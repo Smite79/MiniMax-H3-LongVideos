@@ -1,2 +1,339 @@
-# MiniMax-H3-LongVideos
-Long video generation for MiniMax H3.
+# H3-LongVideos-V1
+
+Make long (up to ~120s) MiniMax-H3 videos from a single prompt, in ComfyUI.
+Self-contained: uses only ComfyUI core's H3 support (no other packs).
+
+## Install
+Copy the `H3-LongVideos-V1/` folder into `ComfyUI/custom_nodes/` and restart
+ComfyUI (full server restart, not just a browser refresh).
+
+## Node: **H3 Long Videos V1**  (category: sampling/minimax)
+One node. You set just two things:
+
+1. **prompt** — this is the `integrated_multimodal_description` (the visual +
+   action timeline). The first paragraph is the look/character kept across the
+   whole video; each later paragraph is a scene beat. Put dialogue and any
+   "lips closed / not speaking" beats here. (Blank line between paragraphs.)
+2. **total_seconds** — how long the finished video should be.
+
+The node reads the paragraphs, spreads `total_seconds` evenly across them,
+splits that into shots that fit both H3's 15s ceiling and your VRAM, chains
+each shot from the previous one's last frame, trims the seams, and outputs the
+finished **images** + **audio** (plus **info** and the **script** it built).
+
+Also on the node: a **resolution** dropdown — a **native** 768-short-edge tier
+per ratio (best detail) and a **fast** 512-short-edge tier per ratio (for the
+generate-low-then-upscale workflow), plus a **balanced** 640 tier. Every option is a
+valid multiple of 32 — there's no custom width/height to snap or mis-type. The
+fast tier is ~4× fewer pixels, so it renders faster, frees VRAM, and
+(because the length budget is resolution-aware) unlocks **longer shots** — on a
+16GB card a 512 shot reaches the full 362f/15s where native only manages ~243f/
+~10s. Best for close/medium shots; H3 distorts faces on *wide* shots at any
+resolution, so keep faces reasonably large in frame. Pair the fast tier with an
+external LTX 2.3 upscale pass (with correct sigmas) to bring finals back to high
+resolution at near-native quality. Also: seed (with control-after-generate),
+steps, cfg, sampler, scheduler. Everything else (fps, seam trim, **handoff offset**,
+VRAM headroom, explicit anchor, ambient `global_soundscape`,
+`non_diegetic_music`, `character_memory`) is optional with sensible defaults.
+
+**Character / wardrobe memory.** The keyframe handoff only carries what the
+*last frame* showed — so if a shot ends zoomed in on the face, the pants aren't
+in that frame and the next shot reinvents them. The fix is to keep wardrobe in
+one **mutable text channel** that's re-stamped into every shot, independent of
+framing — and, crucially, to keep clothing **out of the permanent anchor prose**,
+because the anchor is immutable and would re-assert a garment you're trying to
+remove.
+
+The rule: the first paragraph's prose is **permanent identity only** (hair,
+face, build). Clothing goes on a `wardrobe:` line — either in the first
+paragraph or in the dedicated `character_memory` field (that field wins if both
+are set). Example first paragraph:
+
+    Maya: short silver hair, scar over left eyebrow, athletic build. Cinematic.
+    wardrobe: grey cargo shorts, red flight jacket, black boots
+
+**Automatic removal from your prose (no `wardrobe:` line needed).** With
+`auto_wardrobe` on (the default), the node reads clothing *removals* straight
+from a beat's own action text — "she takes off her jacket," "he sheds his coat,"
+"she peels off her gloves" — and drops that item, with no directive to type.
+It's safe by design: a removal only fires on an item the character is already
+wearing, so non-garment phrases like "the plane takes off down the runway"
+match nothing and change nothing. The garment stays worn in the shot that shows
+it coming off and is gone from the next shot onward, which reads correctly. If a
+name precedes the action ("Maya takes off…"), only that person is affected.
+
+Additions and swaps still use an explicit one-token line (`wardrobe: += mirrored
+sunglasses`), which also overrides the auto-detection. Turn `auto_wardrobe` off
+to drive wardrobe purely through explicit `wardrobe:` lines. Either way, the
+`script` output shows the resolved wardrobe for every shot, so you can always
+see exactly what each shot inherited.
+
+**No gibberish / no mouths moving before dialogue.** H3 will animate — and
+vocalize (as babble) — a mouth on any shot it thinks involves speech, which is
+why action shots leading up to a line often show moving mouths or gibberish
+audio. With `auto_silence_nonspeech` on (the default), any beat with **no
+scripted dialogue** automatically gets a "lips closed, no dialogue" clause, so
+mouths stay shut and silent until real speech. A beat counts as dialogue only if
+it contains **double-quoted** words (or an `<d>…</d>` tag) — so to make someone
+speak, put the words in double quotes: `She says, "Tower, ready for departure."`
+Those shots are left alone; every other shot is silenced. Turn the toggle off to
+manage lip state yourself. Pair it with `handoff_offset` if a dialogue shot still
+hands a mid-word open mouth to the next shot.
+
+To change or remove an item mid-chain *explicitly*, put a `wardrobe:` line **inside** the
+beat where it changes (not as its own paragraph). You have two ways, and you do
+**not** have to restate the whole outfit:
+
+- **One-token edit (easiest):** `wardrobe: -= jacket` removes any item matching
+  "jacket"; `wardrobe: += mirrored sunglasses` adds one. Everything else the
+  person is wearing carries forward untouched.
+- **Full replace:** `wardrobe: grey cargo shorts, black tank top` sets the whole
+  outfit (use when several things change at once).
+
+Either way the change is sticky from that shot onward, and because clothing
+lives only in this channel (never the anchor prose), a removal actually stays
+gone.
+
+**Two or more people.** Name each person, separated by `;`, and put their
+**identity and clothing together** in the named channel:
+
+    wardrobe: Maya = silver hair, scar, grey cargo shorts, red flight jacket; Jon = bald, bearded, navy overalls
+
+Then use their names in the beats. The node binds each person's description
+**inline at the single place their name appears** — `Maya (silver hair, grey
+shorts, red jacket) greets Jon (bald, navy overalls)` — so each name occurs once
+per shot. This matters: the earlier approach emitted a separate `Maya: clothes`
+sentence *and* left `Maya walks…` in the beat, and two mentions of a name make
+text-to-video render the person **twice**. Binding inline fixes that. A tracked
+person you don't name in a beat is left out of that shot (not forced in).
+
+Critical rule to avoid duplicates: **keep names out of the anchor.** The anchor
+is stamped on every shot, so a name there is an extra mention that re-triggers
+duplication. Anchor = scene and style only (no people); all per-person identity
+and clothing go in the named channel; who's in a given shot is decided by which
+names you use in that beat.
+
+**Writing with pronouns (recommended for two people).** To keep prose natural
+and cut duplication further, you can refer to people as "she"/"he"/"they" in the
+beats instead of repeating names — but then declare each person's pronoun in
+their sheet so the node knows who's who:
+
+    wardrobe: Maya = she, silver hair, scar, grey shorts, red jacket; Jon = he, bald, navy overalls
+
+Now "She takes off her jacket" attributes the removal to Maya, and each person's
+description binds at the pronoun (`She (silver hair, grey shorts…) greets him
+(bald, navy overalls)`) — no names, no doubling, and removals still stick. In a
+one-person scene any pronoun maps to that person automatically (no declaration
+needed). Two people of the **same** pronoun can't be told apart by "she" alone —
+name them in the beat where it matters, or use an explicit `wardrobe: Maya -=`
+line. The pronoun token itself is used only for resolution; it never shows in
+the description.
+
+Edit one at a time — `wardrobe: Maya -= jacket` drops Maya's jacket and
+leaves Jon exactly as he was. The name can be written with or without a colon
+(`Maya -= jacket` and `Maya: -= jacket` are the same, and you can seed with
+`Maya: grey shorts, red jacket` too — whichever reads naturally). Names you
+don't mention are untouched; a person with all items removed simply drops out of
+the sheet. This is the node-side of multi-person; H3 itself is weakest at
+multi-subject identity binding, attribute cross-wiring, and multi-speaker audio
+— keep people visually distinct, add spatial cues ("Maya on the left"), and
+prefer one speaker per shot for clean dialogue.
+
+**Steps:** default is **20**, the right value for the base H3 model
+(res_multistep + simple). Only drop to 6–8 if you have a working 4-step
+distill/turbo LoRA or a low-step MXFP8 checkpoint — on the bare base model,
+low steps are the main cause of soft/under-formed frames (faces worst).
+
+**Handoff offset:** if chained shots open with moving or "talking" mouths, set
+`handoff_offset` to 2–4. The node then ends each shot that many frames early
+and hands *that* frame to the next shot instead of the literal last frame
+(which can catch a mid-word open mouth), trimming the matching audio tail so
+A/V stays aligned. 0 = use the last frame (original behavior).
+
+**Audio, the three H3 sections.** You don't type any field labels — the node
+assembles them:
+- **Visual + dialogue** → the **prompt** box. It *is* the
+  `integrated_multimodal_description`. Speech, lip state, and diegetic sound a
+  character makes/hears all go here, in the beats.
+- **Ambient bed** → the **global_soundscape** widget. Appended to every shot as
+  `overall_soundscape:` — environmental sound only (rain, room tone, engines).
+- **Score** → the **non_diegetic_music** widget. Music is **opt-in**: leave it
+  blank and the node writes `non_diegetic_music: N/A` on every shot, so H3 adds
+  no score (a blank field otherwise makes H3 improvise its own music). Fill it in
+  to request a specific score (instrumentation, tempo). Music a character plays
+  or hears is diegetic and belongs in the prompt beat.
+
+Both audio widgets are global (stamped on every shot) so a bed/score stays
+consistent across the whole video. Leave either blank to omit that section.
+
+**VRAM:** it measures the model's size (via ComfyUI's own accounting, so
+quantized checkpoints report correctly), picks the largest shot length your
+card can attempt, and on a caught out-of-memory quietly backs off (tiled
+decode → lower resolution) instead of crashing.
+
+Forcing `shot_seconds` now still respects that budget: a forced length that
+won't fit is **clamped down** to what fits and the clamp is reported in `info`
+(e.g. 15s on a 16GB card clamps to ~10s/243f). Set `allow_oversize_shots` to
+override and honor the requested length anyway — but then the render may spill
+into system RAM (slow) or OOM.
+
+Note on the reactive backoff: it can only fire on a *caught* OOM. If NVIDIA's
+"CUDA – Sysmem Fallback Policy" is on (the default on Windows), an over-budget
+run silently spills VRAM into system RAM instead of raising, so the backoff
+never triggers and you get a slow, over-cap run. Set that policy to *Prefer No
+Sysmem Fallback* (per-app is fine) so over-budget shots raise and the backoff
+can do its job. The predictive clamp above is the guard when the fallback is on.
+
+Between-shot cleanup (`cleanup_between_shots`, on by default): after each beat
+the node moves that shot's decoded video+audio to system RAM and runs a full
+VRAM+RAM purge (Python GC, ComfyUI's aggressive cache clear, and the CUDA
+allocator's `empty_cache` + `ipc_collect`). Without this, every shot's frames
+stay resident on the GPU and accumulate across the chain — the main reason a
+long (12-shot) run OOMs partway through even when a single shot fits. The
+handoff keyframe is kept off-GPU too and re-encoded next shot. Leave it on for
+16GB; turn it off only on a large card if you want to skip the small per-shot
+cleanup cost. (Trade-off: the finished frames now accumulate in system RAM
+instead — expected, since the full video has to live somewhere — so for very
+long high-res renders, watch RAM rather than VRAM.)
+
+## Built-in upscale (optional post-pass)
+Set `upscale` to enable a post-generation pass on the finished frames:
+- **rtx** — NVIDIA **RTX Video Super Resolution**, running on RTX Tensor Cores.
+  Fastest option by a wide margin (NVIDIA claims ~30× vs other local upscalers)
+  and generally cleaner on video than UltraSharp-class models. Requires the
+  `Nvidia_RTX_Nodes_ComfyUI` pack (`git clone https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI`
+  plus `nvidia-vfx` from its requirements; it may not appear in ComfyUI Manager).
+  If the pack isn't installed the node falls back automatically — it never breaks
+  a render. On 16GB, keep `upscale_batch` low: long clips can exhaust system RAM.
+- **model** — runs a Real-ESRGAN / UltraSharp-class upscale model from
+  `models/upscale_models` (pick it in `upscale_model`), chunked with cleanup so
+  a long clip doesn't OOM. Real per-frame sharpening/detail.
+- **lanczos** — plain high-quality resize to `upscale_target_short_edge`
+  (enlarges; adds no new detail).
+
+`upscale_target_short_edge` fits the result's short edge to a target (0 = keep
+the model's native factor). Typical use: generate on the **fast 512 tier** for
+speed/length, then set the target to 768 to land back near native size.
+
+**Honest ceiling:** this pass sharpens and enlarges; it does **not** reconstruct
+video detail the way a second-model re-generation does. For true near-native
+recovery from a low-res render, a separate **LTX 2.3** upscale pass is the gold
+standard (it re-generates detail and holds lip-sync) — but it needs its own
+model loaded, which is why it lives outside this node rather than in it. Use the
+built-in model upscale for a quick, self-contained quality lift; use an external
+LTX 2.3 pass (with correct sigmas) when you need the best possible result.
+
+**Checkpoint swaps are detected and flushed.** ComfyUI keeps previously-loaded
+models resident and only evicts reactively, so switching checkpoints mid-session
+(e.g. NVFP4 → FP8 → MXFP8 while comparing quality) leaves the *old* DiT on the
+card alongside the new one, plus any hooks a previous LoRA installed and stale
+allocator blocks sized for the old layers. The card is then already half full
+before the first shot samples — which looks like the node over-spilling, when in
+fact the budget was measured against memory the previous checkpoint never
+released. The node fingerprints the model (quant format, layer count, weight
+size) and, when it changes between runs, calls `unload_all_models()` plus a
+double VRAM/RAM purge **before** any measurement or patching. `info` reports it:
+`model changed since last run (nvfp4 ~11.7GB -> mxfp8 ~19.5GB): flushed all
+resident models and VRAM caches`. Identical models across runs are untouched, so
+there's no cost to a normal chain.
+
+
+**Character duplication at low resolution (`subject_count_guard`).** Duplication
+gets markedly more likely *below* H3's native 768 short edge: fewer pixels per
+subject pushes the sample away from the training distribution and the model tiles
+the figure. The strongest prompt-side defence is an explicit count, so the node
+can prepend one to each shot — `Exactly two people in this shot, no duplicates,
+no other people in frame.` — counting only the characters actually referenced in
+that beat. `auto` (default) enables it when the short edge is under 768 **or when a LoRA is
+applied** — a distilled LoRA compresses ~20 steps into 4–8, so it fixes global
+composition (including how many people are in frame) within the first step or two
+and then reinforces that choice rather than revising it. That is why turbo LoRAs
+duplicate subjects even at native resolution with a clean prompt. On LoRA runs the
+count clause is also moved to the **front** of the prompt, ahead of scene and
+style, so it binds before composition settles. Both stock-loader LoRAs (weight
+patches) and bypass LoRAs (injections) are detected. `on` always; `off` never.
+Scenery beats with no characters never get the clause.
+
+If duplication persists at native resolution, that's the model rather than the
+prompt — keep subjects visually distinct, add spatial cues ("Kristy at the left
+wing"), and avoid having two characters overlap in frame.
+
+
+**Write attributes, not noun phrases.** In `character_memory`, describe people as
+bare attributes — `Kristy = she, 27, silver hair, red jacket` — not as noun
+phrases like `a woman with silver hair`. A noun phrase renders inline as
+`She (a woman with silver hair)`, which puts **two subject nouns in one clause**
+("She" and "a woman") and reads to the model as two people: character duplication
+from the very first shot, at any resolution. The node now strips these
+automatically (`a young woman, silver hair` → `young, silver hair`, and a bare
+`a woman` is dropped entirely), but writing attributes directly is clearer and
+avoids relying on the cleanup.
+
+
+**Spilling at native resolution (`decode_tile_frames` / `decode_tile_size`).** The
+VAE decode — not sampling — is usually the peak allocation in a run: without
+temporal tiling the video VAE expands the *entire* clip at once (a 243-frame
+1344x768 shot is the largest single tensor the node ever creates). On a checkpoint
+that already exceeds VRAM and streams, that decode is what tips the card into
+shared memory.
+
+Set `decode_tile_frames` to 8–16 to decode in temporal chunks, and
+`decode_tile_size` to 256 for spatial tiles. Both default to 0 (ComfyUI's
+defaults). Lower values mean lower peak VRAM and slightly slower decode. Try these
+before dropping resolution — they cost speed, not picture quality.
+
+**Structural limit:** if the weights alone exceed your VRAM (e.g. an unpruned
+~19.5GB MXFP8 on a 16GB card), *some* spill is unavoidable no matter what the node
+does — the model is streaming before a single frame is allocated. Tiling reduces
+the peak on top of that baseline; only a checkpoint that fits removes it.
+
+
+**Camera direction can summon a phantom person.** Writing motion guidance in the
+anchor — "slow camera movement, the camera follows *the subject*", "moves toward
+*the person*", "tracks *the figure*" — leaves an unnamed person reference in text
+that is stamped into **every** shot, alongside your named cast. The model renders
+it as an extra body matching no character sheet. The node now rewrites those
+generic references ("the subject/person/figure/character") to refer to the scene
+instead, keeping the camera direction intact. Safest is to phrase motion without
+a person at all: `Slow, smooth camera movement. Minimal motion blur.`
+
+
+## Preview the split without rendering (`plan_only`)
+Set `plan_only` on the main node to **True** to see how a job will split —
+shots, frames per shot, seconds, total length — near-instantly, with **no
+render**. It uses the node's *own* settings (resolution, `shot_seconds`, fps,
+prompt), so there's nothing to re-enter and nothing can drift out of sync. The
+plan appears in the `info` output and the `shots` / `frames_per_shot` /
+`video_seconds` outputs are populated. Turn it off to render for real. (This
+replaces the old separate Plan node, which required duplicating settings by
+hand.)
+
+
+
+## Node: **H3 Shot Length**  (category: MiniMax-H3/utils)
+Holds ONE shot length and emits it as both `seconds` and a valid H3 frame count
+(17k+5 grid, capped at 362 unless you turn the cap off). Wire:
+
+    H3 Shot Length (seconds) → H3 Long Videos V1 (shot_seconds)
+    H3 Shot Length (frames)  → Model Preview Override (preview_frames)
+
+One value entered once drives both, so they can't drift apart. It never reads
+the model, so it can sit upstream of a preview override without creating a
+wiring cycle. The main node also outputs `frames_per_shot` and `total_frames`
+if you'd rather read back the value it chose.
+
+## Optional node: **H3 Model Inspector**
+Reports the base precision of a loaded model (BF16 / FP8 / INT8 / NVFP4 /
+MXFP8) and whether your card runs it natively. Use it to confirm you're on a
+base checkpoint (so 20 steps is right) vs a distill/low-step path.
+
+## Requirements
+- ComfyUI 0.30+ with native MiniMax-H3 support.
+- The node applies **ModelSamplingMiniMaxH3** (the video/audio flow schedule)
+  internally by default via `apply_model_sampling`, so you no longer have to
+  wire it upstream — a missing patch is the usual cause of gibberish audio.
+  Turn it off if you patch upstream yourself. Shifts are exposed
+  (`shift_video`/`shift_audio`): base H3 = 12/3 (the defaults), a low-step MXFP8
+  checkpoint ≈ 8 video, a 4-step distill/turbo LoRA ≈ 4–6 audio.
+- No negative prompt needed — H3 is CFG-free (cfg 1) and the node makes an empty one internally.
+- No denoise input — it's fixed at 1.0 internally (partial denoise desyncs the joint audio/video schedule).
