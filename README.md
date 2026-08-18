@@ -20,6 +20,8 @@ The node reads the paragraphs, spreads `total_seconds` evenly across them,
 splits that into shots that fit both H3's 15s ceiling and your VRAM, chains
 each shot from the previous one's last frame, trims the seams, and outputs the
 finished **images** + **audio** (plus **info** and the **script** it built).
+Optionally it also upscales the result and composites a **watermark** and/or an
+**intro title** onto the finished frames — see [Text overlays](#text-overlays-watermark-and-intro-title-overlaypy).
 
 Also on the node: a **resolution** dropdown — a **native** 768-short-edge tier
 per ratio (best detail) and a **fast** 512-short-edge tier per ratio (for the
@@ -314,6 +316,54 @@ model loaded, which is why it lives outside this node rather than in it. Use the
 built-in model upscale for a quick, self-contained quality lift; use an external
 LTX 2.3 pass (with correct sigmas) when you need the best possible result.
 
+## Text overlays: watermark and intro title (`overlay.py`)
+Two optional PIL overlays, **composited onto the finished frames — never asked of
+the model and never added to the prompt.** H3, like every video diffusion model,
+renders text as plausible-looking letterforms that drift, warp and re-spell
+themselves frame to frame; a watermark that changes shape every frame is worse
+than none. Compositing gives pixel-identical text on every frame at zero sampling
+cost, and keeps the words out of the prompt where they'd otherwise steal
+conditioning from the actual shot.
+
+Both draw **white glyphs on a fully transparent layer** that is alpha-blended over
+the video, so only the letters land on the picture and the image shows through
+everywhere else.
+
+- **`watermark_text`** — stamped on **every frame**. `watermark_position` (7
+  anchors: the four corners, `top-center`, `bottom-center`, `center`),
+  `watermark_size` (cap height as a **% of frame height**, default 4.0, so the
+  mark keeps its relative size at any resolution or upscale factor),
+  `watermark_opacity` (default 0.75 — reads as a watermark without burying the
+  picture), `watermark_margin` (inset as a % of the **short** edge).
+- **`intro_text`** — a title over the **opening of the finished video**, not a
+  replacement card: the first shot plays underneath it. Multi-line is centered as
+  a block. It holds at full opacity for `intro_seconds` (default 3.0), then
+  linearly fades over `intro_fade` (default 0.6; 0 = hard cut). `intro_position`
+  offers `center`, `lower-third`, `top-center`, `bottom-center`; `intro_size`
+  defaults to 9.0% of frame height.
+- **`overlay_font`** — TrueType face for **both** overlays: a bare name resolved
+  against the system font folder (`arial.ttf`, `arialbd.ttf`, `segoeui.ttf`) or a
+  full path to a `.ttf`/`.otf`. If it won't load, the node falls back through
+  Arial → Segoe UI → DejaVu Sans → Liberation Sans, and finally to PIL's bitmap
+  default (which ignores size — ugly, but never fatal).
+- **`overlay_stroke`** — black outline in pixels around the white text. 0 keeps it
+  pure white; **2–3 makes it survive a bright sky or a white wall.**
+
+Leave a text field empty to skip that overlay; both are off by default.
+
+**Applied last, after any upscale**, so glyphs are rasterized at the final pixel
+size instead of being interpolated up along with the picture. Two consequences
+worth knowing: the overlays run once on the **whole concatenated video**, so the
+intro sits over the opening of the finished piece rather than the top of every
+shot; and because it happens post-upscale, the text is crisp even on a
+fast-512-then-upscale workflow.
+
+Everything here is **best-effort by design** — any failure (missing Pillow, an
+unloadable font, a bad position) returns the frames untouched and writes a note
+into `info`, because a cosmetic overlay must never destroy a finished render.
+Blending is chunked 64 frames at a time and cropped to the text's tight bounding
+box, so a corner watermark on a 3000-frame chain doesn't blend 3000 full frames.
+
 **Checkpoint swaps are detected and flushed.** ComfyUI keeps previously-loaded
 models resident and only evicts reactively, so switching checkpoints mid-session
 (e.g. NVFP4 → FP8 → MXFP8 while comparing quality) leaves the *old* DiT on the
@@ -389,6 +439,35 @@ instead, keeping the camera direction intact. Safest is to phrase motion without
 a person at all: `Slow, smooth camera movement. Minimal motion blur.`
 
 
+## Per-beat directives (`key: value` lines)
+A beat can carry directive lines that configure it rather than describe it. They
+are **stripped out of the prose** before the prompt is built, and they are never
+beats of their own — a directive attaches to the next content line, or to the
+previous beat if it trails the paragraph. So a `wardrobe:` line inside a beat
+won't accidentally become its own shot.
+
+- **`wardrobe:`** — clothing and identity. Covered in full above.
+- **`seconds: 8`** (alias **`duration: 8`**) — an explicit length for *this* beat,
+  in seconds. This is the highest-priority length signal: it is **honored even
+  when `per_beat_length` is off**, because you stated a duration outright. It is
+  still clamped to the VRAM budget, which is a hard ceiling — a per-beat length
+  can only make a shot **shorter** than the card allows, never longer. Use it to
+  give one beat room ("`seconds: 10`") while the rest take the default.
+- **`exit: Jon`** — Jon leaves the scene. Like auto-removals, exits are
+  **deferred**: he is still present in the shot that *shows* him leaving, and
+  absent from every shot after it. This stops a character the story has written
+  out from wandering back in. Exits are also detected automatically from the
+  action text; the directive is the explicit override.
+- **`enter: Jon`** — undoes a previous exit, bringing him back into play.
+- **`soundscape:` / `overall_soundscape:`** and **`music:` /
+  `non_diegetic_music:`** — per-beat audio that overrides the global widgets for
+  that shot only. A beat that sets its own skips the global stamp.
+
+Without a `seconds:` line the length falls back to quoted dialogue (~2.5 words/sec
+plus 1s of air, when `per_beat_length` is on) and otherwise to the full budget.
+Action prose carries no reliable duration signal — "walks across the tarmac" is 2s
+or 12s depending on the tarmac — so a silent beat is **never guessed short**.
+
 ## Preview the split without rendering (`plan_only`)
 Set `plan_only` on the main node to **True** to see how a job will split —
 shots, frames per shot, seconds, total length — near-instantly, with **no
@@ -426,5 +505,8 @@ base checkpoint (so 20 steps is right) vs a distill/low-step path.
   Turn it off if you patch upstream yourself. Shifts are exposed
   (`shift_video`/`shift_audio`): base H3 = 12/3 (the defaults), a low-step MXFP8
   checkpoint ≈ 8 video, a 4-step distill/turbo LoRA ≈ 4–6 audio.
+- **Pillow (PIL)** only if you use the text overlays. ComfyUI already ships it, so
+  this is effectively always satisfied; if it were missing, the overlays are
+  skipped with a note in `info` and the render still completes.
 - No negative prompt needed — H3 is CFG-free (cfg 1) and the node makes an empty one internally.
 - No denoise input — it's fixed at 1.0 internally (partial denoise desyncs the joint audio/video schedule).
