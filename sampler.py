@@ -36,9 +36,25 @@ import comfy.nested_tensor
 import comfy.model_management as mm
 import node_helpers
 
+try:
+    from . import overlay as _overlay
+except ImportError:      # loaded as a bare file (test_prompt_logic.py), not as a package
+    import importlib.util as _ilu
+    import os as _os
+    _spec = _ilu.spec_from_file_location(
+        "h3_overlay", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "overlay.py"))
+    _overlay = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_overlay)
+
 AUDIO_LATENT_FPS = 40
 GB = 1024 ** 3
 H3_MAX_FRAMES = 362
+# H3's temporal grid is FIXED at 24 fps -- comfy_extras/nodes_minimax_h3.py hard-codes
+# FPS = 24, and the audio latent length is derived from frame_count / 24. The model
+# emits 24 fps content no matter what any node asks for, so every seconds<->frames
+# conversion here MUST use 24. Treating it as a variable is what made a requested
+# 10s shot render 124 frames (~5.2s of real time) when the widget said 12.
+H3_FPS = 24
 MIN_SHOT_FRAMES = 124          # internal VRAM floor (~5s @24fps)
 
 
@@ -53,9 +69,12 @@ def video_latent_t(fc):
     return 2 if fc <= 5 else ((fc - 5) // 17) * 5 + 2
 
 
-def temporal_shape(length, fps=24):
+def temporal_shape(length, fps=H3_FPS):
+    """`fps` is accepted for call-site compatibility but deliberately IGNORED: the
+    audio latent must line up with 24 fps video or the shot's sound is stretched
+    against its picture."""
     fc = align_frame_count(max(5, length))
-    return fc, video_latent_t(fc), round(fc / fps * AUDIO_LATENT_FPS)
+    return fc, video_latent_t(fc), round(fc / H3_FPS * AUDIO_LATENT_FPS)
 
 
 def res_down(w, h, factor=0.85, mult=32):
@@ -145,6 +164,94 @@ def split_paragraphs(text, delimiter):
     import re
     raw = re.sub(r"(?m)^\s*" + re.escape(delimiter) + r"\s*$", "\n\n", raw)
     return [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
+
+
+# Widgets added after the node's original 36-widget layout. Kept LAST in
+# INPUT_TYPES so a workflow saved before they existed still maps its stored values
+# onto the right widgets (ComfyUI matches them by position, not by name).
+# APPEND to this tuple when adding a widget; never insert into the middle.
+ADDED_WIDGETS = (
+    "beat_split", "per_beat_length",
+    "watermark_text", "watermark_position", "watermark_size", "watermark_opacity",
+    "watermark_margin", "intro_text", "intro_position", "intro_seconds",
+    "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
+)
+
+NL = "\n"
+# Lines that CONFIGURE a beat rather than being one. They attach to the beat that
+# follows them, so a line-split never turns "wardrobe: ..." into its own shot.
+DIRECTIVE_KEYS = ("wardrobe", "seconds", "duration", "exit", "enter",
+                  "overall_soundscape", "non_diegetic_music", "soundscape", "music")
+
+
+def is_directive_line(line):
+    import re
+    return bool(re.match(r"\s*(" + "|".join(DIRECTIVE_KEYS) + r")\s*:", line or "", re.I))
+
+
+def expand_beats(paras, mode="auto"):
+    """Turn the prompt's beat PARAGRAPHS into the final beat list. Returns
+    (beats, note).
+
+    Beats are separated by a BLANK line (or a '##' line). That is unambiguous, but
+    it is also the single easiest thing to get wrong in a textarea: six beats typed
+    on six consecutive lines are one paragraph, so they render as ONE shot with six
+    actions crammed into it -- which reads as characters moving at triple speed, not
+    as a splitting problem.
+
+    mode:
+      'auto'      -- blank lines first; any paragraph still holding more than one
+                     content line is then split one beat per line, and says so.
+      'each line' -- every content line is its own beat. Same result as 'auto'; kept
+                     so the intent can be stated explicitly.
+
+    There is deliberately no strict blank-lines-only mode any more. It was the ONE
+    setting that could silently lose beats: six beats typed as two blocks of three
+    rendered as two shots, with no note to say why, because the split note is only
+    written when a paragraph is actually split. Nothing else on the node can change
+    the beat count, so removing that option removes the whole failure class. A
+    workflow that still stores 'blank line' falls through to 'auto' below.
+
+    Directive lines ('wardrobe:', 'seconds:', 'exit:' ...) are never beats of their
+    own: they attach to the next content line, or to the previous beat if they
+    trail the paragraph."""
+    # Any unrecognized mode means AUTO, never "do nothing". An earlier version fell
+    # through an if/elif with no else and silently DROPPED every multi-line paragraph
+    # -- six beats arrived as two shots with four beats simply gone. A stale value on
+    # this widget (including 'blank line' from a workflow saved before it was removed)
+    # is enough to trigger it, so the safe branch has to be the default.
+    if mode not in ("auto", "each line"):
+        mode = "auto"
+    out, split_from = [], 0
+    for p in paras:
+        lines = [ln for ln in (p or "").splitlines() if ln.strip()]
+        content = [ln for ln in lines if not is_directive_line(ln)]
+        if len(content) <= 1:
+            out.append(p)
+        else:
+            split_from += 1
+            pending = []
+            for ln in lines:
+                if is_directive_line(ln):
+                    # Hold it for the NEXT content line: a directive reads as a header
+                    # for the beat it introduces ("wardrobe: -= jacket" / "she shrugs
+                    # it off"). Only if nothing follows does it fall back to the beat
+                    # above, handled after the loop.
+                    pending.append(ln)
+                    continue
+                out.append(NL.join(pending + [ln]))
+                pending = []
+            if pending:                                     # directives with no beat after them
+                if out:
+                    out[-1] = out[-1] + NL + NL.join(pending)
+                else:
+                    out.append(NL.join(pending))
+    note = ""
+    if split_from and mode == "auto":
+        note = (f"{split_from} paragraph(s) held several lines and were split one beat per LINE "
+                f"-> {len(out)} beats. Separate beats with a BLANK line (or a '##' line) to control "
+                f"this yourself")
+    return out, note
 
 
 def _split_items(s):
@@ -578,6 +685,100 @@ def _strip_people_from_anchor(anchor_id, active):
     return txt.strip(" ,.").strip() + ("." if txt.strip(" ,") else "")
 
 
+# Pronoun by grammatical case: (subject, object, possessive).
+_PRON_CASES = {"she": ("she", "her", "her"),
+               "he": ("he", "him", "his"),
+               "they": ("they", "them", "their")}
+# A name right after one of these is an OBJECT ("walks over to Dan"), so it takes the
+# object form. Anything else mid-sentence is treated as an object too, since that is
+# where a bare name usually lands ("hands Dan a wrench", "asks Dan").
+_OBJECT_PREPS = ("to", "with", "at", "for", "from", "toward", "towards", "behind",
+                 "beside", "near", "of", "on", "onto", "into", "over", "under", "past",
+                 "by", "about", "around", "beneath", "against", "alongside", "opposite",
+                 "between", "upon", "across", "after", "before", "beyond", "through")
+# ...and after one of these (or a sentence end) it is a SUBJECT ("and Dan takes it").
+_SUBJECT_LEADS = ("and", "then", "but", "so", "as", "while", "when", "until", "because",
+                  "if", "though", "although", "where", "who")
+
+
+def _mask_quotes(text):
+    """Hide double-quoted spans behind placeholders so a rewrite cannot touch the
+    spoken words. Returns (masked_text, spans)."""
+    import re
+    spans = []
+
+    def grab(m):
+        spans.append(m.group(0))
+        return "\x00%d\x00" % (len(spans) - 1)
+
+    return re.sub(r'["“][^"”]*["”]', grab, text), spans
+
+
+def _unmask_quotes(text, spans):
+    import re
+    return re.sub(r"\x00(\d+)\x00", lambda m: spans[int(m.group(1))], text)
+
+
+def dedupe_person_mentions(body, active):
+    """Replace the SECOND and later mentions of a tracked person's name inside one
+    beat with the right pronoun.
+
+    Naming one person twice in a shot is the single most reliable way to make
+    text-to-video render them twice -- "Kristy finds Dan ... she walks over to Dan"
+    puts two Dans in frame. Binding the description once (compose_persistent) fixes
+    the description, not the name itself, so the bare repeat still duplicates.
+
+    Only fires where the result is unambiguous:
+      * the person's pronoun must be known (declared in their sheet, or a gender word
+        in their description) -- an undeclared person is left exactly as written;
+      * no OTHER person in the shot may share that pronoun, or 'he' could not be
+        traced back to the right one;
+      * words inside double quotes are never touched -- a name in a spoken line is
+        dialogue ("Kristy, over here"), not a second reference to stage.
+    The FIRST mention always survives, so the description still has a name to bind to
+    and the reader can still tell who the shot is about."""
+    import re
+    if not body:
+        return body
+    present = [n for n in active if n and active[n]]
+    if not present:
+        return body
+    by_pron = {}
+    for n in present:
+        p = _pronoun_of(active[n])
+        if p:
+            by_pron.setdefault(p, []).append(n)
+
+    masked, spans = _mask_quotes(body)
+    for n in present:
+        p = _pronoun_of(active[n])
+        if not p or len(by_pron.get(p, [])) != 1:
+            continue                        # undeclared pronoun, or two people share it
+        subj, obj, poss = _PRON_CASES[p]
+        hits = list(re.finditer(r"\b" + re.escape(n) + r"(?:'s|’s)?\b", masked, re.I))
+        if len(hits) < 2:
+            continue
+        for m in reversed(hits[1:]):        # right to left, so earlier offsets stay valid
+            token = m.group(0)
+            raw_before = masked[:m.start()]
+            before = raw_before.rstrip()
+            prev = re.search(r"([A-Za-z']+)\s*$", before)
+            prev = prev.group(1).lower() if prev else ""
+            if token.endswith("s") and ("'" in token or "’" in token):
+                rep = poss
+            elif prev in _OBJECT_PREPS:
+                rep = obj
+            elif (not before) or before[-1] in ".!?;:" or prev in _SUBJECT_LEADS:
+                rep = subj
+            else:
+                rep = obj
+            # capitalize only at a real sentence/line start
+            if (not before) or before[-1] in ".!?" or raw_before.rstrip(" \t").endswith("\n"):
+                rep = rep.capitalize()
+            masked = masked[:m.start()] + rep + masked[m.end():]
+    return _unmask_quotes(masked, spans)
+
+
 def compose_persistent(body, active, anchor_id, removed=None, departed=None,
                        count_subjects=False, speaking=False, front_load=False):
     """Assemble one shot's text WITHOUT duplicating subjects.
@@ -599,6 +800,10 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
     # later pronoun could resolve to them. This is what stops an exited character
     # being silently re-summoned into a later shot.
     active = {k: v for k, v in active.items() if k not in departed}
+    # Collapse repeat NAME mentions to pronouns before anything is measured or bound:
+    # naming one person twice in a shot renders them twice, and the refs below must be
+    # computed against the text that will actually be emitted.
+    body = dedupe_person_mentions(body, active)
     named = [n for n in active if n and active[n]]
     unnamed = active.get("", [])
     anchor_id = _scrub_removed(anchor_id, removed)
@@ -678,6 +883,74 @@ def extract_wardrobe(body):
         else:
             kept.append(ln)
     return "\n".join(kept).strip(), wardrobe
+
+
+def anchor_contributes_nothing(anchor, char_memory=""):
+    """True when the paragraph about to be consumed as the identity anchor would add
+    NOTHING to any shot -- i.e. taking it as the anchor silently DELETES it.
+
+    The anchor is stamped into every shot, so _strip_people_from_anchor removes any
+    sentence that names a tracked character (otherwise that character is introduced
+    twice per shot and the model renders them twice). A first paragraph that is
+    *itself* an action beat about a tracked person -- "Kristy walks around in a garage
+    looking for engine parts." -- is therefore stripped to nothing: the user loses that
+    shot AND the only scene text they wrote, with just a mild note to say so.
+
+    Returns False whenever the paragraph carries something real: a 'wardrobe:' line (it
+    seeds the wardrobe channel), or prose that survives the strip. So a normal
+    identity/scene anchor is never touched, and with no character_memory nothing is
+    tracked, nothing is stripped, and this cannot fire."""
+    anchor_id, anchor_wardrobe = extract_wardrobe((anchor or "").strip())
+    if anchor_wardrobe:                       # seeds the wardrobe channel -> it matters
+        return False
+    if not anchor_id.strip():
+        return False
+    active = parse_wardrobe((char_memory or "").strip())
+    return not _strip_people_from_anchor(anchor_id, active).strip(" .,")
+
+
+# A sentence that STAGES something: a name or pronoun subject followed by a verb
+# ("Kristy walks", "She finds", "Dan answers"). An anchor is scene and style -- noun
+# phrases and lists ("An open 4 bay car garage.", "natural lighting, flat lighting") --
+# and does not match.
+_ACTION_SENT = re.compile(r"^\s*(?:He|She|They|[A-Z][a-z]+)"
+                          r"(?:\s+and\s+(?:[A-Z][a-z]+|he|she|they))?"
+                          r"\s+[a-z]+(?:s|ed|ing)\b")
+
+
+def anchor_is_action_beat(anchor, later_paras=()):
+    """True when the paragraph about to be consumed as the anchor is plainly a BEAT.
+
+    anchor_contributes_nothing() only catches this when the character is tracked in
+    character_memory -- with no sheet, nothing is tracked, nothing is stripped, and an
+    action paragraph sails through to become the anchor. That is the common case: a
+    prompt written as three beats, no character sheet, renders as two shots with the
+    first beat demoted to a header stamped on the other two.
+
+    Fires only when EVERY sentence stages an action AND the subject recurs later, so a
+    mixed paragraph ("Kristy stands by the plane. A cinematic hangar, warm light.")
+    keeps its scene text and stays an anchor, and a style list never matches at all. A
+    pronoun subject is accepted on its own -- 'She walks in.' cannot be scene text."""
+    body, wardrobe = extract_wardrobe((anchor or "").strip())
+    if wardrobe:                              # seeds the wardrobe channel -> it matters
+        return False
+    body = body.strip()
+    if not body:
+        return False
+    sents = [s for s in re.split(r"(?<=[.!?])\s+", body) if s.strip()]
+    if not sents or not all(_ACTION_SENT.match(s) or has_speech(s) for s in sents):
+        return False
+    m = re.match(r"\s*([A-Za-z]+)", body)
+    if not m:
+        return False
+    subj = m.group(1).lower()
+    if subj in ("he", "she", "they"):
+        return True
+    # A NAME is only a beat subject if the prompt goes on using it. This is what keeps
+    # a one-word style lead ("Cinematic lighting, warm tones.") from reading as an
+    # action: 'cinematic' never comes back as a subject in the beats.
+    later = " ".join(later_paras or ()).lower()
+    return bool(re.search(r"\b" + re.escape(subj) + r"\b", later))
 
 
 def has_speech(body):
@@ -840,29 +1113,148 @@ def departed_phrase_people(body, anchor_id):
 WORDS_PER_SEC = 2.5
 
 
+# A spoken line needs a beat of air before and after it inside the same shot --
+# the mouth opens late and the last syllable must not land on the cut.
+SPEECH_PAD_SEC = 1.0
+# ...and a two-hander needs a hand-off between turns. Two people trading three
+# lines is not the same screen time as one person saying all three back to back:
+# the camera/mouth has to switch subject between each.
+TURN_GAP_SEC = 0.5
+# A beat whose prose outside the quotes is longer than this is doing real ACTION
+# as well as talking, and action has no measurable duration -- so such a beat keeps
+# the full budget instead of being sized down to fit its line. Without this,
+# "she walks the length of the tarmac and says 'Ready.'" got 2.2s of dialogue time
+# and the walk was crushed into it, which reads as everyone moving at double speed.
+ACTION_WORDS_FREE = 8
+
+
+def action_words(beat):
+    """Words in a beat that are NOT inside quotes -- i.e. the action the shot has
+    to depict, as opposed to the line it has to deliver."""
+    import re
+    body, _ = extract_wardrobe((beat or "").strip())
+    body = re.sub(r'["“][^"”]*["”]', " ", body)
+    body = "\n".join(ln for ln in body.splitlines() if not is_directive_line(ln))
+    return len(body.split())
+
+
+def dialogue_spans(beat):
+    """Word count of each double-quoted span in a beat, in order. Length of the
+    returned list is the number of speaking TURNS -- the multi-character case."""
+    import re
+    body, _ = extract_wardrobe((beat or "").strip())
+    return [len(q.split()) for q in re.findall(r'["\u201c]([^"\u201d]+)["\u201d]', body) if q.split()]
+
+
+def dialogue_words(beat):
+    """Words inside double quotes in a beat -- the only speech H3 actually renders."""
+    return sum(dialogue_spans(beat))
+
+
+def dialogue_seconds(beat, pad=True):
+    """Screen time this beat's dialogue needs, 0.0 when the beat has none.
+
+    Counts every turn, so a two-character exchange is sized from the WHOLE
+    exchange plus a gap between turns -- not from the longest single line.
+    `pad` controls only the head/tail air; turn gaps are always counted because
+    they are time the shot genuinely has to contain."""
+    spans = dialogue_spans(beat)
+    if not spans:
+        return 0.0
+    return (sum(spans) / WORDS_PER_SEC
+            + TURN_GAP_SEC * (len(spans) - 1)
+            + (SPEECH_PAD_SEC if pad else 0.0))
+
+
+def beat_seconds_directive(beat):
+    """Explicit per-beat length: a 'seconds: 8' (or 'duration: 8') line in the beat.
+    Returns the float, or None when the beat doesn't set one."""
+    import re
+    for key in ("seconds", "duration"):
+        _, val = extract_directive((beat or ""), key)
+        if val:
+            m = re.search(r"([0-9]*\.?[0-9]+)", val)
+            if m:
+                try:
+                    v = float(m.group(1))
+                except ValueError:
+                    continue
+                if v > 0:
+                    return v
+    return None
+
+
+def plan_beat_frames(beats, fps, budget, per_beat=True):
+    """Per-beat shot lengths in frames. Returns (lengths, notes).
+
+    Every length is grid-aligned and clamped to [floor, budget]: the VRAM budget is
+    a hard ceiling, so per-beat sizing can only ever make a shot SHORTER than the
+    card allows, never longer. Priority per beat:
+
+      1. an explicit 'seconds: N' line in the beat -- always honored (even with
+         per_beat off), because the user stated a duration outright;
+      2. its quoted dialogue -- words/WORDS_PER_SEC plus SPEECH_PAD_SEC of air;
+      3. otherwise the full budget. Action prose carries NO reliable duration
+         signal ("walks across the tarmac" is 2s or 12s depending on the tarmac),
+         so a silent beat is never guessed short -- it keeps the length it would
+         have had before per-beat sizing existed.
+
+    The win is that a 6-word line no longer sits in a 10s shot padded with drift,
+    and short beats stop costing full-length render time."""
+    beats = beats if beats else [""]
+    floor = align_frame_count(MIN_SHOT_FRAMES)
+    # MIN_SHOT_FRAMES is the floor of the *VRAM budget* -- the shortest shot the node
+    # will fall back to when it has to guess. It must NOT raise a length the user asked
+    # for outright: `cap = max(floor, budget)` silently turned every forced shot_seconds
+    # below ~5.2s into 124f/5.2s, so 1s/2s/3s/4s all rendered identically and the widget
+    # looked broken. An explicit request is honored down to H3's real 5-frame minimum.
+    cap = max(5, int(budget))
+    out, notes = [], []
+    fps = max(1, int(fps))
+    for i, b in enumerate(beats, 1):
+        want, src = beat_seconds_directive(b), "seconds:"
+        if want is None:
+            # Only a beat that is JUST a delivered line gets sized from that line.
+            # Any real action in the same beat needs time the dialogue clock cannot
+            # see, so those keep the full budget.
+            talky = per_beat and action_words(b) <= ACTION_WORDS_FREE
+            want = dialogue_seconds(b) if talky else 0.0
+            src = "dialogue"
+        if want <= 0:                       # no signal -> full budget
+            out.append(cap)
+            continue
+        n = min(cap, align_frame_count(max(floor, int(round(want * fps)))))
+        out.append(n)
+        if n != cap:
+            notes.append(f"shot {i}: {n}f (~{n / fps:.1f}s, from {src})")
+    return out, notes
+
+
 def dialogue_fit_warnings(beats, seconds_per_shot):
     """Flag beats whose quoted dialogue is unlikely to fit the shot length.
 
-    The VRAM budget shortens SHOTS (never resolution, since rendering below native
+    The VRAM budget caps SHOTS (never resolution, since rendering below native
     softens the frame). That is the right trade for picture quality, but it is blind
     to dialogue: a line written for a 10s shot gets cut off mid-sentence in a 7s one.
     Audio cannot span the handoff either -- each shot generates its own -- so a
     truncated line is simply lost, not continued.
 
+    seconds_per_shot takes a single value or a per-shot list (per-beat sizing).
     Returns a list like ["shot 3: ~6.4s of dialogue in a 5.2s shot"] so the user can
     shorten the line, or choose a lower resolution tier to buy the duration back."""
-    import re
     out = []
     for i, b in enumerate(beats or [], 1):
-        body, _ = extract_wardrobe((b or "").strip())
-        words = 0
-        for q in re.findall(r'["\u201c]([^"\u201d]+)["\u201d]', body):
-            words += len(q.split())
-        if not words:
+        if isinstance(seconds_per_shot, (list, tuple)):
+            if i > len(seconds_per_shot):
+                break
+            sec = seconds_per_shot[i - 1]
+        else:
+            sec = seconds_per_shot
+        need = dialogue_seconds(b, pad=False)
+        if not need:
             continue
-        need = words / WORDS_PER_SEC
-        if need > seconds_per_shot * 0.92:      # leave a little room to breathe
-            out.append(f"shot {i}: ~{need:.1f}s of dialogue in a {seconds_per_shot:.1f}s shot")
+        if need > sec * 0.92:      # leave a little room to breathe
+            out.append(f"shot {i}: ~{need:.1f}s of dialogue in a {sec:.1f}s shot")
     return out
 
 
@@ -916,6 +1308,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     blocks = []
     for gi, b in enumerate(beats, 1):
         body, wardrobe_change = extract_wardrobe((b or "").strip())
+        body, _ = extract_directive(body, "seconds")               # shot length, not prose
+        body, _ = extract_directive(body, "duration")              # ditto (alias)
         body, exit_directive = extract_directive(body, "exit")     # explicit 'exit: Jon'
         body, enter_directive = extract_directive(body, "enter")   # explicit 'enter: Jon' (undo)
         if enter_directive:
@@ -1066,12 +1460,32 @@ def estimate_shot_frames(total_gb, resident_gb, headroom_gb, pixels=None, free_g
     if total_gb <= 0:
         return floor
     avail = total_gb - resident_gb - headroom_gb
-    if avail <= 0:
-        # Weights alone exceed the card: no resolution helps, and scaling a negative
-        # value would perversely make lower resolutions look worse than higher ones.
-        return floor
-    if pixels and pixels > 0:
-        avail *= NATIVE_PIXELS / float(pixels)     # lower res -> effectively more room
+    if resident_gb >= total_gb:
+        # STREAMING REGIME. model_size() reports the whole checkpoint, but a checkpoint
+        # larger than the card is never all resident: ComfyUI streams it, so the weight
+        # figure is NOT what occupies VRAM and cannot be subtracted from capacity. Doing
+        # that arithmetic anyway drove the budget deeply negative and floored every shot
+        # to 124f/~5s on a card that was demonstrably not running out -- a 44.3GB MXFP8
+        # build on a 15.9GB card sampled 243f at 768x768 without exceeding VRAM.
+        #
+        # There is no meaningful "capacity minus weights" here, so budget from the LIVE
+        # free reading instead: it measures what is actually unoccupied right now, which
+        # in this regime is the only number that means anything. Without a reading there
+        # is nothing to go on, so fall back to the floor.
+        if not free_gb or free_gb <= 0:
+            return floor
+        avail = max(0.0, free_gb * (1.0 - SPIKE_RESERVE) - headroom_gb)
+    # avail <= 0 here means the weights FIT but the safety headroom eats what is left.
+    # That is not the same thing, and it used to floor every shot to 124f/~5s no matter
+    # what -- including at the fast 512 tier, where a frame costs a quarter as much.
+    # Two dialogue beats came out at ~5s each on a card that could hold far more. The
+    # baseline term below already represents the latent that fits in space the weight
+    # accounting has covered, so let the arithmetic run instead of bailing out.
+    if avail > 0 and pixels and pixels > 0:
+        # Lower res -> effectively more room. Only ever applied to a POSITIVE surplus:
+        # a deficit is weights that do not fit, which no resolution can shrink, and
+        # scaling it would perversely make lower resolutions look worse.
+        avail *= NATIVE_PIXELS / float(pixels)
     frames = FRAMES_PER_GB * (avail + FRAMES_BASELINE_GB)
     # Sanity floor from a LIVE reading: capacity-minus-weights is the right basis
     # (see above), but if the card is genuinely almost empty right now -- another
@@ -1190,6 +1604,146 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
             kf["latent"] = vae.encode(kf.pop("image"))
         cond = node_helpers.conditioning_set_values(cond, {"minimax_keyframes": keyframes, "minimax_frame_count": fc})
     return cond, latent
+
+
+# --- text-encoder / DiT compatibility -------------------------------------
+# H3's DiT accepts text conditioning at exactly two widths (comfy/ldm/minimax/
+# model.py, preprocess_text_embeds):
+#   * text_dim   -- raw encoder states, projected by condition_proj (5120 on
+#                   stock H3: Qwen3-VL-32B truncated to 50 layers)
+#   * hidden_size-- states already refined to DiT width (5376), passed through
+# Anything else dies deep inside ComfyUI as a bare "mat1 and mat2 shapes cannot
+# be multiplied (156x6144 and 5120x5376)", which reads like a bug in this node.
+# Check the width up front and name what is actually wrong.
+_TE_HIDDEN = {
+    5120: "Qwen3-VL-32B truncated to 50 layers -- the H3 text encoder",
+    5376: "text embeds already refined to DiT width",
+    4096: "Qwen3-VL-8B / T5-XXL -- not an H3 encoder",
+    3584: "Qwen2.5-VL-7B -- not an H3 encoder",
+    2560: "Qwen3-VL-4B -- not an H3 encoder",
+    2048: "Qwen3-VL-2B / Qwen3-30B-A3B -- not an H3 encoder",
+}
+
+
+def _te_name(dim):
+    return _TE_HIDDEN.get(dim, "not a width any H3 encoder produces")
+
+
+def text_encoder_mismatch_note(got, accepted):
+    """Pure: message for conditioning of width `got` fed to a DiT that accepts
+    the widths in `accepted`, or None if it fits / nothing is known. Torch-free
+    so the tests can drive it."""
+    ok = sorted({int(a) for a in (accepted or ()) if a})
+    if not got or not ok or int(got) in ok:
+        return None
+    got = int(got)
+    return (
+        f"H3 Long Videos: the CLIP input does not match this diffusion model. Its "
+        f"conditioning is {got}-dim ({_te_name(got)}), but this H3 DiT only accepts "
+        + " or ".join(f"{a} ({_te_name(a)})" for a in ok) + ". Check, in this order: "
+        f"(1) the CLIPLoader feeding 'clip' is set to the MiniMax-H3 type -- the same "
+        f"file loaded under another type gives a different width; (2) the encoder file "
+        f"is the H3 one that shipped with your H3 checkpoint, not another Qwen3-VL; "
+        f"(3) no upstream node replaced the conditioning between the encoder and this "
+        f"node. Nothing was rendered."
+    )
+
+
+def _dit_text_widths(model):
+    """The text widths this DiT accepts: (condition_proj.in_features,
+    hidden_size). Reads module attributes, not weight.shape -- a quantized or
+    packed weight has a misleading shape and would fake a mismatch. Missing
+    values are dropped, so a model this can't introspect yields ()."""
+    m = getattr(model, "model", model)
+    dm = getattr(m, "diffusion_model", None)
+    proj = getattr(dm, "condition_proj", None)
+    out = []
+    for n in (getattr(proj, "in_features", None), getattr(dm, "hidden_size", None)):
+        if isinstance(n, int) and n > 0:
+            out.append(n)
+    return tuple(out)
+
+
+def _cond_embed_dim(cond):
+    """Width of an encoded conditioning's embedding tensor, or None."""
+    try:
+        return int(cond[0][0].shape[-1])
+    except Exception:
+        return None
+
+
+def check_text_encoder(model, cond):
+    """Raise a readable RuntimeError when clip and model disagree. Silent when
+    either side can't be read -- never block a run on a failed introspection."""
+    note = text_encoder_mismatch_note(_cond_embed_dim(cond), _dit_text_widths(model))
+    if note:
+        raise RuntimeError(note)
+
+
+def _is_audio_vae(v):
+    """True when v looks like the H3 audio VAE (DAC/BigVGAN), False when it looks
+    like a video/image VAE, None when it can't be told. The video VAEs carry a
+    3-tuple upscale_ratio (t, y, x); the audio VAE carries a scalar and reports
+    latent_dim 2 with an audio_sample_rate."""
+    ur = getattr(v, "upscale_ratio", None)
+    if isinstance(ur, (tuple, list)):
+        return False
+    if getattr(v, "audio_sample_rate", None) or getattr(v, "audio_sample_rate_output", None):
+        return True
+    if isinstance(ur, (int, float)) and getattr(v, "latent_dim", None) == 2:
+        return True
+    return None
+
+
+def check_audio_vae_loaded(audio_vae):
+    """Catch an UNCONVERTED audio VAE checkpoint.
+
+    comfy/ldm/minimax/audio_vae.py loads a checkpoint whose weight-norm has been
+    folded into plain "*.weight" tensors. Feed it the raw upstream file (172
+    weight_g/weight_v pairs, no latents_mean/latents_std) and load_state_dict
+    reports the misses as a WARNING, not an error: every weight-normed conv keeps
+    its random init and the two normalization buffers stay torch.empty(), i.e.
+    uninitialized memory. Decoding then multiplies the latents by garbage and the
+    audio comes out as noise -- with nothing in the log at render time to say why.
+
+    latents_std is the cheapest tell: it is a real per-channel scale, so a
+    non-finite or absurd value means the buffer was never filled."""
+    m = getattr(audio_vae, "first_stage_model", None)
+    mean, std = getattr(m, "latents_mean", None), getattr(m, "latents_std", None)
+    if mean is None or std is None:
+        return
+    try:
+        bad = (not torch.isfinite(mean).all() or not torch.isfinite(std).all()
+               or float(std.min()) <= 0.0 or float(std.max()) > 1e3
+               or float(mean.abs().max()) > 1e3)
+    except Exception:
+        return                       # never block a render on a failed introspection
+    if bad:
+        raise RuntimeError(
+            "the audio VAE loaded but its weights are NOT initialized -- this is the raw "
+            "upstream MiniMax-H3 audio checkpoint (weight_g/weight_v weight-norm pairs, no "
+            "latents_mean/latents_std). ComfyUI's loader needs the CONVERTED file, with "
+            "weight-norm folded into plain '*.weight' tensors. Look for the 'Missing VAE keys' "
+            "warning in the log when the VAE loaded. Download the repackaged H3 audio VAE from "
+            "the Comfy-Org release; rendering with this one produces noise, not speech.")
+
+
+def check_vae_wiring(vae, audio_vae):
+    """Catch the commonest miswire -- the video VAE dropped into BOTH VAE inputs.
+    Without this the run samples a whole shot, decodes the video fine, then dies
+    deep inside comfy/sd.py with 'IndexError: tuple index out of range' when the
+    video memory estimator indexes shape[4] of the 4-D audio latent."""
+    if _is_audio_vae(audio_vae) is False:
+        raise RuntimeError(
+            "audio_vae is a video/image VAE, not the H3 audio VAE. Load the audio "
+            "autoencoder (the DAC/BigVGAN one shipped with MiniMax-H3, e.g. "
+            "minimax_h3_audio_vae.safetensors) in its own VAELoader and wire that "
+            "into 'audio_vae'; the video VAE belongs on 'vae' only.")
+    check_audio_vae_loaded(audio_vae)
+    if _is_audio_vae(vae) is True:
+        raise RuntimeError(
+            "vae is the H3 audio VAE -- the video and audio VAE inputs are swapped. "
+            "Wire the video VAE into 'vae' and the audio VAE into 'audio_vae'.")
 
 
 def _find_h3_sampling_node():
@@ -1635,12 +2189,36 @@ def _evict_all_but(keep_model):
 class H3LongVideosV1:
     CATEGORY = "sampling/minimax"
     FUNCTION = "run"
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "INT", "INT", "INT", "FLOAT")
-    RETURN_NAMES = ("images", "audio", "info", "script", "frames_per_shot", "total_frames", "shots", "video_seconds")
+    # fps is emitted as BOTH types on purpose: ComfyUI does not coerce between them,
+    # and the nodes that want a frame rate are split -- CreateVideo / SaveWEBM /
+    # VHS Video Combine take a FLOAT, while plenty of utility nodes take an INT.
+    # Wiring the wrong one is a red link, not a runtime error, so both are offered.
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "INT", "INT", "INT", "FLOAT", "FLOAT", "INT")
+    RETURN_NAMES = ("images", "audio", "info", "script", "frames_per_shot", "total_frames",
+                    "shots", "video_seconds", "fps", "fps_int")
+
+    @classmethod
+    def IS_CHANGED(cls, plan_only=False, **kwargs):
+        """Force a re-run for the PLAN, leave a real render cacheable.
+
+        Without an IS_CHANGED, ComfyUI keys this node's cache on its inputs alone, so
+        re-queueing with the same widgets returns the previous outputs untouched -- and
+        `info` is an output. That reads as "info doesn't update on each run", and it is
+        actively misleading here, because both the info AND the chosen shot length now
+        depend on LIVE FREE VRAM, which is not an input: the cached answer describes a
+        card state that may no longer exist.
+
+        plan_only is near-instant, so it always recomputes -- a stale plan is worse than
+        no plan. A real render still respects the cache (returning NaN there would
+        re-sample for minutes every time the graph is queued); change the seed, or any
+        widget, to force one."""
+        if plan_only:
+            return float("nan")      # NaN != NaN -> never matches the cached signature
+        return False
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        schema = {
             "required": {
                 "model": ("MODEL",), "clip": ("CLIP",), "vae": ("VAE",),
                 "audio_vae": ("VAE",),
@@ -1682,7 +2260,11 @@ class H3LongVideosV1:
                     "tooltip": "Preview the shot split WITHOUT rendering. Uses THIS node's own settings (no "
                                "second node, no duplicate entry): returns the plan in 'info' and the "
                                "shots/frames/seconds outputs near-instantly. Turn off to render for real."}),
-                "fps": ("INT", {"default": 24, "min": 1, "max": 60}),
+                "fps": ("INT", {"default": 24, "min": 1, "max": 60,
+                    "tooltip": "DISPLAY ONLY -- H3 always renders 24 fps. The model's frame grid and its "
+                               "audio latent are both defined against 24, so this node computes every "
+                               "duration at 24 regardless of what you set here. Set your video-save node "
+                               "to 24 as well, or the clip plays at the wrong speed."}),
                 "global_soundscape": ("STRING", {"multiline": True, "default": "",
                     "tooltip": "AMBIENT/environmental sound only (rain, room tone, footsteps, engines). "
                                "Appended to every shot as overall_soundscape. NOT for dialogue -- speech "
@@ -1760,8 +2342,73 @@ class H3LongVideosV1:
                                "factor / no resize). E.g. generate 512 fast, set 768 to land at native size."}),
                 "upscale_batch": ("INT", {"default": 4, "min": 1, "max": 64,
                     "tooltip": "Frames per chunk for the model upscale (lower = less VRAM, slower)."}),
+                "watermark_text": ("STRING", {"default": "",
+                    "tooltip": "Composited with PIL onto every finished frame -- NOT rendered by the "
+                               "model and NOT added to the prompt. White glyphs on a transparent layer, "
+                               "alpha-blended over the video, so only the letters land on the picture. "
+                               "Applied AFTER any upscale, so the text is crisp at final resolution. "
+                               "Leave empty for none."}),
+                "watermark_position": (["bottom-right", "bottom-left", "bottom-center",
+                                        "top-right", "top-left", "top-center", "center"],
+                    {"default": "bottom-right"}),
+                "watermark_size": ("FLOAT", {"default": 4.0, "min": 0.5, "max": 40.0, "step": 0.5,
+                    "tooltip": "Cap height as a percentage of FRAME HEIGHT, so the mark keeps its "
+                               "relative size at any resolution or upscale factor."}),
+                "watermark_opacity": ("FLOAT", {"default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Multiplies the white text alpha. 1.0 = solid white; 0.75 reads as a "
+                               "watermark without burying the picture under it."}),
+                "watermark_margin": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 25.0, "step": 0.5,
+                    "tooltip": "Inset from the frame edge, as a percentage of the SHORT edge."}),
+                "intro_text": ("STRING", {"multiline": True, "default": "",
+                    "tooltip": "Title composited over the OPENING frames -- white on transparent, so the "
+                               "first shot plays underneath it rather than being replaced by a card. "
+                               "Multi-line is centered as a block. Holds for intro_seconds, then fades "
+                               "out over intro_fade. Also PIL, never the model."}),
+                "intro_position": (["center", "lower-third", "top-center", "bottom-center"],
+                    {"default": "center"}),
+                "intro_seconds": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 30.0, "step": 0.5,
+                    "tooltip": "How long the title stays at full opacity before the fade starts."}),
+                "intro_fade": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 10.0, "step": 0.1,
+                    "tooltip": "Linear fade-out length after the hold. 0 = hard cut."}),
+                "intro_size": ("FLOAT", {"default": 9.0, "min": 0.5, "max": 40.0, "step": 0.5,
+                    "tooltip": "Title cap height as a percentage of frame height."}),
+                "overlay_font": ("STRING", {"default": "arial.ttf",
+                    "tooltip": "TrueType font for BOTH overlays: a bare name resolved against the system "
+                               "font folder (arial.ttf, arialbd.ttf, segoeui.ttf) or a full path to a "
+                               ".ttf/.otf file. Falls back to the first font that loads if this one fails."}),
+                "overlay_stroke": ("INT", {"default": 0, "min": 0, "max": 20,
+                    "tooltip": "Black outline thickness in pixels around the white text. 0 keeps it pure "
+                               "white as asked; 2-3 makes it survive a bright sky or a white wall."}),
+                "beat_split": (["auto", "each line"], {"default": "auto",
+                    "tooltip": "How the prompt box becomes beats. Beats are meant to be separated by a "
+                               "BLANK line (or a '##' line) -- but six beats typed on six consecutive "
+                               "lines are ONE paragraph, so they would render as one shot with six actions "
+                               "crammed into it, which looks like everyone is moving at triple speed. "
+                               "auto (default): blank lines first, then any paragraph still holding "
+                               "several lines is split one beat per LINE, and the info output says so. "
+                               "'each line': every line is its own beat -- same result, stated explicitly. "
+                               "Neither can lose a beat. (The old strict 'blank line' option was REMOVED: "
+                               "it was the only setting that could silently collapse beats, and a stored "
+                               "value of it now reads as 'auto'.) Directive lines (wardrobe:, seconds:, exit:) "
+                               "are never beats -- they attach to the beat that follows them."}),
                 "anchor_override": ("STRING", {"multiline": True, "default": "",
-                    "tooltip": "Set the persistent look explicitly instead of using the first paragraph."}),
+                    "tooltip": "Set the persistent look explicitly instead of using the first paragraph. "
+                               "When this is filled in, EVERY paragraph of the prompt box is a beat/shot -- "
+                               "nothing is consumed as the identity anchor. Put the permanent identity here "
+                               "(hair, face, build, age) and the clothing in character_memory."}),
+                "per_beat_length": ("BOOLEAN", {"default": False,
+                    "tooltip": "OPT-IN. Size each shot from its own beat instead of giving every shot the "
+                               "full VRAM budget. OFF (default) = every shot gets the full budget, which is "
+                               "the predictable behaviour. ON = a beat whose prose is just a delivered line "
+                               "is sized from that line (~2.5 words/sec + 1s of air); a beat with NO dialogue "
+                               "keeps the full budget. CAVEAT, and why this is no longer the default: the "
+                               "minimum shot is 124f (~5.2s), and almost every real line needs less than "
+                               "that, so in practice this pins EVERY dialogue shot to exactly 5.2s -- a 3.8s "
+                               "line and a 1.8s line come out the same length. If your shots all render at "
+                               "~5s, this is why; turn it off. Lengths are always clamped to the budget and "
+                               "to the 17n+5 grid, so it can only shorten a shot. Override any single beat "
+                               "with 'seconds: 8' on its own line inside that paragraph (works even with "
+                               "this off). Ignored when shot_seconds forces one length for the whole run."}),
                 "auto_wardrobe": ("BOOLEAN", {"default": True,
                     "tooltip": "Read clothing REMOVALS straight from your beat prose -- 'she takes off her "
                                "jacket' drops the jacket with no 'wardrobe:' line needed. Safe: only fires "
@@ -1804,6 +2451,16 @@ class H3LongVideosV1:
                                "time: 'wardrobe: Maya -= jacket' leaves Jon untouched."}),
             },
         }
+        # ComfyUI restores a saved graph's widget values POSITIONALLY, from a flat
+        # widgets_values array. A widget inserted in the MIDDLE therefore shifts every
+        # value after it onto the wrong widget in every workflow saved before it
+        # existed -- silently, with no error. So widgets added after v1 are forced to
+        # the END here, leaving the original order byte-for-byte intact.
+        opt = schema["optional"]
+        for name in ADDED_WIDGETS:
+            if name in opt:
+                opt[name] = opt.pop(name)      # re-insert at the end, value unchanged
+        return schema
 
     def _render(self, model, clip, vae, audio_vae, negative, prompt, w, h, ln, fps, tiled, sa,
                 handoff, decode_tile_frames=0, decode_tile_size=0):
@@ -1830,11 +2487,16 @@ class H3LongVideosV1:
             decode_tile_frames=0, decode_tile_size=0,
             cleanup_between_shots=True,
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
+            per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
-            mute_nonspeech_audio=False, mute_fade_ms=40):
+            mute_nonspeech_audio=False, mute_fade_ms=40,
+            watermark_text="", watermark_position="bottom-right", watermark_size=4.0,
+            watermark_opacity=0.75, watermark_margin=3.0,
+            intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
+            intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0):
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
         # A stale resident model from a different checkpoint would otherwise poison
@@ -1842,11 +2504,23 @@ class H3LongVideosV1:
         # so this must run before the schedule patch and before vram_gb().
         swap_note = flush_for_model_change(model)
 
-        fps = max(1, int(fps))
+        # Cheap wiring preflight: a video VAE on the audio_vae socket only blows up
+        # after a full shot has been sampled and decoded, so reject it up front.
+        check_vae_wiring(vae, audio_vae)
+
+        # H3 renders 24 fps, always. Honor the widget only as a warning: a lower value
+        # used to silently shorten every shot (10s -> 124f -> 5.2s of real time).
+        fps_note = ("" if int(fps) == H3_FPS else
+                    f"fps widget is {int(fps)} but H3 always renders {H3_FPS} fps -- all durations "
+                    f"computed at {H3_FPS}; set your video-save node to {H3_FPS} too")
+        fps = H3_FPS
         w, h = parse_resolution(resolution)
         # H3 is CFG-free (cfg 1): the sampler skips the negative, but common_ksampler
         # still needs a conditioning object, so build an empty one from the clip.
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
+        # Cheapest possible preflight: this empty encode already went through the
+        # text encoder, so compare its width to the DiT's before anything expensive.
+        check_text_encoder(model, negative)
 
         # Patch the dual video/audio schedule onto the model here, so a missing
         # upstream ModelSamplingMiniMaxH3 can't silently produce gibberish audio.
@@ -1857,11 +2531,35 @@ class H3LongVideosV1:
 
         paras = split_paragraphs(prompt, "##")
         if anchor_override.strip():
-            anchor, beats = anchor_override.strip(), paras
+            anchor, beat_paras = anchor_override.strip(), paras
         elif paras:
-            anchor, beats = paras[0], paras[1:]
+            anchor, beat_paras = paras[0], paras[1:]
         else:
-            anchor, beats = "", []
+            anchor, beat_paras = "", []
+        # A first paragraph that would be stripped to nothing is not an anchor -- it is an
+        # action beat about a tracked character, and consuming it deletes that shot
+        # outright (the sentence names the character, so it gets removed from the always-on
+        # anchor to avoid introducing them twice). Keep it as a BEAT and say so loudly,
+        # rather than losing a shot and the scene text along with it.
+        anchor_note = ""
+        if (not anchor_override.strip()) and paras and \
+                (anchor_contributes_nothing(anchor, character_memory.strip())
+                 or anchor_is_action_beat(anchor, paras[1:])):
+            preview = " ".join(anchor.split())[:60]
+            anchor, beat_paras = "", paras
+            anchor_note = (
+                f'WARNING: paragraph 1 ("{preview}...") reads as an action beat about a tracked '
+                f'character, not an identity anchor -- consuming it would have deleted that shot '
+                f'entirely, so it was KEPT AS A BEAT. There is now no persistent scene text: put '
+                f'the setting and style (with NO character names) in anchor_override.')
+        # Anchor extraction happens on PARAGRAPHS first, so a line-split can never
+        # eat into the identity block; only the beat paragraphs are expanded.
+        beats, split_note = expand_beats(beat_paras, beat_split)
+        beats_note = (f"{len(beats)} beat(s) -> {len(beats)} shot(s) from {len(paras)} paragraph(s)"
+                      + ("" if anchor_override.strip() else
+                         "; paragraph 1 was consumed as the identity anchor (fill anchor_override "
+                         "to make EVERY paragraph a beat)")
+                      + (f". {split_note}" if split_note else ""))
 
         total_gb, free_gb = vram_gb()
         resident_gb = dit_resident_gb(model)
@@ -1877,12 +2575,28 @@ class H3LongVideosV1:
             ln_note = ((ln_note + " ") if ln_note else "") + (
                 f"reserved ~{lora_gb:.1f}GB for bypass-LoRA adapters (they stay resident in bf16 "
                 f"rather than folding into the weights)")
+        # Hitting the internal floor means the budget arithmetic gave up, and every shot
+        # comes out ~5s regardless of what the beats need. That looked like the node
+        # ignoring the prompt; say what actually ran out and what moves the number.
+        if ln <= align_frame_count(MIN_SHOT_FRAMES) and total_gb > 0 and not (
+                shot_seconds and float(shot_seconds) > 0):
+            ln_note = ((ln_note + " ") if ln_note else "") + (
+                f"SHOT LENGTH IS AT THE {ln}f (~{ln / fps:.1f}s) FLOOR -- every shot will be this "
+                f"long whatever the beat asks for. "
+                + (f"No live free-VRAM reading was available, so there was nothing to budget from "
+                   f"(weights ~{resident_gb:.1f}GB stream and cannot be subtracted from the "
+                   f"{total_gb:.1f}GB card)."
+                   if streaming else
+                   f"Weights ~{resident_gb:.1f}GB + headroom ~{eff_headroom:.1f}GB leave nothing of "
+                   f"the {total_gb:.1f}GB card for the latent.")
+                + f" Free right now: ~{free_gb:.1f}GB. Lower vram_headroom_gb, drop to the "
+                  f"balanced/fast resolution tier, or close other GPU apps")
         accel_note = quant_accel_note(model)
         if streaming:
             ln_note = ((ln_note + " ") if ln_note else "") + (
-                f"NOTE: weights (~{resident_gb:.1f}GB) exceed VRAM (~{total_gb:.1f}GB), so they stream "
-                f"from system RAM -- some shared-memory spill is unavoidable at ANY resolution or shot "
-                f"length. Use a checkpoint that fits (pruned) to eliminate it")
+                f"weights (~{resident_gb:.1f}GB) exceed VRAM (~{total_gb:.1f}GB), so they stream rather "
+                f"than sitting on the card -- that figure is NOT subtracted from the budget, which is "
+                f"built from the ~{free_gb:.1f}GB actually free instead")
         tiled = total_gb > 0 and (total_gb - resident_gb) < 20
 
         # Sub-native renders duplicate subjects far more often, so default the guard on
@@ -1893,7 +2607,28 @@ class H3LongVideosV1:
         # count has to be stated even at native size.
         count_subjects = (subject_count_guard == "on" or
                           (subject_count_guard == "auto" and (min(w, h) < 768 or lora_on)))
-        fit_warnings = dialogue_fit_warnings(beats, ln / fps)
+        # `ln` is the CEILING (VRAM budget, or a forced shot_seconds). Each beat now
+        # gets its own length under that ceiling. A forced shot_seconds means the user
+        # stated one duration for the run, so per-beat sizing steps aside -- but an
+        # explicit 'seconds:' inside a beat still wins, which plan_beat_frames honors
+        # regardless of the flag.
+        forced_len = bool(shot_seconds and float(shot_seconds) > 0)
+        lens, len_notes = plan_beat_frames(beats, fps, ln, per_beat=(per_beat_length and not forced_len))
+        secs = [n / fps for n in lens]
+        # Say it OUT LOUD when per-beat sizing is what made the shots short. Buried in a
+        # list of per-shot numbers it read as a report, not a cause, and the symptom it
+        # produces -- every dialogue shot at exactly the 124f/~5.2s minimum -- looks
+        # exactly like the length widget being ignored.
+        if len_notes and any(n < ln for n in lens):
+            n_short = sum(1 for n in lens if n < ln)
+            ln_note = (f"PER-BEAT SIZING (per_beat_length) SHORTENED {n_short} of {len(lens)} shot(s) "
+                       f"below the {ln}f (~{ln / fps:.1f}s) budget -- turn per_beat_length OFF to give "
+                       f"every shot the full length. "
+                       + ((ln_note + " ") if ln_note else ""))
+        if len_notes:
+            ln_note = ((ln_note + " ") if ln_note else "") + (
+                f"per-beat lengths (ceiling {ln}f): " + "; ".join(len_notes))
+        fit_warnings = dialogue_fit_warnings(beats, secs)
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),
                                       auto_wardrobe, auto_silence_nonspeech, count_subjects,
@@ -1902,17 +2637,24 @@ class H3LongVideosV1:
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.
             shots = len(gens)
-            sps = round(ln / fps, 2)
-            total = round(shots * sps, 2)
-            vram_str = f"{total_gb:.1f}GB total / {resident_gb:.1f}GB weights" if total_gb else "VRAM unknown"
-            fitw = dialogue_fit_warnings(beats, ln / fps)
-            plan = (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fitw) + ". ") if fitw else "") + \
-                   (f"PLAN (no render): {shots} shot(s) x {ln}f (~{sps:g}s each) = ~{total:g}s at {w}x{h}. "
+            plan_lens = (lens + [ln] * shots)[:shots]
+            total = round(sum(plan_lens) / fps, 2)
+            uniform = len(set(plan_lens)) == 1
+            shape = (f"{shots} shot(s) x {plan_lens[0]}f (~{plan_lens[0] / fps:g}s each)" if uniform
+                     else f"{shots} shot(s), {sum(plan_lens)}f total: "
+                          + ", ".join(f"{n}f/~{n / fps:.1f}s" for n in plan_lens))
+            vram_str = f"{total_gb:.1f}GB total / {resident_gb:.1f}GB weights / {free_gb:.1f}GB free" if total_gb else "VRAM unknown"
+            plan = ((anchor_note + " ") if anchor_note else "") + \
+                   (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
+                   (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
+                    + (f" {beats_note}." if beats_note else "")
+                + (f" {fps_note}." if fps_note else "")
                     + (f" {ln_note}." if ln_note else ""))
             ph_img = torch.zeros((1, 64, 64, 3))
             ph_audio = {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}
-            return (ph_img, ph_audio, plan, "\n---\n".join(gens), ln, shots * ln, shots, total)
+            return (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
+                    sum(plan_lens), shots, total, float(fps), int(fps))
 
         spk = speech_flags(beats)          # which shots have real (quoted) dialogue
         vram_trace = []                    # free VRAM after each shot
@@ -1923,13 +2665,15 @@ class H3LongVideosV1:
         if cleanup_between_shots:
             _deep_cleanup()          # start the first (heaviest) shot with max free VRAM
 
+        shot_lens = (lens + [ln] * len(gens))[:len(gens)]
         for i, gen_prompt in enumerate(gens):
             # denoise is fixed at 1.0 (partial denoise desyncs the joint AV schedule).
             sa = (seed + i if vary_seed_per_shot else seed, steps, cfg, sampler_name, scheduler, 1.0)
+            ln_i = shot_lens[i]        # this beat's own length (<= the VRAM ceiling)
             if i == 0:
                 while True:
                     try:
-                        frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
+                        frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -1944,12 +2688,12 @@ class H3LongVideosV1:
                                                "Pick a smaller resolution, close other GPU apps, or use a smaller quant.")
             else:
                 try:
-                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
+                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if not _is_oom(e) or tiled:
                         raise
                     mm.soft_empty_cache(True); tiled = True; backoff.append(f"shot {i+1}: tiled")
-                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
+                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
 
             sr = audio["sample_rate"]; wav = audio["waveform"]
 
@@ -1957,7 +2701,11 @@ class H3LongVideosV1:
             # isn't the literal last frame (which may catch an open, mid-word mouth
             # and make the next shot start "talking"). Drop the matching audio tail
             # so this shot's A/V stays aligned. Skipped if the shot is too short.
-            if hoff and frames.shape[0] > hoff + 1:
+            # ...but ONLY when there IS a next shot. On the final shot the trim hands its
+            # frames to nobody, so it just deletes the tail of the finished video -- on a
+            # single-shot run that is the whole point of handoff_offset applied to the one
+            # thing it cannot help (243f requested came back as 231 frames).
+            if hoff and i < len(gens) - 1 and frames.shape[0] > hoff + 1:
                 cut = round(hoff * sr / fps)
                 frames = frames[:-hoff]
                 if cut:
@@ -2036,28 +2784,49 @@ class H3LongVideosV1:
             all_frames, up_note = _upscale_frames(all_frames, upscale, upscale_model,
                                                   upscale_target_short_edge, upscale_batch)
 
+        # Text overlays LAST -- after the upscale, so glyphs are rasterized at the
+        # final pixel size instead of being interpolated up along with the picture.
+        all_frames, ov_note = _overlay.apply_overlays(
+            all_frames, fps, watermark_text, watermark_position, watermark_size,
+            watermark_opacity, watermark_margin, intro_text, intro_seconds,
+            intro_fade, intro_size, intro_position, overlay_font, overlay_stroke)
+
         script = "\n---\n".join(gens)
         actual = all_frames.shape[0] / fps
-        per_shot_s = ln / fps
-        vram_str = f"{total_gb:.1f}GB total / {resident_gb:.1f}GB weights" if total_gb else "VRAM unknown"
-        hoff_str = f" handoff -{hoff}f." if hoff else ""
-        info = (f"{len(gens)} shot(s) x {ln}f (~{per_shot_s:.1f}s each) = ~{len(gens)*per_shot_s:.1f}s "
-                f"at {w}x{h}; {all_frames.shape[0]} frames (~{actual:.1f}s actual). "
+        uniform_len = len(set(shot_lens)) == 1
+        shape_str = (f"{len(gens)} shot(s) x {shot_lens[0]}f (~{shot_lens[0] / fps:.1f}s each) "
+                     f"= ~{sum(shot_lens) / fps:.1f}s" if uniform_len else
+                     f"{len(gens)} shot(s), per-beat "
+                     + ", ".join(f"{n}f/~{n / fps:.1f}s" for n in shot_lens)
+                     + f" = ~{sum(shot_lens) / fps:.1f}s")
+        vram_str = f"{total_gb:.1f}GB total / {resident_gb:.1f}GB weights / {free_gb:.1f}GB free" if total_gb else "VRAM unknown"
+        # Say how many shots the trim actually touched: on a single-shot run it is none,
+        # which explains the frame count instead of leaving it looking like a shortfall.
+        hoff_str = (f" handoff -{hoff}f on {max(0, len(gens) - 1)} of {len(gens)} shot(s)"
+                    f"{' (last shot keeps its tail)' if len(gens) else ''}." if hoff else "")
+        info = ((anchor_note + " ") if anchor_note else "") + \
+               (f"{shape_str} at {w}x{h}; {all_frames.shape[0]} frames (~{actual:.1f}s actual). "
                 f"decode {'tiled' if tiled else 'full'}. {vram_str}.{hoff_str}"
                 + (" DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings)
                    + ". Shorten the line, or pick a lower resolution tier to keep the duration."
                    if fit_warnings else "")
                 + (" subject-count guard ON (sub-native resolution)."
                    if count_subjects and min(w, h) < 768 else "")
+                + (f" {beats_note}." if beats_note else "")
+                + (f" {fps_note}." if fps_note else "")
                 + (f" {swap_note}." if swap_note else "")
                 + (f" free VRAM/shot: {vram_trace}." if len(vram_trace) > 1 else "")
                 + (f" {accel_note}." if accel_note else "")
                 + (f" {ms_note}." if ms_note else "")
                 + (f" {ln_note}." if ln_note else "")
                 + (f" {up_note}." if up_note else "")
+                + (f" {ov_note}." if ov_note else "")
                 + (f" Adjusted: {'; '.join(backoff)}." if backoff else ""))
+        # frames_per_shot is a single INT for a now-variable series: report the LONGEST
+        # shot, which is what a downstream consumer must be able to hold.
         return (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
-                ln, all_frames.shape[0], len(gens), round(actual, 2))
+                max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
+                float(fps), int(fps))
 
 
 NODE_CLASS_MAPPINGS = {"H3LongVideosV1": H3LongVideosV1}

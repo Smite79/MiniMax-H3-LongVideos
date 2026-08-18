@@ -36,6 +36,97 @@ steps, cfg, sampler, scheduler. Everything else (fps, seam trim, **handoff offse
 VRAM headroom, explicit anchor, ambient `global_soundscape`,
 `non_diegetic_music`, `character_memory`) is optional with sensible defaults.
 
+**Every shot coming out at exactly ~5.2s? Turn `per_beat_length` OFF.** It is now
+**off by default**, but a workflow saved earlier still stores the old `True` and must
+be unticked by hand. The feature sizes a dialogue-only beat from its line (~2.5
+words/sec + 1s of air) — but the minimum shot is 124f (~5.2s) and almost every real
+line needs less than that, so in practice it pins **every** dialogue shot to exactly
+5.2s: a 3.8s line and a 1.8s line come out identical. That is not sizing, it is a
+constant, which is why it is no longer the default. Note it is also **ignored when
+`shot_seconds` is forced** — so a plan made with a forced length shows full-length
+shots while the auto render comes back at 5.2s, which looks like the length widget
+being ignored. `info` now says outright when per-beat sizing shortened shots, and by
+how many.
+
+**A short `shot_seconds` used to be ignored.** Values below ~5.2s were raised to the
+124-frame budget floor, so 1s, 2s, 3s and 4s all rendered identically. That floor is
+the fallback for what the node *guesses*, and must never override what you asked for;
+an explicit request is now honored down to H3's 5-frame minimum.
+
+**`info` not updating between runs.** The node had no `IS_CHANGED`, so ComfyUI keyed
+its cache on the inputs alone and re-queueing with unchanged widgets returned the
+previous outputs — `info` among them. That is actively misleading here, because both
+`info` and the chosen shot length depend on live free VRAM, which is not an input.
+`plan_only` now always recomputes (it is near-instant, and a stale plan is worse than
+none); a real render stays cacheable, so change the seed or any widget to force one.
+
+**Every shot coming out ~5s (the 124f floor).** The length budget is card capacity
+minus measured weight size minus `vram_headroom_gb`. If that came out at or below
+zero it returned the internal 124-frame floor immediately — so a checkpoint that
+*fits* but leaves less than the headroom (e.g. ~14.6GB of weights on a 16GB card)
+pinned **every** shot to ~5.2s no matter what the beats asked for, and dropping to the
+fast 512 tier changed nothing, because the early return skipped the resolution scaling
+entirely. That case now runs the normal arithmetic: ~14.6GB weights on a 16GB card
+gives 226f (~9.4s) instead of 124f (~5.2s). Weights that genuinely exceed the card
+still floor at every resolution — that one is real, and no shot length fixes it.
+
+A deficit is weights, not latent, so it is deliberately *not* scaled by resolution;
+in that regime the tiers report the same length. Resolution only buys frames when
+there is a surplus to scale. And when the floor is hit for real, `info` now says so
+outright — which knob moved it, and by how much — instead of quietly handing back 5s
+shots.
+
+**Beat counts can no longer be collapsed by a setting.** `beat_split` used to offer a
+strict `blank line` mode, and it was the only control on the node that could silently
+lose beats: six beats typed as two blocks of three rendered as **two** shots, with
+nothing in `info` to say why (the split note is only written when a paragraph is
+actually split). That option is **removed**. `beat_split` now offers `auto` and
+`each line`, which produce identical results — neither can drop a beat — and a
+workflow that still stores `blank line` reads as `auto`. The widget itself is kept in
+place rather than deleted, because removing a widget shifts every stored value after
+it in already-saved graphs.
+
+Nothing else on the node changes the beat count. The only other control that alters
+it is `anchor_override`: leave it empty and paragraph 1 is consumed as the anchor
+(see below) — intended behaviour, and now guarded against the case where that
+silently deletes a shot.
+
+**Repeat name mentions are collapsed automatically.** Naming one person twice in a
+single beat — "Kristy finds Dan… she walks over to **Dan**" — is the most reliable
+way to make H3 render that person twice, and binding the description once doesn't
+fix it, because the bare repeated name is what duplicates. The node now rewrites the
+second and later mentions to the right pronoun by grammatical case: subject
+(`and Dan takes it` → `and he takes it`), object (`over to Dan` → `over to him`),
+possessive (`Kristy's toolbox` → `her toolbox`). Write the beats however reads
+naturally; you don't have to police your own repeats.
+
+It only fires where the result is unambiguous. The person's pronoun must be known —
+declared in their sheet (`Dan = he, …`) or inferable from a gender word — and no one
+else in the shot may share it, or "he" couldn't be traced back. Words inside double
+quotes are never touched, so a name in a spoken line (`"Kristy, over here!"`) stays
+exactly as written. The first mention always survives, so the description still has
+a name to bind to.
+
+**A first paragraph that is really a beat is now rescued, not eaten** — including with
+no `character_memory` set, which is the common case and the one the first version of
+this guard could not see. A first paragraph is kept as a beat when every sentence in
+it stages an action ("Kristy walks around in a garage looking for engine parts.") and
+its subject recurs later in the prompt, or when it strips to nothing. A scene/style
+anchor never matches; neither does a mixed paragraph that still carries scene text.
+Without
+`anchor_override`, paragraph 1 becomes the identity anchor — so three paragraphs
+render as two shots. That is by design, but it turns into silent data loss when
+paragraph 1 is itself an action beat naming a tracked character ("Kristy walks
+around in a garage looking for engine parts."): the anchor is stamped on every
+shot, so any sentence naming a tracked character is stripped out of it to stop
+that character being introduced twice — which leaves nothing at all. You lose the
+shot *and* the only scene text you wrote. The node now detects that exact case
+(anchor strips to empty), keeps the paragraph as a **beat**, and puts a WARNING at
+the front of `info`. It can't misfire on a normal anchor: a `wardrobe:` line, or
+any prose that survives the strip, is left alone, and with no `character_memory`
+nothing is tracked so nothing is stripped. The real fix is still to put the
+setting and style — **with no character names** — in `anchor_override`.
+
 **Character / wardrobe memory.** The keyframe handoff only carries what the
 *last frame* showed — so if a shot ends zoomed in on the face, the pants aren't
 in that frame and the next shot reinvents them. The fix is to keep wardrobe in

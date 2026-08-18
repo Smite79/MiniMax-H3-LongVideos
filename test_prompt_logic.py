@@ -248,6 +248,220 @@ def check_subject_count_guard():
 
 
 
+def check_beat_count_is_unbreakable():
+    """No widget value may reduce the beat count. beat_split's strict 'blank line'
+    option was the only one that could -- six beats typed as two blocks of three came
+    out as two shots, silently, because the split note is only written when a
+    paragraph is actually split. The option is gone; a stored value of it must read
+    as 'auto' rather than resurrecting the behaviour."""
+    print("\n=== beat count cannot be collapsed by any setting ===")
+    six = ["Kristy scans the shelves.", "She finds a crate.", "She opens it.",
+           "Dan walks in.", "He points at the box.", "She lifts out a piston."]
+    shapes = {"blank-line separated": "\n\n".join(six),
+              "consecutive lines": "\n".join(six),
+              "two blocks of three": "\n".join(six[:3]) + "\n\n" + "\n".join(six[3:]),
+              "mixed 1+2+3": six[0] + "\n\n" + "\n".join(six[1:3]) + "\n\n" + "\n".join(six[3:])}
+    ok = True
+    for label, p in shapes.items():
+        for mode in ("auto", "each line", "blank line", "", None, "nonsense", 0):
+            n = len(S.expand_beats(SP(p, "##"), mode)[0])
+            if n != 6:
+                ok = False
+                print(f"    LOST BEATS: {label} @ mode={mode!r} -> {n}")
+    check("6 beats survive every prompt shape x every mode value", ok)
+    check("the removed option is no longer offered",
+          "blank line" not in S.expand_beats.__doc__ or
+          "no strict blank-lines-only mode" in S.expand_beats.__doc__)
+    check("a stale 'blank line' value behaves exactly like auto",
+          S.expand_beats(SP(shapes["two blocks of three"], "##"), "blank line")[0]
+          == S.expand_beats(SP(shapes["two blocks of three"], "##"), "auto")[0])
+    # ...and the split note must still fire, since that is the user's only signal
+    _, note = S.expand_beats(SP(shapes["consecutive lines"], "##"), "auto")
+    check("auto still reports when it split a paragraph", "split one beat per LINE" in note)
+    check("the note no longer advertises the removed option", "blank line" not in note)
+
+
+def check_name_dedupe():
+    """A person named twice in one beat is rendered twice by the model. The second and
+    later mentions must collapse to a pronoun -- but only where that is unambiguous."""
+    print("\n=== repeat name mentions collapse to pronouns ===")
+    F = S.dedupe_person_mentions
+    cm = S.parse_wardrobe("Kristy = she, 27, silver hair\nDan = he, 40, brown hair")
+
+    got = F("Kristy finds Dan sitting upright in a chair. She walks over to Dan "
+            "and asks him for the pistons.", cm)
+    check("the reported case: second 'Dan' becomes 'him'",
+          got.count("Dan") == 1 and "over to him" in got)
+    check("object position after a preposition uses the object form",
+          F("Kristy waves. Kristy walks toward Dan and stops near Dan.", cm)
+          .endswith("stops near him."))
+    check("subject position after a sentence end uses the capitalized subject form",
+          F("Kristy kneels. Kristy opens the panel.", cm) == "Kristy kneels. She opens the panel.")
+    check("subject position after 'and' uses the subject form",
+          "and he takes it" in F("Kristy hands Dan the wrench, and Dan takes it.", cm))
+    check("possessive becomes the possessive form",
+          F("Kristy opens Kristy's toolbox.", cm) == "Kristy opens her toolbox.")
+    check("the FIRST mention always survives",
+          F("Dan sits. Dan stands. Dan waves.", cm).startswith("Dan sits."))
+    check("...and only the first",
+          F("Dan sits. Dan stands. Dan waves.", cm).count("Dan") == 1)
+
+    # never fire where the result would be ambiguous or would rewrite speech
+    quoted = F('Dan waves at Kristy and calls out, "Kristy, over here!"', cm)
+    check("a name inside dialogue is never rewritten", '"Kristy, over here!"' in quoted)
+    two_she = S.parse_wardrobe("Kristy = she, silver hair\nMaya = she, red hair")
+    check("two people sharing a pronoun are left alone",
+          F("Kristy finds Maya. Kristy waves at Maya.", two_she).count("Kristy") == 2)
+    undecl = S.parse_wardrobe("Kristy = silver hair\nDan = brown hair")
+    check("an undeclared pronoun is left alone",
+          F("Kristy waves. Kristy waves again.", undecl).count("Kristy") == 2)
+    check("an untracked name is left alone",
+          F("Sam waves. Sam waves again.", cm).count("Sam") == 2)
+    check("a single mention is untouched",
+          F("Kristy walks over to Dan.", cm) == "Kristy walks over to Dan.")
+
+    # end to end, through the real assembly
+    beats = ["Kristy finds Dan sitting upright in a chair. She walks over to Dan and "
+             "asks him: \"Do you know where the pistons are?\"",
+             "Dan answers back to Kristy: \"Should be in the box over there.\""]
+    sh = D("An open 4 bay car garage, natural lighting.", beats, "", "",
+           "Kristy = she, 27, silver hair, blue coveralls\nDan = he, 40, brown hair, black t-shirt")
+    check("assembled shot names each person once",
+          all(s.count("Kristy") <= 1 and s.count("Dan") <= 1 for s in sh))
+    check("both people are still described",
+          "silver hair" in sh[0] and "brown hair" in sh[0])
+    check("both dialogue lines survive verbatim",
+          "Do you know where the pistons are?" in sh[0]
+          and "Should be in the box over there." in sh[1])
+
+
+def check_anchor_beat_rescue():
+    """A first paragraph that is really an ACTION BEAT must not be eaten as the anchor.
+
+    Consuming it looks harmless -- but the anchor is stamped on every shot, so any
+    sentence naming a tracked character is stripped out of it to avoid introducing
+    that character twice. A first paragraph like "Kristy walks around in a garage
+    looking for engine parts." is therefore stripped to NOTHING: three paragraphs
+    render as two shots, and the garage never reaches any shot either."""
+    print("\n=== action beat must not be eaten as the anchor ===")
+    F = S.anchor_contributes_nothing
+    cm = "Kristy = she, silver hair\nDan = he, brown hair"
+    check("action beat about a tracked person contributes nothing",
+          F("Kristy walks around in a garage looking for engine parts.", cm) is True)
+    check("scene/style anchor is kept",
+          F("A cinematic garage, warm work light, film grain.", cm) is False)
+    check("identity anchor with no names is kept",
+          F("Warm late-afternoon light, cinematic, 2K.", cm) is False)
+    check("a wardrobe-only paragraph is kept (it seeds the channel)",
+          F("wardrobe: Kristy = she, silver hair", cm) is False)
+    check("prose plus a name keeps the surviving scene text",
+          F("Kristy stands by the plane. A cinematic hangar, warm light.", cm) is False)
+    check("with NO character_memory this test cannot see it (see the action-beat guard)",
+          F("Kristy walks around in a garage looking for engine parts.", "") is False)
+
+    # ...which is why the action-beat guard exists: no character sheet is the COMMON
+    # case, and without it the first beat was silently demoted to a header.
+    A = S.anchor_is_action_beat
+    later = ["Kristy finds Dan sitting in a chair.", "Dan answers back to Kristy."]
+    check("action beat is caught with NO character_memory at all",
+          A("Kristy walks around in a garage looking for engine parts.", later) is True)
+    check("a pronoun subject needs no recurrence", A("She walks into the garage.", []) is True)
+    for anchor in ["natural lighting, flat lighting, even exposure, medium shot, "
+                   "everything sharp, broadcast video, taken with iPhone. An open 4 bay car garage.",
+                   "Cinematic lighting, warm tones, shallow depth of field.",
+                   "A cinematic aircraft hangar and airfield, warm late-afternoon light, film grain.",
+                   "Warm late-afternoon light, cinematic, 2K.",
+                   "Maya: short silver hair, scar over left eyebrow, athletic build."]:
+        if A(anchor, later):
+            check(f"real anchor misread as a beat: {anchor[:40]}", False)
+    check("no real anchor is misread as a beat", True)
+    check("a mixed paragraph keeps its scene text and stays an anchor",
+          A("Kristy stands by the plane. A cinematic hangar, warm light.", later) is False)
+    check("a gerund style lead is not an action ('Cinematic lighting')",
+          A("Cinematic lighting, warm tones.", later) is False)
+    check("a wardrobe-seeding paragraph is still kept",
+          A("wardrobe: Kristy = she, silver hair", later) is False)
+    check("an untracked name that never recurs is not a beat subject",
+          A("Vignette darkens the corners.", later) is False)
+    check("empty anchor does not fire", F("", cm) is False)
+    # the shape that started this: 3 paragraphs, 2 shots
+    p = ("Kristy walks around in a garage looking for engine parts.\n\n"
+         "Kristy finds Dan sitting in a chair. She asks him: \"Where are the pistons?\"\n\n"
+         "Dan answers back: \"In the box over there.\"")
+    paras = SP(p, "##")
+    check("the reported case is 3 paragraphs", len(paras) == 3)
+    old = D(paras[0], paras[1:], "", "", cm)
+    check("old behaviour lost a shot", len(old) == 2)
+    check("...and lost the garage entirely",
+          all("garage" not in s for s in old))
+    new = D("", paras, "", "", cm)
+    check("rescued: all three paragraphs render", len(new) == 3)
+    check("the first beat survives with its action",
+          "garage" in new[0] and "engine parts" in new[0])
+    check("the dialogue shots are unaffected",
+          "Where are the pistons?" in new[1] and "In the box over there." in new[2])
+
+
+def check_forced_shot_seconds():
+    """An explicit shot_seconds must be honored, including SHORT values.
+
+    MIN_SHOT_FRAMES (124f/~5.2s) is the floor of the VRAM *budget* -- what the node
+    falls back to when it has to guess. It was also being applied as a floor on the
+    user's own request, so 1s, 2s, 3s and 4s all rendered as 5.2s and the widget looked
+    dead. It must only ever clamp DOWN (to what the card can hold), never up."""
+    print("\n=== forced shot_seconds is honored ===")
+    R, P = S.resolve_shot_frames, S.plan_beat_frames
+    beats = ["Kristy scans the shelves.", "She opens the crate.", "Dan walks in."]
+    NAT = 1344 * 768
+
+    def rendered(ss):
+        ln, _ = R(ss, 24, 15.9, 11.7, 1.5, False, NAT, 8.0)
+        return P(beats, 24, ln, per_beat=False)[0][0]
+
+    ok = True
+    for ss in (1.0, 2.0, 3.0, 4.0):
+        got = rendered(ss)
+        if got >= 124:
+            ok = False
+            print(f"    RAISED: {ss}s -> {got}f (~{got / 24:.1f}s)")
+    check("short shot_seconds is no longer raised to the 124f floor", ok)
+    check("1s stays about 1s", 24 <= rendered(1.0) <= 45)
+    check("3s stays about 3s", 68 <= rendered(3.0) <= 80)
+    check("each short value is distinct",
+          len({rendered(s) for s in (1.0, 2.0, 3.0, 4.0)}) == 4)
+    check("lengths still land on the 17n+5 grid",
+          all(rendered(s) % 17 == 5 for s in (1.0, 2.0, 3.0, 4.0, 6.0, 10.0)))
+    check("normal lengths are unaffected", rendered(10.0) == 243 and rendered(6.0) == 158)
+    check("a request over the budget still clamps DOWN",
+          rendered(15.0) < 362 and rendered(15.0) == R(15.0, 24, 15.9, 11.7, 1.5, False, NAT, 8.0)[0])
+    check("auto mode still uses the budget floor, not 5 frames",
+          P(beats, 24, S.estimate_shot_frames(12.0, 17.0, 1.5, NAT), per_beat=False)[0][0] == 124)
+    # per-beat sizing keeps its own floor: that path GUESSES from dialogue and must not
+    # guess a 1s shot, unlike an explicit request.
+    talky = ['She says, "Roger."']
+    check("per-beat dialogue sizing keeps the 124f floor",
+          P(talky, 24, 243, per_beat=True)[0][0] == 124)
+
+    # ...which is exactly why per_beat_length is no longer the default: the floor is
+    # ABOVE what nearly every real line needs, so the feature does not "size" shots at
+    # all -- it pins every dialogue beat to the same 124f/~5.2s. This is the "every shot
+    # is locked to 5 seconds" report.
+    dialogue_beats = ['Kristy finds Dan and asks him: "Do you know where the pistons are?"',
+                      'Dan answers her: "Should be in the box over there."',
+                      'She holds up a piston and says: "Found them."',
+                      'Dan nods and says: "Told you."']
+    on = P(dialogue_beats, 24, 243, per_beat=True)[0]
+    off = P(dialogue_beats, 24, 243, per_beat=False)[0]
+    check("per-beat ON collapses every dialogue beat onto the same floor",
+          set(on) == {124})
+    check("...regardless of how different the lines are",
+          S.dialogue_seconds(dialogue_beats[0]) != S.dialogue_seconds(dialogue_beats[3])
+          and on[0] == on[3])
+    check("per-beat OFF gives every beat the full budget", set(off) == {243})
+    check("action beats are never shortened either way",
+          P(["Kristy scans the shelves."], 24, 243, per_beat=True)[0][0] == 243)
+
+
 def check_dialogue_fit():
     """Shortening shots to fit VRAM must not silently truncate dialogue."""
     print("\n=== dialogue fit vs shot length ===")
@@ -325,10 +539,38 @@ def check_vram_budget():
             if any(_vals[i] > _vals[i + 1] for i in range(len(_vals) - 1)):
                 check(f"monotonic by resolution ({_cg}GB card, {_mg}GB weights)", False)
     check("budget is monotonic by resolution for every card/model combo", True)
-    check("a live free-VRAM reading can only REDUCE the estimate",
-          E(15.9, 17.0, 1.5, NAT, free_gb=99) == E(15.9, 17.0, 1.5, NAT))
+    # Where the weights FIT, capacity-minus-weights is the basis and a live reading can
+    # only ever trim it -- a momentarily low reading during model load must not floor it.
+    check("a live free-VRAM reading can only REDUCE the estimate (weights fit)",
+          E(15.9, 11.7, 1.5, NAT, free_gb=99) == E(15.9, 11.7, 1.5, NAT))
+    # Where the weights STREAM, model_size() is not what occupies VRAM, so it cannot be
+    # subtracted from capacity; the live reading is the only meaningful signal. A 44.3GB
+    # MXFP8 build on a 15.9GB card sampled 243f at 768x768 without exceeding VRAM, while
+    # the old arithmetic floored it to 124f/~5s.
+    check("a streaming checkpoint budgets from free VRAM, not from weight size",
+          E(15.9, 44.3, 1.5, 768 * 768, free_gb=12.0) > 124)
+    check("the reported 243f case is now reachable",
+          E(15.9, 44.3, 1.5, 768 * 768, free_gb=12.0) >= 243)
+    check("a streaming checkpoint still scales with resolution",
+          E(15.9, 44.3, 1.5, NAT, free_gb=6.0) <= E(15.9, 44.3, 1.5, 512 * 512, free_gb=6.0))
+    check("less free VRAM means a shorter shot while streaming",
+          E(15.9, 44.3, 1.5, NAT, free_gb=3.0) < E(15.9, 44.3, 1.5, NAT, free_gb=12.0))
+    check("streaming with NO reading to go on still floors",
+          E(15.9, 44.3, 1.5, NAT) == 124)
     check("an almost-full card lowers the estimate",
           E(15.9, 13.6, 1.5, NAT, free_gb=0.3) < E(15.9, 13.6, 1.5, NAT))
+    # Weights that FIT but leave less than the headroom used to floor every shot to
+    # 124f/~5s -- two dialogue beats came out ~5s each on a card with room to spare.
+    # A deficit is weights, not latent, so it must not floor and must not be scaled by
+    # resolution (which would make the fast tier look worse than native).
+    check("a headroom-only deficit no longer floors",
+          E(15.9, 14.6, 1.5, NAT) > 124 and E(15.9, 15.0, 1.5, NAT) > 124)
+    check("a headroom-only deficit still gives a usable length",
+          E(15.9, 14.6, 1.5, NAT) >= 200)
+    check("a deficit is not scaled by resolution",
+          E(15.9, 14.6, 1.5, NAT) == E(15.9, 14.6, 1.5, FAST))
+    check("weights exceeding the card still floor at every resolution",
+          all(E(15.9, 17.0, 1.5, p) == 124 for p in (NAT, FAST, 512 * 512)))
     check("a model that cannot fit floors regardless of resolution",
           all(E(12.0, 17.0, 1.5, p) == 124 for p in (NAT, FAST, 512 * 512)))
     check("a 24GB card clears 362f at native", E(24.0, 11.7, 1.5, NAT) == 362)
@@ -523,8 +765,12 @@ def main():
           all(_person_descs(s, "silver hair") <= 1 for s in rshots))
     check("repeated names: Jon described at most once per shot",
           all(_person_descs(s, "bald") <= 1 for s in rshots))
-    check("repeated names: description lands on the FIRST mention",
-          rshots[0].index("(silver hair") < rshots[0].rindex("Kristy"))
+    # Repeat mentions are now collapsed to pronouns, so each name survives exactly once
+    # and the description binds at that single mention.
+    check("repeated names: each name appears exactly once",
+          rshots[0].count("Kristy") == 1 and rshots[0].count("Jon") == 1)
+    check("repeated names: description binds at that mention",
+          "Kristy (silver hair" in rshots[0])
 
     # --- PLAIN-TEXT beats (no character_memory): garments AND people ------------
     pt_anchor = ("A woman with silver hair in a red jacket and a bald man in navy "
@@ -558,6 +804,10 @@ def main():
     check_mouth_state_on_dialogue()
     check_lora_duplication_guard()
     check_subject_count_guard()
+    check_beat_count_is_unbreakable()
+    check_name_dedupe()
+    check_anchor_beat_rescue()
+    check_forced_shot_seconds()
     check_dialogue_fit()
     check_model_change_flush()
     check_vram_budget()
