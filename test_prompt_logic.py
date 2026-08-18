@@ -34,6 +34,30 @@ def check(name, cond):
 
 
 
+def worn(shot, item):
+    """Is the garment presented as being WORN in this shot?
+
+    A removal now STATES the change ("... is no longer wearing the red jacket, it is
+    off") in the first shot without it -- deleting the item from the channel was not
+    enough on its own, because the shot still starts from a handoff frame that shows
+    it being worn. That sentence mentions the garment while asserting the opposite,
+    so a bare substring test reads a correct removal as a failure. Audio field lines
+    are excluded for the same reason: they are field names, not wardrobe."""
+    import re as _re
+    text = _re.sub(r"[^.]*\bno longer wearing\b[^.]*\.", " ", shot, flags=_re.I)
+    text = _re.sub(r"[^.]*\bno longer worn\b[^.]*\.", " ", text, flags=_re.I)
+    text = _re.sub(r"(?m)^(?:overall_soundscape|non_diegetic_music):.*$", " ", text)
+    return _re.search(r"\b" + _re.escape(item) + r"\b", text, _re.I) is not None
+
+
+def stated_off(shot, item):
+    """Does this shot say outright that the garment is off?"""
+    import re as _re
+    return bool(_re.search(r"(?:no longer wearing|no longer worn)[^.]*\b"
+                           + _re.escape(item) + r"\b|\b" + _re.escape(item)
+                           + r"\b[^.]*\bis off\b", shot, _re.I))
+
+
 def _parens(shot):
     """Extract the contents of every (parenthetical) in a shot's text."""
     out, depth, cur = [], 0, ""
@@ -161,6 +185,170 @@ def check_no_phantom_person_in_anchor():
           "Teresa" in keep and "Dan" in keep and keep.count("Teresa") == 1)
 
 
+# --- the 6-beat production prompt used for the three reported bugs ------------
+SIX_ANCHOR = ("natural lighting, flat lighting, even exposure, medium shot, everything sharp, "
+              "broadcast video, taken with iPhone. An open 4 bay car garage.")
+SIX_BEATS = [
+    "Kristy walks around in a garage looking for engine parts.",                      # 1 silent
+    "Kristy finds Dan sitting in a chair. She walks over to Dan and asks him: "
+    "\"Do you know where the pistons are?\"",                                         # 2 dialogue
+    "Dan answers back to Kristy: \"Should be in the box over there.\"",               # 3 dialogue
+    "Kristy takes off her red jacket and drops it on the workbench.",                 # 4 removal
+    "Kristy opens the box and pulls out a piston.",                                   # 5 silent
+    "Dan stands up and walks over to the bench.",                                     # 6 silent
+]
+SIX_CM = ("Kristy = she, 27, silver hair, red jacket, blue jeans\n"
+          "Dan = he, 40, brown hair, black t-shirt")
+
+
+def check_clothing_removal_6beat():
+    """A removal must take the GARMENT off -- not delete the CHARACTER.
+
+    'takes off her red jacket' used to yield the token 'red' (the first non-stop word
+    after the verb), and matching 'red' with its neighbours in the anchor produced
+    'A woman in a red'. Scrubbing that left 'jacket and a man in a black t-shirt':
+    the woman was deleted from every later shot and the jacket stayed. Clothing
+    removal looked completely broken, and the cast quietly lost a person."""
+    print("\n=== clothing removal on a 6-beat prompt ===")
+    # (a) tracked in the character channel
+    sh = D(SIX_ANCHOR, SIX_BEATS, "", "", SIX_CM)
+    check("6 beats -> 6 shots", len(sh) == 6)
+    check("jacket worn up to and including the removal shot",
+          all(worn(sh[i], "red jacket") for i in range(4)))
+    check("jacket gone from every shot after the removal",
+          all(not worn(sh[i], "red jacket") for i in (4, 5)))
+    check("the removal is stated in the next shot Kristy is in",
+          stated_off(sh[4], "red jacket"))
+    check("the statement uses a pronoun, not a bare name",
+          "Kristy is no longer" not in sh[4])
+    check("the other garment is untouched", worn(sh[4], "blue jeans"))
+    check("the other character is untouched", worn(sh[5], "black t-shirt"))
+
+    # (b) clothing that lives ONLY in the anchor prose -- the reported failure
+    anchor_b = ("natural lighting, even exposure, broadcast video. An open 4 bay car garage. "
+                "A woman in a red jacket and a man in a black t-shirt.")
+    pb = D(anchor_b, SIX_BEATS, "", "", "")
+    check("anchor: jacket worn up to the removal shot",
+          all(worn(pb[i], "red jacket") for i in range(4)))
+    check("anchor: jacket gone after the removal",
+          all(not worn(pb[i], "red jacket") for i in (4, 5)))
+    check("anchor: the WOMAN is still in the scene after the removal",
+          all("woman" in pb[i].lower() for i in (4, 5)))
+    check("anchor: the man and his t-shirt are untouched",
+          all("man" in pb[i].lower() and worn(pb[i], "black t-shirt") for i in (4, 5)))
+    check("anchor: no orphaned garment left behind",
+          not any(s.lower().count("garage. jacket") for s in pb))
+    check("anchor: the removal is stated impersonally",
+          stated_off(pb[4], "red jacket") and "she is no longer" not in pb[4].lower())
+
+    # (c) a removal verb aimed at a NON-garment must strip nothing
+    land = D(SIX_ANCHOR, ["Kristy watches as the plane takes off down the runway.",
+                          "Kristy waves."], "", "", SIX_CM)
+    check("landmine: 'the plane takes off' removes no clothing",
+          worn(land[1], "red jacket") and "no longer wearing" not in land[1])
+
+
+def check_nonspeech_audio_6beat():
+    """Shots with no quoted dialogue must be silenced on BOTH channels.
+
+    The lips-closed clause only constrains the picture. H3 builds audio from its own
+    fields, and an ABSENT `overall_soundscape:` leaves that branch unconditioned --
+    which is when it fills a silent shot with speech-like babble. So a silenced shot
+    now always carries a soundscape line that says no voices outright."""
+    print("\n=== non-dialogue shots must not vocalize ===")
+    sh = D(SIX_ANCHOR, SIX_BEATS, "", "", SIX_CM)
+    silent, talking = (0, 3, 4, 5), (1, 2)
+    check("speech_flags marks exactly the quoted beats",
+          S.speech_flags(SIX_BEATS) == [False, True, True, False, False, False])
+    check("silent shots carry the lips-closed clause",
+          all("mouth closed and lips together" in sh[i] for i in silent))
+    check("silent shots carry a no-voices soundscape",
+          all("overall_soundscape:" in sh[i] and "no voices" in sh[i] for i in silent))
+    check("dialogue shots are left free to speak",
+          all("mouth closed and lips together" not in sh[i] and "no voices" not in sh[i]
+              for i in talking))
+    # A user-supplied soundscape must survive, with the no-voice constraint appended
+    gs = D(SIX_ANCHOR, SIX_BEATS, "distant traffic, garage hum", "", SIX_CM)
+    check("a user soundscape is kept on silent shots",
+          all("distant traffic, garage hum" in gs[i] and "no voices" in gs[i] for i in silent))
+    check("a user soundscape on a dialogue shot is NOT constrained",
+          all("distant traffic, garage hum" in gs[i] and "no voices" not in gs[i]
+              for i in talking))
+    check("silencing can still be turned off wholesale",
+          all("no voices" not in s for s in
+              D(SIX_ANCHOR, SIX_BEATS, "", "", SIX_CM, auto_silence_nonspeech=False)))
+    # The deterministic backstop must be ON by default: prompt-side silencing only
+    # ASKS, and babble under a silent shot was what survived the asking.
+    # Read the declared default from source: INPUT_TYPES() itself needs the real
+    # comfy.samplers list, which this stubbed run deliberately does not have.
+    import re as _re
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    m = _re.search(r'"mute_nonspeech_audio":\s*\("BOOLEAN",\s*\{"default":\s*(True|False)', src)
+    check("mute_nonspeech_audio defaults to ON", bool(m) and m.group(1) == "True")
+
+
+def check_overlay_resolutions():
+    """Watermark and intro title must fit EVERY supported preset.
+
+    Font size is a percentage, so one setting has to serve 512x512 and 1536x672
+    alike. It was taken from the HEIGHT -- the LONG edge on every portrait preset --
+    so 9:16 drew ~1.75x larger than 16:9 on the canvas with the least room, and PIL
+    silently CLIPPED whatever ran past the frame. Sizing from the short edge plus a
+    wrap-and-shrink fit is what makes the same settings work everywhere."""
+    print("\n=== overlays fit every supported resolution ===")
+    try:
+        from PIL import Image, ImageDraw
+    except Exception as e:
+        check(f"SKIPPED: Pillow not importable ({type(e).__name__})", True)
+        return
+    import importlib.util as _ilu
+    _s = _ilu.spec_from_file_location("h3_overlay", os.path.join(_HERE, "overlay.py"))
+    OV = _ilu.module_from_spec(_s)
+    _s.loader.exec_module(OV)
+
+    presets = [S.parse_resolution(o) for o in S.resolution_options()]
+    check("all three tiers x six ratios are offered", len(presets) == 18)
+
+    cases = [("watermark", "(c) H3 Studios 2026", 4.0, 3.0, False),
+             ("intro", "THE GARAGE", 9.0, 6.0, True),
+             ("long intro", "KRISTY AND THE PISTON HUNT", 9.0, 6.0, True)]
+    for name, text, pct, margin_pct, wrap in cases:
+        bad = []
+        for w, h in presets:
+            short = min(w, h)
+            margin = int(short * margin_pct / 100.0)
+            img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            max_w, max_h = w - 2 * margin, h - 2 * margin
+            font, fitted, box, spacing, px = OV._fit(
+                draw, text, "arial.ttf", short * pct / 100.0, max_w, max_h, 0, 1.15, wrap)
+            tw, th = box[2] - box[0], box[3] - box[1]
+            if tw > max_w or th > max_h:
+                bad.append(f"{w}x{h} ({tw}x{th} in {max_w}x{max_h})")
+        check(f"{name}: fits inside the margins at all 18 presets", not bad)
+        if bad:
+            print("    overflow: " + "; ".join(bad))
+
+    # Portrait and landscape of the same tier must agree on apparent size, which is
+    # the whole point of measuring from the short edge.
+    check("size is taken from the short edge, not the height",
+          min(1344, 768) == min(768, 1344))
+    # render_text_layer wraps its result in tensors; this run stubs torch, and the
+    # geometry under test is the bbox, so a pass-through is all it needs.
+    if not hasattr(sys.modules["torch"], "from_numpy"):
+        sys.modules["torch"].from_numpy = lambda a: a
+    port = OV.render_text_layer(768, 1344, "THE GARAGE", 768 * 9 / 100.0, "center", 6.0, "arial.ttf", 0)
+    land = OV.render_text_layer(1344, 768, "THE GARAGE", 768 * 9 / 100.0, "center", 6.0, "arial.ttf", 0)
+    if port is None or land is None:
+        check("both orientations render a layer", False)
+    else:
+        pb, lb = port[2], land[2]
+        check("portrait title is not clipped at the frame edge",
+              pb[0] > 0 and pb[2] < 768 and pb[1] > 0 and pb[3] < 1344)
+        check("portrait and landscape titles are the same size",
+              abs((pb[3] - pb[1]) - (lb[3] - lb[1])) <= 2)
+
+
 def check_anchor_not_rewritten():
     """The anchor must be passed through byte-identical unless something was
     actually scrubbed from it. The punctuation tidy-up that repairs a removal used
@@ -174,7 +362,7 @@ def check_anchor_not_rewritten():
     anchors = {x.split("not talking. ")[1].split(" She")[0].split(" He")[0] for x in sh}
     check("anchor identical across every shot", len(anchors) == 1)
     check("anchor keeps the user's exact wording", "hangar and airfield" in sh[3])
-    check("the removal still applies", "cap" not in sh[3])
+    check("the removal still applies", not worn(sh[3], "cap"))
 
 
 def check_mouth_state_on_dialogue():
@@ -621,16 +809,25 @@ def main():
                   and "he" not in " ".join(_parens(s)).lower().split() for s in shots))
 
     # Maya's RED jacket: worn through the removal shot (3), gone every shot after
-    check("red jacket worn shots 1-3", all("red jacket" in shots[i] for i in range(3)))
-    check("red jacket GONE shots 4-12", all("red jacket" not in shots[i] for i in range(3, 12)))
+    check("red jacket worn shots 1-3", all(worn(shots[i], "red jacket") for i in range(3)))
+    check("red jacket GONE shots 4-12", all(not worn(shots[i], "red jacket") for i in range(3, 12)))
+    # The removal is STATED, not merely deleted -- and it waits for a shot Maya is
+    # actually in (shot 4 is Jon alone), so the sentence never summons her into a
+    # shot she does not belong in.
+    check("the red jacket removal is STATED in shot 5 (Maya's next shot)",
+          stated_off(shots[4], "red jacket"))
+    check("the removal is stated once, not on every later shot",
+          sum(1 for i in range(3, 12) if stated_off(shots[i], "red jacket")) == 1)
+    check("the removal statement uses a pronoun, not a bare name",
+          "Maya" not in shots[4])
 
     # presence-aware sets: which shots actually contain each person
     maya = [i for i in range(12) if "silver hair" in shots[i]]
     jon = [i for i in range(12) if "bald" in shots[i]]
 
     # Jon's cap: worn while Jon is present up to shot 4 (removal), gone while present after
-    check("cap worn while Jon present, shots 1-4", all("cap" in shots[i] for i in jon if i <= 3))
-    check("cap GONE while Jon present, shots 5-12", all("cap" not in shots[i] for i in jon if i >= 4))
+    check("cap worn while Jon present, shots 1-4", all(worn(shots[i], "cap") for i in jon if i <= 3))
+    check("cap GONE while Jon present, shots 5-12", all(not worn(shots[i], "cap") for i in jon if i >= 4))
 
     # LANDMINE: the plane 'takes off' (shot 6) strips nothing
     check("plane-takes-off shot keeps flight suit", "flight suit" in shots[5])
@@ -642,8 +839,8 @@ def main():
           all("brown leather jacket" in shots[i] for i in maya if i >= 6))
 
     # Jon's overalls: removed after 'shrugs off his overalls' (shot 11), gone shot 12
-    check("overalls worn through shot 11", "overalls" in shots[10])
-    check("overalls GONE shot 12", "overalls" not in shots[11])
+    check("overalls worn through shot 11", worn(shots[10], "overalls"))
+    check("overalls GONE shot 12", not worn(shots[11], "overalls"))
 
     # solo beats omit the other person
     check("solo shot 5 (Maya) omits Jon", "bald" not in shots[4] and "silver hair" in shots[4])
@@ -710,7 +907,7 @@ def main():
           all(len([p for p in _parens(dshots[i]) if any(k in p.lower() for k in ("silver hair", "bald"))]) == 0
               for i in (5, 9)))
     check("removal sticks to the end of a 12-shot chain",
-          "red jacket" in dshots[2] and all("red jacket" not in s for s in dshots[3:]))
+          worn(dshots[2], "red jacket") and all(not worn(s, "red jacket") for s in dshots[3:]))
 
     # --- exits: a character who leaves must never come back ----------------------
     ebeats = ["She and he work on the engine.",
@@ -784,7 +981,9 @@ def main():
                 "She wipes her hands."]
     pt = D(pt_anchor, pt_beats, "", "", "")      # NO character channel at all
     check("plain text: garment removed from anchor and stays gone",
-          "red jacket" in pt[1] and all("red jacket" not in s for s in pt[2:]))
+          worn(pt[1], "red jacket") and all(not worn(s, "red jacket") for s in pt[2:]))
+    check("plain text: the person survives the garment scrub",
+          all("woman" in s.lower() for s in pt))
     check("plain text: departing person visible in the exit shot",
           "bald man" in pt[3])
     check("plain text: departed person gone from every later shot",
@@ -797,6 +996,9 @@ def main():
           all(not s.split("not talking. ")[-1].lstrip().lower().startswith(("and ", ", "))
               for s in pt))
 
+    check_clothing_removal_6beat()
+    check_nonspeech_audio_6beat()
+    check_overlay_resolutions()
     check_no_phantom_person_in_anchor()
     check_real_world_sheet()
     check_no_second_subject_noun()

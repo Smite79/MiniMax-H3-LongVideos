@@ -978,32 +978,133 @@ LIPS_CLOSED_LEAD = ("Everyone in this shot is silent with their mouth closed and
                     "jaw still, not talking. ")
 LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement."
 
+# The lips-closed clause constrains the PICTURE only. H3 generates audio from its
+# own fields, and an ABSENT `overall_soundscape:` leaves that branch unconditioned
+# -- which is exactly when it invents speech-like babble under a silent shot. So a
+# silenced shot always gets a soundscape line, and it says no voices outright.
+NO_VOICE_SOUNDSCAPE = ("ambient background sound and room tone only, no voices, no speech, "
+                       "no talking, no whispering, no singing, no vocal sounds")
+NO_VOICE_CLAUSE = ", no voices, no speech, no talking, no vocal sounds"
+
+
+def person_referenced(body, name, active):
+    """Is this person actually in the beat -- by name, or by a pronoun that resolves
+    to them? Used to keep a wardrobe statement out of a shot they aren't in: saying
+    "she is no longer wearing the jacket" in a shot about someone else SUMMONS her
+    into it, which is the duplication failure the whole builder exists to avoid."""
+    import re
+    low = (body or "").lower()
+    if name and re.search(r"\b" + re.escape(name.lower()) + r"\b", low):
+        return True
+    names = [n for n in active if n]
+    pron_map = _pron_map(active)
+    single = len(names) == 1
+    for m in re.finditer(r"\b(she|he|they|her|him|them|his|their)\b", low):
+        if _resolve_subject(m.group(1), names, pron_map, single) == name:
+            return True
+    return False
+
+
+def _subject_term(name, active):
+    """How to refer to a person in a generated clause: their declared PRONOUN when
+    it identifies them uniquely, otherwise their name. Pronoun-first is the rule the
+    whole builder follows -- a bare name is a fresh introduction, and introducing
+    someone twice in a shot is what makes the model render them twice."""
+    pron = _pronoun_of(active.get(name, []))
+    if pron:
+        holders = [n for n in active if n and _pronoun_of(active[n]) == pron]
+        if len(holders) == 1:
+            return pron
+    return name
+
+
+def no_longer_wearing(pairs, active=None):
+    """Positive statement that a garment is OFF, for the shot that follows a removal.
+
+    Dropping the item from the wardrobe channel is only a SILENCE: the next shot
+    still starts from a handoff keyframe that shows the garment being worn, and the
+    model continues what it sees. Saying "no longer wearing" outright is what
+    actually takes it off. Bounded to the one shot after the removal -- by the shot
+    after that, the chain itself carries the new state."""
+    active = active or {}
+    by = {}
+    for name, item in pairs:
+        item = (item or "").strip()
+        if item and item not in by.setdefault(name or "", []):
+            by[name or ""].append(item)
+    bits = []
+    for name, items in by.items():
+        what = ", ".join(items)
+        subj = _subject_term(name, active) if name else ""
+        bits.append(f"{subj} is no longer wearing the {what}, it is off" if subj
+                    else f"the {what} is off and no longer worn by anyone")
+    if not bits:
+        return ""
+    s = "; ".join(bits)
+    return s[0].upper() + s[1:] + "."
+
+
+# Words that can never be part of the garment phrase itself.
+_GARMENT_LEAD = {"off", "out", "of", "aside", "away", "down", "up", "the", "a", "an",
+                 "her", "his", "their", "its", "it", "them", "then"}
+# Words that END a garment phrase: a conjunction, a new preposition, or a new
+# article all start something that is no longer the garment.
+_GARMENT_END = {"and", "or", "but", "then", "on", "onto", "over", "into", "in", "to",
+                "from", "at", "by", "with", "under", "beside", "as", "while", "before",
+                "after", "a", "an", "the", "she", "he", "they", "her", "his", "their"}
+# A person noun is never part of a garment phrase -- scrubbing one deletes the
+# CHARACTER from the anchor and leaves the clothing behind.
+_PERSON_NOUN = {"woman", "women", "man", "men", "girl", "boy", "guy", "lady", "person",
+                "people", "figure", "child", "kid", "teen", "teenager", "male", "female"}
+
 
 def removed_phrase_items(body, anchor_id):
     """Garments named in a REMOVAL phrase in this beat that also appear in the
     anchor prose. Covers the case where the item was never in the wardrobe channel
     at all -- e.g. the anchor says 'a woman in a red flight jacket' and the beat
     says 'she takes off her jacket'. Without this the anchor would keep re-applying
-    it forever. Returns the anchor phrases to scrub."""
+    it forever. Returns the anchor phrases to scrub.
+
+    The phrase is read to its HEAD NOUN, not to the first word after the verb. The
+    earlier version stopped at the first non-stop word, so "takes off her red
+    jacket" yielded 'red' -- and matching 'red' with its preceding words in the
+    anchor produced 'A woman in a red', which scrubbed the PERSON out of
+    'A woman in a red jacket' and left 'jacket'. The garment survived, the
+    character vanished, and clothing removal looked completely broken."""
     import re
     if not body or not anchor_id:
         return []
     verb = re.compile(r"\b(takes?|took|taking|pulls?|pulled|peels?|peeled|strips?|stripped|"
                       r"slips?|slipped|shrugs?|shrugged|removes?|removed|sheds?|shed|discards?|"
                       r"ditch(?:es|ed)?|doffs?|unbuttons?|unzips?)\b", re.I)
-    stop = {"off", "out", "of", "aside", "away", "and", "the", "her", "his", "their", "then",
-            "over", "onto", "with", "from", "a", "an", "it", "she", "he", "they", "up", "down"}
     out = []
     for m in verb.finditer(body):
-        tail = body[m.end():m.end() + 50]
-        for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", tail):
-            if w.lower() in stop:
-                continue
-            # take the noun's surrounding phrase out of the anchor (adjectives included)
-            am = re.search(r"((?:[A-Za-z\-]+\s+){0,3}" + re.escape(w) + r")\b", anchor_id, re.I)
-            if am:
-                out.append(am.group(1).strip())
-            break
+        # Stop at punctuation: "shrugs off his overalls, a flight suit underneath"
+        # must not drag the second clause into the garment.
+        tail = re.split(r"[,.;:!?]", body[m.end():m.end() + 60])[0]
+        words = re.findall(r"[A-Za-z][A-Za-z\-]*", tail)
+        i = 0
+        while i < len(words) and words[i].lower() in _GARMENT_LEAD:
+            i += 1
+        phrase = []
+        while i < len(words) and words[i].lower() not in _GARMENT_END and len(phrase) < 4:
+            phrase.append(words[i])
+            i += 1
+        if not phrase:
+            continue
+        head = phrase[-1]
+        if head.lower() in _PERSON_NOUN:            # "takes off after the man" -- not clothing
+            continue
+        # Take the head noun with its adjectives out of the anchor, then trim any
+        # leading word that belongs to the SENTENCE rather than to the garment.
+        am = re.search(r"((?:[A-Za-z\-]+\s+){0,2}" + re.escape(head) + r")\b", anchor_id, re.I)
+        if not am:
+            continue
+        toks = am.group(1).split()
+        while len(toks) > 1 and toks[0].lower() in (_GARMENT_END | _PERSON_NOUN | _GARMENT_LEAD):
+            toks.pop(0)
+        if toks and toks[-1].lower() not in _PERSON_NOUN:
+            out.append(" ".join(toks))
     return out
 
 
@@ -1305,6 +1406,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     active = parse_wardrobe(seed)            # {name: [items]}, mutable, per-person
     removed = []                             # garments taken off -> also scrubbed from the anchor
     departed = set()                         # characters who left the scene -> never reappear
+    pending_off = []                         # (person, garment) removed LAST beat -> stated in this one
     blocks = []
     for gi, b in enumerate(beats, 1):
         body, wardrobe_change = extract_wardrobe((b or "").strip())
@@ -1315,23 +1417,46 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if enter_directive:
             for nm in _entries(enter_directive):
                 departed.discard(_norm_name(nm))
+        off_now = list(pending_off)          # auto-removals from the previous beat
         if wardrobe_change is not None:
             before = {k: list(v) for k, v in active.items()}
             active = apply_wardrobe_change(active, wardrobe_change)   # explicit: takes effect THIS shot
             for k, v in before.items():
-                removed += [it for it in v if it not in active.get(k, [])]
+                gone = [it for it in v if it not in active.get(k, [])]
+                removed += gone
+                off_now += [(k, it) for it in gone]
         body = body or "continue the action, same subject"
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
                                         speaking=has_speech(body), front_load=front_load)
+        # Say the garment is off, once, in the first shot without it. Deleting the
+        # item is not enough on its own -- the handoff frame still shows it worn.
+        # Only for people who are actually IN this shot; an unnamed (anchor-prose)
+        # garment is stated impersonally, so it summons nobody.
+        speak_off = [(n, it) for n, it in off_now
+                     if not n or person_referenced(body, n, active)]
+        off_clause = no_longer_wearing(speak_off, active)
+        # Anything not said because its wearer is off-screen waits for the next shot
+        # they appear in, rather than being lost on a cutaway.
+        carry_off = [p for p in off_now if p not in speak_off]
+        if off_clause:
+            persistent = persistent.rstrip(". ") + ". " + off_clause
         # Silence non-speech shots: a shot with no scripted dialogue gets an explicit
         # lips-closed / no-speech clause, so H3 doesn't animate a mouth or fill it with
         # gibberish before (or between) actual dialogue. Shots WITH quoted dialogue are
         # left alone so the speech renders.
-        if auto_silence_nonspeech and not has_speech(body):
+        silent_shot = bool(auto_silence_nonspeech and not has_speech(body))
+        if silent_shot:
             persistent = LIPS_CLOSED_LEAD + persistent.rstrip(". ") + "." + LIPS_CLOSED_TAIL
         block = f"[Generation {gi}] {persistent}".strip()
-        if gs and "soundscape:" not in block.lower():
-            block += f"\noverall_soundscape: {gs}"
+        # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is
+        # what let H3 improvise a voice track under a shot whose picture was already
+        # told to keep its mouth shut -- the babble the lips-closed clause cannot
+        # reach, because it only constrains the frames.
+        if "soundscape:" not in block.lower():
+            if gs:
+                block += f"\noverall_soundscape: {gs}{NO_VOICE_CLAUSE if silent_shot else ''}"
+            elif silent_shot:
+                block += f"\noverall_soundscape: {NO_VOICE_SOUNDSCAPE}"
         # Music is OPT-IN: a blank field emits the spec's silence token N/A on every
         # shot, so H3 doesn't improvise a score. (Soundscape is NOT forced to N/A --
         # per the spec it takes N/A only when total silence is explicitly wanted, so a
@@ -1353,15 +1478,24 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # character channel) can't be "departed" by name -- scrub their phrase from
         # the anchor instead, exactly as removed garments are scrubbed.
         removed += departed_phrase_people(body, anchor_id)
+        pending_off = list(carry_off)
         if auto_wardrobe:
             before = {k: list(v) for k, v in active.items()}
             active = auto_wardrobe_removals(active, body)
             for k, v in before.items():
-                removed += [it for it in v if it not in active.get(k, [])]
+                gone = [it for it in v if it not in active.get(k, [])]
+                removed += gone
+                pending_off += [(k, it) for it in gone]
             # Also catch a garment that lives ONLY in the anchor prose (never in the
             # wardrobe channel): the removal phrase names it, so scrub it from the
             # anchor from the next shot on, or the anchor re-applies it forever.
-            removed += removed_phrase_items(body, anchor_id)
+            anchor_gone = removed_phrase_items(body, anchor_id)
+            removed += anchor_gone
+            # Only voice the anchor-side removal when the channel didn't already
+            # cover it -- otherwise the same jacket is announced twice, once with a
+            # name and once without.
+            if anchor_gone and not pending_off:
+                pending_off += [("", it) for it in anchor_gone]
     return blocks
 
 
@@ -2303,7 +2437,12 @@ class H3LongVideosFL2VA:
                 "vram_headroom_gb": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 32.0, "step": 0.5}),
                 "allow_res_backoff": ("BOOLEAN", {"default": True,
                     "tooltip": "If VRAM is tight, step resolution down instead of failing."}),
-                "mute_nonspeech_audio": ("BOOLEAN", {"default": False,
+                # ON by default: the prompt-side clauses ASK H3 not to vocalize (and now
+                # condition the soundscape field too), but asking is not a guarantee --
+                # babble under a silent shot was the one artifact that survived both.
+                # Muting is the only deterministic answer, so it is the default and the
+                # trade-off (that shot's ambience goes too) is stated in `info`.
+                "mute_nonspeech_audio": ("BOOLEAN", {"default": True,
                     "tooltip": "DETERMINISTIC gibberish fix: FULLY silence the audio of any shot that has no "
                                "scripted dialogue (no double-quoted line). Prompt-level silencing asks H3 "
                                "not to babble; this guarantees it. TRADE-OFF: it also removes that shot's "
@@ -2644,11 +2783,18 @@ class H3LongVideosFL2VA:
                      else f"{shots} shot(s), {sum(plan_lens)}f total: "
                           + ", ".join(f"{n}f/~{n / fps:.1f}s" for n in plan_lens))
             vram_str = f"{total_gb:.1f}GB total / {resident_gb:.1f}GB weights / {free_gb:.1f}GB free" if total_gb else "VRAM unknown"
+            # Same dialogue/audio accounting the render reports, so the plan says up
+            # front which shots will come back silent instead of surprising you after.
+            n_silent = sum(1 for f in speech_flags(beats) if not f)
+            plan_audio = (f" {n_silent} of {shots} shot(s) have no quoted dialogue -> "
+                          + ("AUDIO-MUTED (ambience goes too)" if mute_nonspeech_audio
+                             else "prompt/soundscape silencing only")) if n_silent else ""
             plan = ((anchor_note + " ") if anchor_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
                     + (f" {beats_note}." if beats_note else "")
+                    + (f"{plan_audio}." if plan_audio else "")
                 + (f" {fps_note}." if fps_note else "")
                     + (f" {ln_note}." if ln_note else ""))
             ph_img = torch.zeros((1, 64, 64, 3))
@@ -2804,6 +2950,21 @@ class H3LongVideosFL2VA:
         # which explains the frame count instead of leaving it looking like a shortfall.
         hoff_str = (f" handoff -{hoff}f on {max(0, len(gens) - 1)} of {len(gens)} shot(s)"
                     f"{' (last shot keeps its tail)' if len(gens) else ''}." if hoff else "")
+        # Say what was done about babble on non-dialogue shots, and what it cost. Both
+        # states need reporting: muting is silent about the ambience it removes, and
+        # NOT muting is silent about the babble it may leave in.
+        n_silent = sum(1 for f in spk if not f)
+        n_muted = sum(1 for f in muted_flags if f)
+        if n_muted:
+            audio_note = (f" {n_muted} of {len(gens)} shot(s) have no quoted dialogue and were AUDIO-MUTED "
+                          f"(mute_nonspeech_audio) -- that also removes their generated ambience, so lay an "
+                          f"ambient bed under the video in post, or untick it to keep H3's own")
+        elif n_silent:
+            audio_note = (f" {n_silent} of {len(gens)} shot(s) have no quoted dialogue: silenced in the prompt "
+                          f"and soundscape only. If any of them still vocalize, tick mute_nonspeech_audio "
+                          f"for a guaranteed fix")
+        else:
+            audio_note = ""
         info = ((anchor_note + " ") if anchor_note else "") + \
                (f"{shape_str} at {w}x{h}; {all_frames.shape[0]} frames (~{actual:.1f}s actual). "
                 f"decode {'tiled' if tiled else 'full'}. {vram_str}.{hoff_str}"
@@ -2813,6 +2974,7 @@ class H3LongVideosFL2VA:
                 + (" subject-count guard ON (sub-native resolution)."
                    if count_subjects and min(w, h) < 768 else "")
                 + (f" {beats_note}." if beats_note else "")
+                + (f"{audio_note}." if audio_note else "")
                 + (f" {fps_note}." if fps_note else "")
                 + (f" {swap_note}." if swap_note else "")
                 + (f" free VRAM/shot: {vram_trace}." if len(vram_trace) > 1 else "")

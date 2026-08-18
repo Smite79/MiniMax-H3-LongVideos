@@ -20,6 +20,13 @@ import torch
 
 BLEND_CHUNK = 64          # frames blended per slice -- bounds peak RAM on long chains
 
+# Auto-fit: text is wrapped, then shrunk in FIT_SHRINK steps until the block fits
+# inside the margins. MIN_FONT_PX is the point below which the text would be
+# unreadable anyway, so the loop stops there and lets PIL clip rather than spin.
+MIN_FONT_PX = 8
+FIT_SHRINK = 0.92
+FIT_STEPS = 48
+
 # Fonts to try when the requested one cannot be loaded. PIL resolves bare names
 # against the system font directory, so "arial.ttf" works on Windows as-is.
 FONT_FALLBACKS = ("arial.ttf", "segoeui.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf")
@@ -51,9 +58,65 @@ def _load_font(name, px):
     return ImageFont.load_default()
 
 
+def _measure(draw, text, font, stroke_px, spacing):
+    """(x0, y0, x1, y1) of a multi-line block, tolerant of older Pillow builds."""
+    try:
+        return draw.multiline_textbbox((0, 0), text, font=font, align="center",
+                                       stroke_width=stroke_px, spacing=spacing)
+    except TypeError:                      # older Pillow: no stroke/spacing kwargs
+        return draw.multiline_textbbox((0, 0), text, font=font, align="center")
+
+
+def _wrap(draw, text, font, max_w, stroke_px, spacing):
+    """Greedy word-wrap every hard line to max_w. A single word wider than the
+    frame cannot be broken -- the shrink loop in render_text_layer handles that."""
+    out = []
+    for hard in text.split("\n"):
+        words = hard.split()
+        if not words:
+            out.append("")
+            continue
+        cur = words[0]
+        for wd in words[1:]:
+            trial = cur + " " + wd
+            b = _measure(draw, trial, font, stroke_px, spacing)
+            if b[2] - b[0] <= max_w:
+                cur = trial
+            else:
+                out.append(cur)
+                cur = wd
+        out.append(cur)
+    return "\n".join(out)
+
+
+def _fit(draw, text, font_name, px, max_w, max_h, stroke_px, line_spacing, wrap=True):
+    """Largest size at or below px whose wrapped block fits (max_w, max_h).
+
+    Without this, a title is drawn at the requested size and whatever runs past the
+    frame is simply CLIPPED by PIL -- silently, with no error and no note. That is
+    the whole "overlays don't work at other resolutions" failure: the size is a
+    percentage, so the same text that fits 1344x768 overflows a 512-wide portrait
+    canvas and loses its outer characters."""
+    px = max(MIN_FONT_PX, int(px))
+    for _ in range(FIT_STEPS):
+        font = _load_font(font_name, px)
+        spacing = int(max(0.0, px * (line_spacing - 1.0)))
+        fitted = _wrap(draw, text, font, max_w, stroke_px, spacing) if wrap else text
+        box = _measure(draw, fitted, font, stroke_px, spacing)
+        if (box[2] - box[0] <= max_w and box[3] - box[1] <= max_h) or px <= MIN_FONT_PX:
+            return font, fitted, box, spacing, px
+        px = max(MIN_FONT_PX, int(px * FIT_SHRINK))
+    return font, fitted, box, spacing, px
+
+
 def render_text_layer(width, height, text, font_px, position="bottom-right",
-                      margin_pct=3.0, font_name="", stroke_px=0, line_spacing=1.15):
+                      margin_pct=3.0, font_name="", stroke_px=0, line_spacing=1.15,
+                      wrap=True):
     """White text on a transparent RGBA canvas the size of one frame.
+
+    The block is WRAPPED and SHRUNK until it fits inside the margins, so the same
+    settings render legibly on every supported preset -- portrait canvases and the
+    512 tier included -- instead of being clipped at the frame edge.
 
     Returns (rgb, alpha, bbox): rgb [H,W,3] float 0..1, alpha [H,W,1] float 0..1
     (zero everywhere except the glyphs and their optional stroke), and the tight
@@ -68,19 +131,17 @@ def render_text_layer(width, height, text, font_px, position="bottom-right",
 
     img = Image.new("RGBA", (int(width), int(height)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    font = _load_font(font_name, font_px)
     stroke_px = max(0, int(stroke_px))
-    spacing = int(max(0.0, font_px * (line_spacing - 1.0)))
 
     margin = int(min(width, height) * max(0.0, margin_pct) / 100.0)
     ax, ay = POSITIONS.get(position, POSITIONS["bottom-right"])
 
-    # Measure first, so the block is placed by its real size rather than a guess.
-    try:
-        box = draw.multiline_textbbox((0, 0), text, font=font, align="center",
-                                      stroke_width=stroke_px, spacing=spacing)
-    except TypeError:                      # older Pillow: no stroke/spacing kwargs
-        box = draw.multiline_textbbox((0, 0), text, font=font, align="center")
+    # Measure first, so the block is placed by its real size rather than a guess --
+    # and fit it to the space the margins actually leave.
+    max_w = max(1, int(width) - 2 * margin)
+    max_h = max(1, int(height) - 2 * margin)
+    font, text, box, spacing, font_px = _fit(draw, text, font_name, font_px, max_w, max_h,
+                                             stroke_px, line_spacing, wrap)
     tw, th = box[2] - box[0], box[3] - box[1]
 
     free_w = max(0, int(width) - 2 * margin - tw)
@@ -159,10 +220,15 @@ def apply_overlays(frames, fps, watermark="", wm_position="bottom-right", wm_siz
         return frames, ""
     n, h, w = frames.shape[0], frames.shape[1], frames.shape[2]
     frames = frames.contiguous()
+    # Size from the SHORT edge, not the height. Height is the long edge on every
+    # portrait preset, so a height-based percentage drew 9:16 text ~1.75x larger
+    # than the same setting at 16:9 -- on the canvas with the LEAST room for it.
+    # The short edge makes one setting mean the same apparent size at every ratio.
+    short = min(int(w), int(h))
 
     if (watermark or "").strip():
         try:
-            layer = render_text_layer(w, h, watermark, h * max(0.5, wm_size_pct) / 100.0,
+            layer = render_text_layer(w, h, watermark, short * max(0.5, wm_size_pct) / 100.0,
                                       wm_position, wm_margin_pct, font_name, stroke_px)
             if layer is not None:
                 blend_layer(frames, layer, None, wm_opacity)
@@ -172,7 +238,7 @@ def apply_overlays(frames, fps, watermark="", wm_position="bottom-right", wm_siz
 
     if (intro or "").strip():
         try:
-            layer = render_text_layer(w, h, intro, h * max(0.5, intro_size_pct) / 100.0,
+            layer = render_text_layer(w, h, intro, short * max(0.5, intro_size_pct) / 100.0,
                                       intro_position, 6.0, font_name, stroke_px)
             if layer is not None:
                 hold = round(max(0.0, float(intro_seconds)) * fps)

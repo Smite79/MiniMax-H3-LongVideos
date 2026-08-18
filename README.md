@@ -159,6 +159,22 @@ match nothing and change nothing. The garment stays worn in the shot that shows
 it coming off and is gone from the next shot onward, which reads correctly. If a
 name precedes the action ("Maya takes off…"), only that person is affected.
 
+The removal is also **stated outright**, once, in the first shot without the
+garment: *"She is no longer wearing the red jacket, it is off."* Deleting the item
+is not enough on its own — that shot still starts from a handoff keyframe showing
+the garment being worn, and the model continues what it sees. The sentence uses
+the person's **pronoun** (never a bare name, which would re-introduce them and
+risk a duplicate figure) and waits for a shot they are actually in, so a cutaway
+never gets an off-screen character's wardrobe note. One shot later the chain
+carries the new state by itself, so it is not repeated.
+
+This works whether the garment lives in the wardrobe channel or **only in your
+anchor prose** ("A woman in a red jacket and a man in a black t-shirt"): the
+phrase is scrubbed from the anchor so it can't re-apply itself forever. The
+garment's **head noun** is what gets matched — "takes off her red jacket" reads as
+*jacket*, not *red* — because matching the adjective used to pull out "A woman in
+a red" and scrub the **person** out of the scene while leaving the jacket behind.
+
 Additions and swaps still use an explicit one-token line (`wardrobe: += mirrored
 sunglasses`), which also overrides the auto-detection. Turn `auto_wardrobe` off
 to drive wardrobe purely through explicit `wardrobe:` lines. Either way, the
@@ -176,6 +192,22 @@ speak, put the words in double quotes: `She says, "Tower, ready for departure."`
 Those shots are left alone; every other shot is silenced. Turn the toggle off to
 manage lip state yourself. Pair it with `handoff_offset` if a dialogue shot still
 hands a mid-word open mouth to the next shot.
+
+Silencing now covers **both channels**. The lips-closed clause constrains the
+picture only; H3 builds audio from its own fields, and an **absent**
+`overall_soundscape:` leaves that branch unconditioned — which is exactly when it
+fills a silent shot with speech-like babble. Every silenced shot therefore also
+carries a soundscape line that says *no voices, no speech, no talking* outright.
+If you supply a `global_soundscape`, it is kept and the no-voice constraint is
+appended to it on those shots only.
+
+**`mute_nonspeech_audio` is ON by default** — the deterministic backstop. Prompt
+and soundscape clauses *ask* H3 not to vocalize; muting guarantees it by zeroing
+the audio of every shot with no quoted line (neighbouring audible shots get a
+short `mute_fade_ms` ramp so nothing clicks). The trade-off is real and `info`
+reports it on every run: that shot's generated **ambience goes with the babble**,
+so lay a continuous ambient bed under the video in post — or untick the widget to
+keep H3's own sound and rely on the prompt-side silencing alone.
 
 To change or remove an item mid-chain *explicitly*, put a `wardrobe:` line **inside** the
 beat where it changes (not as its own paragraph). You have two ways, and you do
@@ -335,8 +367,8 @@ everywhere else.
 
 - **`watermark_text`** — stamped on **every frame**. `watermark_position` (7
   anchors: the four corners, `top-center`, `bottom-center`, `center`),
-  `watermark_size` (cap height as a **% of frame height**, default 4.0, so the
-  mark keeps its relative size at any resolution or upscale factor),
+  `watermark_size` (cap height as a **% of the short edge**, default 4.0, so the
+  mark keeps its relative size at any resolution, ratio or upscale factor),
   `watermark_opacity` (default 0.75 — reads as a watermark without burying the
   picture), `watermark_margin` (inset as a % of the **short** edge).
 - **`intro_text`** — a title over the **opening of the finished video**, not a
@@ -344,7 +376,14 @@ everywhere else.
   a block. It holds at full opacity for `intro_seconds` (default 3.0), then
   linearly fades over `intro_fade` (default 0.6; 0 = hard cut). `intro_position`
   offers `center`, `lower-third`, `top-center`, `bottom-center`; `intro_size`
-  defaults to 9.0% of frame height.
+  defaults to 9.0% of the short edge.
+- **Fits every preset automatically.** Both sizes are measured from the **short
+  edge**, and the block is word-wrapped and then shrunk until it sits inside the
+  margins. Sizing from the *height* meant a portrait canvas (9:16, 3:4) drew the
+  text ~1.75× larger on the canvas with the least room for it, and anything that
+  ran past the frame was silently clipped by Pillow — no error, no note, just
+  missing characters. A long title now wraps onto as many lines as it needs and
+  reads the same at 512×896 as at 1536×672.
 - **`overlay_font`** — TrueType face for **both** overlays: a bare name resolved
   against the system font folder (`arial.ttf`, `arialbd.ttf`, `segoeui.ttf`) or a
   full path to a `.ttf`/`.otf`. If it won't load, the node falls back through
