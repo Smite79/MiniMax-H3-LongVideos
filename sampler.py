@@ -2186,7 +2186,7 @@ def _evict_all_but(keep_model):
 
 
 
-class H3LongVideosV1:
+class H3LongVideosFL2VA:
     CATEGORY = "sampling/minimax"
     FUNCTION = "run"
     # fps is emitted as BOTH types on purpose: ComfyUI does not coerce between them,
@@ -2829,6 +2829,19 @@ class H3LongVideosV1:
                 float(fps), int(fps))
 
 
-NODE_CLASS_MAPPINGS = {"H3LongVideosV1": H3LongVideosV1}
-NODE_DISPLAY_NAME_MAPPINGS = {"H3LongVideosV1": "H3 Long Videos V1"}
+# "H3LongVideosV1" is the node's ORIGINAL registration key. ComfyUI stores that
+# key verbatim in every saved workflow, so dropping it would make each existing
+# graph load this node as a red "missing node" box. It is kept as an alias onto
+# the same class: new graphs get H3LongVideosFL2VA, old ones keep working.
+NODE_CLASS_MAPPINGS = {
+    "H3LongVideosFL2VA": H3LongVideosFL2VA,
+    "H3LongVideosV1": H3LongVideosFL2VA,          # legacy key -- do not remove
+}
+# The legacy entry is marked in the UI so a graph loaded from an old workflow is
+# visibly the same node under its previous name, rather than looking like a
+# second, competing one in the node search.
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "H3LongVideosFL2VA": "H3 Long Videos FL2VA",
+    "H3LongVideosV1": "H3 Long Videos FL2VA (legacy name)",
+}
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

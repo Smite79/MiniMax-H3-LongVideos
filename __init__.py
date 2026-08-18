@@ -5,7 +5,7 @@ Make long (up to ~120s) MiniMax-H3 videos from a single prompt + a single
 length, in ComfyUI.
 
 Nodes:
-  * H3 Long Videos V1     (sampler.py)      - one prompt + shot length -> video+audio
+  * H3 Long Videos FL2VA  (sampler.py)      - one prompt + shot length -> video+audio
                                               (set plan_only=True to PREVIEW the shot
                                               split using the node's own settings, no
                                               render -- replaces the old Plan node)

@@ -7,7 +7,11 @@ Self-contained: uses only ComfyUI core's H3 support (no other packs).
 Copy the `H3-LongVideos-V1/` folder into `ComfyUI/custom_nodes/` and restart
 ComfyUI (full server restart, not just a browser refresh).
 
-## Node: **H3 Long Videos V1**  (category: sampling/minimax)
+## Node: **H3 Long Videos FL2VA**  (category: sampling/minimax)
+*Renamed from **H3 Long Videos V1**. Workflows saved under the old name still
+load: the previous registration key is kept as an alias onto the same class, and
+shows in the UI as "H3 Long Videos FL2VA (legacy name)". Nothing to re-wire.*
+
 One node. You set just two things:
 
 1. **prompt** — this is the `integrated_multimodal_description` (the visual +
@@ -484,7 +488,7 @@ hand.)
 Holds ONE shot length and emits it as both `seconds` and a valid H3 frame count
 (17k+5 grid, capped at 362 unless you turn the cap off). Wire:
 
-    H3 Shot Length (seconds) → H3 Long Videos V1 (shot_seconds)
+    H3 Shot Length (seconds) → H3 Long Videos FL2VA (shot_seconds)
     H3 Shot Length (frames)  → Model Preview Override (preview_frames)
 
 One value entered once drives both, so they can't drift apart. It never reads
