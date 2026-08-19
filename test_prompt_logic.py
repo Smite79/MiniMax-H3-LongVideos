@@ -456,6 +456,54 @@ def check_detailed_wardrobe_items():
           "black boots are off" in plur and "takes them off" in plur)
 
 
+def check_removal_phrasings():
+    """A removal is not always written "takes it off".
+
+    Clothing comes off in prose in a dozen ways -- you step OUT of jeans, a jacket
+    FALLS to the ground, boots get UNLACED, a coat SLIPS off a shoulder. Only three
+    of those fired before: everything was keyed on a short verb list plus
+    off/out-of/aside/away/down. A miss is silent, and a garment that never leaves
+    the sheet is re-stamped into every later shot."""
+    print("\n=== removals are written many ways ===")
+    cm_ = "Kristy = she, silver hair, red jacket, blue jeans, black boots"
+
+    def removed(beat):
+        a = S.parse_wardrobe(cm_)
+        after = S.auto_wardrobe_removals(a, beat)
+        return [x for x in a["Kristy"] if x not in after["Kristy"]]
+
+    fires = [
+        ("out of", "Kristy steps out of her blue jeans.", "blue jeans"),
+        ("wriggles out of", "Kristy wriggles out of her blue jeans.", "blue jeans"),
+        ("slides out of", "Kristy slides out of her red jacket.", "red jacket"),
+        ("climbs out of", "Kristy climbs out of her blue jeans.", "blue jeans"),
+        # the GARMENT is the subject -- matched backward, not forward
+        ("falls to the ground", "Her red jacket falls to the ground.", "red jacket"),
+        ("drops to the floor", "The red jacket drops to the floor.", "red jacket"),
+        ("pools at her feet", "The red jacket pools at her feet.", "red jacket"),
+        ("slips off her shoulders", "Her red jacket slips off her shoulders.", "red jacket"),
+        ("lets it fall", "Kristy lets her red jacket fall.", "red jacket"),
+        ("undoes", "Kristy undoes her red jacket.", "red jacket"),
+        ("unlaces", "Kristy unlaces her black boots.", "black boots"),
+        ("shakes off", "Kristy shakes off her red jacket.", "red jacket"),
+    ]
+    for label, beat, want in fires:
+        check(f"'{label}' removes the garment", removed(beat) == [want])
+
+    # None of the new cues may fire on something that is not a garment coming off.
+    landmines = [
+        ("a person falling", "Kristy falls to the ground."),
+        ("leaving a place", "Kristy steps out of the garage."),
+        ("stepping down", "Kristy steps down from the ladder."),
+        ("an object falling", "A wrench falls to the ground."),
+        ("the landmine", "Kristy watches the plane take off down the runway."),
+        ("DONNING, not removal", "Kristy puts on her red jacket."),
+        ("...nor slipping into", "Kristy slips into her black boots."),
+    ]
+    for label, beat in landmines:
+        check(f"{label} strips nothing", removed(beat) == [])
+
+
 def check_removal_takes_only_its_object():
     """A removal must take off what the verb acts ON -- nothing else nearby.
 
@@ -1204,6 +1252,7 @@ def main():
     check_no_second_subject_noun()
     check_anchor_not_rewritten()
     check_detailed_wardrobe_items()
+    check_removal_phrasings()
     check_removal_takes_only_its_object()
     check_unnamed_sheet_punctuation()
     check_mouth_state_on_dialogue()

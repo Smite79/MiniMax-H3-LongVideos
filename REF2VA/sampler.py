@@ -588,27 +588,29 @@ _OBJECT_STOP = re.compile(
     r"|\b(?:puts?|pulls?|slips?|throws?|zips?|buttons?|laces?)\s+(?:on|into)\b")
 
 
-def _removal_object_span(text, m):
-    """The text a removal verb actually acts ON.
+def _removal_object_spans(text, m):
+    """(forward, backward) -- the two places a removal verb's object can sit.
 
-    The old code searched a fixed ~68-character window around the verb, so ANY
-    tracked garment sitting near the removal came off with it: "takes off her red
-    jacket and drops it on the bench next to her boots" removed the boots, and
-    "takes off her red jacket over her black tank top" removed the tank top. Two
-    items gone where the beat removed one.
+    FORWARD is the normal case ("takes off her red jacket"). It runs from the verb
+    to the first phrase boundary and INCLUDES the matched cue, because the put-away
+    patterns ("hangs her jacket on a hook") carry the garment inside the match. It
+    deliberately does not extend past a boundary: a fixed ~68-character window used
+    to sweep up any garment sitting near the removal, so "drops it on the bench next
+    to her boots" removed the boots and "over her black tank top" removed the top.
 
-    The span therefore runs from the verb to the first phrase boundary, and it
-    INCLUDES the matched cue itself, because the put-away patterns ("hangs her
-    jacket on a hook") carry the garment inside the match. Coordination survives --
-    "takes off her jacket and boots" has no boundary between the two, so both are
-    still found. A backward span is tried only when nothing is found forward, for
-    the phrasings that put the garment first ("her jacket is off now")."""
+    BACKWARD covers the phrasings that put the garment FIRST -- "her jacket slips
+    off her shoulders", "her dress falls to the ground", "the jacket is off now".
+    It is tried only when the forward span turns up nothing, and it stops at the
+    previous clause boundary so it reaches the subject and no further."""
     tail = text[m.end():m.end() + 60]
     cut = _OBJECT_STOP.search(tail)
-    span = m.group(0) + (tail[:cut.start()] if cut else tail)
-    if span.strip():
-        return span
-    return text[max(0, m.start() - 40):m.start()]
+    forward = m.group(0) + (tail[:cut.start()] if cut else tail)
+    head = text[max(0, m.start() - 45):m.start()]
+    bcut = None
+    for b in re.finditer(r"[,.;:!?]|\b(?:and|then|while|as|before|after)\b", head):
+        bcut = b
+    backward = head[bcut.end():] if bcut else head
+    return forward, backward
 
 
 def auto_wardrobe_removals(active, body):
@@ -634,14 +636,26 @@ def auto_wardrobe_removals(active, body):
     single = len(names) == 1
 
     remove_cue = re.compile(
-        # verb ... off / out of / aside / away   (covers "takes off", "slips out of")
+        # verb ... off / out of / aside / away   (covers "takes off", "steps out of")
         r"\b(?:takes?|took|taken|taking|pulls?|pulled|peels?|peeled|strips?|stripped|"
         r"slips?|slipped|shrugs?|shrugged|tears?|tore|yanks?|yanked|casts?|kicks?|"
-        r"throws?|threw|tosses|tossed|hangs?|hung|drops?|dropped|sets?|set|puts?|put)\b"
+        r"throws?|threw|tosses|tossed|hangs?|hung|drops?|dropped|sets?|set|puts?|put|"
+        # ...and the ones you get OUT OF rather than take off
+        r"steps?|stepped|stepping|wriggles?|wriggled|wiggles?|wiggled|squirms?|squirmed|"
+        r"slides?|slid|sliding|climbs?|climbed|works?|worked|eases?|eased|shakes?|shook)\b"
         r"[\w\s\']{0,20}?\b(?:off|out of|aside|away|down)\b"
+        # the garment itself is the subject: "her dress falls to the ground",
+        # "the jacket pools at her feet". Matched backward to the subject.
+        r"|\b(?:falls?|fell|falling|slides?|slid|slips?|slipped|drops?|dropped|"
+        r"pools?|pooled|tumbles?|tumbled|crumples?|crumpled)\s+"
+        r"(?:to|onto|on to|down|off|open|away|around|at)\b"
+        # "lets her jacket fall", "lets it drop"
+        r"|\blets?\b[\w\s\']{0,20}?\b(?:fall|falls|drop|drops|slide|slides|slip|slips)\b"
         # standalone removal verbs
         r"|\b(?:removes?|removed|removing|sheds?|shed|shedding|discards?|discarded|"
         r"ditch(?:es|ed)?|doffs?|doffed|unbuttons?|unzips?|unzipped|unbuckles?|"
+        r"undoes|undid|undone|unlaces?|unlaced|unhooks?|unhooked|unfastens?|unfastened|"
+        r"unclasps?|unclasped|unsnaps?|unsnapped|unties?|untied|unwraps?|unwrapped|"
         r"hangs? up|hung up)\b"
         # "<garment> is off / are off"
         r"|\bis off\b|\bare off\b"
@@ -673,14 +687,24 @@ def auto_wardrobe_removals(active, body):
     for m in remove_cue.finditer(text):
         if any(a <= m.start() <= b for a, b in don_spans):
             continue
-        window = _removal_object_span(text, m)
+        forward, backward = _removal_object_spans(text, m)
         tgt = nearest_subject(m.start())
-        for name in ([tgt] if tgt else list(active.keys())):
-            for it in list(active.get(name, [])):
-                if it.strip().lower() in _PRO:      # never treat the pronoun token as a garment
-                    continue
-                if _item_mentioned(it, window):
-                    active[name] = [x for x in active[name] if x != it]
+        # Try the verb's forward object first; only if that names nothing tracked do
+        # we look BACK to the subject, which is where "her jacket falls to the
+        # ground" and "her jacket slips off her shoulders" put the garment.
+        for window in (forward, backward):
+            if not window.strip():
+                continue
+            hit = False
+            for name in ([tgt] if tgt else list(active.keys())):
+                for it in list(active.get(name, [])):
+                    if it.strip().lower() in _PRO:
+                        continue
+                    if _item_mentioned(it, window):
+                        active[name] = [x for x in active[name] if x != it]
+                        hit = True
+            if hit:
+                break
     return active
 
 
