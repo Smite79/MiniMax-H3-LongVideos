@@ -217,10 +217,24 @@ def check_clothing_removal_6beat():
           all(worn(sh[i], "red jacket") for i in range(4)))
     check("jacket gone from every shot after the removal",
           all(not worn(sh[i], "red jacket") for i in (4, 5)))
-    check("the removal is stated in the next shot Kristy is in",
-          stated_off(sh[4], "red jacket"))
+    # --- the reverse-motion trap ------------------------------------------------
+    # The removal shot must not describe her as WEARING the garment: that made the
+    # jacket the shot's stated end state, and running the frames backwards satisfied
+    # it -- the removal played in reverse and the jacket went back on.
+    desc = " ".join(_parens(sh[3]))
+    check("the removal shot no longer lists the garment as worn",
+          "red jacket" not in desc)
+    check("the removal shot still describes the rest of the outfit",
+          "blue jeans" in desc and "silver hair" in desc)
+    check("the removal is stated in the shot that performs it",
+          stated_off(sh[3], "red jacket"))
+    check("the removal states its END state", "by the last frame" in sh[3])
+    check("the removal rules out the reverse",
+          "never put back on" in sh[3] and "never plays in reverse" in sh[3])
     check("the statement uses a pronoun, not a bare name",
-          "Kristy is no longer" not in sh[4])
+          "Kristy starts this shot" not in sh[3] and "She starts this shot" in sh[3])
+    check("no shot after the removal names the garment at all",
+          all("red jacket" not in s for s in sh[4:]))
     check("the other garment is untouched", worn(sh[4], "blue jeans"))
     check("the other character is untouched", worn(sh[5], "black t-shirt"))
 
@@ -238,8 +252,29 @@ def check_clothing_removal_6beat():
           all("man" in pb[i].lower() and worn(pb[i], "black t-shirt") for i in (4, 5)))
     check("anchor: no orphaned garment left behind",
           not any(s.lower().count("garage. jacket") for s in pb))
-    check("anchor: the removal is stated impersonally",
-          stated_off(pb[4], "red jacket") and "she is no longer" not in pb[4].lower())
+    check("anchor: the removal is stated in the shot that performs it",
+          stated_off(pb[3], "red jacket") and "comes off during it" in pb[3])
+    check("anchor: no shot after the removal names the garment",
+          all("red jacket" not in s for s in pb[4:]))
+
+    # (b2) the clause is read literally by the text encoder, so it has to be
+    # grammatical for every shape of garment -- "the navy overalls IS off" is not.
+    act = {"Maya": ["she", "silver hair"], "Jon": ["he", "bald"]}
+    sing = S.takes_off_clause([("Maya", "red jacket")], act)
+    plur = S.takes_off_clause([("Jon", "navy overalls")], act)
+    two = S.takes_off_clause([("Jon", "cap"), ("Jon", "gloves")], act)
+    imp = S.takes_off_clause([("", "boots")], act)
+    check("singular garment takes a singular verb",
+          "red jacket is off" in sing and "not wearing it" in sing)
+    check("a plural garment takes a plural verb",
+          "navy overalls are off" in plur and "takes them off" in plur)
+    check("two garments take a plural verb", "cap and gloves are off" in two)
+    check("a double-s noun stays singular",
+          "dress is off" in S.takes_off_clause([("Maya", "dress")], act))
+    check("the impersonal form uses a SUBJECT pronoun",
+          "they are off" in imp and "them are off" not in imp)
+    check("every form rules out the reverse",
+          all("never plays in reverse" in c for c in (sing, plur, two, imp)))
 
     # (c) a removal verb aimed at a NON-garment must strip nothing
     land = D(SIX_ANCHOR, ["Kristy watches as the plane takes off down the runway.",
@@ -930,15 +965,16 @@ def main():
     # Maya's RED jacket: worn through the removal shot (3), gone every shot after
     check("red jacket worn shots 1-3", all(worn(shots[i], "red jacket") for i in range(3)))
     check("red jacket GONE shots 4-12", all(not worn(shots[i], "red jacket") for i in range(3, 12)))
-    # The removal is STATED, not merely deleted -- and it waits for a shot Maya is
-    # actually in (shot 4 is Jon alone), so the sentence never summons her into a
-    # shot she does not belong in.
-    check("the red jacket removal is STATED in shot 5 (Maya's next shot)",
-          stated_off(shots[4], "red jacket"))
-    check("the removal is stated once, not on every later shot",
-          sum(1 for i in range(3, 12) if stated_off(shots[i], "red jacket")) == 1)
+    # The removal is STATED in the shot that performs it (shot 3), never in a later
+    # one: a mention after the fact is a presence cue that puts the garment back on.
+    check("the red jacket removal is STATED in the shot that performs it",
+          stated_off(shots[2], "red jacket"))
+    check("the removal is stated exactly once in the whole chain",
+          sum(1 for i in range(12) if stated_off(shots[i], "red jacket")) == 1)
+    check("no shot after the removal names the garment at all",
+          all("red jacket" not in shots[i] for i in range(3, 12)))
     check("the removal statement uses a pronoun, not a bare name",
-          "Maya" not in shots[4])
+          "Maya" not in shots[2])
 
     # presence-aware sets: which shots actually contain each person
     maya = [i for i in range(12) if "silver hair" in shots[i]]

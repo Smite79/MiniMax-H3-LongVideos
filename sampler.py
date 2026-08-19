@@ -1018,14 +1018,33 @@ def _subject_term(name, active):
     return name
 
 
-def no_longer_wearing(pairs, active=None):
-    """Positive statement that a garment is OFF, for the shot that follows a removal.
+def _is_plural_garment(item):
+    """Garments that take a plural verb: overalls, jeans, boots, gloves, shorts.
+    A head noun ending in a DOUBLE s (dress, harness) is singular, which is what
+    separates them from a real plural."""
+    import re
+    words = re.findall(r"[a-z\-]+", (item or "").lower())
+    if not words:
+        return False
+    head = words[-1]
+    return head.endswith("s") and not head.endswith("ss")
 
-    Dropping the item from the wardrobe channel is only a SILENCE: the next shot
-    still starts from a handoff keyframe that shows the garment being worn, and the
-    model continues what it sees. Saying "no longer wearing" outright is what
-    actually takes it off. Bounded to the one shot after the removal -- by the shot
-    after that, the chain itself carries the new state."""
+
+def takes_off_clause(pairs, active=None):
+    """The DIRECTION of a removal, stated in the shot that performs it.
+
+    A removal is the one wardrobe change with a failure mode of its own: the motion
+    is symmetric. The same frames played backwards are a person putting the garment
+    ON, and both readings satisfy "takes off her red jacket" equally well. The model
+    picks whichever the rest of the conditioning supports -- and when the shot's own
+    description still listed the garment as worn, backwards was the reading that
+    matched. The removal rendered in reverse and the jacket came back.
+
+    So the end state is stated explicitly, and the reverse is ruled out by name.
+    Said ONCE, in the removal shot only: every later shot simply describes what the
+    person is wearing now, and never names the garment again -- to a video model a
+    mention is a presence cue, and a negation is a weak one, so "no longer wearing
+    the red jacket" in the NEXT shot was itself enough to put it back on."""
     active = active or {}
     by = {}
     for name, item in pairs:
@@ -1034,14 +1053,31 @@ def no_longer_wearing(pairs, active=None):
             by[name or ""].append(item)
     bits = []
     for name, items in by.items():
-        what = ", ".join(items)
+        what = " and ".join(items)
+        # "the navy overalls IS off" reads as a mistake to the encoder that has to
+        # parse this. Garments like overalls/jeans/boots are grammatically plural,
+        # as is any list of more than one.
+        plural = len(items) > 1 or any(_is_plural_garment(i) for i in items)
+        # `pron` is the OBJECT form ("takes them off"), `subj_pron` the SUBJECT form
+        # ("they are off") -- the impersonal branch needs the latter.
+        verb, pron, subj_pron = ("are", "them", "they") if plural else ("is", "it", "it")
         subj = _subject_term(name, active) if name else ""
-        bits.append(f"{subj} is no longer wearing the {what}, it is off" if subj
-                    else f"the {what} is off and no longer worn by anyone")
+        if subj:
+            bits.append(f"{subj} starts this shot wearing the {what} and takes {pron} off during the "
+                        f"shot; by the last frame the {what} {verb} off and {subj.lower()} is not "
+                        f"wearing {pron}")
+        else:
+            bits.append(f"the {what} {verb} worn at the start of this shot and {'come' if plural else 'comes'} "
+                        f"off during it; by the last frame {subj_pron} {verb} off")
     if not bits:
         return ""
     s = "; ".join(bits)
-    return s[0].upper() + s[1:] + "."
+    # The anti-reverse instruction is the point of the clause, so it is not left
+    # implicit in the end-state description. Worded without a pronoun so it needs no
+    # agreement with whatever came off.
+    return (s[0].upper() + s[1:]
+            + ". The motion runs one way only: the clothing comes off and is never put back on, "
+              "never re-worn, and the action never plays in reverse.")
 
 
 # Words that can never be part of the garment phrase itself.
@@ -1406,7 +1442,6 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     active = parse_wardrobe(seed)            # {name: [items]}, mutable, per-person
     removed = []                             # garments taken off -> also scrubbed from the anchor
     departed = set()                         # characters who left the scene -> never reappear
-    pending_off = []                         # (person, garment) removed LAST beat -> stated in this one
     blocks = []
     for gi, b in enumerate(beats, 1):
         body, wardrobe_change = extract_wardrobe((b or "").strip())
@@ -1417,7 +1452,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if enter_directive:
             for nm in _entries(enter_directive):
                 departed.discard(_norm_name(nm))
-        off_now = list(pending_off)          # auto-removals from the previous beat
+        body = body or "continue the action, same subject"
+        off_now = []                         # (person, garment) coming off in THIS shot
         if wardrobe_change is not None:
             before = {k: list(v) for k, v in active.items()}
             active = apply_wardrobe_change(active, wardrobe_change)   # explicit: takes effect THIS shot
@@ -1425,19 +1461,44 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 gone = [it for it in v if it not in active.get(k, [])]
                 removed += gone
                 off_now += [(k, it) for it in gone]
-        body = body or "continue the action, same subject"
+        # Auto-removals are resolved BEFORE the shot is composed, so the garment is
+        # already out of the person's description in the very shot that takes it off.
+        #
+        # It used to be deferred to the next shot, on the reasoning that the shot
+        # SHOWING the removal should still show the garment. That produced a shot
+        # whose description says "wearing a red jacket" while its verb says "takes off
+        # her red jacket" -- and the cheapest way for the model to satisfy both is to
+        # run the motion the OTHER way, ending with the jacket on. The video played
+        # the removal in reverse.
+        #
+        # The start state does not need the description: for every shot after the
+        # first it is pinned by the handoff keyframe, which shows the garment still
+        # worn. So the keyframe carries the START state and the prompt carries the
+        # END state, and the direction between them is stated outright below.
+        if auto_wardrobe:
+            before = {k: list(v) for k, v in active.items()}
+            active = auto_wardrobe_removals(active, body)
+            for k, v in before.items():
+                gone = [it for it in v if it not in active.get(k, [])]
+                removed += gone
+                off_now += [(k, it) for it in gone]
+            # A garment that lives ONLY in the anchor prose (never in the wardrobe
+            # channel): the removal phrase names it, so scrub it from the anchor or
+            # the anchor re-applies it forever.
+            anchor_gone = removed_phrase_items(body, anchor_id)
+            removed += anchor_gone
+            # Voice the anchor-side removal only when the channel didn't already cover
+            # it, or the same jacket is announced twice.
+            if anchor_gone and not off_now:
+                off_now += [("", it) for it in anchor_gone]
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
                                         speaking=has_speech(body), front_load=front_load)
-        # Say the garment is off, once, in the first shot without it. Deleting the
-        # item is not enough on its own -- the handoff frame still shows it worn.
-        # Only for people who are actually IN this shot; an unnamed (anchor-prose)
-        # garment is stated impersonally, so it summons nobody.
+        # State the DIRECTION of the change, in the shot that performs it. Only for
+        # people actually in this shot; an anchor-prose garment is stated
+        # impersonally, so it summons nobody.
         speak_off = [(n, it) for n, it in off_now
                      if not n or person_referenced(body, n, active)]
-        off_clause = no_longer_wearing(speak_off, active)
-        # Anything not said because its wearer is off-screen waits for the next shot
-        # they appear in, rather than being lost on a cutaway.
-        carry_off = [p for p in off_now if p not in speak_off]
+        off_clause = takes_off_clause(speak_off, active)
         if off_clause:
             persistent = persistent.rstrip(". ") + ". " + off_clause
         # Silence non-speech shots: a shot with no scripted dialogue gets an explicit
@@ -1464,12 +1525,10 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if "non_diegetic_music:" not in block.lower():
             block += f"\nnon_diegetic_music: {music if music else 'N/A'}"
         blocks.append(block.strip())
-        # Auto-removal is DEFERRED to the next shot: the garment stays worn in the
-        # shot that SHOWS it coming off ("she takes off her jacket"), and is gone
-        # from the following shot onward -- which reads correctly. Gated on tracked
-        # items, so "the plane takes off" removes nothing.
-        # Exits are DEFERRED like removals: the character is still in the shot that
-        # SHOWS them leaving, and absent from every shot after.
+        # Exits stay DEFERRED, unlike removals: a character has to be visible in the
+        # shot that shows them leaving, and the frame they leave in is the shot's own
+        # subject -- there is no reverse-motion trap, because "walks out" ending with
+        # them present would contradict the beat itself, not just a description.
         if exit_directive:
             for nm in _entries(exit_directive):
                 departed.add(_norm_name(nm))
@@ -1478,24 +1537,6 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # character channel) can't be "departed" by name -- scrub their phrase from
         # the anchor instead, exactly as removed garments are scrubbed.
         removed += departed_phrase_people(body, anchor_id)
-        pending_off = list(carry_off)
-        if auto_wardrobe:
-            before = {k: list(v) for k, v in active.items()}
-            active = auto_wardrobe_removals(active, body)
-            for k, v in before.items():
-                gone = [it for it in v if it not in active.get(k, [])]
-                removed += gone
-                pending_off += [(k, it) for it in gone]
-            # Also catch a garment that lives ONLY in the anchor prose (never in the
-            # wardrobe channel): the removal phrase names it, so scrub it from the
-            # anchor from the next shot on, or the anchor re-applies it forever.
-            anchor_gone = removed_phrase_items(body, anchor_id)
-            removed += anchor_gone
-            # Only voice the anchor-side removal when the channel didn't already
-            # cover it -- otherwise the same jacket is announced twice, once with a
-            # name and once without.
-            if anchor_gone and not pending_off:
-                pending_off += [("", it) for it in anchor_gone]
     return blocks
 
 

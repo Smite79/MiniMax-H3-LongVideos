@@ -155,18 +155,36 @@ from a beat's own action text — "she takes off her jacket," "he sheds his coat
 "she peels off her gloves" — and drops that item, with no directive to type.
 It's safe by design: a removal only fires on an item the character is already
 wearing, so non-garment phrases like "the plane takes off down the runway"
-match nothing and change nothing. The garment stays worn in the shot that shows
-it coming off and is gone from the next shot onward, which reads correctly. If a
-name precedes the action ("Maya takes off…"), only that person is affected.
+match nothing and change nothing. If a name precedes the action ("Maya takes
+off…"), only that person is affected.
 
-The removal is also **stated outright**, once, in the first shot without the
-garment: *"She is no longer wearing the red jacket, it is off."* Deleting the item
-is not enough on its own — that shot still starts from a handoff keyframe showing
-the garment being worn, and the model continues what it sees. The sentence uses
-the person's **pronoun** (never a bare name, which would re-introduce them and
-risk a duplicate figure) and waits for a shot they are actually in, so a cutaway
-never gets an off-screen character's wardrobe note. One shot later the chain
-carries the new state by itself, so it is not repeated.
+**The keyframe carries the start state; the prompt carries the end state.** From
+the removal shot onward the garment is gone from the person's description, and
+that shot alone states the change outright: *"She starts this shot wearing the red
+jacket and takes it off during the shot; by the last frame the red jacket is off
+and she is not wearing it. The motion runs one way only: the clothing comes off
+and is never put back on, never re-worn, and the action never plays in reverse."*
+It uses the person's **pronoun**, never a bare name (a bare name re-introduces
+them, and re-introducing someone is what makes the model render them twice).
+
+Both halves of that exist for a reason, and both were bugs first:
+
+- **Listing the garment as worn in the shot that removes it made the video play
+  backwards.** A removal is the one wardrobe change whose motion is symmetric —
+  the same frames reversed are a person putting the garment *on*, and both
+  readings satisfy "takes off her red jacket" equally. When the shot's own
+  description still said "wearing a red jacket", backwards was the reading that
+  matched the description, so the removal rendered in reverse and the jacket came
+  back. The start state does not need the description: for every shot after the
+  first, the handoff keyframe already shows the garment still on.
+- **Naming the garment in a LATER shot put it back on.** To a video model a
+  mention is a presence cue and a negation is a weak one, so "she is no longer
+  wearing the red jacket" in the following shot was itself enough to re-dress her.
+  No shot after the removal names the item at all now — they simply describe what
+  she *is* wearing.
+
+Plural garments get plural agreement ("the navy overalls **are** off, he is not
+wearing **them**"), because the clause is read literally by the text encoder.
 
 This works whether the garment lives in the wardrobe channel or **only in your
 anchor prose** ("A woman in a red jacket and a man in a black t-shirt"): the
