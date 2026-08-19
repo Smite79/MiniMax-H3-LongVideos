@@ -659,11 +659,14 @@ def check_forced_shot_seconds():
           rendered(15.0) < 362 and rendered(15.0) == R(15.0, 24, 15.9, 11.7, 1.5, False, NAT, 8.0)[0])
     check("auto mode still uses the budget floor, not 5 frames",
           P(beats, 24, S.estimate_shot_frames(12.0, 17.0, 1.5, NAT), per_beat=False)[0][0] == 124)
-    # per-beat sizing keeps its own floor: that path GUESSES from dialogue and must not
-    # guess a 1s shot, unlike an explicit request.
+    # Content sizing keeps its own floor -- that path GUESSES, and must never guess a
+    # 1s shot the way an explicit request may ask for one. The floor is the shortest
+    # shot that can hold ONE action, not the old 124f VRAM fallback.
     talky = ['She says, "Roger."']
-    check("per-beat dialogue sizing keeps the 124f floor",
-          P(talky, 24, 243, per_beat=True)[0][0] == 124)
+    check("content sizing keeps a one-action floor",
+          P(talky, 24, 243, per_beat=True)[0][0] >= S.align_frame_count(S.MIN_CONTENT_FRAMES))
+    check("...which is well below the old 124f VRAM floor",
+          S.align_frame_count(S.MIN_CONTENT_FRAMES) < 124)
 
     # Pacing is now sized from CONTENT -- how many actions a beat stages -- not from a
     # dialogue clock that floored everything at 124f. The old behaviour pinned every
@@ -702,6 +705,19 @@ def check_forced_shot_seconds():
              "then stops at the far wall."], 24, 294, per_beat=True)[0][0] < 124)
     check("'seconds:' is honored with pacing OFF too",
           P(["seconds: 3\nShe waves."], 24, 294, per_beat=False)[0][0] < 124)
+
+    # The grid steps 17 frames (~0.7s). Rounding an ESTIMATE up added that to every
+    # content-sized shot -- pacing leans short on purpose, so it must not lean back.
+    check("an estimate snaps to the NEAREST grid point, not upward",
+          S.align_frame_count_nearest(228) == 226 and S.align_frame_count(228) == 243)
+    check("nearest never leaves the 17n+5 grid",
+          all(S.align_frame_count_nearest(n) % 17 == 5 for n in range(5, 400)))
+    check("nearest is always within half a grid step",
+          all(abs(S.align_frame_count_nearest(n) - n) <= 9 for n in range(5, 400)))
+    check("a stated 'seconds:' is still never rounded DOWN",
+          P(["seconds: 9.5\nShe waves."], 24, 294, per_beat=True)[0][0] == 243)
+    check("a one-action beat lands at its estimate, not a grid step above",
+          P(["Kristy scans the shelves."], 24, 294, per_beat=True)[0][0] == 107)
 
     # The warning exists for the case the node CANNOT size: pacing off, thin beat.
     thin = ['Kristy scans the shelves.']

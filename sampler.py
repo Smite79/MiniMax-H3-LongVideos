@@ -65,6 +65,20 @@ def align_frame_count(n):
     return n
 
 
+def align_frame_count_nearest(n):
+    """Nearest 17k+5 grid point, not the next one up.
+
+    align_frame_count always rounds UP, which is right when honoring a length that
+    was ASKED for -- never give back less than requested. It is wrong for an
+    ESTIMATE: the grid steps 17 frames (~0.7s), so rounding up added up to 0.7s to
+    every content-sized shot and pushed a 9.5s estimate out to 10.1s. Pacing leans
+    short on purpose; rounding should not quietly lean the other way."""
+    n = max(5, int(n))
+    lo = n - ((n - 5) % 17)
+    hi = lo + 17
+    return lo if (n - lo) <= (hi - n) else hi
+
+
 def video_latent_t(fc):
     return 2 if fc <= 5 else ((fc - 5) // 17) * 5 + 2
 
@@ -1399,13 +1413,14 @@ def plan_beat_frames(beats, fps, budget, per_beat=True):
     fps = max(1, int(fps))
     for i, b in enumerate(beats, 1):
         want, src, floor = beat_seconds_directive(b), "seconds:", 5
+        snap = align_frame_count            # a stated length is never rounded DOWN
         if want is None:
             want = estimate_beat_seconds(b) if per_beat else 0.0
-            src, floor = "content", content_floor
+            src, floor, snap = "content", content_floor, align_frame_count_nearest
         if want <= 0:                       # no signal -> the ceiling
             out.append(cap)
             continue
-        n = min(cap, max(floor, align_frame_count(int(round(want * fps)))))
+        n = min(cap, max(floor, snap(int(round(want * fps)))))
         out.append(n)
         if n != cap:
             notes.append(f"shot {i}: {n}f (~{n / fps:.1f}s, from {src})")
