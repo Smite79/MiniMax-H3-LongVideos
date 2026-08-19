@@ -431,6 +431,23 @@ def check_detailed_wardrobe_items():
     check("a one-word item is unaffected", S._item_head("boots") == "boots")
     check("detail alone never becomes the head", S._item_head("jacket with zippers") == "jacket")
 
+    # Worn items positioned with 'around'/'at' -- accessories are usually written this
+    # way ("chain around her waist"), and the body part was becoming the head noun, so
+    # the removal never fired.
+    for item, head in [("silver chain around her neck", "chain"),
+                       ("chain around her waist", "chain"),
+                       ("handcuffs around her wrists", "handcuffs"),
+                       ("steel handcuffs on her wrists", "handcuffs"),
+                       ("belt around her waist", "belt")]:
+        check(f"head of {item!r} is {head!r}", S._item_head(item) == head)
+        a = S.parse_wardrobe(f"Kristy = she, black t-shirt, {item}")
+        after = S.auto_wardrobe_removals(a, f"Kristy takes off her {head}.")
+        check(f"  ...and 'takes off her {head}' removes it",
+              [x for x in a["Kristy"] if x not in after["Kristy"]] == [item])
+    # "down" is a material, not a position: cutting there would leave "puffy"
+    check("a down jacket keeps its head noun", S._item_head("puffy down jacket") == "jacket")
+    check("...and its zone", S.garment_zones("puffy down jacket") == {"upper"})
+
     # The removal sentence names the garment, not its whole sheet entry. The detail
     # is already stamped in the description every shot; repeating it twice inside a
     # sentence whose only job is "it came off" buries the instruction.
@@ -504,7 +521,11 @@ def check_under_layer_stays_on():
         # exposure warning exactly when it is needed.
         "none":  ["black boots", "wool socks", "silk stockings", "lace garter belt",
                   "leather gloves", "wool scarf", "baseball cap", "silver hair",
-                  "leather belt", "gold necklace"],
+                  "leather belt", "gold necklace",
+                  # worn, tracked and removable -- but they cover nothing, so they
+                  # must never satisfy the exposure check
+                  "silver chain", "chains", "heavy chains", "steel handcuffs",
+                  "handcuffs", "leather cuffs", "ankle chains"],
     }
     wrong = []
     for want, items in ZONES.items():

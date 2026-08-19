@@ -495,9 +495,12 @@ def _resolve_subject(word, names, pron_map, single):
 
 # Words that start a DETAIL trailing off a garment rather than continuing its name:
 # "red leather jacket WITH silver zippers", "boots WITH steel buckles".
+# NOTE: "down" is deliberately absent -- it is a material ("a puffy down jacket"),
+# not a position, and cutting there would leave "puffy" as the garment name.
 _ITEM_DETAIL = re.compile(
     r"\b(?:with|without|featuring|showing|bearing|in|on|over|under|across|that|which|"
-    r"and|plus|sporting|carrying|covered)\b")
+    r"and|plus|sporting|carrying|covered|around|about|at|through|along|behind|"
+    r"beneath|beside|near)\b")
 
 
 def _item_name(item):
