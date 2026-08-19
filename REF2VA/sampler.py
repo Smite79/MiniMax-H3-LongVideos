@@ -540,6 +540,40 @@ def _item_mentioned(item, window):
     return False
 
 
+# Where a removal verb's OBJECT ends. Anything past one of these belongs to a
+# different phrase -- what was revealed, where the garment was put, what happened
+# next -- and must not be treated as something that also came off.
+_OBJECT_STOP = re.compile(
+    r"[,.;:!?]"
+    r"|\b(?:revealing|reveals?|showing|shows?|exposing|exposes?|leaving|leaves?|wearing|"
+    r"wears?|underneath|beneath|under|over|on|onto|in|into|to|from|at|by|beside|near|"
+    r"next|behind|against|while|as|before|after|then|toward|towards)\b"
+    r"|\b(?:puts?|pulls?|slips?|throws?|zips?|buttons?|laces?)\s+(?:on|into)\b")
+
+
+def _removal_object_span(text, m):
+    """The text a removal verb actually acts ON.
+
+    The old code searched a fixed ~68-character window around the verb, so ANY
+    tracked garment sitting near the removal came off with it: "takes off her red
+    jacket and drops it on the bench next to her boots" removed the boots, and
+    "takes off her red jacket over her black tank top" removed the tank top. Two
+    items gone where the beat removed one.
+
+    The span therefore runs from the verb to the first phrase boundary, and it
+    INCLUDES the matched cue itself, because the put-away patterns ("hangs her
+    jacket on a hook") carry the garment inside the match. Coordination survives --
+    "takes off her jacket and boots" has no boundary between the two, so both are
+    still found. A backward span is tried only when nothing is found forward, for
+    the phrasings that put the garment first ("her jacket is off now")."""
+    tail = text[m.end():m.end() + 60]
+    cut = _OBJECT_STOP.search(tail)
+    span = m.group(0) + (tail[:cut.start()] if cut else tail)
+    if span.strip():
+        return span
+    return text[max(0, m.start() - 40):m.start()]
+
+
 def auto_wardrobe_removals(active, body):
     """Infer clothing REMOVALS from a beat's own action text, so you don't have
     to write a 'wardrobe:' line at all -- "she takes off her jacket" drops the
@@ -602,9 +636,7 @@ def auto_wardrobe_removals(active, body):
     for m in remove_cue.finditer(text):
         if any(a <= m.start() <= b for a, b in don_spans):
             continue
-        # look forward from the verb, and a little BACKWARD too: some phrasings put
-        # the garment first ("her jacket is off now", "the jacket, now removed").
-        window = text[max(0, m.start() - 28):m.end() + 40]
+        window = _removal_object_span(text, m)
         tgt = nearest_subject(m.start())
         for name in ([tgt] if tgt else list(active.keys())):
             for it in list(active.get(name, [])):

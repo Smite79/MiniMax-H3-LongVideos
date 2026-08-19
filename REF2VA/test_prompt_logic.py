@@ -400,6 +400,46 @@ def check_anchor_not_rewritten():
     check("the removal still applies", not worn(sh[3], "cap"))
 
 
+def check_removal_takes_only_its_object():
+    """A removal must take off what the verb acts ON -- nothing else nearby.
+
+    The matcher used to search a fixed ~68-character window around the removal verb,
+    so any tracked garment sitting near it came off too: "takes off her red jacket
+    and drops it on the bench next to her boots" removed the boots, and "takes off
+    her red jacket over her black tank top" removed the tank top. Two items gone
+    where the beat removed one. The span now ends at the first phrase boundary --
+    what was revealed, where it was put, what happened next."""
+    print("\n=== a removal takes its OBJECT, not its neighbours ===")
+    cm_ = "Kristy = she, silver hair, red jacket, black tank top, blue jeans, black boots"
+
+    def removed(beat):
+        a = S.parse_wardrobe(cm_)
+        after = S.auto_wardrobe_removals(a, beat)
+        return sorted(i for i in a["Kristy"] if i not in after["Kristy"])
+
+    check("a garment named after 'next to' is not removed",
+          removed("Kristy takes off her red jacket and drops it on the bench "
+                  "next to her boots.") == ["red jacket"])
+    check("a garment named after 'over' is not removed",
+          removed("Kristy takes off her red jacket over her black tank top.") == ["red jacket"])
+    check("a REVEALED garment is not removed",
+          removed("Kristy takes off her red jacket, revealing a black tank top.") == ["red jacket"])
+    check("...nor when the reveal trails the clause",
+          removed("Kristy shrugs off her red jacket, a black tank top underneath.") == ["red jacket"])
+    # coordination must still work: two real objects of one verb
+    check("'jacket and boots' still removes both",
+          removed("Kristy takes off her red jacket and boots.") == ["black boots", "red jacket"])
+    check("'boots and her jacket' still removes both",
+          removed("Kristy removes her boots and her jacket.") == ["black boots", "red jacket"])
+    # the put-away patterns carry the garment INSIDE the matched cue
+    check("'hangs her jacket on a hook' still removes the jacket",
+          removed("Kristy hangs her red jacket on a hook.") == ["red jacket"])
+    check("'throws her jacket over a chair' still removes the jacket",
+          removed("Kristy throws her red jacket over a chair.") == ["red jacket"])
+    check("the landmine still strips nothing",
+          removed("Kristy watches the plane take off over the black tank top.") == [])
+
+
 def check_unnamed_sheet_punctuation():
     """An unnamed character_memory must not run into the beat.
 
@@ -1226,6 +1266,7 @@ def main():
     check_real_world_sheet()
     check_no_second_subject_noun()
     check_anchor_not_rewritten()
+    check_removal_takes_only_its_object()
     check_unnamed_sheet_punctuation()
     check_mouth_state_on_dialogue()
     check_lora_duplication_guard()
