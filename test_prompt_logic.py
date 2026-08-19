@@ -456,6 +456,52 @@ def check_detailed_wardrobe_items():
           "black boots are off" in plur and "takes them off" in plur)
 
 
+def check_under_layer_stays_on():
+    """Removing an outer layer must not undress the character.
+
+    Shorts worn under trousers were listed once, in a distant parenthetical, between
+    a t-shirt and a pair of boots. The removal clause then said the trousers were
+    off, not worn, and that clothing comes off -- five statements about lower-body
+    clothing leaving and none about what remains. The model completed the obvious
+    continuation and rendered bare legs. The under-layer is now named in the same
+    breath as the removal, and where there is NO under-layer the node says so in
+    `info` instead of quietly producing nudity."""
+    print("\n=== an under-layer stays on through a removal ===")
+    cm_ = "Kristy = she, silver hair, black t-shirt, blue jeans, grey shorts, black boots"
+    notes = []
+    sh = D("A garage.", ["Kristy stands there.", "Kristy takes off her blue jeans.",
+                         "Kristy walks off."], "", "", cm_, notes_out=notes)
+    check("the under-layer is named in the removal shot", "grey shorts underneath" in sh[1])
+    check("...and stated as staying on", "still wearing them" in sh[1])
+    check("the under-layer survives in the wardrobe channel", worn(sh[2], "grey shorts"))
+    check("the removed garment is gone", not worn(sh[2], "blue jeans"))
+    check("no exposure warning when something remains", notes == [])
+
+    # nothing underneath -> the node cannot fix it, so it must SAY so
+    bare = []
+    sb = D("A garage.", ["Kristy stands there.", "Kristy takes off her blue jeans.",
+                         "Kristy walks off."], "", "",
+           "Kristy = she, silver hair, black t-shirt, blue jeans, black boots", notes_out=bare)
+    check("a removal with nothing underneath is reported", len(bare) == 1)
+    check("...naming the zone left bare", "lower body" in bare[0])
+    check("...and how to fix it", "under-layer" in bare[0])
+    check("no under-layer sentence is invented", "underneath" not in sb[1])
+
+    # zone classification
+    check("trousers and shorts share the lower zone",
+          S.garment_zones("blue jeans") == S.garment_zones("grey shorts") == {"lower"})
+    check("a dress covers both zones", S.garment_zones("red dress") == {"upper", "lower"})
+    check("boots cover no body zone", S.garment_zones("black boots") == set())
+    check("a non-garment attribute covers nothing", S.garment_zones("silver hair") == set())
+    check("an upper layer over an upper layer is recognised",
+          S.remaining_cover(["black t-shirt", "black boots"], {"upper"}) == ["black t-shirt"])
+    # removing a jacket over a t-shirt must NOT warn
+    j = []
+    D("A garage.", ["Kristy stands there.", "Kristy takes off her red jacket."], "", "",
+      "Kristy = she, red jacket, black t-shirt, blue jeans", notes_out=j)
+    check("a jacket over a shirt raises no warning", j == [])
+
+
 def check_removal_phrasings():
     """A removal is not always written "takes it off".
 
@@ -1252,6 +1298,7 @@ def main():
     check_no_second_subject_noun()
     check_anchor_not_rewritten()
     check_detailed_wardrobe_items()
+    check_under_layer_stays_on()
     check_removal_phrasings()
     check_removal_takes_only_its_object()
     check_unnamed_sheet_punctuation()

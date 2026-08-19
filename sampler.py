@@ -1134,6 +1134,39 @@ def _subject_term(name, active):
     return name
 
 
+# Which part of the body a garment covers. Only two zones matter here: a removal
+# that leaves a zone with nothing on it is the one that renders as nudity.
+_ZONE_LOWER = {"pants", "trousers", "jeans", "shorts", "skirt", "leggings", "tights",
+               "joggers", "sweatpants", "slacks", "chinos", "briefs", "boxers",
+               "panties", "knickers", "underwear", "bottoms", "breeches", "culottes"}
+_ZONE_UPPER = {"shirt", "t-shirt", "tee", "top", "blouse", "sweater", "jumper", "hoodie",
+               "jacket", "coat", "blazer", "cardigan", "vest", "tank", "sweatshirt",
+               "pullover", "bra", "camisole", "singlet", "smock"}
+_ZONE_BOTH = {"dress", "gown", "jumpsuit", "romper", "overalls", "coveralls", "robe",
+              "kimono", "bodysuit", "leotard", "suit", "onesie", "dungarees"}
+
+
+def garment_zones(item):
+    """The body zones a garment covers: {'lower'}, {'upper'}, both, or empty.
+
+    Empty means it is not body covering at all (hat, boots, a scar, hair colour), so
+    removing it can never expose anything."""
+    head = _item_head(item)
+    for form in (head, head.rstrip("s"), head + "s"):
+        if form in _ZONE_BOTH:
+            return {"upper", "lower"}
+        if form in _ZONE_LOWER:
+            return {"lower"}
+        if form in _ZONE_UPPER:
+            return {"upper"}
+    return set()
+
+
+def remaining_cover(items, zones):
+    """Items still worn that cover any of `zones` -- what is underneath."""
+    return [i for i in items if garment_zones(i) & zones]
+
+
 def _is_plural_garment(item):
     """Garments that take a plural verb: overalls, jeans, boots, gloves, shorts.
     A head noun ending in a DOUBLE s (dress, harness) is singular, which is what
@@ -1167,7 +1200,7 @@ def takes_off_clause(pairs, active=None):
         item = (item or "").strip()
         if item and item not in by.setdefault(name or "", []):
             by[name or ""].append(item)
-    bits = []
+    bits, still = [], []
     for name, items in by.items():
         # Refer to the garment by NAME, not by its full sheet entry. The detail
         # (logo, zippers, torn knee) is already stamped in the description every
@@ -1189,9 +1222,25 @@ def takes_off_clause(pairs, active=None):
         else:
             bits.append(f"the {what} {verb} worn at the start of this shot and {'come' if plural else 'comes'} "
                         f"off during it; by the last frame {subj_pron} {verb} off")
+        # SAY WHAT IS STILL ON. The clause is five statements about clothing coming
+        # off; without this, nothing in it says the body is still covered, and the
+        # model completes the obvious continuation -- shorts worn UNDER trousers were
+        # listed once in a distant parenthetical and simply not rendered. Naming the
+        # under-layer here, in the same breath as the removal, is what keeps it on.
+        zones = set()
+        for i in items:
+            zones |= garment_zones(i)
+        under = remaining_cover(active.get(name, []), zones) if zones else []
+        if under:
+            worn = " and ".join(_item_name(u) for u in under)
+            who = (_subject_term(name, active).lower() if name else "the character")
+            still.append(f"the {worn} underneath {'stay' if len(under) > 1 or _is_plural_garment(under[0]) else 'stays'} "
+                         f"on and {who} is still wearing {'them' if len(under) > 1 or _is_plural_garment(under[0]) else 'it'}")
     if not bits:
         return ""
     s = "; ".join(bits)
+    if still:
+        s += ". " + ("; ".join(still)).capitalize()
     # The anti-reverse instruction is the point of the clause, so it is not left
     # implicit in the end-state description. Worded without a pronoun so it needs no
     # agreement with whatever came off.
@@ -1593,7 +1642,8 @@ def speech_flags(beats):
 
 
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
-                           auto_silence_nonspeech=True, count_subjects=False, front_load=False):
+                           auto_silence_nonspeech=True, count_subjects=False, front_load=False,
+                           notes_out=None):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -1685,6 +1735,18 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         speak_off = [(n, it) for n, it in off_now
                      if not n or person_referenced(body, n, active)]
         off_clause = takes_off_clause(speak_off, active)
+        # A removal that leaves a body zone with NOTHING on it is the one the node
+        # cannot write its way out of: there is no under-layer to name, so the model
+        # renders bare skin. Say so before the render rather than after it.
+        if notes_out is not None:
+            for nm, it in off_now:
+                zones = garment_zones(it)
+                if zones and not remaining_cover(active.get(nm, []), zones):
+                    who = nm or "the character"
+                    notes_out.append(
+                        f"shot {gi}: removing the {_item_name(it)} leaves {who} with nothing on the "
+                        f"{'/'.join(sorted(zones))} body -- H3 will render bare skin there. Add an "
+                        f"under-layer to character_memory (e.g. 'grey shorts') if that is not intended")
         if off_clause:
             persistent = persistent.rstrip(". ") + ". " + off_clause
         # Silence non-speech shots: a shot with no scripted dialogue gets an explicit
@@ -2999,10 +3061,11 @@ class H3LongVideosFL2VA:
                 + ". Add a second clause to the beat, set 'seconds:' on it, or turn "
                   "per_beat_length ON to size shots from their content")
         fit_warnings = dialogue_fit_warnings(beats, secs)
+        wardrobe_notes = []
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),
                                       auto_wardrobe, auto_silence_nonspeech, count_subjects,
-                                      lora_on)
+                                      lora_on, notes_out=wardrobe_notes)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.
@@ -3026,6 +3089,8 @@ class H3LongVideosFL2VA:
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
                     + (f" {beats_note}." if beats_note else "")
                     + (f"{plan_audio}." if plan_audio else "")
+                    + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
+                       if wardrobe_notes else "")
                 + (f" {fps_note}." if fps_note else "")
                     + (f" {ln_note}." if ln_note else ""))
             ph_img = torch.zeros((1, 64, 64, 3))
@@ -3206,6 +3271,8 @@ class H3LongVideosFL2VA:
                    if count_subjects and min(w, h) < 768 else "")
                 + (f" {beats_note}." if beats_note else "")
                 + (f"{audio_note}." if audio_note else "")
+                + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
+                   if wardrobe_notes else "")
                 + (f" {fps_note}." if fps_note else "")
                 + (f" {swap_note}." if swap_note else "")
                 + (f" free VRAM/shot: {vram_trace}." if len(vram_trace) > 1 else "")
