@@ -590,3 +590,9 @@ base checkpoint (so 20 steps is right) vs a distill/low-step path.
   skipped with a note in `info` and the render still completes.
 - No negative prompt needed — H3 is CFG-free (cfg 1) and the node makes an empty one internally.
 - No denoise input — it's fixed at 1.0 internally (partial denoise desyncs the joint audio/video schedule).
+
+## Disclaimer
+
+The owner of this repo will not be responsible for any copyright strikes
+incurred because of use. You are responsible for your works. Use this node
+responsibly and ethically.
