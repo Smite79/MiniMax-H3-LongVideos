@@ -400,6 +400,30 @@ def check_anchor_not_rewritten():
     check("the removal still applies", not worn(sh[3], "cap"))
 
 
+def check_unnamed_sheet_punctuation():
+    """An unnamed character_memory must not run into the beat.
+
+    A sheet with no "Name =" lands under the empty key and is PREPENDED as a bare
+    comma list. Without a terminator it fused with the action -- "...blue jeans,
+    black boots Kristy walks around the garage" -- where "black boots Kristy" reads
+    as a single noun phrase. A named sheet never had this: it binds as a
+    parenthetical at the person's first mention."""
+    print("\n=== unnamed sheet is closed off as its own sentence ===")
+    cm_ = "27, silver hair, green eyes, red jacket, blue jeans, black boots"
+    shot = D("A garage, warm light.", ["Kristy walks around the garage."], "", "", cm_)[0]
+    check("the sheet does not run into the action", "boots Kristy" not in shot)
+    check("the sheet is terminated", "black boots." in shot)
+    check("the description still reaches the shot", "silver hair" in shot)
+    # a sheet that already ends in punctuation must not get a second one
+    cm2 = "silver hair, red jacket. Mouth closed."
+    shot2 = D("A garage.", ["Kristy walks in."], "", "", cm2)[0]
+    check("no doubled terminator", ".." not in shot2)
+    # the named path is unaffected -- it binds inline, never as a prefix
+    named = D("A garage.", ["Kristy walks in."], "", "",
+              "Kristy = she, silver hair, red jacket")[0]
+    check("a named sheet still binds as a parenthetical", "Kristy (silver hair" in named)
+
+
 def check_mouth_state_on_dialogue():
     """A sheet that forces "Mouth closed" must not do so on a SPEAKING shot.
 
@@ -1083,6 +1107,7 @@ def main():
     check_real_world_sheet()
     check_no_second_subject_noun()
     check_anchor_not_rewritten()
+    check_unnamed_sheet_punctuation()
     check_mouth_state_on_dialogue()
     check_lora_duplication_guard()
     check_subject_count_guard()

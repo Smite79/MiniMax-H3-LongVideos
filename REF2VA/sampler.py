@@ -848,7 +848,16 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
     # Keep tracked people OUT of the always-on anchor: the beat binds them inline,
     # so leaving them here too introduces each character twice per shot.
     anchor_id = _strip_people_from_anchor(anchor_id, active)
-    prefix_bits = [x for x in (anchor_id, ", ".join(unnamed) if unnamed else "") if x]
+    # An UNNAMED sheet is emitted as a bare list in front of the beat, so it has to
+    # be closed off as its own sentence. Without the period it ran straight into the
+    # action -- "...red jacket, blue jeans, black boots Kristy walks around the
+    # garage" -- where "black boots Kristy" reads as one noun phrase. A NAMED sheet
+    # never had this problem: it binds as a parenthetical at the person's first
+    # mention instead of being prepended.
+    unnamed_txt = ", ".join(unnamed) if unnamed else ""
+    if unnamed_txt and unnamed_txt[-1] not in ".!?":
+        unnamed_txt += "."
+    prefix_bits = [x for x in (anchor_id, unnamed_txt) if x]
 
     if named:
         names = list(named)
