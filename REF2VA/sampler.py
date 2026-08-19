@@ -517,12 +517,38 @@ def _resolve_subject(word, names, pron_map, single):
     return None
 
 
+# Words that start a DETAIL trailing off a garment rather than continuing its name:
+# "red leather jacket WITH silver zippers", "boots WITH steel buckles".
+_ITEM_DETAIL = re.compile(
+    r"\b(?:with|without|featuring|showing|bearing|in|on|over|under|across|that|which|"
+    r"and|plus|sporting|carrying|covered)\b")
+
+
+def _item_head(item):
+    """The garment's own head noun, ignoring any detail trailing off it.
+
+    Taking the LAST word was wrong the moment an item carried detail: the head of
+    "red leather jacket with silver zippers" came out as `zippers`, of "bomber
+    jacket with a white logo on the chest" as `chest`. "takes off her red jacket"
+    then matched nothing and the removal SILENTLY did not fire -- the garment stayed
+    on the sheet and got re-stamped into every later shot. Detailed wardrobe entries
+    are normal (logos, zippers, torn knees), so the head has to be read from the
+    part of the phrase that names the garment."""
+    import re
+    il = (item or "").lower().strip()
+    cut = _ITEM_DETAIL.search(il)
+    name = il[:cut.start()] if cut and cut.start() > 0 else il
+    words = re.findall(r"[a-z\-]+", name) or re.findall(r"[a-z\-]+", il)
+    return words[-1] if words else ""
+
+
 def _item_mentioned(item, window):
     """Does `window` refer to this wardrobe item? Matches the whole phrase, or the
     item's head noun, tolerant of singular/plural ('boots' vs 'boot') -- the strict
     exact-substring test missed 'takes off her boots' when the sheet said 'boots'
     and vice versa. Ignores generic colour/size adjectives so 'red jacket' is still
-    matched by 'her jacket'."""
+    matched by 'her jacket', and trailing detail so 'red jacket with silver zippers'
+    is still matched by 'her jacket'."""
     import re
     w = window.lower()
     il = item.lower().strip()
@@ -530,10 +556,9 @@ def _item_mentioned(item, window):
         return False
     if il in w:
         return True
-    words = [x for x in re.findall(r"[a-z\-]+", il)]
-    if not words:
+    head = _item_head(il)
+    if not head:
         return False
-    head = words[-1]
     for form in {head, head.rstrip("s"), head + "s", head + "es"}:
         if form and re.search(r"\b" + re.escape(form) + r"\b", w):
             return True

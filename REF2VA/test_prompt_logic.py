@@ -400,6 +400,38 @@ def check_anchor_not_rewritten():
     check("the removal still applies", not worn(sh[3], "cap"))
 
 
+def check_detailed_wardrobe_items():
+    """A garment carrying DETAIL must still be removable.
+
+    _item_mentioned took the last word of the item as its head noun, so the head of
+    "red leather jacket with silver zippers" was `zippers` and of "bomber jacket
+    with a white logo on the chest" was `chest`. "takes off her red jacket" then
+    matched nothing, the removal silently did not fire, and the garment was
+    re-stamped into every later shot. Detailed entries are normal -- logos,
+    zippers, torn knees -- so the head is read from the part that names the
+    garment, not from whatever the phrase happens to end on."""
+    print("\n=== detailed wardrobe items stay removable ===")
+    cases = [("red leather jacket with silver zippers", "jacket",
+              "Kristy takes off her red jacket."),
+             ("red bomber jacket with a white circular logo on the chest", "jacket",
+              "Kristy takes off her red jacket."),
+             ("black boots with steel buckles", "boots", "Kristy removes her boots."),
+             ("blue jeans with a torn left knee", "jeans", "Kristy peels off her jeans."),
+             ("grey hoodie featuring a faded band logo", "hoodie",
+              "Kristy pulls off her hoodie."),
+             ("navy overalls covered in grease stains", "overalls",
+              "Kristy shrugs off her overalls.")]
+    for item, head, beat in cases:
+        check(f"head of {item[:34]!r} is {head!r}", S._item_head(item) == head)
+        a = S.parse_wardrobe(f"Kristy = she, silver hair, {item}")
+        after = S.auto_wardrobe_removals(a, beat)
+        check(f"  ...and it is removed by {beat.split('her ')[-1][:-1]!r}",
+              [x for x in a["Kristy"] if x not in after["Kristy"]] == [item])
+    check("a plain item is unaffected", S._item_head("red jacket") == "jacket")
+    check("a one-word item is unaffected", S._item_head("boots") == "boots")
+    check("detail alone never becomes the head", S._item_head("jacket with zippers") == "jacket")
+
+
 def check_removal_takes_only_its_object():
     """A removal must take off what the verb acts ON -- nothing else nearby.
 
@@ -1266,6 +1298,7 @@ def main():
     check_real_world_sheet()
     check_no_second_subject_noun()
     check_anchor_not_rewritten()
+    check_detailed_wardrobe_items()
     check_removal_takes_only_its_object()
     check_unnamed_sheet_punctuation()
     check_mouth_state_on_dialogue()
