@@ -42,17 +42,27 @@ steps, cfg, sampler, scheduler. Everything else (fps, seam trim, **handoff offse
 VRAM headroom, explicit anchor, ambient `global_soundscape`,
 `non_diegetic_music`, `character_memory`) is optional with sensible defaults.
 
-**Every shot coming out at exactly ~5.2s? Turn `per_beat_length` OFF.** It is now
-**off by default**, but a workflow saved earlier still stores the old `True` and must
-be unticked by hand. The feature sizes a dialogue-only beat from its line (~2.5
-words/sec + 1s of air) — but the minimum shot is 124f (~5.2s) and almost every real
-line needs less than that, so in practice it pins **every** dialogue shot to exactly
-5.2s: a 3.8s line and a 1.8s line come out identical. That is not sizing, it is a
-constant, which is why it is no longer the default. Note it is also **ignored when
-`shot_seconds` is forced** — so a plan made with a forced length shows full-length
-shots while the auto render comes back at 5.2s, which looks like the length widget
-being ignored. `info` now says outright when per-beat sizing shortened shots, and by
-how many.
+**Shot length is sized from what each beat stages** (`per_beat_length`, **on by
+default**). A beat's time is ~2s of setup plus ~2.5s per action clause, or its
+spoken line, whichever is longer — so "she takes off her jacket and drops it on
+the bench" gets ~7s while a three-part beat gets more. `shot_seconds` and the VRAM
+budget are the **ceiling**, not the length of every shot.
+
+This exists because the opposite is a real failure, not an aesthetic one. A 3-second
+action in a 12-second shot leaves nine seconds the model was told nothing about,
+and it fills them by repeating or **reversing** the action — which is why clothing
+came off and went back on. The estimate deliberately leans **short**: an unfinished
+action is continued by the next shot from the handoff frame, while an overlong shot
+is unrecoverable.
+
+Override any single beat with `seconds: 8` on its own line inside that paragraph —
+that wins over the estimate, over `shot_seconds`, and over the toggle, and it is
+honored down to H3's 5-frame minimum. Turn `per_beat_length` **off** to give every
+shot the full ceiling; `info` then warns about any beat too thin for the length it
+got, since that is the case the node cannot size for you.
+
+*Note for workflows saved before this:* ComfyUI stores widget values, so an existing
+node still holds the old `per_beat_length` value and must be ticked by hand.
 
 **A short `shot_seconds` used to be ignored.** Values below ~5.2s were raised to the
 124-frame budget floor, so 1s, 2s, 3s and 4s all rendered identically. That floor is

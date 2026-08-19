@@ -1275,6 +1275,51 @@ def action_words(beat):
     return len(body.split())
 
 
+# --- content-aware shot length ---------------------------------------------
+# A beat's screen time is estimated from how many ACTIONS it stages, not from its
+# word count. Word count measures how wordy you were; clause count measures how
+# much has to happen.
+#
+# The estimate is deliberately biased SHORT, because the two errors are not
+# symmetric. A shot that ends before the action finishes hands a mid-motion frame
+# to the next shot, which is exactly what the handoff chain is built to continue.
+# A shot that outlasts its action leaves the model seconds it was told nothing
+# about, and the cheapest filler for a symmetric action (taking a jacket off, a
+# door opening, sitting down) is to run it BACKWARDS -- which returns to the start
+# state and makes the clip loopable. Too long is unrecoverable; too short is not.
+BEAT_BASE_SEC = 2.0          # setup/settle time every shot needs regardless of content
+SECONDS_PER_ACTION = 2.5     # screen time for one staged action clause
+MIN_CONTENT_FRAMES = 73      # ~3.0s: the shortest shot that can hold one action
+# Clause separators: a new coordinated verb phrase starts a new action.
+_CLAUSE_SPLIT = (r"(?:[.!?;]+|,?\s+(?:and then|then|and|before|after|while|as|until)\s+"
+                 r"|,\s+(?=[a-z]+ing\b))")
+
+
+def action_clauses(beat):
+    """How many distinct staged actions a beat contains.
+
+    "takes off her red jacket and drops it on the workbench" is two; "walks the
+    length of the garage, checking every bench, then stops at the far wall" is
+    three. Quoted speech is excluded -- that time is counted by dialogue_seconds."""
+    import re
+    body, _ = extract_wardrobe((beat or "").strip())
+    body = re.sub(r'["“][^"”]*["”]', " ", body)
+    body = " ".join(ln for ln in body.splitlines() if not is_directive_line(ln))
+    parts = [p.strip() for p in re.split(_CLAUSE_SPLIT, body) if p and p.strip()]
+    # A fragment of one word is a leftover ("it", "her"), not an action of its own.
+    return sum(1 for p in parts if len(p.split()) >= 2)
+
+
+def estimate_beat_seconds(beat):
+    """Screen time this beat needs, from its own content. 0.0 when it has none.
+
+    Action and dialogue OVERLAP rather than add -- people talk while they move --
+    so the estimate is the larger of the two, not their sum."""
+    n = action_clauses(beat)
+    action = (BEAT_BASE_SEC + SECONDS_PER_ACTION * n) if n else 0.0
+    return max(action, dialogue_seconds(beat))
+
+
 def dialogue_spans(beat):
     """Word count of each double-quoted span in a beat, in order. Length of the
     returned list is the number of speaking TURNS -- the multi-character case."""
@@ -1324,47 +1369,67 @@ def beat_seconds_directive(beat):
 def plan_beat_frames(beats, fps, budget, per_beat=True):
     """Per-beat shot lengths in frames. Returns (lengths, notes).
 
-    Every length is grid-aligned and clamped to [floor, budget]: the VRAM budget is
-    a hard ceiling, so per-beat sizing can only ever make a shot SHORTER than the
-    card allows, never longer. Priority per beat:
+    `budget` is the CEILING -- the VRAM budget, or a forced shot_seconds already
+    clamped to it. Per-beat sizing can only ever make a shot shorter than that
+    ceiling, never longer. Priority per beat:
 
-      1. an explicit 'seconds: N' line in the beat -- always honored (even with
-         per_beat off), because the user stated a duration outright;
-      2. its quoted dialogue -- words/WORDS_PER_SEC plus SPEECH_PAD_SEC of air;
-      3. otherwise the full budget. Action prose carries NO reliable duration
-         signal ("walks across the tarmac" is 2s or 12s depending on the tarmac),
-         so a silent beat is never guessed short -- it keeps the length it would
-         have had before per-beat sizing existed.
+      1. an explicit 'seconds: N' line in the beat -- always honored, down to
+         H3's real 5-frame minimum, because you stated a duration outright;
+      2. its own content -- action clauses and quoted dialogue (see
+         estimate_beat_seconds), floored at MIN_CONTENT_FRAMES so a shot always
+         has room for one action;
+      3. with per_beat off, the ceiling, exactly as before.
 
-    The win is that a 6-word line no longer sits in a 10s shot padded with drift,
-    and short beats stop costing full-length render time."""
+    Why estimate at all, when action prose has no *reliable* duration? Because the
+    alternative is not "no guess" -- it is "guess the maximum", which is what giving
+    every beat the ceiling does. A 3-second action in a 12-second shot leaves nine
+    seconds the model was told nothing about, and it fills them by repeating or
+    REVERSING the action. Leaning short costs an unfinished action that the next
+    shot continues from the handoff frame; leaning long costs a jacket that takes
+    itself off and puts itself back on."""
     beats = beats if beats else [""]
-    floor = align_frame_count(MIN_SHOT_FRAMES)
     # MIN_SHOT_FRAMES is the floor of the *VRAM budget* -- the shortest shot the node
-    # will fall back to when it has to guess. It must NOT raise a length the user asked
-    # for outright: `cap = max(floor, budget)` silently turned every forced shot_seconds
-    # below ~5.2s into 124f/5.2s, so 1s/2s/3s/4s all rendered identically and the widget
-    # looked broken. An explicit request is honored down to H3's real 5-frame minimum.
+    # falls back to when it has to guess with no information at all. It must not raise
+    # a length that came from you or from the beat's own content: `max(floor, ...)`
+    # silently turned every request below ~5.2s into 124f, so 1s/2s/3s/4s all rendered
+    # identically and both the widget and the `seconds:` directive looked broken.
     cap = max(5, int(budget))
+    content_floor = align_frame_count(MIN_CONTENT_FRAMES)
     out, notes = [], []
     fps = max(1, int(fps))
     for i, b in enumerate(beats, 1):
-        want, src = beat_seconds_directive(b), "seconds:"
+        want, src, floor = beat_seconds_directive(b), "seconds:", 5
         if want is None:
-            # Only a beat that is JUST a delivered line gets sized from that line.
-            # Any real action in the same beat needs time the dialogue clock cannot
-            # see, so those keep the full budget.
-            talky = per_beat and action_words(b) <= ACTION_WORDS_FREE
-            want = dialogue_seconds(b) if talky else 0.0
-            src = "dialogue"
-        if want <= 0:                       # no signal -> full budget
+            want = estimate_beat_seconds(b) if per_beat else 0.0
+            src, floor = "content", content_floor
+        if want <= 0:                       # no signal -> the ceiling
             out.append(cap)
             continue
-        n = min(cap, align_frame_count(max(floor, int(round(want * fps)))))
+        n = min(cap, max(floor, align_frame_count(int(round(want * fps)))))
         out.append(n)
         if n != cap:
             notes.append(f"shot {i}: {n}f (~{n / fps:.1f}s, from {src})")
     return out, notes
+
+
+def pacing_warnings(beats, lengths, fps):
+    """Beats whose content is far too thin for the length they were given.
+
+    Pure arithmetic, no model involved: it cannot know that "walks across the
+    tarmac" is 2s or 12s, but it can see 12 words sitting in a 12-second shot and
+    say so BEFORE the render, instead of leaving you to discover it as an action
+    that repeats or plays backwards."""
+    out = []
+    fps = max(1, int(fps))
+    for i, (b, n) in enumerate(zip(beats or [], lengths or []), 1):
+        if beat_seconds_directive(b):        # you stated it; not the node's business
+            continue
+        need = estimate_beat_seconds(b)
+        have = n / fps
+        if need and have > need * 1.8 and have - need >= 3.0:
+            out.append(f"shot {i}: ~{need:.1f}s of content in a {have:.1f}s shot "
+                       f"({action_clauses(b)} action(s), {dialogue_words(b)} spoken words)")
+    return out
 
 
 def dialogue_fit_warnings(beats, seconds_per_shot):
@@ -2576,19 +2641,20 @@ class H3LongVideosFL2VA:
                                "When this is filled in, EVERY paragraph of the prompt box is a beat/shot -- "
                                "nothing is consumed as the identity anchor. Put the permanent identity here "
                                "(hair, face, build, age) and the clothing in character_memory."}),
-                "per_beat_length": ("BOOLEAN", {"default": False,
-                    "tooltip": "OPT-IN. Size each shot from its own beat instead of giving every shot the "
-                               "full VRAM budget. OFF (default) = every shot gets the full budget, which is "
-                               "the predictable behaviour. ON = a beat whose prose is just a delivered line "
-                               "is sized from that line (~2.5 words/sec + 1s of air); a beat with NO dialogue "
-                               "keeps the full budget. CAVEAT, and why this is no longer the default: the "
-                               "minimum shot is 124f (~5.2s), and almost every real line needs less than "
-                               "that, so in practice this pins EVERY dialogue shot to exactly 5.2s -- a 3.8s "
-                               "line and a 1.8s line come out the same length. If your shots all render at "
-                               "~5s, this is why; turn it off. Lengths are always clamped to the budget and "
-                               "to the 17n+5 grid, so it can only shorten a shot. Override any single beat "
-                               "with 'seconds: 8' on its own line inside that paragraph (works even with "
-                               "this off). Ignored when shot_seconds forces one length for the whole run."}),
+                "per_beat_length": ("BOOLEAN", {"default": True,
+                    "tooltip": "PACING. Size each shot from what its beat actually stages, instead of giving "
+                               "every shot the same length. ON (default): a beat's time is ~2s of setup plus "
+                               "~2.5s per action clause, or its spoken line, whichever is longer -- so 'she "
+                               "takes off her jacket and drops it on the bench' gets ~7s and a three-part "
+                               "beat gets more. OFF: every shot gets the full ceiling. WHY IT MATTERS: a 3s "
+                               "action in a 12s shot leaves 9 seconds the model was told nothing about, and "
+                               "it fills them by repeating or REVERSING the action -- which is why clothing "
+                               "comes off and goes back on. The estimate leans SHORT on purpose: an "
+                               "unfinished action is continued by the next shot from the handoff frame, "
+                               "while an overlong one is unrecoverable. Never exceeds the ceiling "
+                               "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
+                               "Override any single beat with 'seconds: 8' on its own line inside that "
+                               "paragraph -- that wins over everything, including this toggle."}),
                 "auto_wardrobe": ("BOOLEAN", {"default": True,
                     "tooltip": "Read clothing REMOVALS straight from your beat prose -- 'she takes off her "
                                "jacket' drops the jacket with no 'wardrobe:' line needed. Safe: only fires "
@@ -2787,27 +2853,30 @@ class H3LongVideosFL2VA:
         # count has to be stated even at native size.
         count_subjects = (subject_count_guard == "on" or
                           (subject_count_guard == "auto" and (min(w, h) < 768 or lora_on)))
-        # `ln` is the CEILING (VRAM budget, or a forced shot_seconds). Each beat now
-        # gets its own length under that ceiling. A forced shot_seconds means the user
-        # stated one duration for the run, so per-beat sizing steps aside -- but an
-        # explicit 'seconds:' inside a beat still wins, which plan_beat_frames honors
-        # regardless of the flag.
-        forced_len = bool(shot_seconds and float(shot_seconds) > 0)
-        lens, len_notes = plan_beat_frames(beats, fps, ln, per_beat=(per_beat_length and not forced_len))
+        # `ln` is the CEILING (VRAM budget, or a forced shot_seconds). Each beat gets
+        # its own length UNDER that ceiling -- including when shot_seconds is forced,
+        # which now means "no shot longer than this" rather than "every shot exactly
+        # this". Forcing a length used to DISABLE per-beat sizing entirely, which is
+        # why a plan made with a forced length disagreed with the auto render: two
+        # different code paths for the same question.
+        lens, len_notes = plan_beat_frames(beats, fps, ln, per_beat=bool(per_beat_length))
         secs = [n / fps for n in lens]
-        # Say it OUT LOUD when per-beat sizing is what made the shots short. Buried in a
-        # list of per-shot numbers it read as a report, not a cause, and the symptom it
-        # produces -- every dialogue shot at exactly the 124f/~5.2s minimum -- looks
-        # exactly like the length widget being ignored.
-        if len_notes and any(n < ln for n in lens):
-            n_short = sum(1 for n in lens if n < ln)
-            ln_note = (f"PER-BEAT SIZING (per_beat_length) SHORTENED {n_short} of {len(lens)} shot(s) "
-                       f"below the {ln}f (~{ln / fps:.1f}s) budget -- turn per_beat_length OFF to give "
-                       f"every shot the full length. "
-                       + ((ln_note + " ") if ln_note else ""))
         if len_notes:
+            n_short = sum(1 for n in lens if n < ln)
             ln_note = ((ln_note + " ") if ln_note else "") + (
-                f"per-beat lengths (ceiling {ln}f): " + "; ".join(len_notes))
+                f"per-beat pacing sized {n_short} of {len(lens)} shot(s) under the {ln}f "
+                f"(~{ln / fps:.1f}s) ceiling from their own content: " + "; ".join(len_notes)
+                + ". Turn per_beat_length OFF to give every shot the full ceiling")
+        # With pacing OFF, every beat gets the ceiling whether it has anything to fill
+        # it with or not -- so say which beats are too thin for the length they got.
+        # This is the failure that reads as an action repeating or playing backwards.
+        pace_warnings = pacing_warnings(beats, lens, fps)
+        if pace_warnings:
+            ln_note = ((ln_note + " ") if ln_note else "") + (
+                "THIN BEATS -- the model must invent the remaining time, which it fills by "
+                "repeating or REVERSING the action: " + "; ".join(pace_warnings)
+                + ". Add a second clause to the beat, set 'seconds:' on it, or turn "
+                  "per_beat_length ON to size shots from their content")
         fit_warnings = dialogue_fit_warnings(beats, secs)
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),

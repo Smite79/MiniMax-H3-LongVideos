@@ -665,24 +665,52 @@ def check_forced_shot_seconds():
     check("per-beat dialogue sizing keeps the 124f floor",
           P(talky, 24, 243, per_beat=True)[0][0] == 124)
 
-    # ...which is exactly why per_beat_length is no longer the default: the floor is
-    # ABOVE what nearly every real line needs, so the feature does not "size" shots at
-    # all -- it pins every dialogue beat to the same 124f/~5.2s. This is the "every shot
-    # is locked to 5 seconds" report.
-    dialogue_beats = ['Kristy finds Dan and asks him: "Do you know where the pistons are?"',
-                      'Dan answers her: "Should be in the box over there."',
-                      'She holds up a piston and says: "Found them."',
-                      'Dan nods and says: "Told you."']
-    on = P(dialogue_beats, 24, 243, per_beat=True)[0]
-    off = P(dialogue_beats, 24, 243, per_beat=False)[0]
-    check("per-beat ON collapses every dialogue beat onto the same floor",
-          set(on) == {124})
-    check("...regardless of how different the lines are",
-          S.dialogue_seconds(dialogue_beats[0]) != S.dialogue_seconds(dialogue_beats[3])
-          and on[0] == on[3])
-    check("per-beat OFF gives every beat the full budget", set(off) == {243})
-    check("action beats are never shortened either way",
-          P(["Kristy scans the shelves."], 24, 243, per_beat=True)[0][0] == 243)
+    # Pacing is now sized from CONTENT -- how many actions a beat stages -- not from a
+    # dialogue clock that floored everything at 124f. The old behaviour pinned every
+    # dialogue beat to exactly 5.2s ("every shot is locked to 5 seconds") and never
+    # touched an action beat at all, which left a 3s action sitting in a 12s shot --
+    # the vacuum the model fills by repeating or REVERSING the action.
+    print("\n=== content-aware pacing ===")
+    varied = ['Kristy scans the shelves.',                                     # 1 action
+              'Kristy takes off her red jacket and drops it on the workbench.',  # 2 actions
+              'Kristy walks the length of the garage, checking every bench, '
+              'then stops at the far wall.',                                   # 3 actions
+              'Dan nods and says: "Told you."']                                # short line
+    on = P(varied, 24, 294, per_beat=True)[0]
+    off = P(varied, 24, 294, per_beat=False)[0]
+    check("per-beat OFF gives every beat the ceiling", set(off) == {294})
+    check("ON, beats no longer all come out the same length", len(set(on)) > 1)
+    check("more actions -> a longer shot", on[0] < on[1] < on[2])
+    check("ACTION beats are sized now (they never were before)", on[0] < 294)
+    check("nothing exceeds the ceiling", all(n <= 294 for n in on))
+    check("every length lands on the 17n+5 grid", all(n % 17 == 5 for n in on))
+    check("no shot falls below the one-action content floor",
+          all(n >= S.align_frame_count(S.MIN_CONTENT_FRAMES) for n in on))
+    # The estimate must lean SHORT: an unfinished action is continued from the handoff
+    # frame, an overlong shot is filled with invented (often reversed) motion.
+    est = S.estimate_beat_seconds(varied[1])
+    check("a two-action beat estimates well under a 12s ceiling", 5.0 <= est <= 9.0)
+    check("a beat with no content at all keeps the ceiling",
+          P([""], 24, 294, per_beat=True)[0][0] == 294)
+
+    # 'seconds:' is an explicit statement, so it is honored BELOW the guess floor --
+    # the same bug class as shot_seconds being raised to 124f.
+    check("'seconds: 3' is honored, not raised to the 124f floor",
+          P(["seconds: 3\nShe waves."], 24, 294, per_beat=True)[0][0] < 124)
+    check("'seconds:' wins over the content estimate",
+          P(["seconds: 3\nKristy walks the length of the garage, checking every bench, "
+             "then stops at the far wall."], 24, 294, per_beat=True)[0][0] < 124)
+    check("'seconds:' is honored with pacing OFF too",
+          P(["seconds: 3\nShe waves."], 24, 294, per_beat=False)[0][0] < 124)
+
+    # The warning exists for the case the node CANNOT size: pacing off, thin beat.
+    thin = ['Kristy scans the shelves.']
+    check("a thin beat in a long shot is flagged",
+          len(S.pacing_warnings(thin, [294], 24)) == 1)
+    check("the same beat at its own length is not flagged",
+          S.pacing_warnings(thin, P(thin, 24, 294, per_beat=True)[0], 24) == [])
+    check("a beat with an explicit 'seconds:' is never second-guessed",
+          S.pacing_warnings(["seconds: 12\nShe waves."], [294], 24) == [])
 
 
 def check_dialogue_fit():
