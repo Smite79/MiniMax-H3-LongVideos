@@ -510,6 +510,9 @@ def _item_name(item):
     il = (item or "").strip()
     cut = _ITEM_DETAIL.search(il.lower())
     name = il[:cut.start()].strip(" ,") if cut and cut.start() > 0 else il
+    # Drop a leading determiner: sheets are written both ways ("a diaper", "diaper"),
+    # and the generated prose supplies its own article -- "the a diaper underneath".
+    name = re.sub(r"^(?:a|an|the|her|his|their|its|my|your)\s+", "", name, flags=re.I)
     return name or il
 
 
@@ -1134,16 +1137,63 @@ def _subject_term(name, active):
     return name
 
 
-# Which part of the body a garment covers. Only two zones matter here: a removal
-# that leaves a zone with nothing on it is the one that renders as nudity.
-_ZONE_LOWER = {"pants", "trousers", "jeans", "shorts", "skirt", "leggings", "tights",
-               "joggers", "sweatpants", "slacks", "chinos", "briefs", "boxers",
-               "panties", "knickers", "underwear", "bottoms", "breeches", "culottes"}
-_ZONE_UPPER = {"shirt", "t-shirt", "tee", "top", "blouse", "sweater", "jumper", "hoodie",
-               "jacket", "coat", "blazer", "cardigan", "vest", "tank", "sweatshirt",
-               "pullover", "bra", "camisole", "singlet", "smock"}
-_ZONE_BOTH = {"dress", "gown", "jumpsuit", "romper", "overalls", "coveralls", "robe",
-              "kimono", "bodysuit", "leotard", "suit", "onesie", "dungarees"}
+# Which part of the body a garment covers. Only two zones matter here, and the
+# question each answers is strictly "is this part of the body still COVERED?" -- a
+# removal that empties a zone is the one that renders as nudity.
+#
+# That question, not "is this clothing?", decides what belongs in these sets. A
+# garter belt, stockings, hold-ups, socks, gloves and a scarf are all clothing and
+# all deliberately absent: they leave the zone bare, so counting them as cover
+# would SUPPRESS the exposure warning exactly when it is needed. Anything not
+# listed maps to no zone, which is the safe default -- it can never mask a warning,
+# it can only fail to volunteer an under-layer.
+_ZONE_LOWER = {
+    # trousers and their families
+    "pants", "trousers", "jeans", "denims", "slacks", "chinos", "khakis", "cargos",
+    "cords", "corduroys", "joggers", "sweatpants", "sweats", "trackpants",
+    "breeches", "jodhpurs", "capris", "culottes", "bloomers", "harems",
+    # skirts
+    "skirt", "miniskirt", "midiskirt", "maxiskirt", "kilt", "sarong", "lungi", "dhoti",
+    # shorts
+    "shorts", "boardshorts", "trunks", "speedos", "hotpants",
+    # legwear that DOES cover the pelvis
+    "leggings", "jeggings", "treggings", "tights", "pantyhose", "pantihose",
+    # underwear and lingerie bottoms
+    "briefs", "boxers", "boxershorts", "panties", "knickers", "underpants",
+    "underwear", "undies", "drawers", "thong", "g-string", "gstring", "tanga",
+    "boyshorts", "boyshort", "hipsters", "jockstrap", "loincloth", "bottoms",
+    # nappies
+    "diaper", "diapers", "nappy", "nappies", "pull-ups", "pullups", "pull-up",
+}
+_ZONE_UPPER = {
+    # shirts and tops
+    "shirt", "t-shirt", "tshirt", "tee", "top", "crop-top", "croptop", "tanktop",
+    "tank", "blouse", "jersey", "polo", "henley", "turtleneck", "flannel", "smock",
+    "tunic", "kurta", "halter", "bandeau", "tube-top",
+    # knitwear and outerwear
+    "sweater", "jumper", "hoodie", "sweatshirt", "pullover", "cardigan", "jacket",
+    "coat", "blazer", "vest", "waistcoat", "gilet", "anorak", "parka", "windbreaker",
+    "bomber", "peacoat", "trenchcoat", "raincoat", "poncho", "shawl", "cape", "cloak",
+    "thermal", "thermals",
+    # lingerie and underlayers for the torso
+    "bra", "brassiere", "bralette", "bustier", "corset", "basque", "camisole", "cami",
+    "singlet", "undershirt", "brasiere",
+}
+_ZONE_BOTH = {
+    # one-piece garments covering torso AND pelvis
+    "dress", "gown", "frock", "pinafore", "jumpsuit", "romper", "playsuit", "catsuit",
+    "unitard", "leotard", "bodysuit", "bodystocking", "onesie", "overalls",
+    "dungarees", "coveralls", "boilersuit", "snowsuit", "wetsuit", "drysuit",
+    "robe", "bathrobe", "housecoat", "dressinggown", "kimono", "kaftan", "caftan",
+    "abaya", "sari", "saree", "toga",
+    # sleepwear and lingerie one-pieces
+    "nightgown", "nightie", "nightdress", "negligee", "babydoll", "teddy", "slip",
+    "chemise", "pyjamas", "pajamas", "pjs",
+    # swimwear counted as a set
+    "swimsuit", "swimming-costume", "maillot", "bikini", "tankini", "monokini",
+    # a suit is jacket + trousers
+    "suit", "tracksuit",
+}
 
 
 def garment_zones(item):

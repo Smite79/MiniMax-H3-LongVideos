@@ -487,12 +487,52 @@ def check_under_layer_stays_on():
     check("...and how to fix it", "under-layer" in bare[0])
     check("no under-layer sentence is invented", "underneath" not in sb[1])
 
-    # zone classification
-    check("trousers and shorts share the lower zone",
-          S.garment_zones("blue jeans") == S.garment_zones("grey shorts") == {"lower"})
-    check("a dress covers both zones", S.garment_zones("red dress") == {"upper", "lower"})
-    check("boots cover no body zone", S.garment_zones("black boots") == set())
-    check("a non-garment attribute covers nothing", S.garment_zones("silver hair") == set())
+    # zone classification across the whole wardrobe vocabulary
+    ZONES = {
+        "lower": ["blue jeans", "grey shorts", "pleated skirt", "black leggings",
+                  "cotton briefs", "boxer shorts", "lace panties", "silk thong",
+                  "cargo pants", "a diaper", "disposable nappy", "pull-ups",
+                  "swim trunks", "jockstrap", "sheer tights", "corduroy trousers"],
+        "upper": ["black t-shirt", "red jacket", "wool sweater", "lace bra",
+                  "satin bralette", "leather bustier", "silk camisole", "denim vest",
+                  "hooded parka", "crop top", "cotton blouse", "knit cardigan"],
+        "both":  ["red dress", "silk nightgown", "lace teddy", "satin negligee",
+                  "cotton onesie", "navy overalls", "terry bathrobe", "black bodysuit",
+                  "string bikini", "flannel pyjamas", "sheer babydoll", "silk slip",
+                  "denim jumpsuit", "wool coveralls"],
+        # NOT coverage: these leave the zone bare, so counting them would suppress the
+        # exposure warning exactly when it is needed.
+        "none":  ["black boots", "wool socks", "silk stockings", "lace garter belt",
+                  "leather gloves", "wool scarf", "baseball cap", "silver hair",
+                  "leather belt", "gold necklace"],
+    }
+    wrong = []
+    for want, items in ZONES.items():
+        for it in items:
+            z = S.garment_zones(it)
+            got = ("both" if z == {"upper", "lower"} else
+                   "lower" if z == {"lower"} else "upper" if z == {"upper"} else "none")
+            if got != want:
+                wrong.append(f"{it} -> {got} (want {want})")
+    check(f"all {sum(len(v) for v in ZONES.values())} garment types classify correctly", not wrong)
+    if wrong:
+        print("    " + "; ".join(wrong))
+
+    # The decency semantics, stated as tests because they are easy to get backwards.
+    st = []
+    D("A room.", ["She stands.", "She takes off her black leggings."], "", "",
+      "Mia = she, silk blouse, black leggings, silk stockings", notes_out=st)
+    check("stockings do NOT count as lower cover -- the warning still fires", len(st) == 1)
+    dp = []
+    dshot = D("A room.", ["She stands.", "She takes off her blue jeans."], "", "",
+              "Mia = she, black t-shirt, blue jeans, a diaper", notes_out=dp)
+    check("a diaper DOES count as lower cover -- no warning", dp == [])
+    check("...and it is named as the under-layer", "diaper underneath" in dshot[1])
+    check("an article in the sheet is not doubled", "the a diaper" not in dshot[1])
+    check("lingerie under a dress counts as cover",
+          D("A room.", ["She stands.", "She takes off her red dress."], "", "",
+            "Mia = she, red dress, lace bra, silk slip", notes_out=(lg := []))
+          and lg == [])
     check("an upper layer over an upper layer is recognised",
           S.remaining_cover(["black t-shirt", "black boots"], {"upper"}) == ["black t-shirt"])
     # removing a jacket over a t-shirt must NOT warn
