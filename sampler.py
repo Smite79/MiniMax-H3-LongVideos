@@ -500,6 +500,19 @@ _ITEM_DETAIL = re.compile(
     r"and|plus|sporting|carrying|covered)\b")
 
 
+def _item_name(item):
+    """The part of a wardrobe item that NAMES the garment, without its detail.
+
+    "red leather jacket with a white circular chest patch" -> "red leather jacket".
+    Used both to match a removal and to refer to the garment in generated prose:
+    the detail belongs in the description that is stamped every shot, not in a
+    sentence whose only job is to say the thing came off."""
+    il = (item or "").strip()
+    cut = _ITEM_DETAIL.search(il.lower())
+    name = il[:cut.start()].strip(" ,") if cut and cut.start() > 0 else il
+    return name or il
+
+
 def _item_head(item):
     """The garment's own head noun, ignoring any detail trailing off it.
 
@@ -511,10 +524,9 @@ def _item_head(item):
     are normal (logos, zippers, torn knees), so the head has to be read from the
     part of the phrase that names the garment."""
     import re
-    il = (item or "").lower().strip()
-    cut = _ITEM_DETAIL.search(il)
-    name = il[:cut.start()] if cut and cut.start() > 0 else il
-    words = re.findall(r"[a-z\-]+", name) or re.findall(r"[a-z\-]+", il)
+    words = re.findall(r"[a-z\-]+", _item_name(item).lower())
+    if not words:
+        words = re.findall(r"[a-z\-]+", (item or "").lower())
     return words[-1] if words else ""
 
 
@@ -1101,13 +1113,13 @@ def _subject_term(name, active):
 def _is_plural_garment(item):
     """Garments that take a plural verb: overalls, jeans, boots, gloves, shorts.
     A head noun ending in a DOUBLE s (dress, harness) is singular, which is what
-    separates them from a real plural."""
-    import re
-    words = re.findall(r"[a-z\-]+", (item or "").lower())
-    if not words:
-        return False
-    head = words[-1]
-    return head.endswith("s") and not head.endswith("ss")
+    separates them from a real plural.
+
+    Read from the garment's own head, not the item's last word: "red jacket with
+    silver zippers" ends on a plural detail while the garment itself is singular,
+    which produced "the red jacket ... ARE off and she is not wearing THEM"."""
+    head = _item_head(item)
+    return bool(head) and head.endswith("s") and not head.endswith("ss")
 
 
 def takes_off_clause(pairs, active=None):
@@ -1133,7 +1145,11 @@ def takes_off_clause(pairs, active=None):
             by[name or ""].append(item)
     bits = []
     for name, items in by.items():
-        what = " and ".join(items)
+        # Refer to the garment by NAME, not by its full sheet entry. The detail
+        # (logo, zippers, torn knee) is already stamped in the description every
+        # shot; repeating it twice inside a sentence that only has to say the thing
+        # came off buries the instruction in 22 words of wardrobe.
+        what = " and ".join(_item_name(i) for i in items)
         # "the navy overalls IS off" reads as a mistake to the encoder that has to
         # parse this. Garments like overalls/jeans/boots are grammatically plural,
         # as is any list of more than one.

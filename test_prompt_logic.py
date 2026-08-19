@@ -431,6 +431,30 @@ def check_detailed_wardrobe_items():
     check("a one-word item is unaffected", S._item_head("boots") == "boots")
     check("detail alone never becomes the head", S._item_head("jacket with zippers") == "jacket")
 
+    # The removal sentence names the garment, not its whole sheet entry. The detail
+    # is already stamped in the description every shot; repeating it twice inside a
+    # sentence whose only job is "it came off" buries the instruction.
+    detailed = "red leather jacket with a white circular chest patch"
+    check("the garment NAME drops the detail", S._item_name(detailed) == "red leather jacket")
+    clause = S.takes_off_clause([("Kristy", detailed)], {"Kristy": ["she"]})
+    check("the removal sentence uses the short name", "the red leather jacket" in clause)
+    check("...and not the full sheet entry", "chest patch" not in clause)
+    # The meaningful invariant is not an absolute length -- the three negations in the
+    # tail are load-bearing, since a negation is weak for a video model and reversal is
+    # the failure being prevented. It is that DETAIL costs nothing: a garment with a
+    # long description must produce the same sentence as its plain name.
+    plain = S.takes_off_clause([("Kristy", "red leather jacket")], {"Kristy": ["she"]})
+    check("detail adds no words to the removal sentence", clause == plain)
+    # plurality must come from the GARMENT, not from a plural detail
+    check("a singular garment with plural detail stays singular",
+          not S._is_plural_garment("red jacket with silver zippers"))
+    sing = S.takes_off_clause([("Kristy", "red jacket with silver zippers")], {"Kristy": ["she"]})
+    check("...so the verb agrees with the jacket",
+          "red jacket is off" in sing and "not wearing it" in sing)
+    plur = S.takes_off_clause([("Kristy", "black boots with steel buckles")], {"Kristy": ["she"]})
+    check("a genuinely plural garment still takes a plural verb",
+          "black boots are off" in plur and "takes them off" in plur)
+
 
 def check_removal_takes_only_its_object():
     """A removal must take off what the verb acts ON -- nothing else nearby.
