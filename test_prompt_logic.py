@@ -513,6 +513,29 @@ def check_props_survive_the_shot_boundary():
     check("...without naming a second van", "second van" not in sh[1])
     check("shot 1 is untouched -- it introduces the van", "the same van" not in sh[0])
 
+    # --- the reported case: BOTH sentences in ONE beat -------------------------
+    # No shot boundary at all, so the cross-shot carry never runs. The van is named
+    # three times in a single prompt, and repetition is how a video model renders
+    # three. This is the same failure the node already fixes for people by collapsing
+    # repeat NAME mentions -- an object is no different.
+    one_beat = ["Dom drives a van down the farm driveway and stops in front the barn. "
+                "He gets out of the van and walks to the back of the van."]
+    g = D("A farm with a barn building.", one_beat, "", "",
+          "Dom = he, tall, 35, brunette", count_subjects=True, front_load=True)[0]
+    check("repeat mentions of one object collapse to a pronoun",
+          "the back of it" in g)
+    check("the first definite mention survives", "gets out of the van" in g)
+    check("objects get the same positive count people get",
+          "Exactly one van in this shot" in g)
+    check("...stated positively, never naming a second one", "second van" not in g)
+    # guards on the collapse
+    two, n = S.dedupe_prop_mentions("He opens the van then the truck then the van.", ["van", "truck"])
+    check("no collapse when two objects could both be 'it'", n == 0)
+    q, _ = S.dedupe_prop_mentions('He says "get in the van" and opens the van.', ["van"])
+    check("quoted speech is never collapsed", '"get in the van"' in q)
+    single, n1 = S.dedupe_prop_mentions("He opens the van.", ["van"])
+    check("a single mention is left alone", n1 == 0 and single == "He opens the van.")
+
     # extraction
     props = S.introduced_props("Dom parks a white van and a truck by a barn.")
     check("every indefinite introduction is captured",

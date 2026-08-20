@@ -1158,6 +1158,48 @@ def bind_props(body, props):
     return _unmask_quotes(masked, spans), bound
 
 
+def dedupe_prop_mentions(body, nouns):
+    """Collapse repeat mentions of the SAME object within one beat.
+
+    "drives a van ... gets out of the van ... walks to the back of the van" is three
+    vans in one prompt, and repetition is how a video model ends up rendering three.
+    The node already does exactly this for people -- naming someone twice in a beat
+    is the most reliable way to get two of them -- and an object is no different.
+
+    Only fires when a single carried object is in play, so "it" cannot be ambiguous,
+    and never inside quoted speech."""
+    if not body or len(nouns) != 1:
+        return body, 0
+    noun = nouns[0]
+    masked, spans = _mask_quotes(body)
+    hits = list(re.finditer(r"\b(?:the|that|this)\s+" + re.escape(noun) + r"\b", masked, re.I))
+    if len(hits) < 2:
+        return body, 0
+    # keep the first definite mention; the rest become pronouns
+    for m in reversed(hits[1:]):
+        masked = masked[:m.start()] + "it" + masked[m.end():]
+    return _unmask_quotes(masked, spans), len(hits) - 1
+
+
+def repeated_props(body, own):
+    """Objects a beat introduces and then refers back to definitely, in the SAME
+    beat -- the case a cross-shot carry never sees."""
+    out = []
+    for noun in own:
+        if re.search(r"\b(?:the|that|this)\s+" + re.escape(noun) + r"\b", body or "", re.I):
+            out.append(noun)
+    return out
+
+
+def prop_count_clause(nouns):
+    """Positive count for objects, matching the subject-count guard's shape."""
+    if not nouns:
+        return ""
+    bits = [f"exactly one {n} in this shot" for n in nouns]
+    s = ", ".join(bits)
+    return " " + s[0].upper() + s[1:] + "."
+
+
 def prop_continuity_clause(bound, props):
     """One short sentence pinning a carried prop to the previous shot's object.
 
@@ -1864,9 +1906,17 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # invented one standing next to it. Garments are excluded -- they have their
         # own channel, and "the same red jacket" would fight a removal.
         worn_nouns = {_item_head(i) for v in active.values() for i in v}
+        own_props = {n: p for n, p in introduced_props(body).items() if n not in worn_nouns}
         carried = {n: p for n, p in props.items()
-                   if n not in worn_nouns and n not in introduced_props(body)}
+                   if n not in worn_nouns and n not in own_props}
         body, bound_props = bind_props(body, carried) if auto_props else (body, [])
+        # An object introduced AND referred back to inside one beat never reaches the
+        # cross-shot carry -- but that is the case that duplicates hardest, because
+        # the repetition is all in one prompt. Collapse the repeats the way repeated
+        # NAMES are collapsed, and state the count.
+        here_again = repeated_props(body, own_props) if auto_props else []
+        if here_again:
+            body, _ = dedupe_prop_mentions(body, here_again)
         off_now = []                         # (person, garment) coming off in THIS shot
         if wardrobe_change is not None:
             before = {k: list(v) for k, v in active.items()}
@@ -1913,7 +1963,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         speak_off = [(n, it) for n, it in off_now
                      if not n or person_referenced(body, n, active)]
         off_clause = takes_off_clause(speak_off, active)
-        prop_clause = prop_continuity_clause(bound_props, carried)
+        prop_clause = (prop_continuity_clause(bound_props, carried)
+                       + prop_count_clause([n for n in here_again if n not in bound_props]))
         # A removal that leaves a body zone with NOTHING on it is the one the node
         # cannot write its way out of: there is no under-layer to name, so the model
         # renders bare skin. Say so before the render rather than after it.

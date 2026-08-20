@@ -776,6 +776,14 @@ don't bloat), quoted dialogue is never rewritten, **worn garments are excluded**
 (they have the wardrobe channel, and "the same red jacket" would fight a removal),
 and frame/body nouns — the ground, the light, the hand — are never carried.
 
+**Repeat mentions inside one beat are collapsed too.** Naming the same object
+three times in a single shot — "drives a van … gets out of the van … walks to the
+back of the van" — is the most reliable way to get more than one of it, exactly as
+naming a person twice duplicates them. The first definite mention survives and the
+rest become "it", and the shot gets a positive count: *Exactly one van in this
+shot.* This only fires when a single object is in play, so "it" can never be
+ambiguous, and quoted dialogue is never touched.
+
 **Introduce things indefinitely the first time.** `a rusted red toolbox` in beat 1
 gives every later `the toolbox` something to bind to; starting with `the toolbox`
 gives the node nothing to carry and the model something to invent.
