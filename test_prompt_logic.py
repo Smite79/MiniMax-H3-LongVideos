@@ -490,6 +490,43 @@ def check_detailed_wardrobe_items():
           "black boots are off" in plur and "takes them off" in plur)
 
 
+def check_anchor_hazards():
+    """The anchor repeats on EVERY shot, so what is in it must be true of every shot.
+
+    Four things are not, and each has cost a real render:
+      - face words put a face in an establishing shot with nobody in it
+      - apparatus words render the equipment, or someone holding it
+      - framing pins every shot to one size
+      - clothing here is immutable, so a removal can never stick"""
+    print("\n=== anchor hazards are reported before the render ===")
+    def kinds(a):
+        return {w.split(" in the anchor")[0] for w in S.anchor_warnings(a)}
+
+    face = ("Shallow depth of field. Visible skin texture with pores and stray hairs. "
+            "An open garage.")
+    check("face words are caught", "person/face words" in kinds(face))
+    gear = ("Handheld documentary video on a full-frame sensor, 35mm lens at f/2.8. "
+            "An open garage.")
+    check("apparatus words are caught", "camera/apparatus words" in kinds(gear))
+    check("...including the phone case",
+          "camera/apparatus words" in kinds("broadcast video, taken with iPhone. A garage."))
+    frame = "Natural light, medium shot, everything sharp. A garage."
+    check("framing is caught", "framing" in kinds(frame))
+    cloth = "A woman in a red jacket and a man in navy overalls. A hangar."
+    check("clothing is caught", "clothing" in kinds(cloth))
+    check("...and the person nouns with it", "person/face words" in kinds(cloth))
+
+    clean = ("Natural daylight, hard sun and deep shadow, highlights clipping to white. "
+             "Shallow depth of field, the background falling soft. Fine grain, slight motion "
+             "blur, neutral colour, no colour grade. A farm with a barn building.")
+    check("a clean anchor raises nothing", S.anchor_warnings(clean) == [])
+    check("an empty anchor raises nothing", S.anchor_warnings("") == [])
+    # the warning has to say what to do, not just what is wrong
+    w = S.anchor_warnings(face)[0]
+    check("the warning names the fix", "character_memory" in w)
+    check("...and says why it matters", "EVERY shot" in w)
+
+
 def check_props_survive_the_shot_boundary():
     """"the van" in shot 2 must mean the van from shot 1.
 
@@ -1642,6 +1679,7 @@ def main():
     check_no_second_subject_noun()
     check_anchor_not_rewritten()
     check_detailed_wardrobe_items()
+    check_anchor_hazards()
     check_props_survive_the_shot_boundary()
     check_under_layer_stays_on()
     check_removal_phrasings()

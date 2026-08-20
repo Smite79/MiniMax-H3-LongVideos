@@ -1021,6 +1021,60 @@ def extract_wardrobe(body):
     return "\n".join(kept).strip(), wardrobe
 
 
+# --- anchor hazards ---------------------------------------------------------
+# The anchor is stamped into EVERY shot, so anything in it has to be true of every
+# shot. Four kinds of thing are not, and each fails in its own way.
+_ANCHOR_PERSON = re.compile(
+    r"\b(skin|pores?|complexion|freckles?|stubble|face|facial|eyes?|lips?|mouth|"
+    r"hairs?|figure|portrait|subject|person|people|man|woman|men|women|girl|boy|"
+    r"he|she|him|her|his|hers|they|them|their)\b", re.I)
+_ANCHOR_APPARATUS = re.compile(
+    r"\b(camera|camcorder|lens|sensor|tripod|gimbal|steadicam|dolly|crane|drone|"
+    r"handheld|hand-held|iphone|phone|gopro|dslr|webcam|filming|filmed|crew|"
+    r"operator|documentary|selfie|pov|point of view|shot on|taken with)\b", re.I)
+_ANCHOR_FRAMING = re.compile(
+    r"\b(medium shot|close-?ups?|wide shot|long shot|full shot|two shot|"
+    r"over the shoulder|low angle|high angle|aerial|overhead shot|establishing shot)\b", re.I)
+
+
+def anchor_warnings(anchor):
+    """Things in the anchor that will misfire because it repeats on every shot.
+
+    Pure text, no model. Each of these has cost a real render: face words put a face
+    in an empty establishing frame, apparatus words render the equipment, framing
+    pins every shot to one size, and clothing here is immutable so a removal can
+    never stick."""
+    a = (anchor or "").strip()
+    if not a:
+        return []
+    out = []
+    def found(rx):
+        return sorted({m.group(0).lower() for m in rx.finditer(a)})
+    p = found(_ANCHOR_PERSON)
+    if p:
+        out.append(f"person/face words in the anchor ({', '.join(p)}) -- the anchor is stamped on "
+                   f"EVERY shot, so these arrive in shots with nobody in them and can render a "
+                   f"face in an empty frame; move them to character_memory, which is only emitted "
+                   f"where that person appears")
+    q = found(_ANCHOR_APPARATUS)
+    if q:
+        out.append(f"camera/apparatus words in the anchor ({', '.join(q)}) -- naming the equipment "
+                   f"can render the equipment, or someone holding it; describe the IMAGE instead "
+                   f"('shallow depth of field' rather than '35mm lens', 'fine grain' rather than "
+                   f"'sensor grain')")
+    f = found(_ANCHOR_FRAMING)
+    if f:
+        out.append(f"framing in the anchor ({', '.join(f)}) -- this pins every shot to that size; "
+                   f"put framing in the beats so it can change shot to shot")
+    garments = sorted({w.lower() for w in re.findall(r"[A-Za-z][\w\-]*", a)
+                       if garment_zones(w)})
+    if garments:
+        out.append(f"clothing in the anchor ({', '.join(garments)}) -- the anchor is immutable, so "
+                   f"it re-applies the garment on every shot and a removal cannot stick; put "
+                   f"clothing in character_memory, the only channel that can change mid-chain")
+    return out
+
+
 def anchor_contributes_nothing(anchor, char_memory=""):
     """True when the paragraph about to be consumed as the identity anchor would add
     NOTHING to any shot -- i.e. taking it as the anchor silently DELETES it.
@@ -3426,6 +3480,11 @@ class H3LongVideos:
                 f'character, not an identity anchor -- consuming it would have deleted that shot '
                 f'entirely, so it was KEPT AS A BEAT. There is now no persistent scene text: put '
                 f'the setting and style (with NO character names) in anchor_override.')
+        # The anchor repeats on every shot, so what is IN it matters more than its
+        # length. These have each cost a render: face words putting a face in an empty
+        # establishing frame, apparatus words rendering the equipment (or someone
+        # holding it), framing pinning every shot, clothing that no removal can strip.
+        anchor_hazards = anchor_warnings(anchor)
         # Anchor extraction happens on PARAGRAPHS first, so a line-split can never
         # eat into the identity block; only the beat paragraphs are expanded.
         beats, split_note = expand_beats(beat_paras, beat_split)
@@ -3544,6 +3603,10 @@ class H3LongVideos:
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
                     + (f" {beats_note}." if beats_note else "")
+                    + (" ANCHOR: " + "; ".join(anchor_hazards) + "."
+                       if anchor_hazards else "")
+                + (" ANCHOR: " + "; ".join(anchor_hazards) + "."
+                   if anchor_hazards else "")
                     + (f"{plan_audio}." if plan_audio else "")
                     + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
                        if wardrobe_notes else "")

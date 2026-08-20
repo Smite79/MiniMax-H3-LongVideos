@@ -788,6 +788,33 @@ ambiguous, and quoted dialogue is never touched.
 gives every later `the toolbox` something to bind to; starting with `the toolbox`
 gives the node nothing to carry and the model something to invent.
 
+## What belongs in the anchor (and what will bite you)
+
+The anchor is stamped into **every** shot, so anything in it has to be true of
+every shot. `plan_only` and `info` now scan it and report four hazards, each of
+which has cost a real render:
+
+| in the anchor | what happens |
+|---|---|
+| **person / face words** — `skin`, `pores`, `subject`, `them`, `hair` | they arrive in shots with nobody in them, and can render a face in an empty establishing frame. Put them in `character_memory`, which is only emitted where that person appears. |
+| **apparatus words** — `camera`, `lens`, `sensor`, `handheld`, `iPhone`, `documentary` | the equipment gets rendered, sometimes with someone holding it. Describe the **image**, not the gear. |
+| **framing** — `medium shot`, `close-up`, `wide shot` | pins every shot to that size. Put framing in the beats so it can change. |
+| **clothing** — any garment noun | the anchor is immutable, so it re-applies the garment every shot and a removal can never stick. |
+
+A working anchor holds **light**, **image properties** and **the location**:
+
+```
+Natural daylight, hard sun and deep shadow, highlights clipping to white. Shallow
+depth of field, the background falling soft. Fine grain, slight motion blur,
+neutral colour, no colour grade. A farm with a barn building.
+```
+
+Note what is *not* named: no lens, no sensor, no handheld, no skin, no subject. The
+realism cues survive as descriptions of the picture — "shallow depth of field"
+rather than "35mm at f/2.8", "fine grain" rather than "sensor grain". Per-person
+realism (`weathered skin with visible pores`) belongs in `character_memory`, where
+it only appears in shots containing that person.
+
 ## Requirements
 - ComfyUI 0.30+ with native MiniMax-H3 support.
 - The node applies **ModelSamplingMiniMaxH3** (the video/audio flow schedule)
