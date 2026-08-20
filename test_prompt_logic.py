@@ -1140,6 +1140,37 @@ def check_forced_shot_seconds():
           S.pacing_warnings(["seconds: 12\nShe waves."], [294], 24) == [])
 
 
+def check_dialogue_filler():
+    """A shot far longer than its line is what babbles.
+
+    dialogue_fit_warnings covers the opposite error -- a line too long for its shot,
+    which truncates. This is the one that produces speech nobody wrote: a 2s line in
+    a 10s shot leaves 8s of audio the model was told nothing about, and the audio
+    branch keeps talking. mute_nonspeech_audio cannot help: a shot WITH a scripted
+    line is deliberately left audible. Reported as babble creeping in on a 9-beat
+    run whose dialogue sat on beats 2, 4 and 6."""
+    print("\n=== dialogue shots with more time than line ===")
+    B = ["Dom drives a van down the driveway.",
+         'Mara asks him: "Is that the last one?"',
+         "Dom lifts out a crate.",
+         'Dom answers: "That is all of it."']
+    long_shots = S.dialogue_filler_warnings(B, [10.1] * 4)
+    check("every dialogue shot with a big gap is flagged", len(long_shots) == 2)
+    check("...naming the shot and the gap",
+          "shot 2" in long_shots[0] and "unscripted audio" in long_shots[0])
+    check("action-only shots are never flagged (they have no line)",
+          all("shot 1" not in w and "shot 3" not in w for w in long_shots))
+    lens, _ = S.plan_beat_frames(B, 24, 243, per_beat=True)
+    check("content pacing shrinks the gap",
+          len(S.dialogue_filler_warnings(B, [n / 24 for n in lens])) < len(long_shots))
+    check("a line that FITS its shot is not flagged",
+          S.dialogue_filler_warnings(['She says, "Ready."'], [2.5]) == [])
+    check("the opposite error is still caught by dialogue_fit_warnings",
+          len(S.dialogue_fit_warnings(
+              ['She says, "Tower, this is Kilo Alpha, ready for departure on runway two seven."'],
+              3.0)) == 1)
+
+
 def check_dialogue_fit():
     """Shortening shots to fit VRAM must not silently truncate dialogue."""
     print("\n=== dialogue fit vs shot length ===")
@@ -1702,6 +1733,7 @@ def main():
     check_name_dedupe()
     check_anchor_beat_rescue()
     check_forced_shot_seconds()
+    check_dialogue_filler()
     check_dialogue_fit()
     check_model_change_flush()
     check_vram_budget()

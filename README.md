@@ -815,6 +815,19 @@ rather than "35mm at f/2.8", "fine grain" rather than "sensor grain". Per-person
 realism (`weathered skin with visible pores`) belongs in `character_memory`, where
 it only appears in shots containing that person.
 
+**Babble on a shot that HAS dialogue.** `mute_nonspeech_audio` cannot help there —
+a shot with a scripted line is deliberately left audible. The cause is the same
+vacuum that makes an action repeat: a 2-second line in a 10-second shot leaves
+8 seconds of audio the model was told nothing about, and the audio branch keeps
+talking to fill them. `info` now reports it before the render:
+
+    BABBLE RISK -- shot 2: 2.0s of dialogue in a 10.1s shot -- 8.1s of unscripted
+    audio the model will fill with more speech
+
+The fix is length, not silencing: leave `per_beat_length` on so the shot is sized
+from its line, or put `seconds:` on that beat. (`dialogue_fit_warnings` covers the
+opposite error — a line too long for its shot, which gets truncated.)
+
 ## Requirements
 - ComfyUI 0.30+ with native MiniMax-H3 support.
 - The node applies **ModelSamplingMiniMaxH3** (the video/audio flow schedule)

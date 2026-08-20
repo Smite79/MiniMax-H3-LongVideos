@@ -1895,6 +1895,33 @@ def dialogue_fit_warnings(beats, seconds_per_shot):
     return out
 
 
+def dialogue_filler_warnings(beats, seconds_per_shot):
+    """Dialogue shots with far more time than their line, which H3 fills with speech.
+
+    dialogue_fit_warnings covers the opposite error -- a line too long for its shot,
+    which gets truncated. This is the one that produces BABBLE: a two-second line in
+    a ten-second shot leaves eight seconds of audio the model was told nothing
+    about, and the audio branch keeps talking to fill them. mute_nonspeech_audio
+    cannot help, because a shot with a scripted line is deliberately left audible.
+
+    Same vacuum as an over-long action beat, one channel across."""
+    out = []
+    for i, b in enumerate(beats or [], 1):
+        sec = (seconds_per_shot[i - 1] if isinstance(seconds_per_shot, (list, tuple))
+               else seconds_per_shot) if not isinstance(seconds_per_shot, (list, tuple)) \
+            or i <= len(seconds_per_shot) else None
+        if sec is None:
+            break
+        spoken = dialogue_seconds(b, pad=False)
+        if not spoken:
+            continue
+        gap = sec - spoken
+        if gap >= 3.0 and sec > spoken * 2:
+            out.append(f"shot {i}: {spoken:.1f}s of dialogue in a {sec:.1f}s shot -- {gap:.1f}s of "
+                       f"unscripted audio the model will fill with more speech")
+    return out
+
+
 def speech_flags(beats):
     """Per-beat: does it contain scripted (quoted) dialogue? Same rule the prompt
     builder uses to decide silencing, exposed so the renderer can also MUTE the
@@ -3565,6 +3592,13 @@ class H3LongVideos:
                 + ". Add a second clause to the beat, set 'seconds:' on it, or turn "
                   "per_beat_length ON to size shots from their content")
         fit_warnings = dialogue_fit_warnings(beats, secs)
+        # The opposite error, and the one that babbles: far more shot than line.
+        filler_warnings = dialogue_filler_warnings(beats, secs)
+        if filler_warnings:
+            ln_note = ((ln_note + " ") if ln_note else "") + (
+                "BABBLE RISK -- " + "; ".join(filler_warnings)
+                + ". Turn per_beat_length ON to size these shots from their line, or set "
+                  "'seconds:' on the beat")
         wardrobe_notes = []
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),
