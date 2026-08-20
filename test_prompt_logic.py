@@ -297,6 +297,23 @@ def check_nonspeech_audio_6beat():
           S.speech_flags(SIX_BEATS) == [False, True, True, False, False, False])
     check("silent shots carry the lips-closed clause",
           all("mouth closed and lips together" in sh[i] for i in silent))
+    # The mouth state must NOT lead. Opening a shot with "mouth closed, lips
+    # together, jaw still" puts face anatomy in the first tokens the model reads,
+    # and a distilled LoRA settles composition in its first step or two -- which
+    # rendered a face at the start of shots, generic and not from any reference.
+    for i in silent:
+        body = sh[i].split("] ", 1)[-1]
+        check(f"  shot {i+1}: the mouth state does not open the prompt",
+              not body.lstrip().startswith("Everyone in this shot is silent"))
+    # ...and a shot with NOBODY in it has no mouth to describe at all.
+    scenery = D(SIX_ANCHOR, ["Wide shot of the empty garage, sunlight through the doors.",
+                             "Kristy walks in."], "", "", SIX_CM)
+    check("a scenery beat gets no lips-closed clause at all",
+          "mouth closed" not in scenery[0])
+    check("...but still gets the no-voice soundscape (an empty room still babbles)",
+          "no voices" in scenery[0])
+    check("a beat with a person still gets both",
+          "mouth closed" in scenery[1] and "no voices" in scenery[1])
     check("silent shots carry a no-voices soundscape",
           all("overall_soundscape:" in sh[i] and "no voices" in sh[i] for i in silent))
     check("dialogue shots are left free to speak",

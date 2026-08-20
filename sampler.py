@@ -1106,12 +1106,21 @@ def has_speech(body):
     return False
 
 
-# Leading, physically-described directive. A trailing "no dialogue" sentence is the
-# weakest position in a prompt; H3 follows described PHYSICAL STATE far better than
-# an appended negation -- so the silence is stated as a mouth state, up front, and
-# repeated once at the end as a hard constraint.
-LIPS_CLOSED_LEAD = ("Everyone in this shot is silent with their mouth closed and lips together, "
-                    "jaw still, not talking. ")
+# Silence is stated as a described PHYSICAL STATE, which H3 follows far better than
+# an appended negation -- but NOT in the leading position it used to occupy.
+#
+# Opening every silent shot with "mouth closed, lips together, jaw still" put face
+# anatomy in the first tokens the model reads, and a distilled LoRA fixes
+# composition in its first step or two. The result was a face rendered at the start
+# of shots -- including scenery shots with nobody in them at all, which is where it
+# was unmistakable. The mouth state now follows the action instead of preceding it,
+# and it is skipped entirely on a shot with no people, where "everyone is silent
+# with their mouth closed" describes nobody and only invites a face.
+#
+# The audio half of the babble fix does not depend on this: the no-voice soundscape
+# line and mute_nonspeech_audio both still apply.
+LIPS_CLOSED_STATE = (" Everyone in this shot is silent with their mouth closed and lips together, "
+                     "jaw still, not talking.")
 LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement."
 
 # The lips-closed clause constrains the PICTURE only. H3 generates audio from its
@@ -1820,15 +1829,19 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # lips-closed / no-speech clause, so H3 doesn't animate a mouth or fill it with
         # gibberish before (or between) actual dialogue. Shots WITH quoted dialogue are
         # left alone so the speech renders.
-        silent_shot = bool(auto_silence_nonspeech and not has_speech(body))
-        if silent_shot:
-            # A FRONT-LOADED subject count has to stay first. It is front-loaded
-            # precisely because a distilled LoRA settles composition in its first
-            # step or two, so the count must bind before anything else -- and this
-            # lips-closed lead, added later for the babble fix, was displacing it.
-            m = re.match(r"(Exactly .*?no crowd\.\s*)", persistent)
-            count_head, rest = (m.group(1), persistent[m.end():]) if m else ("", persistent)
-            persistent = count_head + LIPS_CLOSED_LEAD + rest.rstrip(". ") + "." + LIPS_CLOSED_TAIL
+        # Two different silences, and they are NOT the same condition:
+        #   no_speech  -> the AUDIO constraint. A shot with no scripted line must not
+        #                 be given an unconditioned audio branch, whether or not
+        #                 anyone is on screen; an empty room still babbles.
+        #   mouth_state-> the PICTURE constraint. Only meaningful when someone is
+        #                 there to have a mouth. On a scenery beat it describes
+        #                 nobody and can only invite a face into an empty frame.
+        no_speech = bool(auto_silence_nonspeech and not has_speech(body))
+        people_here = bool(active.get("")) or any(
+            n and person_referenced(body, n, active) for n in active)
+        if no_speech and people_here:
+            persistent = persistent.rstrip(". ") + "." + LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL
+        silent_shot = no_speech
         block = f"[Generation {gi}] {persistent}".strip()
         # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is
         # what let H3 improvise a voice track under a shot whose picture was already
