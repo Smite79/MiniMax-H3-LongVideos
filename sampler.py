@@ -1,28 +1,41 @@
 """
-H3-LongVideos-V1  (all-in-one: one prompt + one length -> long video+audio)
-===========================================================================
-You give it a prompt (first paragraph = the look/character kept across the
-whole video; each later paragraph = a scene beat), a total length in seconds,
-and a resolution from the VRAM-appropriate list. It spreads the seconds across
-your paragraphs, splits them into shots that fit H3's 15s ceiling and your
-VRAM, chains each shot from the previous one's last frame, and returns the
-finished video + audio.
+H3 Long Videos  (one prompt + one length -> long video+audio)
+=============================================================
+One node covering both of H3's conditioning tasks:
 
-Resolution choices are built at node-load from your card's TOTAL VRAM and are
-grouped by ratio (16:9 / 9:16 / 4:3 / 3:4 / 1:1). 'custom (may OOM)' lets you
-enter width/height yourself and warns in the info output. The runtime
-auto-budget (tiled decode -> lower resolution on real OOM) is the actual
-no-crash guarantee; the list is a curated shortlist by card size.
+  * FL2VA -- a first frame (or the previous shot's last frame) anchors the shot.
+             This is what drives the chain: each shot continues the one before it.
+  * REF2VA -- reference images condition the shot on what a character LOOKS like,
+             independent of any frame.
 
-Requirements: patch the model with ModelSamplingMiniMaxH3 upstream. H3 is
-CFG-free (cfg 1) and needs no negative prompt — the node makes an empty one
-internally, so there's no negative input to wire. denoise is fixed at 1.0
-internally: a partial denoise starts sampling from a lower sigma on the joint
-AV latent and desyncs the audio schedule, so there's deliberately no denoise
-input to get wrong.
+Connect nothing to ref_image_* and it behaves exactly as the FL2VA node always
+did. Connect a reference and `ref_mode` decides which shots use it.
+
+THE ONE RULE: a shot carries EITHER references or the last-frame handoff, never
+both. They are two task conditionings competing for the same cond_video_latents
+slot in comfy/model_base.py -- the refs branch overwrites what the keyframe branch
+wrote, while the packed layout still reserves rows for both, so a shot given both
+hands the DiT fewer latents than it has condition rows. `ref_mode` chooses:
+
+  first shot                -- refs establish the cast in shot 1, every later shot
+                               uses the handoff. Continuity unbroken.
+  every shot                -- strongest identity; no handoff, so beats meet as
+                               CUTS rather than as one continuous take.
+  every shot + handoff ref  -- refs every shot, plus the previous shot's last
+                               frame as one more reference. Continuity returns as
+                               a soft signal.
+
+You give it a prompt (first paragraph = the look/character kept across the whole
+video; each later paragraph = a scene beat), a shot length, and a resolution from
+the VRAM-appropriate list. It splits the beats into shots that fit H3's ceiling
+and your VRAM, chains them, and returns the finished video + audio.
+
+Requirements: H3 is CFG-free (cfg 1) and needs no negative prompt -- the node
+makes an empty one internally. denoise is fixed at 1.0: a partial denoise desyncs
+the joint audio/video schedule.
 
 Verified against ComfyUI core (comfy_extras/nodes_minimax_h3.py, model_base.py,
-sd.py).
+ldm/minimax/model.py, text_encoders/minimax.py, sd.py).
 """
 
 import gc
@@ -189,6 +202,7 @@ ADDED_WIDGETS = (
     "watermark_text", "watermark_position", "watermark_size", "watermark_opacity",
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
+    "ref_mode", "ref_image_size",
 )
 
 NL = "\n"
@@ -2066,8 +2080,70 @@ def _decode_audio(audio_vae, out_latent):
     return {"waveform": audio, "sample_rate": sr}
 
 
-def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, handoff):
+# --- ref2va reference conditioning ----------------------------------------
+# H3's reference pipeline encodes a reference image at up to a 2048 short edge.
+# Reference rows ride through EVERY sampling step, so this is also the setting
+# that decides how much the references cost per step.
+REF_IMAGE_SHORT_EDGE = 2048
+CANVAS_MULTIPLE = 32
+
+
+def ref_image_canvas(w, h, gen_w, gen_h, mode="match"):
+    """Pure: the (width, height) a reference image is encoded at.
+
+    'match' scales it (DOWN only, aspect kept) to the generation's pixel area, so a
+    reference costs about as much as one frame of the shot. 'max' goes to the
+    reference pipeline's 2048 short edge for the best identity fidelity, which on a
+    long chain is several times slower because the rows are re-attended every step
+    of every shot. Never upscales: a small reference stays small."""
+    import math
+    w, h = max(1, int(w)), max(1, int(h))
+    if mode == "max":
+        scale = min(1.0, REF_IMAGE_SHORT_EDGE / min(w, h))
+    else:
+        scale = min(1.0, math.sqrt((int(gen_w) * int(gen_h)) / float(w * h)))
+    snap = lambda v: max(CANVAS_MULTIPLE, round(v * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
+    return snap(w), snap(h)
+
+
+def _build_ref_images(vae, images, gen_w, gen_h, mode="match"):
+    """(tokenizer items, DiT blocks) for a list of reference IMAGE tensors.
+
+    The tokenizer labels each one `<Picture N>:` itself, in the order given here --
+    so the roster the prompt refers to is decided by input order, not by anything
+    written in the prompt."""
+    items, blocks = [], []
+    for img in images:
+        if img is None:
+            continue
+        h, w = int(img.shape[1]), int(img.shape[2])
+        tw, th = ref_image_canvas(w, h, gen_w, gen_h, mode)
+        resized = _resize(img[:1], tw, th, "disabled")
+        items.append({"type": "image", "data": resized})
+        blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16,
+                       "latent": vae.encode(resized)})
+    return items, blocks
+
+
+def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, handoff,
+                             ref_images=None, ref_image_size="match"):
     latent, fc = _empty_av_latent(width, height, length, fps)
+    refs = [r for r in (ref_images or []) if r is not None]
+    if refs:
+        # ref2va: references REPLACE the keyframe channel for this shot -- the two
+        # cannot ride together. comfy/model_base.py fills ONE `cond_video_latents`
+        # list, and the refs branch overwrites whatever the keyframe branch put
+        # there (model_base.py:2094 then :2098), while PackedLayout still lays out
+        # rows for both. The row count and the latent count then disagree, which
+        # lands as a shape error deep inside the DiT -- or worse, feeds the keyframe
+        # rows a reference's latent. So a shot is EITHER ref-conditioned or
+        # keyframe-conditioned, and run() decides which per shot.
+        items, blocks = _build_ref_images(vae, refs, width, height, ref_image_size)
+        tokens = clip.tokenize(prompt, minimax_ref_items=items)
+        cond = clip.encode_from_tokens_scheduled(tokens)
+        if blocks:
+            cond = node_helpers.conditioning_set_values(cond, {"minimax_refs": blocks})
+        return cond, latent
     images, keyframes = [], []
     if handoff is not None:
         img = _resize(handoff[:1], width, height, "disabled")
@@ -2080,6 +2156,36 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
             kf["latent"] = vae.encode(kf.pop("image"))
         cond = node_helpers.conditioning_set_values(cond, {"minimax_keyframes": keyframes, "minimax_frame_count": fc})
     return cond, latent
+
+
+def shot_references(ref_list, ref_mode, shot_index, handoff):
+    """Pure: which reference images shot `shot_index` is conditioned on, or [] when
+    the shot should use the keyframe handoff instead.
+
+    The three modes trade identity against continuity, and they trade because a
+    shot cannot carry both channels:
+
+      'first shot'  -- references establish the cast in shot 1; every later shot
+                       uses the last-frame handoff. Continuity is unbroken and the
+                       look propagates down the chain, but only through the frames.
+      'every shot'  -- every shot is ref-conditioned. Strongest identity, and no
+                       handoff at all, so shots meet as CUTS rather than as one
+                       continuous take.
+      'every shot + handoff ref'
+                    -- every shot is ref-conditioned AND the previous shot's last
+                       frame is appended as one more reference. Continuity comes
+                       back as a soft signal (the model is shown where the last
+                       shot ended rather than told to start exactly there), and it
+                       stays a single ref2va task, so nothing conflicts."""
+    if not ref_list:
+        return []
+    if ref_mode == "first shot":
+        return list(ref_list) if shot_index == 0 else []
+    if ref_mode == "every shot":
+        return list(ref_list)
+    if ref_mode == "every shot + handoff ref":
+        return list(ref_list) + ([handoff] if handoff is not None else [])
+    return list(ref_list) if shot_index == 0 else []       # unknown value -> safest
 
 
 # --- text-encoder / DiT compatibility -------------------------------------
@@ -2662,7 +2768,7 @@ def _evict_all_but(keep_model):
 
 
 
-class H3LongVideosFL2VA:
+class H3LongVideos:
     CATEGORY = "sampling/minimax"
     FUNCTION = "run"
     # fps is emitted as BOTH types on purpose: ComfyUI does not coerce between them,
@@ -2732,6 +2838,18 @@ class H3LongVideosFL2VA:
             },
             "optional": {
                 "first_frame": ("IMAGE",),
+                # ref2va inputs. Order matters and is the ONLY thing that decides the
+                # roster: the tokenizer labels these <Picture 1>..<Picture 4> in the
+                # order they appear here, then appends the prompt. Refer to them by
+                # those tags in the prompt if you want a reference bound to a named
+                # character ("Kristy, <Picture 1>, walks in").
+                "ref_image_1": ("IMAGE", {"tooltip": "Reference image <Picture 1> -- identity/appearance "
+                    "carried into the shots. ref2va conditioning REPLACES the keyframe handoff on any "
+                    "shot it applies to (the model can carry one or the other, never both), so which "
+                    "shots get it is set by ref_mode."}),
+                "ref_image_2": ("IMAGE", {"tooltip": "Reference image <Picture 2>."}),
+                "ref_image_3": ("IMAGE", {"tooltip": "Reference image <Picture 3>."}),
+                "ref_image_4": ("IMAGE", {"tooltip": "Reference image <Picture 4>."}),
                 "plan_only": ("BOOLEAN", {"default": False,
                     "tooltip": "Preview the shot split WITHOUT rendering. Uses THIS node's own settings (no "
                                "second node, no duplicate entry): returns the plan in 'info' and the "
@@ -2860,6 +2978,23 @@ class H3LongVideosFL2VA:
                 "overlay_stroke": ("INT", {"default": 0, "min": 0, "max": 20,
                     "tooltip": "Black outline thickness in pixels around the white text. 0 keeps it pure "
                                "white as asked; 2-3 makes it survive a bright sky or a white wall."}),
+                "ref_mode": (["first shot", "every shot", "every shot + handoff ref"],
+                    {"default": "first shot",
+                     "tooltip": "Which shots the ref_image inputs condition. A shot carries EITHER "
+                                "references or the last-frame handoff, never both. 'first shot' "
+                                "(default): references establish the cast in shot 1, every later shot "
+                                "uses the handoff -- continuity unbroken. 'every shot': strongest "
+                                "identity, no handoff, so beats meet as CUTS rather than one take. "
+                                "'every shot + handoff ref': references every shot AND the previous "
+                                "shot's last frame added as one more reference -- continuity returns as "
+                                "a soft signal. Ignored when no ref_image is connected."}),
+                "ref_image_size": (["match", "max"], {"default": "match",
+                    "tooltip": "How large each reference is encoded. 'match' scales it down to the "
+                               "generation's pixel area -- a reference then costs about one frame per "
+                               "step. 'max' uses the reference pipeline's 2048 short edge for the best "
+                               "identity fidelity, but reference rows are re-attended EVERY step of "
+                               "EVERY ref-conditioned shot, so on a long chain it is several times "
+                               "slower. Neither ever upscales a small reference."}),
                 "beat_split": (["auto", "each line"], {"default": "auto",
                     "tooltip": "How the prompt box becomes beats. Beats are meant to be separated by a "
                                "BLANK line (or a '##' line) -- but six beats typed on six consecutive "
@@ -2945,8 +3080,10 @@ class H3LongVideosFL2VA:
         return schema
 
     def _render(self, model, clip, vae, audio_vae, negative, prompt, w, h, ln, fps, tiled, sa,
-                handoff, decode_tile_frames=0, decode_tile_size=0):
-        positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff)
+                handoff, decode_tile_frames=0, decode_tile_size=0,
+                refs=None, ref_image_size="match"):
+        positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff,
+                                                    ref_images=refs, ref_image_size=ref_image_size)
         seed, steps, cfg, sn, sch, denoise = sa
         # Conditioning is built, so the text encoder and VAEs are dead weight for the
         # whole sampling loop -- evict them and keep only the DiT on the card.
@@ -2978,7 +3115,9 @@ class H3LongVideosFL2VA:
             watermark_text="", watermark_position="bottom-right", watermark_size=4.0,
             watermark_opacity=0.75, watermark_margin=3.0,
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
-            intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0):
+            intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0,
+            ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_image_4=None,
+            ref_mode="first shot", ref_image_size="match"):
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
         # A stale resident model from a different checkpoint would otherwise poison
@@ -3136,6 +3275,17 @@ class H3LongVideosFL2VA:
             plan_audio = (f" {n_silent} of {shots} shot(s) have no quoted dialogue -> "
                           + ("AUDIO-MUTED (ambience goes too)" if mute_nonspeech_audio
                              else "prompt/soundscape silencing only")) if n_silent else ""
+            # Same reference accounting the render reports: which shots lose the
+            # handoff is a composition decision, so it belongs in the preview.
+            n_refs = len([r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
+                          if r is not None])
+            plan_ref = ""
+            if n_refs:
+                on = [n + 1 for n in range(shots)
+                      if shot_references([1] * n_refs, ref_mode, n, 1 if n else None)]
+                plan_ref = (f" ref2va: {n_refs} reference image(s) at '{ref_image_size}' on shot(s) "
+                            f"{','.join(str(n) for n in on) or 'none'} (ref_mode '{ref_mode}') -> "
+                            f"those shots drop the last-frame handoff")
             plan = ((anchor_note + " ") if anchor_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
@@ -3144,6 +3294,7 @@ class H3LongVideosFL2VA:
                     + (f"{plan_audio}." if plan_audio else "")
                     + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
                        if wardrobe_notes else "")
+                    + (f"{plan_ref}." if plan_ref else "")
                 + (f" {fps_note}." if fps_note else "")
                     + (f" {ln_note}." if ln_note else ""))
             ph_img = torch.zeros((1, 64, 64, 3))
@@ -3157,6 +3308,8 @@ class H3LongVideosFL2VA:
         hoff = max(0, int(handoff_offset))
         backoff, video_chunks, audio_chunks = [], [], []
         handoff, sr = first_frame, None
+        ref_list = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4) if r is not None]
+        ref_shots = []                     # which shots ended up ref-conditioned
         if cleanup_between_shots:
             _deep_cleanup()          # start the first (heaviest) shot with max free VRAM
 
@@ -3165,10 +3318,18 @@ class H3LongVideosFL2VA:
             # denoise is fixed at 1.0 (partial denoise desyncs the joint AV schedule).
             sa = (seed + i if vary_seed_per_shot else seed, steps, cfg, sampler_name, scheduler, 1.0)
             ln_i = shot_lens[i]        # this beat's own length (<= the VRAM ceiling)
+            # A shot is EITHER ref-conditioned or keyframe-conditioned (see
+            # _build_shot_conditioning). Deciding here keeps the two channels from
+            # ever meeting in one payload.
+            shot_refs = shot_references(ref_list, ref_mode, i, handoff)
+            shot_handoff = None if shot_refs else handoff
+            if shot_refs:
+                ref_shots.append(i + 1)
             if i == 0:
                 while True:
                     try:
-                        frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
+                        frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
+                                                     shot_refs, ref_image_size)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -3183,12 +3344,14 @@ class H3LongVideosFL2VA:
                                                "Pick a smaller resolution, close other GPU apps, or use a smaller quant.")
             else:
                 try:
-                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
+                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
+                                                     shot_refs, ref_image_size)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if not _is_oom(e) or tiled:
                         raise
                     mm.soft_empty_cache(True); tiled = True; backoff.append(f"shot {i+1}: tiled")
-                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, handoff, decode_tile_frames, decode_tile_size)
+                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
+                                                     shot_refs, ref_image_size)
 
             sr = audio["sample_rate"]; wav = audio["waveform"]
 
@@ -3314,6 +3477,21 @@ class H3LongVideosFL2VA:
                           f"for a guaranteed fix")
         else:
             audio_note = ""
+        # Which shots actually took the reference channel, and what they gave up for
+        # it. Silence here would leave "why did shot 2 cut instead of continuing?"
+        # unanswerable from the output alone.
+        if ref_list and ref_shots:
+            kept = [n for n in range(1, len(gens) + 1) if n not in ref_shots]
+            ref_note = (f" ref2va: {len(ref_list)} reference image(s) at '{ref_image_size}' on shot(s) "
+                        f"{','.join(str(n) for n in ref_shots)} (ref_mode '{ref_mode}') -- those shots "
+                        f"carry references INSTEAD of the last-frame handoff"
+                        + (f"; shot(s) {','.join(str(n) for n in kept)} keep the handoff" if kept
+                           else ", so every cut between beats is a CUT, not a continuous take"))
+        elif ref_list:
+            ref_note = (f" ref2va: {len(ref_list)} reference image(s) connected but ref_mode "
+                        f"'{ref_mode}' applied them to no shot")
+        else:
+            ref_note = ""
         info = ((anchor_note + " ") if anchor_note else "") + \
                (f"{shape_str} at {w}x{h}; {all_frames.shape[0]} frames (~{actual:.1f}s actual). "
                 f"decode {'tiled' if tiled else 'full'}. {vram_str}.{hoff_str}"
@@ -3326,6 +3504,7 @@ class H3LongVideosFL2VA:
                 + (f"{audio_note}." if audio_note else "")
                 + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
                    if wardrobe_notes else "")
+                + (f"{ref_note}." if ref_note else "")
                 + (f" {fps_note}." if fps_note else "")
                 + (f" {swap_note}." if swap_note else "")
                 + (f" free VRAM/shot: {vram_trace}." if len(vram_trace) > 1 else "")
@@ -3342,19 +3521,25 @@ class H3LongVideosFL2VA:
                 float(fps), int(fps))
 
 
-# "H3LongVideosV1" is the node's ORIGINAL registration key. ComfyUI stores that
-# key verbatim in every saved workflow, so dropping it would make each existing
-# graph load this node as a red "missing node" box. It is kept as an alias onto
-# the same class: new graphs get H3LongVideosFL2VA, old ones keep working.
+# REF2VA registers under its OWN key. The FL2VA pack one directory up keeps
+# "H3LongVideosFL2VA" and the legacy "H3LongVideosV1" alias; ComfyUI builds one
+# flat registry, so repeating either here would silently overwrite that node --
+# same name in the search, no way to tell which copy a workflow is running.
+# ONE node, three registration keys. ComfyUI stores the key verbatim in every saved
+# workflow, so all three must keep resolving or existing graphs load as red "missing
+# node" boxes: "H3LongVideosV1" is the original name, "H3LongVideosFL2VA" the rename,
+# and "H3LongVideosREF2VA" the separate reference node that has now been folded in.
+# They are aliases onto the same class -- there is no second implementation.
 NODE_CLASS_MAPPINGS = {
-    "H3LongVideosFL2VA": H3LongVideosFL2VA,
-    "H3LongVideosV1": H3LongVideosFL2VA,          # legacy key -- do not remove
+    "H3LongVideos": H3LongVideos,
+    "H3LongVideosFL2VA": H3LongVideos,        # do not remove
+    "H3LongVideosV1": H3LongVideos,           # do not remove
+    "H3LongVideosREF2VA": H3LongVideos,       # do not remove
 }
-# The legacy entry is marked in the UI so a graph loaded from an old workflow is
-# visibly the same node under its previous name, rather than looking like a
-# second, competing one in the node search.
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3LongVideosFL2VA": "H3 Long Videos FL2VA",
-    "H3LongVideosV1": "H3 Long Videos FL2VA (legacy name)",
+    "H3LongVideos": "H3 Long Videos (FL2VA + REF2VA)",
+    "H3LongVideosFL2VA": "H3 Long Videos (FL2VA + REF2VA)",
+    "H3LongVideosV1": "H3 Long Videos (FL2VA + REF2VA)",
+    "H3LongVideosREF2VA": "H3 Long Videos (FL2VA + REF2VA)",
 }
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

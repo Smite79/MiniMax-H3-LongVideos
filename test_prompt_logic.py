@@ -1054,6 +1054,125 @@ def check_model_change_flush():
         S.mm.unload_all_models = _orig
 
 
+class _FakeImg:
+    """Minimal stand-in for an IMAGE tensor: enough shape/movedim to survive _resize."""
+    def __init__(self, w=1024, h=1024):
+        self.shape = (1, h, w, 3)
+    def __getitem__(self, key):
+        return self
+    def movedim(self, *a):
+        return self
+
+
+def check_ref_conditioning_channels():
+    """A shot carries EITHER references or the keyframe handoff -- never both.
+
+    comfy/model_base.py builds one `cond_video_latents` list for the DiT: the
+    keyframe branch fills it, then the refs branch OVERWRITES it, while PackedLayout
+    still lays out rows for both. A shot carrying both would hand the layout fewer
+    latents than it has condition rows -- a shape error deep inside the DiT, or a
+    keyframe row silently fed a reference's latent. This test pins the exclusion at
+    the only place it can be enforced: where the conditioning is built."""
+    print("\n=== ref2va and keyframe conditioning are mutually exclusive ===")
+    # The stubs live in sys.modules only; a submodule found there is never attached
+    # to its parent package, so `comfy.utils.x` at call time would still fail.
+    t = sys.modules["torch"]
+    cu, nt = sys.modules["comfy.utils"], sys.modules["comfy.nested_tensor"]
+    cmm, node_helpers = sys.modules["comfy.model_management"], sys.modules["node_helpers"]
+    for name in ("utils", "nested_tensor", "model_management"):
+        setattr(sys.modules["comfy"], name, sys.modules["comfy." + name])
+    if not hasattr(t, "zeros"):
+        t.zeros = lambda *a, **k: object()
+    if not hasattr(cu, "common_upscale"):
+        cu.common_upscale = lambda s, w, h, m, c: s
+    if not hasattr(nt, "NestedTensor"):
+        nt.NestedTensor = lambda pair: pair
+    if not hasattr(cmm, "intermediate_device"):
+        cmm.intermediate_device = lambda: "cpu"
+
+    seen = {}
+
+    class _Clip:
+        def tokenize(self, prompt, **kw):
+            seen["tokenize_kwargs"] = kw
+            return "tokens"
+        def encode_from_tokens_scheduled(self, tokens):
+            return [["cond", {}]]
+
+    class _Vae:
+        def encode(self, img):
+            return "latent"
+
+    node_helpers.conditioning_set_values = lambda cond, values: (seen.setdefault("values", {}).update(values), cond)[1]
+
+    def build(handoff=None, refs=None, size="match"):
+        seen.clear()
+        S._build_shot_conditioning(_Clip(), _Vae(), "a prompt", 1344, 768, 124, 24,
+                                   handoff, ref_images=refs, ref_image_size=size)
+        return seen.get("values", {}), seen.get("tokenize_kwargs", {})
+
+    vals, tok = build(handoff=_FakeImg())
+    check("handoff only -> keyframe conditioning", "minimax_keyframes" in vals)
+    check("handoff only -> no refs", "minimax_refs" not in vals)
+    check("handoff only -> keyframes are presented as images", "images" in tok)
+
+    vals, tok = build(refs=[_FakeImg(), _FakeImg()])
+    check("refs only -> ref conditioning", "minimax_refs" in vals)
+    check("refs only -> no keyframes", "minimax_keyframes" not in vals)
+    check("refs only -> presented as minimax_ref_items", "minimax_ref_items" in tok)
+    check("every reference reaches the tokenizer", len(tok.get("minimax_ref_items", [])) == 2)
+    check("every reference reaches the DiT", len(vals.get("minimax_refs", [])) == 2)
+
+    vals, _ = build(handoff=_FakeImg(), refs=[_FakeImg()])
+    check("refs WIN when both are offered", "minimax_refs" in vals)
+    check("the keyframe channel stays empty when refs are present",
+          "minimax_keyframes" not in vals)
+
+    vals, tok = build(refs=[None, None])
+    check("all-empty ref slots fall back to the keyframe path",
+          "minimax_refs" not in vals and "minimax_ref_items" not in tok)
+
+    # latent grid must match what the DiT is told to expect (16px per latent cell)
+    vals, _ = build(refs=[_FakeImg(2048, 1024)])
+    blk = vals["minimax_refs"][0]
+    tw, th = S.ref_image_canvas(2048, 1024, 1344, 768, "match")
+    check("ref block reports the latent grid of its own canvas",
+          blk["latent_w"] == tw // 16 and blk["latent_h"] == th // 16)
+    check("ref block is an image kind", blk["kind"] == "image")
+
+
+def check_ref_modes():
+    """Which shots take the reference channel, and what they give up for it."""
+    print("\n=== ref_mode over a 6-shot chain ===")
+    refs = ["A", "B"]
+    ho = lambda i: None if i == 0 else "handoff"
+    first = [S.shot_references(refs, "first shot", i, ho(i)) for i in range(6)]
+    check("'first shot': only shot 1 is ref-conditioned",
+          bool(first[0]) and not any(first[1:]))
+    every = [S.shot_references(refs, "every shot", i, ho(i)) for i in range(6)]
+    check("'every shot': all six are ref-conditioned", all(len(r) == 2 for r in every))
+    both = [S.shot_references(refs, "every shot + handoff ref", i, ho(i)) for i in range(6)]
+    check("'+ handoff ref': shot 1 has no previous frame to add", len(both[0]) == 2)
+    check("'+ handoff ref': later shots carry refs AND the last frame",
+          all(len(r) == 3 and r[-1] == "handoff" for r in both[1:]))
+    check("a stale/unknown ref_mode falls back to the safe 'first shot'",
+          bool(S.shot_references(refs, "blank line", 0, None))
+          and not S.shot_references(refs, "blank line", 3, "handoff"))
+    check("no references connected -> every shot keeps the handoff",
+          all(S.shot_references([], m, i, ho(i)) == []
+              for m in ("first shot", "every shot", "every shot + handoff ref")
+              for i in range(6)))
+    # sizing: 'match' must never exceed the generation area by more than the 32px snap,
+    # and neither mode may ever upscale a small reference
+    big = S.ref_image_canvas(4096, 2160, 1344, 768, "match")
+    check("'match' scales a 4K reference down to ~one frame's area",
+          abs(big[0] * big[1] - 1344 * 768) < 1344 * 768 * 0.05)
+    check("'max' uses the 2048 short edge", S.ref_image_canvas(4096, 2160, 1344, 768, "max")[1] == 2048)
+    check("a small reference is never upscaled",
+          S.ref_image_canvas(512, 512, 1344, 768, "match") == (512, 512)
+          and S.ref_image_canvas(512, 512, 1344, 768, "max") == (512, 512))
+
+
 def check_vram_budget():
     """Regression guard for the shot-length budget. Anchored to MEASURED runs on a
     16GB card with the pruned NVFP4 DiT (~11.7GB): 243f at 1344x768 works, 362f
@@ -1373,6 +1492,8 @@ def main():
     check_dialogue_fit()
     check_model_change_flush()
     check_vram_budget()
+    check_ref_conditioning_channels()
+    check_ref_modes()
 
     print()
     if _fails:

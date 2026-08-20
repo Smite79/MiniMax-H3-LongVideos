@@ -7,10 +7,12 @@ Self-contained: uses only ComfyUI core's H3 support (no other packs).
 Copy the `H3-LongVideos-V1/` folder into `ComfyUI/custom_nodes/` and restart
 ComfyUI (full server restart, not just a browser refresh).
 
-## Node: **H3 Long Videos FL2VA**  (category: sampling/minimax)
-*Renamed from **H3 Long Videos V1**. Workflows saved under the old name still
-load: the previous registration key is kept as an alias onto the same class, and
-shows in the UI as "H3 Long Videos FL2VA (legacy name)". Nothing to re-wire.*
+## Node: **H3 Long Videos (FL2VA + REF2VA)**  (category: sampling/minimax)
+*One node covers both H3 conditioning tasks. It registers under four keys --
+`H3LongVideos`, `H3LongVideosFL2VA`, `H3LongVideosV1` and `H3LongVideosREF2VA` --
+all aliases onto the same class, so every workflow saved under any previous name
+keeps loading with nothing to re-wire. REF2VA was briefly a separate, duplicated
+sampler; it is now folded in.*
 
 One node. You set just two things:
 
@@ -567,6 +569,39 @@ if you'd rather read back the value it chose.
 Reports the base precision of a loaded model (BF16 / FP8 / INT8 / NVFP4 /
 MXFP8) and whether your card runs it natively. Use it to confirm you're on a
 base checkpoint (so 20 steps is right) vs a distill/low-step path.
+
+## Reference images (the REF2VA part)
+
+Connect up to four images to `ref_image_1` … `ref_image_4`. The tokenizer labels
+them `<Picture 1>` … `<Picture 4>` **in input order** and appends your prompt
+after them, so you can bind one to a character by name in the prompt —
+`Kristy, <Picture 1>, walks around the garage` — or say nothing and let them work
+as a general appearance anchor.
+
+**A shot carries either references or the last-frame handoff — never both.** They
+are two different task conditionings competing for the same `cond_video_latents`
+slot inside ComfyUI's H3 model wrapper: the reference branch overwrites what the
+keyframe branch wrote, while the packed layout still reserves rows for both, so a
+shot given both would hand the DiT fewer latents than it has condition rows.
+`ref_mode` is how you choose, per run:
+
+| `ref_mode` | Shot 1 | Shots 2+ | Trade |
+|---|---|---|---|
+| `first shot` *(default)* | references | handoff | Continuity unbroken; identity is established once and then carried by the frames |
+| `every shot` | references | references | Strongest identity; **no handoff**, so beats meet as cuts, not one continuous take |
+| `every shot + handoff ref` | references | references **+ previous last frame as an extra reference** | Continuity returns as a soft signal — the model is *shown* where the last shot ended rather than told to start exactly there |
+
+`ref_image_size` sets how large each reference is encoded. `match` scales it down
+to the generation's pixel area, so a reference costs roughly one frame per step.
+`max` uses the reference pipeline's 2048 short edge for the best identity
+fidelity — but reference rows are re-attended **every step of every
+ref-conditioned shot**, so on a long chain `max` is several times slower. Neither
+mode ever upscales a small reference.
+
+With no reference connected, the node behaves exactly like FL2VA.
+
+`info` reports which shots took the reference channel and which kept the handoff,
+and `plan_only` previews the same split before you spend a render on it.
 
 ## Requirements
 - ComfyUI 0.30+ with native MiniMax-H3 support.
