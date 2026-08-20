@@ -1141,6 +1141,58 @@ def check_ref_conditioning_channels():
     check("ref block is an image kind", blk["kind"] == "image")
 
 
+def check_tagged_references():
+    """<Picture N> in a beat places that reference on THAT shot.
+
+    The positional modes go by shot NUMBER and are blind to who is in the shot: a
+    character who first appears in shot 2 got nothing, while an empty establishing
+    shot 1 got a portrait pushed into its opening frames. Tagging says where each
+    reference belongs, in the prompt, next to the character it describes.
+
+    The tags must be RENUMBERED per shot: the tokenizer numbers references by their
+    position in the list it is handed, so a shot using only <Picture 2> receives
+    that image as <Picture 1> and the untouched text would point at nothing."""
+    print("\n=== references placed by <Picture N> tags ===")
+    REFS = ["KristyPhoto", "DanPhoto", "CarPhoto"]
+
+    def place(text, refs=REFS):
+        return S.resolve_tagged_refs(text, refs)
+
+    check("an untagged beat takes no references", place("Kristy walks in.")[1] == [])
+    check("a tagged beat takes the named image",
+          place("Kristy, <Picture 1>, walks in.")[1] == ["KristyPhoto"])
+    check("tag syntax is forgiving",
+          place("Dan <picture_2> waves.")[1] == place("Dan <PICTURE 2> waves.")[1]
+          == place("Dan <Picture 2> waves.")[1] == ["DanPhoto"])
+    # renumbering: slot 2 alone must arrive as <Picture 1>
+    txt, imgs, _ = place("Dan, <picture_2>, hands her a wrench.")
+    check("a lone <Picture 2> is renumbered to <Picture 1>", "<Picture 1>" in txt)
+    check("...and carries the RIGHT image", imgs == ["DanPhoto"])
+    txt2, imgs2, _ = place("Kristy <Picture 1> and Dan <Picture 3> argue.")
+    check("two tags renumber in order",
+          "<Picture 1>" in txt2 and "<Picture 2>" in txt2 and "<Picture 3>" not in txt2)
+    check("...and both images ride along", imgs2 == ["KristyPhoto", "CarPhoto"])
+    # a tag with no image behind it refers to nothing
+    txt3, imgs3, dropped = place("Someone <Picture 9> appears.")
+    check("a tag with no connected image is dropped from the text", "<Picture" not in txt3)
+    check("...carries no image", imgs3 == [])
+    check("...and is reported", dropped == [9])
+    check("picture_tags reads every slot named",
+          S.picture_tags("<Picture 1> then <picture_3>") == [1, 3])
+    check("picture_tags on plain prose finds nothing", S.picture_tags("Kristy walks in.") == [])
+
+    # the whole point: the empty establishing shot must stay clean
+    BEATS = ["Wide shot of the empty garage.",
+             "Kristy, <picture_1>, walks in.",
+             "Kristy finds Dan, <Picture 2>, at the bench.",
+             "Dan hands her a wrench."]
+    got = [place(b, ["KristyPhoto", "DanPhoto"])[1] for b in BEATS]
+    check("shot 1 (nobody in it) takes no reference and keeps its handoff", got[0] == [])
+    check("the character's own shot gets their photo", got[1] == ["KristyPhoto"])
+    check("a second character lands on THEIR shot", got[2] == ["DanPhoto"])
+    check("untagged later shots keep the handoff", got[3] == [])
+
+
 def check_ref_modes():
     """Which shots take the reference channel, and what they give up for it."""
     print("\n=== ref_mode over a 6-shot chain ===")
@@ -1493,6 +1545,7 @@ def main():
     check_model_change_flush()
     check_vram_budget()
     check_ref_conditioning_channels()
+    check_tagged_references()
     check_ref_modes()
 
     print()

@@ -2158,6 +2158,43 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
     return cond, latent
 
 
+# <Picture 1>, <picture_1>, <PICTURE 1> -- all the ways people write the tag.
+_PICTURE_TAG = re.compile(r"<\s*picture[\s_\-]*(\d+)\s*>", re.I)
+
+
+def picture_tags(text):
+    """The reference slots a shot's text asks for, in ascending order."""
+    return sorted({int(m.group(1)) for m in _PICTURE_TAG.finditer(text or "")})
+
+
+def resolve_tagged_refs(text, ref_list):
+    """(rewritten text, images, dropped) for the <Picture N> tags in ONE shot.
+
+    The tokenizer numbers references by their position in the list it is handed, so
+    a shot that uses only <Picture 2> would receive that image labelled
+    <Picture 1> and the text would point at nothing. The tags are therefore
+    RENUMBERED per shot to match what that shot actually carries: slot 2 alone
+    becomes <Picture 1>, slots 2 and 4 become <Picture 1> and <Picture 2>.
+
+    A tag naming a slot with no image connected refers to nothing at all, so it is
+    removed from the text rather than left to confuse the encoder, and reported."""
+    wanted = picture_tags(text)
+    live = [n for n in wanted if 1 <= n <= len(ref_list or [])]
+    dropped = [n for n in wanted if n not in live]
+    renumber = {old: new for new, old in enumerate(live, 1)}
+
+    def sub(m):
+        n = int(m.group(1))
+        return f"<Picture {renumber[n]}>" if n in renumber else ""
+
+    out = _PICTURE_TAG.sub(sub, text or "")
+    if dropped:                       # tidy the gap a removed tag leaves behind
+        out = re.sub(r"\s+([,.;:])", r"\1", out)
+        out = re.sub(r"(,\s*){2,}", ", ", out)
+        out = re.sub(r"\s{2,}", " ", out)
+    return out.strip(), [ref_list[n - 1] for n in live], dropped
+
+
 def shot_references(ref_list, ref_mode, shot_index, handoff):
     """Pure: which reference images shot `shot_index` is conditioned on, or [] when
     the shot should use the keyframe handoff instead.
@@ -2978,16 +3015,21 @@ class H3LongVideos:
                 "overlay_stroke": ("INT", {"default": 0, "min": 0, "max": 20,
                     "tooltip": "Black outline thickness in pixels around the white text. 0 keeps it pure "
                                "white as asked; 2-3 makes it survive a bright sky or a white wall."}),
-                "ref_mode": (["first shot", "every shot", "every shot + handoff ref"],
-                    {"default": "first shot",
+                "ref_mode": (["where tagged", "first shot", "every shot", "every shot + handoff ref"],
+                    {"default": "where tagged",
                      "tooltip": "Which shots the ref_image inputs condition. A shot carries EITHER "
-                                "references or the last-frame handoff, never both. 'first shot' "
-                                "(default): references establish the cast in shot 1, every later shot "
-                                "uses the handoff -- continuity unbroken. 'every shot': strongest "
-                                "identity, no handoff, so beats meet as CUTS rather than one take. "
-                                "'every shot + handoff ref': references every shot AND the previous "
-                                "shot's last frame added as one more reference -- continuity returns as "
-                                "a soft signal. Ignored when no ref_image is connected."}),
+                                "references or the last-frame handoff, never both. 'where tagged' "
+                                "(default): write <Picture 1> in the beat where that character "
+                                "appears and ONLY that shot gets the reference -- every other shot "
+                                "keeps its handoff. This is the precise option: the other modes go by "
+                                "shot NUMBER and are blind to who is actually in the shot, so a "
+                                "character who first appears in shot 2 gets nothing while an empty "
+                                "establishing shot 1 gets a portrait pushed into it. Tags are "
+                                "renumbered per shot, so <Picture 2> alone still resolves. With refs "
+                                "connected but no tags anywhere, falls back to first shot rather than "
+                                "silently doing nothing. 'first shot' / 'every shot' / 'every shot + "
+                                "handoff ref' go purely by position. Ignored when no ref_image is "
+                                "connected."}),
                 "ref_image_size": (["match", "max"], {"default": "match",
                     "tooltip": "How large each reference is encoded. 'match' scales it down to the "
                                "generation's pixel area -- a reference then costs about one frame per "
@@ -3310,6 +3352,14 @@ class H3LongVideos:
         handoff, sr = first_frame, None
         ref_list = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4) if r is not None]
         ref_shots = []                     # which shots ended up ref-conditioned
+        ref_missing = []                   # <Picture N> tags naming an unconnected slot
+        # 'where tagged' reads the prompt instead of counting shots. If references are
+        # connected but nothing is tagged anywhere, fall back to first-shot placement
+        # rather than silently conditioning nothing at all.
+        tag_driven = bool(ref_list) and ref_mode == "where tagged" and any(
+            picture_tags(g) for g in gens)
+        if ref_list and ref_mode == "where tagged" and not tag_driven:
+            ref_mode = "first shot"
         if cleanup_between_shots:
             _deep_cleanup()          # start the first (heaviest) shot with max free VRAM
 
@@ -3321,7 +3371,16 @@ class H3LongVideos:
             # A shot is EITHER ref-conditioned or keyframe-conditioned (see
             # _build_shot_conditioning). Deciding here keeps the two channels from
             # ever meeting in one payload.
-            shot_refs = shot_references(ref_list, ref_mode, i, handoff)
+            if tag_driven:
+                # The prompt itself says where each reference belongs: the shot whose
+                # text names <Picture N> gets image N, renumbered to match what that
+                # shot actually carries. Every untagged shot keeps its handoff.
+                gen_prompt, shot_refs, dropped = resolve_tagged_refs(gen_prompt, ref_list)
+                for n in dropped:
+                    if n not in ref_missing:
+                        ref_missing.append(n)
+            else:
+                shot_refs = shot_references(ref_list, ref_mode, i, handoff)
             shot_handoff = None if shot_refs else handoff
             if shot_refs:
                 ref_shots.append(i + 1)
@@ -3480,13 +3539,21 @@ class H3LongVideos:
         # Which shots actually took the reference channel, and what they gave up for
         # it. Silence here would leave "why did shot 2 cut instead of continuing?"
         # unanswerable from the output alone.
+        if ref_missing:
+            ref_note_missing = (f" <Picture {','.join(str(n) for n in ref_missing)}> named in the prompt "
+                                f"but no image is connected to that ref_image input -- the tag(s) were "
+                                f"dropped from the text")
+        else:
+            ref_note_missing = ""
         if ref_list and ref_shots:
             kept = [n for n in range(1, len(gens) + 1) if n not in ref_shots]
             ref_note = (f" ref2va: {len(ref_list)} reference image(s) at '{ref_image_size}' on shot(s) "
-                        f"{','.join(str(n) for n in ref_shots)} (ref_mode '{ref_mode}') -- those shots "
+                        f"{','.join(str(n) for n in ref_shots)} "
+                        f"({'placed by <Picture N> tags' if tag_driven else f"ref_mode '{ref_mode}'"}) -- those shots "
                         f"carry references INSTEAD of the last-frame handoff"
                         + (f"; shot(s) {','.join(str(n) for n in kept)} keep the handoff" if kept
-                           else ", so every cut between beats is a CUT, not a continuous take"))
+                           else ", so every cut between beats is a CUT, not a continuous take")
+                        + ref_note_missing)
         elif ref_list:
             ref_note = (f" ref2va: {len(ref_list)} reference image(s) connected but ref_mode "
                         f"'{ref_mode}' applied them to no shot")

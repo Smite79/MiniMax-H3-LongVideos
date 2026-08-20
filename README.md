@@ -583,7 +583,41 @@ are two different task conditionings competing for the same `cond_video_latents`
 slot inside ComfyUI's H3 model wrapper: the reference branch overwrites what the
 keyframe branch wrote, while the packed layout still reserves rows for both, so a
 shot given both would hand the DiT fewer latents than it has condition rows.
-`ref_mode` is how you choose, per run:
+`ref_mode` decides where they land. The default reads your prompt:
+
+| `ref_mode` | Where the reference goes |
+|---|---|
+| `where tagged` *(default)* | **The shot whose text names `<Picture N>`** — write the tag in the beat where that character appears. Every untagged shot keeps its handoff. |
+| `first shot` | Shot 1, whoever is in it |
+| `every shot` | All shots, no handoff anywhere |
+| `every shot + handoff ref` | All shots, previous frame added as an extra reference |
+
+**Why tagging is the precise option.** The positional modes go by shot *number*
+and are blind to who is actually in the shot. A character who first appears in
+shot 2 gets nothing, while an empty establishing shot 1 gets a portrait pushed
+into its opening frames. Tagging puts the reference next to the character it
+describes:
+
+```
+Wide shot of the empty garage, sunlight through the bay doors.
+
+Kristy, <Picture 1>, walks in and looks around.
+
+Kristy finds Dan, <Picture 2>, at the bench.
+
+Dan hands her a wrench.
+```
+
+Shot 1 renders clean and keeps its handoff. Shot 2 carries Kristy's photo, shot 3
+carries Dan's, shot 4 chains normally. Tags are **renumbered per shot** — a shot
+using only `<Picture 2>` receives that image as `<Picture 1>` and its text is
+rewritten to match, because the tokenizer numbers references by their position in
+the list the shot actually carries. `<picture_1>`, `<Picture 1>` and `<PICTURE 1>`
+all work. A tag naming an unconnected input is removed from the text and reported
+in `info`. With references connected but nothing tagged anywhere, it falls back to
+`first shot` rather than silently conditioning nothing.
+
+The three positional modes still differ in what they trade:
 
 | `ref_mode` | Shot 1 | Shots 2+ | Trade |
 |---|---|---|---|
