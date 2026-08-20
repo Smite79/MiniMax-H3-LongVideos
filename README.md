@@ -1,4 +1,4 @@
-# H3-LongVideos-V1
+# H3-LongVideos
 
 Make long (up to ~120s) MiniMax-H3 videos from a single prompt, in ComfyUI.
 Self-contained: uses only ComfyUI core's H3 support (no other packs).
