@@ -1427,6 +1427,31 @@ def garment_zones(item):
     return set()
 
 
+# Once a zone has been stripped, its state has to be STATED in every later shot.
+# Deleting the garment is only a silence, and a video model's default prior is a
+# clothed person, so silence gets them dressed again a shot or two later -- the same
+# reason "no longer wearing the red jacket" was not enough on its own. These read as
+# a physical description, not as a negation, and they live in the wardrobe channel
+# so they persist and clear exactly like a garment.
+_BARE_MARK = {"lower": "bare below the waist", "upper": "bare chest"}
+
+
+def bare_state_items(items, stripped_zones):
+    """Markers to add / remove so a stripped zone keeps saying it is stripped.
+
+    Returns (add, drop). A zone that something covers again -- because a garment was
+    put back on -- drops its marker, which is what "unless requested" means."""
+    add, drop = [], []
+    for zone, mark in _BARE_MARK.items():
+        present = mark in items
+        covered = bool(remaining_cover([i for i in items if i not in _BARE_MARK.values()], {zone}))
+        if zone in stripped_zones and not covered and not present:
+            add.append(mark)
+        elif (covered or zone not in stripped_zones) and present:
+            drop.append(mark)
+    return add, drop
+
+
 def remaining_cover(items, zones):
     """Items still worn that cover any of `zones` -- what is underneath."""
     return [i for i in items if garment_zones(i) & zones]
@@ -1991,6 +2016,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     removed = []                             # garments taken off -> also scrubbed from the anchor
     departed = set()                         # characters who left the scene -> never reappear
     props = {}                               # objects introduced so far -> their phrase
+    stripped = {}                            # person -> body zones stripped so far
     blocks = []
     for gi, b in enumerate(beats, 1):
         body, wardrobe_change = extract_wardrobe((b or "").strip())
@@ -2056,6 +2082,21 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             # it, or the same jacket is announced twice.
             if anchor_gone and not off_now:
                 off_now += [("", it) for it in anchor_gone]
+        # Record which zones this person has been stripped in, then keep the state
+        # STATED in every later shot. Deleting the garment is only a silence, and a
+        # video model's default is a clothed person -- so silence puts the clothes
+        # back on a shot or two later. The marker clears by itself if a garment
+        # covering that zone is put back on, which is the "unless requested" half.
+        for nm, it in off_now:
+            z = garment_zones(it)
+            if z:
+                stripped.setdefault(nm, set()).update(z)
+        for nm in list(active):
+            add, drop = bare_state_items(active.get(nm, []), stripped.get(nm, set()))
+            for mark in add:
+                active[nm].append(mark)
+            for mark in drop:
+                active[nm].remove(mark)
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
                                         speaking=has_speech(body), front_load=front_load)
         # State the DIRECTION of the change, in the shot that performs it. Only for

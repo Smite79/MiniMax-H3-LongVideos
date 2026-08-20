@@ -527,6 +527,43 @@ def check_anchor_hazards():
     check("...and says why it matters", "EVERY shot" in w)
 
 
+def check_stripped_state_persists():
+    """A stripped zone must keep saying it is stripped, until something covers it.
+
+    Removing the last garment on a zone only DELETED it from the description, and a
+    video model's default prior is a clothed person -- so a shot or two later the
+    clothes were back on. Same reason deleting a jacket was not enough on its own.
+    The state is now carried in the wardrobe channel as a physical description, and
+    it clears by itself when a garment covering that zone is put back on."""
+    print("\n=== a stripped body zone stays stripped ===")
+    cm_ = "Mara = she, 30, red hair, grey coat, black jeans, black panties"
+    B = ["Mara stands in the barn.",
+         "Mara takes off her black jeans.",
+         "Mara takes off her black panties.",
+         "Mara walks to the window.",
+         "Mara looks outside.",
+         "wardrobe: Mara += grey shorts\nMara pulls on grey shorts.",
+         "Mara turns back to the door."]
+    sh = D("A barn interior.", B, "", "", cm_)
+    check("the under-layer holds while it is worn", worn(sh[1], "black panties"))
+    check("stripping the last layer states the state", "bare below the waist" in sh[2])
+    check("...and it persists into later shots",
+          all("bare below the waist" in s for s in sh[3:5]))
+    check("...instead of the zone simply going unmentioned",
+          "bare below the waist" in sh[4])
+    check("putting clothing back on clears it", "bare below the waist" not in sh[5])
+    check("...and it stays cleared", "bare below the waist" not in sh[6])
+    check("the new garment is worn from then on", worn(sh[6], "grey shorts"))
+    # the marker is a description, not a garment: it must never count as cover
+    check("the marker never counts as body cover",
+          S.garment_zones("bare below the waist") == set())
+    add, drop = S.bare_state_items(["grey coat"], {"lower"})
+    check("a stripped zone with nothing on it gains the marker", add == ["bare below the waist"])
+    add2, drop2 = S.bare_state_items(["grey coat", "grey shorts", "bare below the waist"], {"lower"})
+    check("...and loses it once covered", drop2 == ["bare below the waist"])
+    check("a zone never stripped is never marked", S.bare_state_items(["grey coat"], set())[0] == [])
+
+
 def check_emergence_is_not_an_exit():
     """Coming OUT OF a place is arriving, not leaving.
 
@@ -1757,6 +1794,7 @@ def main():
     check_anchor_not_rewritten()
     check_detailed_wardrobe_items()
     check_anchor_hazards()
+    check_stripped_state_persists()
     check_emergence_is_not_an_exit()
     check_props_survive_the_shot_boundary()
     check_under_layer_stays_on()
