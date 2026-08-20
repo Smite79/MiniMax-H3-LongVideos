@@ -1162,15 +1162,22 @@ def prop_continuity_clause(bound, props):
     """One short sentence pinning a carried prop to the previous shot's object.
 
     Re-describing it is not enough on its own: "a white van" in shot 1 and "a white
-    van" in shot 2 are two white vans. The clause says it is the same one, and that
-    there is only one."""
+    van" in shot 2 are two white vans. The clause states identity with the previous
+    shot, and states the COUNT positively.
+
+    It deliberately does NOT say "no second van". Naming the unwanted thing is how
+    "she is no longer wearing the red jacket" put the jacket back on: to a video
+    model a mention is a presence cue and a negation is weak, so "no second van"
+    puts a second van in the text. The subject-count guard already had this right
+    for people -- it leads with "Exactly one person" -- and props follow the same
+    shape."""
     if not bound:
         return ""
     bits = []
     for noun in bound:
         phrase = props.get(noun, noun)
-        bits.append(f"the {phrase} is the same {noun} as in the previous shot -- "
-                    f"one {noun} only, no second {noun}")
+        bits.append(f"exactly one {noun} in this shot, the same {phrase} from the previous shot, "
+                    f"in the same place")
     s = "; ".join(bits)
     return " " + s[0].upper() + s[1:] + "."
 

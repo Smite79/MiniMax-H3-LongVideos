@@ -505,8 +505,12 @@ def check_props_survive_the_shot_boundary():
              "Dom gets out of the van and walks to the back doors."]
     sh = D("Daylight, documentary video.", BEATS, "", "", "Dom = he, 40, beard, brown jacket")
     check("shot 2 names the object instead of assuming it", "the same van" in sh[1])
-    check("...and pins it to the previous shot", "same van as in the previous shot" in sh[1])
-    check("...and forbids a second one", "no second van" in sh[1])
+    check("...and pins it to the previous shot", "from the previous shot" in sh[1])
+    # The count is stated POSITIVELY. "no second van" names the unwanted thing, which
+    # is how "no longer wearing the red jacket" put the jacket back on -- a mention is
+    # a presence cue and a negation is weak.
+    check("...and counts positively", "exactly one van in this shot" in sh[1].lower())
+    check("...without naming a second van", "second van" not in sh[1])
     check("shot 1 is untouched -- it introduces the van", "the same van" not in sh[0])
 
     # extraction
