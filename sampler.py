@@ -3627,6 +3627,7 @@ class H3LongVideos:
         ref_list = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4) if r is not None]
         ref_shots = []                     # which shots ended up ref-conditioned
         ref_missing = []                   # <Picture N> tags naming an unconnected slot
+        ref_carried = []                   # tagged shots that kept continuity as an extra ref
         # 'where tagged' reads the prompt instead of counting shots. If references are
         # connected but nothing is tagged anywhere, fall back to first-shot placement
         # rather than silently conditioning nothing at all.
@@ -3653,6 +3654,16 @@ class H3LongVideos:
                 for n in dropped:
                     if n not in ref_missing:
                         ref_missing.append(n)
+                # A tagged shot takes references, and references REPLACE the handoff --
+                # so on a long chain every tag was a hard cut, and cohesion went with
+                # it. The previous shot's last frame rides along as one more reference
+                # instead: same single ref2va payload, nothing conflicts, and the shot
+                # is shown where the last one ended rather than starting from nothing.
+                # It is appended AFTER the tagged images, so their <Picture N> numbers
+                # are untouched.
+                if shot_refs and handoff is not None:
+                    shot_refs = shot_refs + [handoff]
+                    ref_carried.append(i + 1)
             else:
                 shot_refs = shot_references(ref_list, ref_mode, i, handoff)
             shot_handoff = None if shot_refs else handoff
@@ -3829,6 +3840,9 @@ class H3LongVideos:
                            and float(ref_noise_aug) < 0.999 else "")
                         + (f"; shot(s) {','.join(str(n) for n in kept)} keep the handoff" if kept
                            else ", so every cut between beats is a CUT, not a continuous take")
+                        + (f"; the previous frame rides along as an extra reference on shot(s) "
+                           f"{','.join(str(n) for n in ref_carried)}, so a tag is not a cut"
+                           if ref_carried else "")
                         + ref_note_missing)
         elif ref_list:
             ref_note = (f" ref2va: {len(ref_list)} reference image(s) connected but ref_mode "

@@ -1330,6 +1330,16 @@ def check_tagged_references():
           S.picture_tags("<Picture 1> then <picture_3>") == [1, 3])
     check("picture_tags on plain prose finds nothing", S.picture_tags("Kristy walks in.") == [])
 
+    # A tagged shot takes references, and references REPLACE the handoff -- so on a
+    # long chain every tag was a hard cut and cohesion went with it. The previous
+    # frame now rides along as one more reference: same ref2va payload, and the
+    # tagged images keep their <Picture N> numbers because it is appended last.
+    txt, imgs, _ = place("Mara, <Picture 2>, steps out of the barn.")
+    carried = imgs + ["prev_frame"]
+    check("a tagged shot can carry the previous frame as an extra reference",
+          carried == ["DanPhoto", "prev_frame"])
+    check("...without disturbing the tag numbering", "<Picture 1>" in txt)
+
     # the whole point: the empty establishing shot must stay clean
     BEATS = ["Wide shot of the empty garage.",
              "Kristy, <picture_1>, walks in.",

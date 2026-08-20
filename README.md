@@ -587,7 +587,7 @@ shot given both would hand the DiT fewer latents than it has condition rows.
 
 | `ref_mode` | Where the reference goes |
 |---|---|
-| `where tagged` *(default)* | **The shot whose text names `<Picture N>`** — write the tag in the beat where that character appears. Every untagged shot keeps its handoff. |
+| `where tagged` *(default)* | **The shot whose text names `<Picture N>`** — write the tag in the beat where that character appears. Every untagged shot keeps its handoff, and a tagged shot carries the previous frame as an extra reference so the tag is not a cut. |
 | `first shot` | Shot 1, whoever is in it |
 | `every shot` | All shots, no handoff anywhere |
 | `every shot + handoff ref` | All shots, previous frame added as an extra reference |
