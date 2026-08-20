@@ -625,6 +625,18 @@ The three positional modes still differ in what they trade:
 | `every shot` | references | references | Strongest identity; **no handoff**, so beats meet as cuts, not one continuous take |
 | `every shot + handoff ref` | references | references **+ previous last frame as an extra reference** | Continuity returns as a soft signal — the model is *shown* where the last shot ended rather than told to start exactly there |
 
+**Stopping the reference being copied into the opening frames.** `ref_noise_aug`
+controls how *clean* the reference is presented as. H3's own default, **0.999**,
+hands the model a finished, noise-free image — which is an invitation to
+reproduce it at the start of the shot rather than to take an identity from it.
+The DiT uses the value twice: it blends the condition latent with noise at
+`1 - aug`, and it labels those rows with a timestep of `max(t_video, aug)`.
+
+Lower it if the reference appears burned into the first frames: try **0.95**,
+then **0.90**. Below about 0.8 the reference stops holding identity at all. It
+applies **only to ref-conditioned shots** — the last-frame handoff is never
+weakened, or continuity would break.
+
 `ref_image_size` sets how large each reference is encoded. `match` scales it down
 to the generation's pixel area, so a reference costs roughly one frame per step.
 `max` uses the reference pipeline's 2048 short edge for the best identity

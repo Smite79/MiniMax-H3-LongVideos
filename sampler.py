@@ -202,7 +202,7 @@ ADDED_WIDGETS = (
     "watermark_text", "watermark_position", "watermark_size", "watermark_opacity",
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
-    "ref_mode", "ref_image_size",
+    "ref_mode", "ref_image_size", "ref_noise_aug",
 )
 
 NL = "\n"
@@ -2126,7 +2126,7 @@ def _build_ref_images(vae, images, gen_w, gen_h, mode="match"):
 
 
 def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, handoff,
-                             ref_images=None, ref_image_size="match"):
+                             ref_images=None, ref_image_size="match", ref_noise_aug=None):
     latent, fc = _empty_av_latent(width, height, length, fps)
     refs = [r for r in (ref_images or []) if r is not None]
     if refs:
@@ -2142,7 +2142,17 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         tokens = clip.tokenize(prompt, minimax_ref_items=items)
         cond = clip.encode_from_tokens_scheduled(tokens)
         if blocks:
-            cond = node_helpers.conditioning_set_values(cond, {"minimax_refs": blocks})
+            vals = {"minimax_refs": blocks}
+            # How CLEAN the reference is presented as. The DiT both blends the
+            # condition latent with noise at (1 - aug) and labels those rows with a
+            # timestep of max(t_video, aug) -- so the model default of 0.999 hands it
+            # a finished, noise-free image, which is an invitation to REPRODUCE it
+            # rather than to take an identity from it. Lower says "approximate".
+            # Applied only here: a keyframe shot must keep its handoff authoritative
+            # or continuity breaks, and a shot never carries both channels.
+            if ref_noise_aug is not None:
+                vals["minimax_visual_cond_noise_aug"] = float(ref_noise_aug)
+            cond = node_helpers.conditioning_set_values(cond, vals)
         return cond, latent
     images, keyframes = [], []
     if handoff is not None:
@@ -3030,6 +3040,16 @@ class H3LongVideos:
                                 "silently doing nothing. 'first shot' / 'every shot' / 'every shot + "
                                 "handoff ref' go purely by position. Ignored when no ref_image is "
                                 "connected."}),
+                "ref_noise_aug": ("FLOAT", {"default": 0.999, "min": 0.50, "max": 1.0, "step": 0.005,
+                    "tooltip": "How CLEAN each reference is presented to the model. 0.999 (H3's own "
+                               "default) hands it a finished, noise-free image -- which invites the "
+                               "model to REPRODUCE the reference in the opening frames instead of just "
+                               "taking an identity from it. Lower values blend the condition with "
+                               "noise and label it as approximate, so it informs the face without "
+                               "being copied: try 0.95, then 0.90. Too low (below ~0.8) and the "
+                               "reference stops holding identity at all. Applies ONLY to "
+                               "ref-conditioned shots -- the last-frame handoff is never weakened, or "
+                               "continuity would break."}),
                 "ref_image_size": (["match", "max"], {"default": "match",
                     "tooltip": "How large each reference is encoded. 'match' scales it down to the "
                                "generation's pixel area -- a reference then costs about one frame per "
@@ -3123,9 +3143,10 @@ class H3LongVideos:
 
     def _render(self, model, clip, vae, audio_vae, negative, prompt, w, h, ln, fps, tiled, sa,
                 handoff, decode_tile_frames=0, decode_tile_size=0,
-                refs=None, ref_image_size="match"):
+                refs=None, ref_image_size="match", ref_noise_aug=None):
         positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff,
-                                                    ref_images=refs, ref_image_size=ref_image_size)
+                                                    ref_images=refs, ref_image_size=ref_image_size,
+                                                    ref_noise_aug=ref_noise_aug)
         seed, steps, cfg, sn, sch, denoise = sa
         # Conditioning is built, so the text encoder and VAEs are dead weight for the
         # whole sampling loop -- evict them and keep only the DiT on the card.
@@ -3159,7 +3180,7 @@ class H3LongVideos:
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0,
             ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_image_4=None,
-            ref_mode="first shot", ref_image_size="match"):
+            ref_mode="where tagged", ref_image_size="match", ref_noise_aug=0.999):
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
         # A stale resident model from a different checkpoint would otherwise poison
@@ -3388,7 +3409,7 @@ class H3LongVideos:
                 while True:
                     try:
                         frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size)
+                                                     shot_refs, ref_image_size, ref_noise_aug)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -3404,13 +3425,13 @@ class H3LongVideos:
             else:
                 try:
                     frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size)
+                                                     shot_refs, ref_image_size, ref_noise_aug)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if not _is_oom(e) or tiled:
                         raise
                     mm.soft_empty_cache(True); tiled = True; backoff.append(f"shot {i+1}: tiled")
                     frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size)
+                                                     shot_refs, ref_image_size, ref_noise_aug)
 
             sr = audio["sample_rate"]; wav = audio["waveform"]
 
@@ -3551,6 +3572,8 @@ class H3LongVideos:
                         f"{','.join(str(n) for n in ref_shots)} "
                         f"({'placed by <Picture N> tags' if tag_driven else f"ref_mode '{ref_mode}'"}) -- those shots "
                         f"carry references INSTEAD of the last-frame handoff"
+                        + (f", ref_noise_aug {ref_noise_aug:.3f}" if ref_noise_aug is not None
+                           and float(ref_noise_aug) < 0.999 else "")
                         + (f"; shot(s) {','.join(str(n) for n in kept)} keep the handoff" if kept
                            else ", so every cut between beats is a CUT, not a continuous take")
                         + ref_note_missing)

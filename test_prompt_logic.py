@@ -1105,16 +1105,29 @@ def check_ref_conditioning_channels():
 
     node_helpers.conditioning_set_values = lambda cond, values: (seen.setdefault("values", {}).update(values), cond)[1]
 
-    def build(handoff=None, refs=None, size="match"):
+    def build(handoff=None, refs=None, size="match", aug=None):
         seen.clear()
         S._build_shot_conditioning(_Clip(), _Vae(), "a prompt", 1344, 768, 124, 24,
-                                   handoff, ref_images=refs, ref_image_size=size)
+                                   handoff, ref_images=refs, ref_image_size=size,
+                                   ref_noise_aug=aug)
         return seen.get("values", {}), seen.get("tokenize_kwargs", {})
 
     vals, tok = build(handoff=_FakeImg())
     check("handoff only -> keyframe conditioning", "minimax_keyframes" in vals)
     check("handoff only -> no refs", "minimax_refs" not in vals)
     check("handoff only -> keyframes are presented as images", "images" in tok)
+
+    # ref_noise_aug: how CLEAN the reference is presented as. The DiT blends the
+    # condition latent with noise at (1 - aug) AND labels those rows with a timestep
+    # of max(t_video, aug), so H3's own default of 0.999 hands the model a finished
+    # image -- an invitation to reproduce it in the opening frames rather than to
+    # take an identity from it.
+    check("ref_noise_aug reaches the conditioning",
+          build(refs=[_FakeImg()], aug=0.90)[0].get("minimax_visual_cond_noise_aug") == 0.90)
+    check("it is NEVER applied to a keyframe shot",
+          "minimax_visual_cond_noise_aug" not in build(handoff=_FakeImg(), aug=0.90)[0])
+    check("omitting it leaves H3's own default in place",
+          "minimax_visual_cond_noise_aug" not in build(refs=[_FakeImg()], aug=None)[0])
 
     vals, tok = build(refs=[_FakeImg(), _FakeImg()])
     check("refs only -> ref conditioning", "minimax_refs" in vals)
