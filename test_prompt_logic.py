@@ -527,6 +527,37 @@ def check_anchor_hazards():
     check("...and says why it matters", "EVERY shot" in w)
 
 
+def check_naming_brings_a_character_back():
+    """Naming a departed character again is intent to have them BACK.
+
+    Reported: "the action was taken over by the other character when the character
+    it was meant for disappeared." That is the mechanism exactly -- a departed person
+    keeps their NAME in the beat but loses their description, so the beat reads
+    "Mara opens the crate" with Mara undescribed while Dom still has his sheet. The
+    described character absorbs the action.
+
+    A PRONOUN still cannot re-summon anyone: "she waves" after someone left is
+    ambiguous. A name is not."""
+    print("\n=== naming a departed character brings them back ===")
+    cm_ = "Dom = he, tall, brunette, white t-shirt\nMara = she, 30, red hair, grey coat"
+    sh = D("A farm.", ["Dom and Mara stand by the van.",
+                       "Mara walks out and the barn door shuts.",
+                       "Dom opens the crate alone.",
+                       "Mara walks back in and takes the lantern.",
+                       "Dom hands Mara the crate."], "", "", cm_)
+    check("she is visible in the shot she leaves in", "red hair" in sh[1])
+    check("...and absent from the shot after", "red hair" not in sh[2])
+    check("naming her brings her back, described", "red hair" in sh[3])
+    check("...and she stays back", "red hair" in sh[4])
+    check("a bare undescribed name never reaches the model",
+          "Mara" not in sh[2] and "Mara (30, red hair" in sh[3])
+    # the pronoun guard is unchanged
+    p = D("A farm.", ["Dom and Mara work.", "Mara walks out and is gone.",
+                      "He waves.", "She waves."], "", "", cm_)
+    check("a pronoun cannot re-summon a departed character",
+          "red hair" not in p[2] and "red hair" not in p[3])
+
+
 def check_stripped_state_persists():
     """A stripped zone must keep saying it is stripped, until something covers it.
 
@@ -1794,6 +1825,7 @@ def main():
     check_anchor_not_rewritten()
     check_detailed_wardrobe_items()
     check_anchor_hazards()
+    check_naming_brings_a_character_back()
     check_stripped_state_persists()
     check_emergence_is_not_an_exit()
     check_props_survive_the_shot_boundary()

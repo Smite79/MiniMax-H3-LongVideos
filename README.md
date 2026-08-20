@@ -239,6 +239,20 @@ reports it on every run: that shot's generated **ambience goes with the babble**
 so lay a continuous ambient bed under the video in post — or untick the widget to
 keep H3's own sound and rely on the prompt-side silencing alone.
 
+**A character who leaves comes back when you name them.** Naming a departed
+character in a later beat is intent to have them present, so they return with their
+description intact. A *pronoun* deliberately cannot do this -- "she waves" after
+someone left is ambiguous -- and `exit: Name` sends them out again if you meant it.
+
+This matters more than it sounds: a departed character keeps their NAME in the beat
+but loses their description, so the beat reads "Mara opens the crate" with Mara
+undescribed while everyone else still has their sheet. The described character then
+absorbs the action.
+
+Related: coming **out of** a place is arriving, not leaving. "Mara steps out of the
+barn" no longer marks her as departed -- only "walks out", "out of frame", "off
+screen", "leaves", "drives off" and the like do.
+
 To change or remove an item mid-chain *explicitly*, put a `wardrobe:` line **inside** the
 beat where it changes (not as its own paragraph). You have two ways, and you do
 **not** have to restate the whole outfit:

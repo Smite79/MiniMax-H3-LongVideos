@@ -2027,6 +2027,17 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if enter_directive:
             for nm in _entries(enter_directive):
                 departed.discard(_norm_name(nm))
+        # Naming a departed character again is intent to have them BACK. Without
+        # this they stayed departed, so the beat carried their bare NAME with no
+        # description while everyone else kept theirs -- and the described character
+        # absorbed the action. A PRONOUN still cannot re-summon anyone: "he waves"
+        # after someone left is ambiguous, a name is not. Use 'exit: Name' again to
+        # send them back out.
+        if departed:
+            named_here, _spans = _mask_quotes(body)
+            for nm in list(departed):
+                if nm and re.search(r"\b" + re.escape(nm) + r"\b", named_here, re.I):
+                    departed.discard(nm)
         body = body or "continue the action, same subject"
         # Props introduced in an EARLIER beat: bind the first definite reference to
         # them, so "the van" in shot 2 means the van from shot 1 instead of an
