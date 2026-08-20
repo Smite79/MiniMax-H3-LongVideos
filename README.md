@@ -603,6 +603,103 @@ With no reference connected, the node behaves exactly like FL2VA.
 `info` reports which shots took the reference channel and which kept the handoff,
 and `plan_only` previews the same split before you spend a render on it.
 
+## Character syntax: a worked example
+
+Four fields, each with one job. This is the whole setup for a character driven by
+a reference picture.
+
+**1. The picture** — wired, never named in a text field:
+
+```
+Load Image ──(IMAGE)──> ref_image_1
+ref_mode       = first shot
+ref_image_size = match
+```
+
+A **head-and-shoulders** shot is the right choice: it spends the whole reference
+on the face, which is what drifts, and it carries no clothing, so it cannot fight
+a wardrobe removal later. A full-body reference wearing a garment you intend to
+remove will keep re-asserting it on every ref-conditioned shot.
+
+**2. `character_memory`** — who they are and what they wear:
+
+```
+Kristy = she, silver hair in a ponytail, scar over left eyebrow,
+         red leather jacket with a white chest patch, blue jeans, grey shorts, black boots
+```
+
+- **`Name = `** — the named form. Without it the sheet is prepended to every beat
+  as a bare list instead of binding to the character.
+- **Pronoun first** (`she` / `he` / `they`) — drives pronoun resolution, repeat-name
+  collapsing and removal attribution. It is stripped from what is rendered.
+- **Attach detail with `with`, never a comma.** `red leather jacket with a white
+  chest patch` is ONE garment; `red leather jacket, white chest patch` is two, and
+  only the first would come off.
+- **Include the under-layer** (`grey shorts`) whenever something is removed. That
+  is what keeps a removal from rendering as nudity; `info` warns when a removal
+  leaves a body zone bare.
+- **4–7 items.** The sheet is re-stamped on every shot, so spend it on
+  distinctive, renderable traits. `27` and `athletic build` mostly do not render;
+  `scar over left eyebrow` does.
+
+**3. The anchor (first paragraph)** — scene and style only:
+
+```
+Handheld phone video, 26mm lens, natural window light, mild lens distortion,
+light compression noise, no color grade. An open 4 bay car garage.
+```
+
+**No names, no clothing.** Names here are stripped anyway (the beat binds people
+inline), and clothing here is immutable — a removal cannot stick because the
+anchor re-applies it every shot.
+
+**4. The beats** — action, framing, and the tag if you want it:
+
+```
+Medium shot. Kristy, <Picture 1>, walks around the garage checking the benches,
+then stops at the far wall.
+
+Kristy finds Dan sitting in a chair and asks him: "Where are the pistons?"
+
+Kristy takes off her red jacket and drops it on the workbench, then turns back
+to the engine.
+```
+
+Framing belongs here, not in the anchor, so it can change shot to shot. Two
+clauses per beat is a good ratio — a beat with one short action in a long shot
+leaves the model seconds it was told nothing about.
+
+### Where `<Picture N>` is safe
+
+The tokenizer uses the same `<Picture N>` numbering for **keyframes**, so on a
+shot with no references the tag points at the previous shot's last frame instead
+of your photo:
+
+| `ref_mode` | Tag in a beat | Tag in the anchor or `character_memory` |
+|---|---|---|
+| `first shot` *(default)* | **First beat only** | **No** — those are stamped on every shot, and shots 2+ have no references |
+| `every shot` | Anywhere | Yes — every shot carries the references |
+| `every shot + handoff ref` | Anywhere | Yes |
+
+The tag is optional either way: the reference conditions the shot whether or not
+you name it.
+
+### What the model receives
+
+```
+shot 1  ... Kristy (silver hair in a ponytail, scar over left eyebrow, red leather
+        jacket with a white chest patch, blue jeans, grey shorts, black boots),
+        <Picture 1>, walks around the garage checking the benches ...
+
+shot 3  ... Kristy (silver hair in a ponytail, blue jeans, grey shorts, black boots)
+        takes off her red jacket ... by the last frame the red leather jacket is off
+        and she is not wearing it. The grey shorts underneath stay on ... never put
+        back on, never re-worn, and the action never plays in reverse.
+```
+
+The jacket leaves the description in the shot that removes it, the under-layer is
+stated, and no later shot names the jacket at all.
+
 ## Requirements
 - ComfyUI 0.30+ with native MiniMax-H3 support.
 - The node applies **ModelSamplingMiniMaxH3** (the video/audio flow schedule)
