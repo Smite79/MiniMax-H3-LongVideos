@@ -1590,6 +1590,24 @@ def extract_directive(body, key):
     return "\n".join(kept).strip(), val
 
 
+# "walks out OF THE BARN" is emerging INTO the scene, not leaving it -- and a false
+# exit is the expensive error: the character is stripped from every later shot and
+# only an explicit 'enter:' brings them back. So "out of <somewhere>" is never an
+# exit unless the somewhere is the frame itself.
+_EMERGENCE_TAIL = re.compile(
+    r"^\s+of\s+(?:the\s+|a\s+|an\s+|his\s+|her\s+|their\s+|its\s+)?"
+    r"(?!frame\b|shot\b|view\b|screen\b|scene\b|camera\b|sight\b|there\b|here\b)\w+", re.I)
+
+
+def _is_emergence(text, m):
+    """True when this exit cue is really someone coming OUT OF a place into view.
+
+    The cue match ends at "out"/"off", so what decides it is what FOLLOWS: "walks
+    out | of the barn" is emergence, "walks out | of frame" is departure, and a
+    bare "walks out" has nothing after it and stays an exit."""
+    return bool(_EMERGENCE_TAIL.match(text[m.end():]))
+
+
 def detect_exits(body, active, departed):
     """Names of characters who LEAVE in this beat, so they don't reappear later.
     Matches an exit phrase ('leaves', 'walks out', 'exits', 'drives off', 'steps
@@ -1618,6 +1636,8 @@ def detect_exits(body, active, departed):
 
     out = []
     for m in exit_cue.finditer(text):
+        if _is_emergence(text, m):
+            continue
         best, bp = None, -1
         for sm in subj_re.finditer(text):
             if 0 <= sm.start() < m.start() and sm.start() > bp:

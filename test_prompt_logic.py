@@ -527,6 +527,42 @@ def check_anchor_hazards():
     check("...and says why it matters", "EVERY shot" in w)
 
 
+def check_emergence_is_not_an_exit():
+    """Coming OUT OF a place is arriving, not leaving.
+
+    "Mara steps out of the barn and watches him" was read as an exit, so Mara was
+    stripped from every later shot and only an explicit enter: could bring her back.
+    That is the reported vanishing second character.
+
+    The two errors are not equal. A false exit deletes someone silently for the rest
+    of the video; a missed exit describes them one shot too long, and exit: Name is
+    an explicit override. So "out of <somewhere>" is emergence unless the somewhere
+    is the frame itself."""
+    print("\n=== emerging from a place is not an exit ===")
+    act = S.parse_wardrobe("Dom = he, tall, brunette\nMara = she, 30, red hair")
+    for beat in ["Mara steps out of the barn and watches him.",
+                 "Mara walks out of the barn carrying a crate.",
+                 "Mara steps out of the shadows.",
+                 "Dom climbs out of the van.",
+                 "Mara walks out of the house."]:
+        check(f"{beat.split()[1]} {beat.split()[2]} {beat.split()[3]}... is not an exit",
+              S.detect_exits(beat, act, set()) == [])
+    for beat in ["Mara walks out and closes the door.", "Mara leaves.",
+                 "Mara steps out of frame.", "Mara walks off screen.",
+                 "Mara walks out of view.", "Mara drives off down the road.",
+                 "Dom exits.", "Mara is gone."]:
+        check(f"still an exit: {beat}", S.detect_exits(beat, act, set()) != [])
+    # end to end: she must still be in the shots after she emerges
+    sh = D("A farm with a barn.",
+           ["Dom parks the van.",
+            "Mara steps out of the barn and watches him.",
+            "Mara walks over to the van.",
+            "Mara opens the rear doors."], "", "",
+           "Dom = he, tall, brunette\nMara = she, 30, red hair")
+    check("she is present in the shot she emerges in", "red hair" in sh[1])
+    check("...and in every shot after", all("red hair" in s for s in sh[2:]))
+
+
 def check_props_survive_the_shot_boundary():
     """"the van" in shot 2 must mean the van from shot 1.
 
@@ -1627,7 +1663,7 @@ def main():
 
     # --- exits: a character who leaves must never come back ----------------------
     ebeats = ["She and he work on the engine.",
-              "He walks out of the hangar.",      # Jon leaves (visible here)
+              "He walks out and the hangar door swings shut.",   # Jon leaves (visible here)
               "She keeps working alone.",
               "He waves.",                        # pronoun must NOT re-summon Jon
               "The plane leaves the apron.",      # landmine: not a person
@@ -1691,7 +1727,7 @@ def main():
     pt_beats = ["They walk in together.",
                 "She takes off her jacket.",     # garment removal from anchor prose
                 "She checks the panel.",
-                "He walks out of the hangar.",   # person exit from anchor prose
+                "He walks out and is gone.",     # person exit from anchor prose
                 "She keeps working alone.",
                 "The plane leaves the apron.",   # landmine
                 "She wipes her hands."]
@@ -1721,6 +1757,7 @@ def main():
     check_anchor_not_rewritten()
     check_detailed_wardrobe_items()
     check_anchor_hazards()
+    check_emergence_is_not_an_exit()
     check_props_survive_the_shot_boundary()
     check_under_layer_stays_on()
     check_removal_phrasings()
