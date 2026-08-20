@@ -4,7 +4,7 @@ Make long (up to ~120s) MiniMax-H3 videos from a single prompt, in ComfyUI.
 Self-contained: uses only ComfyUI core's H3 support (no other packs).
 
 ## Install
-Copy the `H3-LongVideos-V1/` folder into `ComfyUI/custom_nodes/` and restart
+Copy the `H3-LongVideos/` folder into `ComfyUI/custom_nodes/` and restart
 ComfyUI (full server restart, not just a browser refresh).
 
 ## Node: **H3 Long Videos (FL2VA + REF2VA)**  (category: sampling/minimax)

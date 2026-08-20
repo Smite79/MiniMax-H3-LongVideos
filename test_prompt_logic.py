@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Safety / regression tests for H3-LongVideos-V1 prompt logic
-===========================================================
+Safety / regression tests for H3-LongVideos prompt logic
+========================================================
 Exercises the wardrobe channel, pronoun resolution, duplication avoidance, and
 auto-removal against a full 12-beat (12-shot) chain -- the real production
 length. Pure string logic only: it stubs the torch / ComfyUI imports so it runs

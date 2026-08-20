@@ -1,6 +1,6 @@
 """
-H3-LongVideos-V1
-================
+H3-LongVideos
+=============
 Make long (up to ~120s) MiniMax-H3 videos from a single prompt + a single
 length, in ComfyUI.
 
