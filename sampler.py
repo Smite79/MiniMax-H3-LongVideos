@@ -1822,7 +1822,13 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # left alone so the speech renders.
         silent_shot = bool(auto_silence_nonspeech and not has_speech(body))
         if silent_shot:
-            persistent = LIPS_CLOSED_LEAD + persistent.rstrip(". ") + "." + LIPS_CLOSED_TAIL
+            # A FRONT-LOADED subject count has to stay first. It is front-loaded
+            # precisely because a distilled LoRA settles composition in its first
+            # step or two, so the count must bind before anything else -- and this
+            # lips-closed lead, added later for the babble fix, was displacing it.
+            m = re.match(r"(Exactly .*?no crowd\.\s*)", persistent)
+            count_head, rest = (m.group(1), persistent[m.end():]) if m else ("", persistent)
+            persistent = count_head + LIPS_CLOSED_LEAD + rest.rstrip(". ") + "." + LIPS_CLOSED_TAIL
         block = f"[Generation {gi}] {persistent}".strip()
         # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is
         # what let H3 improvise a voice track under a shot whose picture was already
@@ -3588,8 +3594,12 @@ class H3LongVideos:
                 + (" DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings)
                    + ". Shorten the line, or pick a lower resolution tier to keep the duration."
                    if fit_warnings else "")
-                + (" subject-count guard ON (sub-native resolution)."
-                   if count_subjects and min(w, h) < 768 else "")
+                + ((" subject-count guard ON ("
+                    + ("sub-native resolution" if min(w, h) < 768 else "")
+                    + ("; " if min(w, h) < 768 and lora_on else "")
+                    + ("LoRA active -- count front-loaded so it binds before the scene"
+                       if lora_on else "")
+                    + ").") if count_subjects else "")
                 + (f" {beats_note}." if beats_note else "")
                 + (f"{audio_note}." if audio_note else "")
                 + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."

@@ -712,12 +712,22 @@ def check_lora_duplication_guard():
     cm_ = "Teresa = woman, skinny, blonde hair\nDan = man, brown hair"
     a = "A garage, warm light, cinematic."
     with_lora = D(a, ["Teresa talks to Dan."], "", "", cm_, True, True, True, True)[0]
-    body = with_lora.split("not talking. ")[-1]
+    # FIRST means first in the whole prompt -- ahead of the scene, and ahead of the
+    # lips-closed lead. A distilled LoRA settles composition in its first step or
+    # two, which is the entire reason the count is front-loaded; the silence lead
+    # added later for the babble fix was displacing it and quietly undoing this.
+    prompt = with_lora.split("] ", 1)[-1]
     check("count clause is FIRST when a LoRA is applied",
-          body.strip().startswith("Exactly two people"))
-    check("count clause names the right number", "Exactly two people" in body)
+          prompt.strip().startswith("Exactly two people"))
+    check("...ahead of the lips-closed lead",
+          prompt.index("Exactly two people") < prompt.index("silent with their mouth"))
+    check("count clause names the right number", "Exactly two people" in prompt)
     check("clause forbids extra bodies explicitly",
-          "no extra bodies" in body and "no repeated figures" in body)
+          "no extra bodies" in prompt and "no repeated figures" in prompt)
+    # a SPEAKING shot has no lips-closed lead, so front-loading must still hold
+    talky = D(a, ['Teresa asks Dan: "Ready?"'], "", "", cm_, True, True, True, True)[0]
+    check("front-loading holds on a dialogue shot too",
+          talky.split("] ", 1)[-1].strip().startswith("Exactly two people"))
     solo = D(a, ["Teresa checks the crate."], "", "", cm_, True, True, True, True)[0]
     check("solo shot counts one", "Exactly one person" in solo)
     scenery = D(a, ["The garage door rolls open."], "", "", cm_, True, True, True, True)[0]
