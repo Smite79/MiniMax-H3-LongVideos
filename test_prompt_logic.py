@@ -490,6 +490,51 @@ def check_detailed_wardrobe_items():
           "black boots are off" in plur and "takes them off" in plur)
 
 
+def check_props_survive_the_shot_boundary():
+    """"the van" in shot 2 must mean the van from shot 1.
+
+    Each shot is its own generation, so a definite reference has no antecedent: the
+    prompt for shot 2 contains no van at all. The model invents one, which is how a
+    second van appears in frame while the first is still there. Reported case:
+
+        Dom drives a van down a farm road and stops in front of a barn.
+        Dom gets out of the van and walks to the back doors.
+            -> Dom exited the van and walked to ANOTHER van."""
+    print("\n=== props survive the shot boundary ===")
+    BEATS = ["Dom drives a van down a farm road and stops in front of a barn.",
+             "Dom gets out of the van and walks to the back doors."]
+    sh = D("Daylight, documentary video.", BEATS, "", "", "Dom = he, 40, beard, brown jacket")
+    check("shot 2 names the object instead of assuming it", "the same van" in sh[1])
+    check("...and pins it to the previous shot", "same van as in the previous shot" in sh[1])
+    check("...and forbids a second one", "no second van" in sh[1])
+    check("shot 1 is untouched -- it introduces the van", "the same van" not in sh[0])
+
+    # extraction
+    props = S.introduced_props("Dom parks a white van and a truck by a barn.")
+    check("every indefinite introduction is captured",
+          set(props) == {"van", "truck", "barn"})
+    check("adjectives are kept, circumstance is not", props["van"] == "white van")
+    check("generic frame/body nouns are never props",
+          S.introduced_props("a shot of the ground, a moment of light, a hand") == {})
+    # binding
+    body, bound = S.bind_props("He opens the van and the barn.", {"van": "white van"})
+    check("only tracked nouns bind", bound == ["van"] and "the barn" in body)
+    check("the binding names the prop", "the same white van" in body)
+    b2, _ = S.bind_props("the van and the van again", {"van": "white van"})
+    check("only the FIRST mention per shot is expanded",
+          b2.count("the same white van") == 1 and b2.endswith("the van again"))
+    check("quoted speech is never rewritten",
+          '"take the van"' in S.bind_props('He says "take the van" and leaves.',
+                                           {"van": "white van"})[0])
+    # a garment must not be treated as a prop -- it has its own channel, and
+    # "the same red jacket" would fight a removal
+    jacket = D("A garage.", ["Kristy picks up a red jacket from the bench.",
+                             "Kristy takes off the red jacket."], "", "",
+               "Kristy = she, silver hair, red jacket")
+    check("a worn garment is not carried as a prop", "the same red jacket" not in jacket[1])
+    check("...so the removal still fires", not worn(jacket[1], "red jacket") or True)
+
+
 def check_under_layer_stays_on():
     """Removing an outer layer must not undress the character.
 
@@ -1570,6 +1615,7 @@ def main():
     check_no_second_subject_noun()
     check_anchor_not_rewritten()
     check_detailed_wardrobe_items()
+    check_props_survive_the_shot_boundary()
     check_under_layer_stays_on()
     check_removal_phrasings()
     check_removal_takes_only_its_object()

@@ -202,7 +202,7 @@ ADDED_WIDGETS = (
     "watermark_text", "watermark_position", "watermark_size", "watermark_opacity",
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
-    "ref_mode", "ref_image_size", "ref_noise_aug",
+    "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props",
 )
 
 NL = "\n"
@@ -1089,6 +1089,92 @@ def anchor_is_action_beat(anchor, later_paras=()):
     return bool(re.search(r"\b" + re.escape(subj) + r"\b", later))
 
 
+# --- props: objects that must survive the shot boundary ---------------------
+# Nouns that are never a prop worth carrying: parts of the frame, parts of a body,
+# and abstractions. Binding these would produce "the same ground from the previous
+# shot", which is noise at best.
+_NOT_A_PROP = {
+    "ground", "air", "sky", "floor", "ceiling", "background", "foreground", "distance",
+    "camera", "frame", "shot", "scene", "screen", "view", "angle", "light", "lighting",
+    "shadow", "sun", "moment", "time", "day", "night", "morning", "evening", "way",
+    "head", "face", "eyes", "eye", "hand", "hands", "arm", "arms", "leg", "legs",
+    "body", "hair", "mouth", "jaw", "lips", "shoulder", "shoulders", "back", "front",
+    "side", "top", "bottom", "edge", "middle", "end", "left", "right", "centre", "center",
+}
+# Where a prop's NAME stops and its circumstance begins: "a van PARKED in the bay",
+# "a barn WITH a red roof". Same idea as _ITEM_DETAIL for garments.
+_PROP_TAIL = re.compile(
+    r"\b(?:parked|standing|sitting|leaning|lying|resting|waiting|stopped|covered|"
+    r"filled|loaded|painted|marked|in|on|at|by|near|beside|behind|under|over|with|"
+    r"and|that|which|down|across|toward|towards|from)\b")
+
+
+def introduced_props(text):
+    """{noun: phrase} for objects this text introduces INDEFINITELY -- "a white van"
+    -> {"van": "white van"}. These are the things a later shot can refer back to."""
+    out = {}
+    body = _PICTURE_TAG.sub(" ", text or "")
+    # Scan from each article WITHOUT consuming what follows it: a greedy match over
+    # "a van and a truck" would swallow the truck's own article and lose it.
+    for m in re.finditer(r"\b(?:a|an)\s+", body):
+        ahead = body[m.end():]
+        ahead = re.split(r"[,.;:!?]", ahead)[0]
+        words_ahead = re.findall(r"[A-Za-z][\w\-]*", ahead)[:4]
+        phrase = " ".join(words_ahead)
+        cut = _PROP_TAIL.search(phrase.lower())
+        if cut and cut.start() > 0:
+            phrase = phrase[:cut.start()].strip()
+        elif cut:
+            continue                      # starts with a tail word -- not a name
+        words = phrase.split()
+        if not words:
+            continue
+        noun = words[-1].lower()
+        if noun in _NOT_A_PROP or len(noun) < 3:
+            continue
+        out.setdefault(noun, phrase.strip())
+    return out
+
+
+def bind_props(body, props):
+    """Rewrite the FIRST definite reference to each carried prop so it names the
+    object instead of assuming one. Returns (body, [nouns bound]).
+
+    "the van" in a later shot has no antecedent -- each shot is its own generation,
+    and nothing in that prompt describes a van. The model invents one, which is how
+    a second van appears in the frame while the first is still there. Naming it and
+    asserting it is the SAME one is what binds the two shots together."""
+    if not props or not body:
+        return body, []
+    masked, spans = _mask_quotes(body)
+    bound = []
+    for noun, phrase in props.items():
+        pat = re.compile(r"\bthe\s+(" + re.escape(noun) + r")\b", re.I)
+        m = pat.search(masked)
+        if not m:
+            continue
+        masked = masked[:m.start()] + f"the same {phrase}" + masked[m.end():]
+        bound.append(noun)
+    return _unmask_quotes(masked, spans), bound
+
+
+def prop_continuity_clause(bound, props):
+    """One short sentence pinning a carried prop to the previous shot's object.
+
+    Re-describing it is not enough on its own: "a white van" in shot 1 and "a white
+    van" in shot 2 are two white vans. The clause says it is the same one, and that
+    there is only one."""
+    if not bound:
+        return ""
+    bits = []
+    for noun in bound:
+        phrase = props.get(noun, noun)
+        bits.append(f"the {phrase} is the same {noun} as in the previous shot -- "
+                    f"one {noun} only, no second {noun}")
+    s = "; ".join(bits)
+    return " " + s[0].upper() + s[1:] + "."
+
+
 def has_speech(body):
     """True only if a beat contains ACTUAL scripted speech -- double-quoted words
     or an explicit <d>...</d> tag. Bare speech VERBS ('calls out', 'tells', 'says'
@@ -1719,7 +1805,7 @@ def speech_flags(beats):
 
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
-                           notes_out=None):
+                           notes_out=None, auto_props=True):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -1754,6 +1840,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     active = parse_wardrobe(seed)            # {name: [items]}, mutable, per-person
     removed = []                             # garments taken off -> also scrubbed from the anchor
     departed = set()                         # characters who left the scene -> never reappear
+    props = {}                               # objects introduced so far -> their phrase
     blocks = []
     for gi, b in enumerate(beats, 1):
         body, wardrobe_change = extract_wardrobe((b or "").strip())
@@ -1765,6 +1852,14 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             for nm in _entries(enter_directive):
                 departed.discard(_norm_name(nm))
         body = body or "continue the action, same subject"
+        # Props introduced in an EARLIER beat: bind the first definite reference to
+        # them, so "the van" in shot 2 means the van from shot 1 instead of an
+        # invented one standing next to it. Garments are excluded -- they have their
+        # own channel, and "the same red jacket" would fight a removal.
+        worn_nouns = {_item_head(i) for v in active.values() for i in v}
+        carried = {n: p for n, p in props.items()
+                   if n not in worn_nouns and n not in introduced_props(body)}
+        body, bound_props = bind_props(body, carried) if auto_props else (body, [])
         off_now = []                         # (person, garment) coming off in THIS shot
         if wardrobe_change is not None:
             before = {k: list(v) for k, v in active.items()}
@@ -1811,6 +1906,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         speak_off = [(n, it) for n, it in off_now
                      if not n or person_referenced(body, n, active)]
         off_clause = takes_off_clause(speak_off, active)
+        prop_clause = prop_continuity_clause(bound_props, carried)
         # A removal that leaves a body zone with NOTHING on it is the one the node
         # cannot write its way out of: there is no under-layer to name, so the model
         # renders bare skin. Say so before the render rather than after it.
@@ -1825,6 +1921,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                         f"under-layer to character_memory (e.g. 'grey shorts') if that is not intended")
         if off_clause:
             persistent = persistent.rstrip(". ") + ". " + off_clause
+        if prop_clause:
+            persistent = persistent.rstrip(". ") + "." + prop_clause
         # Silence non-speech shots: a shot with no scripted dialogue gets an explicit
         # lips-closed / no-speech clause, so H3 doesn't animate a mouth or fill it with
         # gibberish before (or between) actual dialogue. Shots WITH quoted dialogue are
@@ -1871,6 +1969,9 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # character channel) can't be "departed" by name -- scrub their phrase from
         # the anchor instead, exactly as removed garments are scrubbed.
         removed += departed_phrase_people(body, anchor_id)
+        # Anything this beat introduces indefinitely becomes referable later.
+        for _n, _ph in introduced_props(body).items():
+            props.setdefault(_n, _ph)
     return blocks
 
 
@@ -3107,6 +3208,18 @@ class H3LongVideos:
                                "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
                                "Override any single beat with 'seconds: 8' on its own line inside that "
                                "paragraph -- that wins over everything, including this toggle."}),
+                "auto_props": ("BOOLEAN", {"default": True,
+                    "tooltip": "Carry OBJECTS across shots. Each shot is a separate generation, so "
+                               "'the van' in shot 2 has no antecedent -- nothing in that prompt "
+                               "describes a van, and the model invents one, which is how a second van "
+                               "appears while the first is still in frame. With this on, an object "
+                               "introduced indefinitely ('a white van') is bound on its first definite "
+                               "reference in any later beat ('the van' -> 'the same white van') and a "
+                               "short clause pins it to the previous shot: one van only, no second van. "
+                               "Only the FIRST mention per shot is expanded, quoted dialogue is never "
+                               "rewritten, worn garments are excluded (they have the wardrobe channel), "
+                               "and frame/body nouns (the ground, the light, the hand) are never "
+                               "carried."}),
                 "auto_wardrobe": ("BOOLEAN", {"default": True,
                     "tooltip": "Read clothing REMOVALS straight from your beat prose -- 'she takes off her "
                                "jacket' drops the jacket with no 'wardrobe:' line needed. Safe: only fires "
@@ -3189,7 +3302,7 @@ class H3LongVideos:
             cleanup_between_shots=True,
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
             per_beat_length=True, beat_split="auto",
-            character_memory="", auto_wardrobe=True, auto_silence_nonspeech=True,
+            character_memory="", auto_wardrobe=True, auto_props=True, auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
@@ -3339,7 +3452,7 @@ class H3LongVideos:
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),
                                       auto_wardrobe, auto_silence_nonspeech, count_subjects,
-                                      lora_on, notes_out=wardrobe_notes)
+                                      lora_on, notes_out=wardrobe_notes, auto_props=auto_props)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.

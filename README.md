@@ -746,6 +746,40 @@ shot 3  ... Kristy (silver hair in a ponytail, blue jeans, grey shorts, black bo
 The jacket leaves the description in the shot that removes it, the under-layer is
 stated, and no later shot names the jacket at all.
 
+## Props: objects that must survive the shot boundary
+
+Each shot is a separate generation, so a definite reference has no antecedent. Write:
+
+```
+Dom drives a van down a farm road and stops in front of a barn.
+
+Dom gets out of the van and walks to the back doors.
+```
+
+and the prompt for shot 2 contains **no van at all** — just the words "the van".
+The model has nothing to resolve that against except the handoff frame, so it
+invents one, and you get Dom stepping out of one van and walking to another.
+
+With `auto_props` on (the default), an object introduced **indefinitely** is
+carried forward and bound on its first definite reference in a later beat:
+
+```
+shot 2: ... gets out of the same van and walks to the back doors.
+        The van is the same van as in the previous shot -- one van only, no second van.
+```
+
+Re-describing it is not enough by itself — "a white van" in two shots is two white
+vans — so the clause also states it is the *same* object and forbids a second.
+
+Scoped deliberately: only the **first** mention per shot is expanded (so prompts
+don't bloat), quoted dialogue is never rewritten, **worn garments are excluded**
+(they have the wardrobe channel, and "the same red jacket" would fight a removal),
+and frame/body nouns — the ground, the light, the hand — are never carried.
+
+**Introduce things indefinitely the first time.** `a rusted red toolbox` in beat 1
+gives every later `the toolbox` something to bind to; starting with `the toolbox`
+gives the node nothing to carry and the model something to invent.
+
 ## Requirements
 - ComfyUI 0.30+ with native MiniMax-H3 support.
 - The node applies **ModelSamplingMiniMaxH3** (the video/audio flow schedule)
