@@ -131,6 +131,27 @@ UNETLoader ─> MiniMax H3 Memory Efficient Sol Attention Patch ─> H3 Long Vid
 Nothing here depends on it, and it patches attention while this node only patches
 the sampling schedule, so they don't collide.
 
+### Pair it with an SLA LoRA
+
+Sparse attention drops long-range coherence first, and in a video DiT that renders
+as **the same person twice**. The fix is an **SLA LoRA** — a turbo LoRA fine-tuned
+*with* sparse attention in the loop, so the weights have already adapted to the
+approximation. The two are a matched pair:
+
+| | sparse attention ON | OFF |
+|---|---|---|
+| **SLA LoRA** | the pairing you want | pays the LoRA's quality cost, collects no speedup |
+| **ordinary LoRA** | duplicated subjects | normal dense render |
+
+The node detects both halves and warns in `info` when they don't match — including
+under `plan_only`, so you find out before spending a render, not after.
+
+Detection reads the **filename** off the workflow graph, because that is the only
+place the information exists: an SLA LoRA carries no marker in its tensor names or
+its metadata and is byte-shape-identical to any un-resized rank-128 turbo LoRA. Any
+LoRA with `sla` as a delimited token in its name counts (`..._768p_sla_...`);
+`slack`, `translate` and `SLAYER` do not.
+
 **On ComfyUI portable its Triton kernels will not build**, and they fail *silently*
 — the patch reports itself inactive and you simply get the slower path. The
 embedded Python ships without development files:

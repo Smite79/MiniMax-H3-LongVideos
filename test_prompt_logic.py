@@ -1591,6 +1591,87 @@ def check_tagged_references():
     check("untagged later shots keep the handoff", got[3] == [])
 
 
+class _FakeGraph:
+    """Stands in for ComfyUI's DynamicPrompt: node_id -> {class_type, inputs}."""
+    def __init__(self, nodes):
+        self._n = nodes
+
+    def get_node(self, nid):
+        return self._n[str(nid)]
+
+
+class _FakeModel:
+    def __init__(self, sparse):
+        self.model_options = {"transformer_options": {
+            "optimized_attention_override": (lambda *a: None) if sparse else None}}
+
+
+def _sla_graph(lora, sparse):
+    """UNETLoader -> [LoraLoaderModelOnly] -> [SolAttnPatch] -> our node ('9')."""
+    g = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "h3.safetensors"}}}
+    prev = "1"
+    if lora:
+        g["2"] = {"class_type": "LoraLoaderModelOnly",
+                  "inputs": {"model": [prev, 0], "lora_name": lora, "strength_model": 1.0}}
+        prev = "2"
+    if sparse:
+        g["3"] = {"class_type": "SolAttnPatch", "inputs": {"model": [prev, 0], "tau": 0.1}}
+        prev = "3"
+    g["9"] = {"class_type": "H3LongVideos",
+              "inputs": {"model": [prev, 0], "clip": ["8", 0], "prompt": "a woman walks"}}
+    return _FakeGraph(g)
+
+
+def check_sla_pairing():
+    """An SLA LoRA and a sparse-attention patch are a matched pair.
+
+    The LoRA carries NO marker -- not in its tensor names, not in its metadata -- so
+    the filename off the workflow graph is the only signal there is."""
+    print("\n=== SLA LoRA / sparse-attention pairing ===")
+    SLA = "minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_comfyui_bf16.safetensors"
+    PLAIN = "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_resized_avg_rank_21_bf16.safetensors"
+
+    def pair(lora, sparse):
+        return S.sla_pairing(_FakeModel(sparse), _sla_graph(lora, sparse), "9")
+
+    sla, sp, note = pair(SLA, True)
+    check("SLA LoRA + sparse attention is the matched pair, no warning",
+          sla and sp and not note)
+    sla, sp, note = pair(SLA, False)
+    check("SLA LoRA without sparse attention warns", bool(sla) and not sp and bool(note))
+    check("...and says the speedup is not being collected", "none of its speed" in note)
+    sla, sp, note = pair(PLAIN, True)
+    check("sparse attention with a non-SLA LoRA warns", not sla and sp and bool(note))
+    check("...and names duplication, which is what it actually causes",
+          "SAME PERSON TWICE" in note)
+    sla, sp, note = pair(PLAIN, False)
+    check("neither half present is not a warning", not sla and not sp and not note)
+    sla, sp, note = pair(None, True)
+    check("sparse attention with no LoRA at all warns", not sla and sp and bool(note))
+
+    # The graph walk must follow only MODEL links: a LoRA on some other branch of
+    # the workflow is not affecting us and must not be reported as if it were.
+    g = _FakeGraph({
+        "1": {"class_type": "UNETLoader", "inputs": {}},
+        "2": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": SLA}},
+        "5": {"class_type": "LoraLoaderModelOnly",
+              "inputs": {"model": ["1", 0], "lora_name": "other_branch.safetensors"}},
+        "9": {"class_type": "H3LongVideos", "inputs": {"model": ["2", 0]}}})
+    check("the walk follows only the model chain feeding this node",
+          S.upstream_lora_names(g, "9") == [SLA])
+    # A cycle must not hang the walk.
+    cyc = _FakeGraph({"1": {"class_type": "X", "inputs": {"model": ["2", 0]}},
+                      "2": {"class_type": "Y", "inputs": {"model": ["1", 0]}}})
+    check("a cyclic graph terminates", S.upstream_lora_names(cyc, "1") == [])
+    check("no graph at all is not an error", S.sla_pairing(_FakeModel(False), None, None)[2] == "")
+
+    for name in ("h3-SLA-turbo.safetensors", "turbo.sla.bf16.safetensors", SLA):
+        check(f"'sla' recognised in {name}", bool(S._SLA_NAME.search(name)))
+    for name in ("slack_style.safetensors", "translate_lora.safetensors",
+                 "isla_character_v2.safetensors", "SLAYER_style.safetensors", PLAIN):
+        check(f"'sla' NOT falsely found in {name}", not S._SLA_NAME.search(name))
+
+
 def check_ref_modes():
     """Which shots take the reference channel, and what they give up for it."""
     print("\n=== ref_mode over a 6-shot chain ===")
@@ -2015,6 +2096,7 @@ def main():
     check_ref_conditioning_channels()
     check_tagged_references()
     check_ref_modes()
+    check_sla_pairing()
 
     print()
     if _fails:

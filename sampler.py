@@ -39,6 +39,7 @@ ldm/minimax/model.py, text_encoders/minimax.py, sd.py).
 """
 
 import gc
+import os
 import re
 import torch
 
@@ -3114,6 +3115,102 @@ def lora_overhead_gb(model):
         return 0.0
 
 
+# --- SLA (sparse-linear attention) pairing ----------------------------------
+# An SLA LoRA is a turbo LoRA fine-tuned WITH sparse attention in the loop, so the
+# weights have already adapted to the approximation. That is the whole benefit: you
+# get the sparse-attention speedup without the quality collapse. The two halves are
+# a matched pair and only work together --
+#
+#   sparse attention ON  + ordinary LoRA -> the model sees an attention map it was
+#       never trained on. Long-range coherence is what sparsity drops first, and in
+#       a video DiT that shows up as the SAME PERSON RENDERED TWICE.
+#   SLA LoRA + sparse attention OFF -> the weights are pre-compensating for
+#       sparsity that isn't there. You pay its quality cost and get no speedup.
+#
+# Neither half is inferable from the model object. Verified against the actual
+# file: minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_comfyui_bf16.safetensors carries
+# NO SLA marker -- not in its 624 tensor names, not in its 9 metadata keys. It is
+# byte-shape-identical to any un-resized rank-128 H3 turbo LoRA. The only place the
+# word appears is the FILENAME, so that is what has to be read.
+#
+# Matches 'sla' as a DELIMITED token, so 'slack', 'translate', 'isla' and 'SLAYER'
+# do not fire. A LoRA that ends in '_sla' for some unrelated reason would warn
+# spuriously -- the cost is one wrong line in `info`, never a changed render.
+_SLA_NAME = re.compile(r"(?:^|[^a-z])sla(?:[^a-z]|$)", re.I)
+
+
+def sparse_attention_active(model):
+    """True when an attention-override patch (Sol-Attn and friends) is on `model`.
+
+    ComfyUI carries these in model_options['transformer_options'], which our node
+    receives already patched because the patch node ran upstream of us."""
+    try:
+        opts = getattr(model, "model_options", None) or {}
+        tro = opts.get("transformer_options", {}) or {}
+        return tro.get("optimized_attention_override") is not None
+    except Exception:
+        return False
+
+
+def upstream_lora_names(graph, node_id, _seen=None):
+    """LoRA filenames on the MODEL chain feeding this node, nearest last.
+
+    Walks the workflow graph backwards from our own `model` input. Reading the
+    filename is the only way to identify an SLA LoRA (see above), and the graph is
+    the only place the filename survives -- ComfyUI stashes a LoRA's safetensors
+    metadata on the patcher but never its name.
+
+    Deliberately follows ONLY model-carrying inputs, so a LoRA wired into some
+    other branch of the workflow is not mistaken for one that is affecting us."""
+    if graph is None or node_id is None:
+        return []
+    _seen = set() if _seen is None else _seen
+    nid = str(node_id)
+    if nid in _seen:
+        return []
+    _seen.add(nid)
+    try:
+        node = graph.get_node(nid)
+    except Exception:
+        return []
+    names, inputs = [], (node.get("inputs") or {})
+    for key, val in inputs.items():
+        # a link is [upstream_node_id, output_slot]; anything else is a widget value
+        if isinstance(val, (list, tuple)) and len(val) == 2 and not isinstance(val[1], (list, dict)):
+            if "model" in str(key).lower():
+                names += upstream_lora_names(graph, val[0], _seen)
+        elif isinstance(val, str) and "lora" in str(key).lower() and val.strip():
+            names.append(val)
+    return names
+
+
+def sla_pairing(model, graph, node_id):
+    """(sla_lora_name|None, sparse_on, note) -- how the two halves line up.
+
+    `note` is the warning when they are mismatched, and it is worth a warning
+    rather than a silent default because both mismatches cost a full render."""
+    sparse = sparse_attention_active(model)
+    loras = upstream_lora_names(graph, node_id)
+    sla = next((n for n in reversed(loras) if _SLA_NAME.search(os.path.basename(str(n)))), None)
+    note = ""
+    if sla and not sparse:
+        note = (f"SLA LoRA '{os.path.basename(str(sla))}' is loaded but NO sparse-attention patch "
+                f"is active -- it was fine-tuned WITH sparse attention, so on dense attention you "
+                f"pay its quality cost and get none of its speed. Add the Sol-Attn patch node "
+                f"between the loader and this node, or load the non-SLA turbo LoRA instead")
+    elif sparse and loras and not sla:
+        note = (f"sparse attention is ON but the LoRA on this chain "
+                f"({os.path.basename(str(loras[-1]))}) is not an SLA build -- the model was never "
+                f"trained against the approximated attention map, and the first thing sparsity "
+                f"drops is long-range coherence, which renders as the SAME PERSON TWICE. Load the "
+                f"'_sla_' turbo LoRA, or turn the sparse-attention patch off")
+    elif sparse and not loras:
+        note = ("sparse attention is ON with no LoRA on this chain -- base H3 was not trained "
+                "against an approximated attention map, so expect duplicated subjects. Pair it "
+                "with an SLA turbo LoRA")
+    return sla, sparse, note
+
+
 # Fingerprint of the model used by the previous run, so a checkpoint swap can be
 # detected between queue executions. Module-level: it must outlive the node
 # instance, which ComfyUI recreates per execution.
@@ -3604,6 +3701,14 @@ class H3LongVideos:
                                "'Maya = grey shorts, red jacket; Jon = navy overalls', then edit one at a "
                                "time: 'wardrobe: Maya -= jacket' leaves Jon untouched."}),
             },
+            # Read-only graph access, for SLA-LoRA detection: a LoRA's filename is
+            # the only thing that identifies an SLA build, and the graph is the only
+            # place it survives. Named 'graph'/'node_id' rather than the usual
+            # 'prompt' because this node already has a `prompt` widget -- ComfyUI
+            # passes hidden inputs by parameter name, so "prompt": "PROMPT" would
+            # overwrite the user's text with the workflow dict. Hidden inputs carry
+            # no widget, so they cannot shift saved widget positions.
+            "hidden": {"graph": "DYNPROMPT", "node_id": "UNIQUE_ID"},
         }
         # ComfyUI restores a saved graph's widget values POSITIONALLY, from a flat
         # widgets_values array. A widget inserted in the MIDDLE therefore shifts every
@@ -3657,7 +3762,8 @@ class H3LongVideos:
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0,
             ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_image_4=None,
-            ref_mode="where tagged", ref_image_size="match", ref_noise_aug=0.999):
+            ref_mode="where tagged", ref_image_size="match", ref_noise_aug=0.999,
+            graph=None, node_id=None):
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
         # A stale resident model from a different checkpoint would otherwise poison
@@ -3768,6 +3874,10 @@ class H3LongVideos:
         # Sub-native renders duplicate subjects far more often, so default the guard on
         # there and leave native renders alone (the extra clause costs prompt budget).
         lora_on = lora_active(model)
+        # An SLA LoRA and a sparse-attention patch are a matched pair; either one
+        # alone costs a full render to discover. Computed here so plan_only reports
+        # it too -- that is the point of catching it, before anything is sampled.
+        sla_name, sparse_on, sla_note = sla_pairing(model, graph, node_id)
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
@@ -3842,6 +3952,7 @@ class H3LongVideos:
                             f"{','.join(str(n) for n in on) or 'none'} (ref_mode '{ref_mode}') -> "
                             f"those shots drop the last-frame handoff")
             plan = ((anchor_note + " ") if anchor_note else "") + \
+                   ((f"SLA: {sla_note}. ") if sla_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4107,6 +4218,9 @@ class H3LongVideos:
                     + ("LoRA active -- count front-loaded so it binds before the scene"
                        if lora_on else "")
                     + ").") if count_subjects else "")
+                + (f" SLA: {sla_note}." if sla_note else "")
+                + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
+                   if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")
                 + (f"{audio_note}." if audio_note else "")
                 + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
