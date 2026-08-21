@@ -3307,6 +3307,12 @@ def _call_node(cls, model, shift_video, shift_audio):
             elif "audio" in low:
                 kwargs[name] = float(shift_audio)
         out = getattr(inst, cls.FUNCTION)(**kwargs)
+        # A V3 node exposes INPUT_TYPES and a truthy FUNCTION ('EXECUTE_NORMALIZED')
+        # for compatibility, so this branch runs on 0.31+ too -- and there it returns
+        # a NodeOutput, not a tuple. Without the unwrap the caller got the wrapper
+        # object where a MODEL belonged. Unreachable today because the direct patch
+        # succeeds first, which is exactly why it went unnoticed.
+        out = getattr(out, "result", out)
         return out[0] if isinstance(out, (tuple, list)) else out
     # V3 API: an execute()/patch() classmethod taking model + shift kwargs
     fn = None
@@ -4504,8 +4510,22 @@ class H3LongVideos:
         # The quantization kernels are ComfyUI's, not this node's -- but losing them
         # is silent, and the symptom (soft output) looks like a dozen other causes.
         kernel_note = kernel_backend_note(model)
-        audio_note = (audio_scale_note(shift_video, shift_audio)
-                      if apply_model_sampling else "")
+        audio_ratio_note = (audio_scale_note(shift_video, shift_audio)
+                            if apply_model_sampling else "")
+        # One ordered list, emitted once per output. These used to be six separate
+        # `+ (f" X -- {note}." if note else "")` fragments repeated at BOTH the plan
+        # and the render site -- twelve lines that had to stay in sync by hand. They
+        # did not: `audio_note` collided with the mute-reporting variable of the same
+        # name, so the shift-ratio warning reached plan_only and never a real render,
+        # while the mute note was printed twice under the wrong label.
+        preflight = [("SLA", sla_note),
+                     ("LORA HINTS", "; ".join(hint_notes)),
+                     ("", mp_note),
+                     ("SCHEDULE", sched_note),
+                     ("KERNELS", kernel_note),
+                     ("AUDIO", audio_ratio_note)]
+        preflight_txt = "".join(f"{(lbl + ' -- ') if lbl else ''}{txt}. "
+                                for lbl, txt in preflight if txt)
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
@@ -4580,12 +4600,7 @@ class H3LongVideos:
                             f"{','.join(str(n) for n in on) or 'none'} (ref_mode '{ref_mode}') -> "
                             f"those shots drop the last-frame handoff")
             plan = ((anchor_note + " ") if anchor_note else "") + \
-                   ((f"SLA: {sla_note}. ") if sla_note else "") + \
-                   (("LORA HINTS -- " + "; ".join(hint_notes) + ". ") if hint_notes else "") + \
-                   ((mp_note + ". ") if mp_note else "") + \
-                   ((f"SCHEDULE -- {sched_note}. ") if sched_note else "") + \
-                   ((f"KERNELS -- {kernel_note}. ") if kernel_note else "") + \
-                   ((f"AUDIO -- {audio_note}. ") if audio_note else "") + \
+                   preflight_txt + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4864,12 +4879,7 @@ class H3LongVideos:
                     + ("LoRA active -- count front-loaded so it binds before the scene"
                        if lora_on else "")
                     + ").") if count_subjects else "")
-                + (f" SLA: {sla_note}." if sla_note else "")
-                + (" LORA HINTS -- " + "; ".join(hint_notes) + "." if hint_notes else "")
-                + (f" {mp_note}." if mp_note else "")
-                + (f" SCHEDULE -- {sched_note}." if sched_note else "")
-                + (f" KERNELS -- {kernel_note}." if kernel_note else "")
-                + (f" AUDIO -- {audio_note}." if audio_note else "")
+                + ((" " + preflight_txt.strip()) if preflight_txt else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")

@@ -2269,6 +2269,48 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_preflight_note_assembly():
+    """The preflight notes are built ONCE and emitted at both output sites.
+
+    They used to be six separate `+ (f" X -- {n}." if n else "")` fragments repeated
+    at the plan site and the render site -- twelve lines kept in sync by hand. They
+    drifted: the shift-ratio note was named `audio_note`, colliding with the
+    mute-reporting variable of the same name assigned later in run(), so it reached
+    plan_only and never a real render, while the mute note printed twice under the
+    wrong label."""
+    print("\n=== preflight note assembly ===")
+
+    def compose(pf):
+        return "".join(f"{(lbl + ' -- ') if lbl else ''}{txt}. " for lbl, txt in pf if txt)
+
+    empty = [("SLA", ""), ("LORA HINTS", ""), ("", ""), ("SCHEDULE", ""),
+             ("KERNELS", ""), ("AUDIO", "")]
+    check("no notes produces no text", compose(empty) == "")
+    check("an unlabelled note carries no separator",
+          compose([("", "megapixels 1.00")]) == "megapixels 1.00. ")
+    check("a labelled note gets its label",
+          compose([("SCHEDULE", "tail heavy")]) == "SCHEDULE -- tail heavy. ")
+    check("several notes keep their order",
+          compose([("SCHEDULE", "d"), ("AUDIO", "f")]) == "SCHEDULE -- d. AUDIO -- f. ")
+    check("blank entries are skipped, not spaced",
+          compose([("SLA", ""), ("KERNELS", "e")]) == "KERNELS -- e. ")
+
+    # The collision itself: the two must be distinct names in the source.
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("the shift-ratio note no longer uses the mute note's name",
+          "audio_ratio_note = (audio_scale_note(" in src)
+    check("...and the mute note keeps its own name", "audio_note = (f\" {n_muted}" in src)
+    check("the ratio note is in the preflight list", '("AUDIO", audio_ratio_note)' in src)
+    # Referenced on exactly three LINES: one definition, one plan emission, one
+    # render emission. Counting occurrences instead of lines is wrong -- the render
+    # line names it twice (`preflight_txt.strip()` and the `if preflight_txt` guard).
+    lines = [ln for ln in src.splitlines() if "preflight_txt" in ln]
+    check("preflight_txt appears on exactly 3 lines: define, plan, render",
+          len(lines) == 3)
+    check("...one of them is the definition",
+          any(ln.strip().startswith("preflight_txt =") for ln in lines))
+
+
 def check_audio_scale_coupling():
     """The two flow shifts are COUPLED on ComfyUI 0.31+, and that is new.
 
@@ -2827,6 +2869,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_preflight_note_assembly()
     check_audio_scale_coupling()
     check_schedule_balance()
     check_megapixel_sizing()
