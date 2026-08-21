@@ -1836,6 +1836,66 @@ def main():
     check("removal sticks to the end of a 12-shot chain",
           "red jacket" in dshots[2] and all(not worn(s, "red jacket") for s in dshots[3:]))
 
+    # --- garments joined by 'and' in the sheet are tracked SEPARATELY ------------
+    # The reported bug: "small white t-shirt and shiny white lace thong" parsed as a
+    # single item whose head noun was `t-shirt`, so the second garment was invisible
+    # to every removal path and got re-stamped into the character's parenthetical on
+    # every later shot -- the prompt kept saying she was wearing it.
+    conj = S.parse_wardrobe("Maya = 30, blue eyes, small white t-shirt and blue denim jacket")
+    check("an 'A and B' sheet entry becomes two tracked garments",
+          "small white t-shirt" in conj["Maya"] and "blue denim jacket" in conj["Maya"])
+    check("the second garment carries its own head noun",
+          S._item_head("blue denim jacket") == "jacket")
+    # Not splitting is always safe; splitting wrongly is not. Colour pairs and
+    # ordinary attributes must survive intact.
+    check("a colour pair is NOT split", S._split_conjoined("black and white dress") ==
+          ["black and white dress"])
+    check("a striped colour pair is NOT split",
+          S._split_conjoined("red and blue striped shirt") == ["red and blue striped shirt"])
+    check("non-garment attributes are NOT split",
+          S._split_conjoined("blonde hair and blue eyes") == ["blonde hair and blue eyes"])
+    check("a one-word garment on the right still splits",
+          S._split_conjoined("black leather jacket and jeans") == ["black leather jacket", "jeans"])
+    check("'down' in a garment name still does not split it",
+          S._split_conjoined("a puffy down jacket and grey shorts")
+          == ["a puffy down jacket", "grey shorts"])
+
+    cbeats = ["Maya stands by the window.",
+              "Jon walks in and says to Maya: \"Take off your jacket.\"",
+              "Maya pulls off the jacket in front of Jon and steps away, removing it.",
+              "Jon says to Maya: \"Now sit down.\" Maya sits.",
+              "Maya looks out the window again.",
+              "Jon hands Maya a cup of tea."]
+    cshots = D("A quiet room, warm light.", cbeats, "", "",
+               "Maya = 30, blonde hair in pony tail, blue eyes, "
+               "small white t-shirt and blue denim jacket")
+    check("a conjoined garment is still worn before its removal",
+          worn(cshots[0], "denim jacket") and worn(cshots[1], "denim jacket"))
+    check("a conjoined garment is named in the shot that removes it",
+          "jacket" in cshots[2].lower())
+    check("a conjoined garment does NOT come back after removal",
+          all("jacket" not in s.lower() for s in cshots[3:]))
+
+    # --- quoted speech is an instruction, not an action --------------------------
+    # 'Mom says: "take off your thong"' used to strip the garment in the shot that
+    # merely ASKS for it, one shot early -- so the shot that stages the removal no
+    # longer knew it was on, and never got its direction clause.
+    ask = S.auto_wardrobe_removals({"Maya": ["blue denim jacket"]},
+                                   'Jon says to Maya: "Take off your jacket."')
+    check("a quoted instruction does not remove the garment",
+          ask["Maya"] == ["blue denim jacket"])
+    neg = S.auto_wardrobe_removals({"Maya": ["blue denim jacket"]},
+                                   'Jon says: "Do not take off your jacket." Maya nods.')
+    check("a NEGATED quoted instruction does not remove the garment",
+          neg["Maya"] == ["blue denim jacket"])
+    act_ = S.auto_wardrobe_removals({"Maya": ["blue denim jacket"]},
+                                    'Maya pulls off the jacket and steps away.')
+    check("unquoted narration still removes the garment", act_["Maya"] == [])
+    mixed = S.auto_wardrobe_removals(
+        {"Maya": ["blue denim jacket"]},
+        'Maya takes off her jacket while saying: "It is warm in here."')
+    check("narration removes even when the beat also has dialogue", mixed["Maya"] == [])
+
     # --- exits: a character who leaves must never come back ----------------------
     ebeats = ["She and he work on the engine.",
               "He walks out and the hangar door swings shut.",   # Jon leaves (visible here)

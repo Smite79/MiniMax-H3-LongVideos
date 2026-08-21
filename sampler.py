@@ -283,6 +283,47 @@ def expand_beats(paras, mode="auto"):
     return out, note
 
 
+def _garment_side(side):
+    """Is `side` one garment, for the purpose of splitting an 'A and B' entry?
+
+    Qualifies when its head noun is a garment the zone tables know, or when it is
+    long enough to be a described item rather than a bare adjective. The zone
+    vocabulary is looked up at call time because it is defined further down."""
+    words = side.split()
+    if not words:
+        return False
+    vocab = _ZONE_LOWER | _ZONE_UPPER | _ZONE_BOTH
+    return _item_head(side) in vocab or len(words) >= 2
+
+
+def _split_conjoined(item):
+    """Split 'a black jacket and blue jeans' into two tracked garments.
+
+    A sheet entry joined by 'and' was kept as ONE item, and _item_name() truncates
+    at 'and' -- so "small white t-shirt and shiny white lace thong" became the item
+    "small white t-shirt" with head `t-shirt`, and the thong was not tracked at all.
+    "pulls down the thong" then matched nothing, the removal silently did not fire,
+    and the whole compound string -- thong included -- was re-stamped into the
+    character's parenthetical on every later shot. The prompt kept saying she was
+    wearing it, so the model kept putting it back.
+
+    Only split when BOTH sides read as garments and at least one is a garment the
+    zone tables recognise. That last condition is what keeps colour pairs and
+    ordinary attributes intact: "black and white dress" has 'black' on the left,
+    which is neither a known garment nor two words, and "blonde hair and blue eyes"
+    has no garment on either side. Not splitting is always safe -- the left-hand
+    garment stays tracked through _item_name()'s truncation either way -- so this
+    is purely additive: it can only start tracking a garment that was invisible."""
+    parts = [p.strip(" .;") for p in re.split(r"\s+and\s+", item or "", flags=re.I)]
+    parts = [p for p in parts if p]
+    if len(parts) < 2 or not all(_garment_side(p) for p in parts):
+        return [item]
+    vocab = _ZONE_LOWER | _ZONE_UPPER | _ZONE_BOTH
+    if not any(_item_head(p) in vocab for p in parts):
+        return [item]
+    return parts
+
+
 def _split_items(s):
     """Split a description into attribute items on commas AND sentence ends.
 
@@ -290,9 +331,17 @@ def _split_items(s):
     and jeans. Mouth closed." -- and treating that as ONE item drags a whole sentence
     into the inline parenthetical, which then reads as its own statement about a
     person rather than an attribute of the pronoun. Splitting on '.' as well keeps
-    each item a short attribute."""
+    each item a short attribute.
+
+    Garments joined by 'and' are then separated so each is independently removable;
+    see _split_conjoined()."""
     import re
-    return [i.strip(" .;") for i in re.split(r"[,.;]", s or "") if i.strip(" .;")]
+    out = []
+    for i in re.split(r"[,.;]", s or ""):
+        i = i.strip(" .;")
+        if i:
+            out += _split_conjoined(i)
+    return out
 
 
 def _norm_name(name):
@@ -626,7 +675,14 @@ def auto_wardrobe_removals(active, body):
     import re
     if not body:
         return active
-    text = " " + body.lower() + " "
+    # Quoted speech is an INSTRUCTION, not an action. 'Mom says: "take off your
+    # thong"' used to strip the garment in the shot where it is merely asked for,
+    # one shot before the character does it -- so the shot that performs the
+    # removal no longer knew the garment was on, and the removal never got its
+    # direction clause. Negation made it worse: "do not take off your jacket"
+    # removed the jacket. Detect removals from narration only; the beat that
+    # actually stages it is unquoted.
+    text = " " + _mask_quotes(body)[0].lower() + " "
     active = {k: list(v) for k, v in active.items()}
     names = [n for n in active if n]
     pron_map = _pron_map(active)
