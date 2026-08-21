@@ -176,7 +176,6 @@ def resolution_options():
 def parse_resolution(choice):
     """Read WxH from a preset label. All presets are valid multiples of 32, so
     there's no custom path to snap. Falls back to 16:9 native if unrecognized."""
-    import re
     m = re.search(r"(\d+)\s*x\s*(\d+)", choice or "")
     if m:
         return int(m.group(1)), int(m.group(2))
@@ -188,7 +187,6 @@ def split_paragraphs(text, delimiter):
     raw = text.replace("\r\n", "\n").strip()
     if not raw:
         return []
-    import re
     raw = re.sub(r"(?m)^\s*" + re.escape(delimiter) + r"\s*$", "\n\n", raw)
     return [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
 
@@ -214,7 +212,6 @@ DIRECTIVE_KEYS = ("wardrobe", "seconds", "duration", "exit", "enter",
 
 
 def is_directive_line(line):
-    import re
     return bool(re.match(r"\s*(" + "|".join(DIRECTIVE_KEYS) + r")\s*:", line or "", re.I))
 
 
@@ -335,7 +332,6 @@ def _split_items(s):
 
     Garments joined by 'and' are then separated so each is independently removable;
     see _split_conjoined()."""
-    import re
     out = []
     for i in re.split(r"[,.;]", s or ""):
         i = i.strip(" .;")
@@ -372,7 +368,6 @@ def _entries(text):
     per line is the natural way to write it, and silently mis-parsing that (folding
     the next person into the previous one's item list) breaks name lookup and makes
     removals fail to match. Also tolerates a leading '-' bullet per line."""
-    import re
     parts = []
     for chunk in re.split(r"[;\n\r]+", text or ""):
         chunk = chunk.strip().lstrip("-*\u2022 ").strip()
@@ -438,7 +433,6 @@ _GENDER = {"woman": "she", "women": "she", "female": "she", "girl": "she", "lady
 def _pronoun_of(items):
     """A person's pronoun, from an explicit token in their sheet ('she') or a
     gender word in their description ('woman'). None if undeclared/undetectable."""
-    import re
     for it in items:
         if it.strip().lower() in _PRO:
             return _PRO[it.strip().lower()]
@@ -467,7 +461,6 @@ def _deposition(desc, name=None):
     Strips: a leading article + optional adjectives + person noun (keeping any
     following "with/in ..." attributes), a copula phrase ("Kristy is a tall
     woman"), and a bare repeat of the character's own name."""
-    import re
     d = (desc or "").strip()
     if not d:
         return d
@@ -593,7 +586,6 @@ def _item_head(item):
     on the sheet and got re-stamped into every later shot. Detailed wardrobe entries
     are normal (logos, zippers, torn knees), so the head has to be read from the
     part of the phrase that names the garment."""
-    import re
     words = re.findall(r"[a-z\-]+", _item_name(item).lower())
     if not words:
         words = re.findall(r"[a-z\-]+", (item or "").lower())
@@ -607,7 +599,6 @@ def _item_mentioned(item, window):
     and vice versa. Ignores generic colour/size adjectives so 'red jacket' is still
     matched by 'her jacket', and trailing detail so 'red jacket with silver zippers'
     is still matched by 'her jacket'."""
-    import re
     w = window.lower()
     il = item.lower().strip()
     if not il:
@@ -672,7 +663,6 @@ def auto_wardrobe_removals(active, body):
     pronoun maps to that person. If the subject is ambiguous (two same-pronoun
     people, no name), the item is dropped from whoever wears it. Explicit
     'wardrobe: -=' always overrides."""
-    import re
     if not body:
         return active
     # Quoted speech is an INSTRUCTION, not an action. 'Mom says: "take off your
@@ -769,7 +759,6 @@ def _scrub_removed(text, removed):
     -- can't re-apply itself on every shot after the character takes it off. Removes
     the item phrase plus a leading connector ('in a', 'wearing a', 'with a') and
     tidies the leftover punctuation. Case-insensitive; leaves everything else alone."""
-    import re
     if not text or not removed:
         return text
     changed = False
@@ -821,7 +810,6 @@ def _strip_people_from_anchor(anchor_id, active):
     Removes (a) any tracked NAME plus its clause, and (b) a person-phrase whose
     description overlaps a tracked person's items (gender word + shared descriptors).
     Leaves everything else -- setting, lighting, lens, mood -- untouched."""
-    import re
     if not anchor_id:
         return anchor_id
     txt = anchor_id
@@ -888,7 +876,6 @@ _SUBJECT_LEADS = ("and", "then", "but", "so", "as", "while", "when", "until", "b
 def _mask_quotes(text):
     """Hide double-quoted spans behind placeholders so a rewrite cannot touch the
     spoken words. Returns (masked_text, spans)."""
-    import re
     spans = []
 
     def grab(m):
@@ -899,7 +886,6 @@ def _mask_quotes(text):
 
 
 def _unmask_quotes(text, spans):
-    import re
     return re.sub(r"\x00(\d+)\x00", lambda m: spans[int(m.group(1))], text)
 
 
@@ -921,7 +907,6 @@ def dedupe_person_mentions(body, active):
         dialogue ("Kristy, over here"), not a second reference to stage.
     The FIRST mention always survives, so the description still has a name to bind to
     and the reader can still tell who the shot is about."""
-    import re
     if not body:
         return body
     present = [n for n in active if n and active[n]]
@@ -977,7 +962,6 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
     Pronoun tokens declared in a person's sheet ('Maya = she, ...') are used to
     resolve 'she'/'he' but are stripped from the shown description. Keep the
     anchor to scene/style with NO names."""
-    import re
     count_prefix = ""          # set when the count clause is front-loaded (LoRA runs)
     departed = set(departed or ())
     # A character who has LEFT the scene is never described again -- not even if a
@@ -1068,7 +1052,6 @@ def extract_wardrobe(body):
     'wardrobe:' (case-insensitive), placed INSIDE a beat (not as its own blank-
     line-separated paragraph, which would become its own shot). It's removed
     from the body so the literal 'wardrobe:' text isn't stamped as an action."""
-    import re
     kept, wardrobe = [], None
     for ln in body.split("\n"):
         if re.match(r"\s*wardrobe\s*:", ln, re.I):
@@ -1358,7 +1341,6 @@ def has_speech(body):
     what H3 fills with gibberish, so those beats get silenced too. If you want
     someone to speak, quote the line: She says, "Ready for departure."
     Apostrophes/single quotes never count (they'd false-fire on "she's")."""
-    import re
     if not body:
         return False
     if re.search(r"<d>.*?</d>", body, re.S):
@@ -1399,7 +1381,6 @@ def person_referenced(body, name, active):
     to them? Used to keep a wardrobe statement out of a shot they aren't in: saying
     "she is no longer wearing the jacket" in a shot about someone else SUMMONS her
     into it, which is the duplication failure the whole builder exists to avoid."""
-    import re
     low = (body or "").lower()
     if name and re.search(r"\b" + re.escape(name.lower()) + r"\b", low):
         return True
@@ -1697,7 +1678,6 @@ def removed_phrase_items(body, anchor_id):
     anchor produced 'A woman in a red', which scrubbed the PERSON out of
     'A woman in a red jacket' and left 'jacket'. The garment survived, the
     character vanished, and clothing removal looked completely broken."""
-    import re
     if not body or not anchor_id:
         return []
     verb = re.compile(r"\b(takes?|took|taking|pulls?|pulled|peels?|peeled|strips?|stripped|"
@@ -1736,7 +1716,6 @@ def removed_phrase_items(body, anchor_id):
 
 def extract_directive(body, key):
     """Pull a '<key>: ...' line out of a beat body. Returns (clean_body, value|None)."""
-    import re
     kept, val = [], None
     for ln in body.split("\n"):
         if re.match(r"\s*" + key + r"\s*:", ln, re.I):
@@ -1764,13 +1743,24 @@ def _is_emergence(text, m):
     return bool(_EMERGENCE_TAIL.match(text[m.end():]))
 
 
+# One list of departure phrasings for both readers of it: detect_exits(), which
+# decides WHO left, and departed_phrase_people(), which scrubs their description
+# out of the anchor. It was written out twice; the two copies had to agree or a
+# character could be marked departed while the anchor kept describing them.
+_EXIT_CUE = re.compile(
+    r"\b(?:leaves?|left|leaving|exits?|exited|departs?|departed|"
+    r"walks? (?:out|off|away)|walked (?:out|off|away)|steps? (?:out|off|away)|"
+    r"stepped (?:out|off|away)|drives? (?:off|away)|drove (?:off|away)|"
+    r"rides? (?:off|away)|runs? (?:out|off)|ran (?:out|off)|"
+    r"disappears?|vanishes?|is gone|are gone|out of frame|off screen|off-screen)\b", re.I)
+
+
 def detect_exits(body, active, departed):
     """Names of characters who LEAVE in this beat, so they don't reappear later.
     Matches an exit phrase ('leaves', 'walks out', 'exits', 'drives off', 'steps
     out of frame', 'is gone') attributed to the nearest preceding subject (name or
     resolvable pronoun). Gated on tracked people, so 'the plane leaves' -- not a
     tracked person -- departs nobody."""
-    import re
     if not body:
         return []
     text = " " + body.lower() + " "
@@ -1780,18 +1770,11 @@ def detect_exits(body, active, departed):
     pron_map = _pron_map({k: v for k, v in active.items() if k not in departed})
     single = len(names) == 1
 
-    exit_cue = re.compile(
-        r"\b(?:leaves?|left|leaving|exits?|exited|departs?|departed|"
-        r"walks? (?:out|off|away)|walked (?:out|off|away)|steps? (?:out|off|away)|"
-        r"stepped (?:out|off|away)|drives? (?:off|away)|drove (?:off|away)|"
-        r"rides? (?:off|away)|runs? (?:out|off)|ran (?:out|off)|"
-        r"disappears?|vanishes?|is gone|are gone|out of frame|off screen|off-screen)\b")
-
     subj_tokens = [re.escape(n.lower()) for n in names] + list(_PRO.keys())
     subj_re = re.compile(r"\b(" + "|".join(subj_tokens) + r")\b")
 
     out = []
-    for m in exit_cue.finditer(text):
+    for m in _EXIT_CUE.finditer(text):
         if _is_emergence(text, m):
             continue
         best, bp = None, -1
@@ -1817,19 +1800,12 @@ def departed_phrase_people(body, anchor_id):
     prepositional clause, e.g. 'a bald man in navy overalls') for scrubbing.
     Returns [] when nothing matches, so non-person exits ('the plane leaves')
     remove nobody."""
-    import re
     if not body or not anchor_id:
         return []
-    exit_cue = re.compile(
-        r"\b(?:leaves?|left|leaving|exits?|exited|departs?|departed|"
-        r"walks? (?:out|off|away)|walked (?:out|off|away)|steps? (?:out|off|away)|"
-        r"stepped (?:out|off|away)|drives? (?:off|away)|drove (?:off|away)|"
-        r"rides? (?:off|away)|runs? (?:out|off)|ran (?:out|off)|"
-        r"disappears?|vanishes?|is gone|are gone|out of frame|off screen|off-screen)\b", re.I)
     want = {"she": ("woman", "women", "girl", "lady", "female"),
             "he":  ("man", "men", "boy", "guy", "gentleman", "male")}
     out = []
-    for m in exit_cue.finditer(body):
+    for m in _EXIT_CUE.finditer(body):
         head = body[:m.start()]
         pm = None
         for p in re.finditer(r"\b(she|he|her|him|his|the\s+\w+)\b", head, re.I):
@@ -1867,22 +1843,6 @@ SPEECH_PAD_SEC = 1.0
 # lines is not the same screen time as one person saying all three back to back:
 # the camera/mouth has to switch subject between each.
 TURN_GAP_SEC = 0.5
-# A beat whose prose outside the quotes is longer than this is doing real ACTION
-# as well as talking, and action has no measurable duration -- so such a beat keeps
-# the full budget instead of being sized down to fit its line. Without this,
-# "she walks the length of the tarmac and says 'Ready.'" got 2.2s of dialogue time
-# and the walk was crushed into it, which reads as everyone moving at double speed.
-ACTION_WORDS_FREE = 8
-
-
-def action_words(beat):
-    """Words in a beat that are NOT inside quotes -- i.e. the action the shot has
-    to depict, as opposed to the line it has to deliver."""
-    import re
-    body, _ = extract_wardrobe((beat or "").strip())
-    body = re.sub(r'["“][^"”]*["”]', " ", body)
-    body = "\n".join(ln for ln in body.splitlines() if not is_directive_line(ln))
-    return len(body.split())
 
 
 # --- content-aware shot length ---------------------------------------------
@@ -1911,7 +1871,6 @@ def action_clauses(beat):
     "takes off her red jacket and drops it on the workbench" is two; "walks the
     length of the garage, checking every bench, then stops at the far wall" is
     three. Quoted speech is excluded -- that time is counted by dialogue_seconds."""
-    import re
     body, _ = extract_wardrobe((beat or "").strip())
     body = re.sub(r'["“][^"”]*["”]', " ", body)
     body = " ".join(ln for ln in body.splitlines() if not is_directive_line(ln))
@@ -1933,7 +1892,6 @@ def estimate_beat_seconds(beat):
 def dialogue_spans(beat):
     """Word count of each double-quoted span in a beat, in order. Length of the
     returned list is the number of speaking TURNS -- the multi-character case."""
-    import re
     body, _ = extract_wardrobe((beat or "").strip())
     return [len(q.split()) for q in re.findall(r'["\u201c]([^"\u201d]+)["\u201d]', body) if q.split()]
 
@@ -1961,7 +1919,6 @@ def dialogue_seconds(beat, pad=True):
 def beat_seconds_directive(beat):
     """Explicit per-beat length: a 'seconds: 8' (or 'duration: 8') line in the beat.
     Returns the float, or None when the beat doesn't set one."""
-    import re
     for key in ("seconds", "duration"):
         _, val = extract_directive((beat or ""), key)
         if val:
@@ -2189,13 +2146,19 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if here_again:
             body, _ = dedupe_prop_mentions(body, here_again)
         off_now = []                         # (person, garment) coming off in THIS shot
+
+        def _drop(before, after):
+            """Record what `after` no longer has, for both removal paths."""
+            for k, v in before.items():
+                gone = [it for it in v if it not in after.get(k, [])]
+                removed.extend(gone)
+                off_now.extend((k, it) for it in gone)
+            return after
+
         if wardrobe_change is not None:
             before = {k: list(v) for k, v in active.items()}
-            active = apply_wardrobe_change(active, wardrobe_change)   # explicit: takes effect THIS shot
-            for k, v in before.items():
-                gone = [it for it in v if it not in active.get(k, [])]
-                removed += gone
-                off_now += [(k, it) for it in gone]
+            # explicit: takes effect THIS shot
+            active = _drop(before, apply_wardrobe_change(active, wardrobe_change))
         # Auto-removals are resolved BEFORE the shot is composed, so the garment is
         # already out of the person's description in the very shot that takes it off.
         #
@@ -2212,11 +2175,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # END state, and the direction between them is stated outright below.
         if auto_wardrobe:
             before = {k: list(v) for k, v in active.items()}
-            active = auto_wardrobe_removals(active, body)
-            for k, v in before.items():
-                gone = [it for it in v if it not in active.get(k, [])]
-                removed += gone
-                off_now += [(k, it) for it in gone]
+            active = _drop(before, auto_wardrobe_removals(active, body))
             # A garment that lives ONLY in the anchor prose (never in the wardrobe
             # channel): the removal phrase names it, so scrub it from the anchor or
             # the anchor re-applies it forever.
