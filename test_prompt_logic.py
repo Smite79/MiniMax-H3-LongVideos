@@ -1672,6 +1672,89 @@ def check_sla_pairing():
         check(f"'sla' NOT falsely found in {name}", not S._SLA_NAME.search(name))
 
 
+class _Vec:
+    """The few tensor operations check_audio_vae_loaded() actually performs."""
+    def __init__(self, vals):
+        self.v = list(vals)
+
+    def min(self):
+        return min(self.v)
+
+    def max(self):
+        return max(self.v)
+
+    def abs(self):
+        return _Vec(abs(x) for x in self.v)
+
+
+class _All:
+    def __init__(self, ok):
+        self.ok = ok
+
+    def all(self):
+        return self.ok
+
+
+def check_audio_vae_guard():
+    """An audio VAE whose normalization buffers were never filled must be REFUSED.
+
+    comfy/ldm/minimax/audio_vae.py registers latents_mean/latents_std as
+    torch.empty() -- uninitialized memory. The video VAE bakes real constants in
+    instead (torch.tensor(LATENTS_MEAN)), so the same 'Missing VAE keys' warning is
+    cosmetic there and serious here. Without this guard, decode() multiplies the
+    latents by garbage and the audio returns as noise with nothing in the log.
+
+    Verified separately against real torch 2.13: torch.empty(32) reliably contains
+    a ~-9.98e+27 magnitude, so genuine uninitialized memory always trips the bounds
+    below rather than merely usually."""
+    print("\n=== audio VAE normalization buffers ===")
+    t = sys.modules["torch"]
+    t.isfinite = lambda vec: _All(all(x == x and abs(x) != float("inf") for x in vec.v))
+
+    class _FSM:
+        def __init__(self, mean, std):
+            self.latents_mean, self.latents_std = mean, std
+
+    class _V:
+        def __init__(self, mean, std):
+            self.first_stage_model = _FSM(mean, std)
+
+    def refused(mean, std):
+        try:
+            S.check_audio_vae_loaded(_V(mean, std))
+            return False
+        except RuntimeError:
+            return True
+
+    good_m = _Vec([0.1, -0.2, 0.05, 0.3])
+    good_s = _Vec([0.9, 1.2, 0.7, 1.05])
+    check("a properly loaded audio VAE passes", not refused(good_m, good_s))
+    check("all-zero buffers are refused", refused(_Vec([0] * 4), _Vec([0] * 4)))
+    check("a zero scale channel is refused", refused(good_m, _Vec([0.9, 0.0, 0.7, 1.05])))
+    check("a negative scale is refused", refused(good_m, _Vec([0.9, -1.4, 0.7, 1.05])))
+    check("NaN in the mean is refused",
+          refused(_Vec([0.1, float("nan"), 0.05, 0.3]), good_s))
+    check("inf in the scale is refused",
+          refused(good_m, _Vec([0.9, float("inf"), 0.7, 1.05])))
+    check("the magnitude torch.empty actually produces is refused",
+          refused(_Vec([-9.98e27] * 4), _Vec([-9.98e27] * 4)))
+    check("an absurd but finite scale is refused", refused(good_m, _Vec([1e4] * 4)))
+    check("an absurd but finite mean is refused", refused(_Vec([1e4] * 4), good_s))
+    # Absent buffers mean a VAE that does not use this scheme at all -- not a fault.
+    check("absent buffers are not treated as a fault", not refused(None, None))
+    # Introspection must never be what stops a render.
+    class _Hostile:
+        first_stage_model = property(lambda self: (_ for _ in ()).throw(ValueError("boom")))
+    try:
+        S.check_audio_vae_loaded(_Hostile())
+        ok = True
+    except RuntimeError:
+        ok = False
+    except Exception:
+        ok = True          # any non-RuntimeError is the introspection failing, not a block
+    check("a failed introspection does not block the render", ok)
+
+
 class _MDModel:
     """A patcher carrying a LoRA's safetensors metadata, as ComfyUI stashes it."""
     def __init__(self, md):
@@ -2160,6 +2243,7 @@ def main():
     check_ref_modes()
     check_sla_pairing()
     check_lora_hints()
+    check_audio_vae_guard()
 
     print()
     if _fails:
