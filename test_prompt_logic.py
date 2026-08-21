@@ -232,7 +232,7 @@ def check_clothing_removal_6beat():
     check("the removal rules out the reverse",
           "never put back on" in sh[3] and "never plays in reverse" in sh[3])
     check("the statement uses a pronoun, not a bare name",
-          "Kristy starts this shot" not in sh[3] and "She starts this shot" in sh[3])
+          "Kristy takes the" not in sh[3] and "She takes the" in sh[3])
     check("no shot after the removal names the garment at all",
           all("red jacket" not in s for s in sh[4:]))
     check("the other garment is untouched", worn(sh[4], "blue jeans"))
@@ -253,7 +253,7 @@ def check_clothing_removal_6beat():
     check("anchor: no orphaned garment left behind",
           not any(s.lower().count("garage. jacket") for s in pb))
     check("anchor: the removal is stated in the shot that performs it",
-          stated_off(pb[3], "red jacket") and "comes off during it" in pb[3])
+          stated_off(pb[3], "red jacket") and "comes off during this shot" in pb[3])
     check("anchor: no shot after the removal names the garment",
           all("red jacket" not in s for s in pb[4:]))
 
@@ -265,12 +265,12 @@ def check_clothing_removal_6beat():
     two = S.takes_off_clause([("Jon", "cap"), ("Jon", "gloves")], act)
     imp = S.takes_off_clause([("", "boots")], act)
     check("singular garment takes a singular verb",
-          "red jacket is off" in sing and "not wearing it" in sing)
+          "the red jacket off" in sing and "no longer wearing it" in sing)
     check("a plural garment takes a plural verb",
-          "navy overalls are off" in plur and "takes them off" in plur)
-    check("two garments take a plural verb", "cap and gloves are off" in two)
+          "the navy overalls off" in plur and "they are off" in plur)
+    check("two garments take a plural verb", "the cap and gloves off" in two)
     check("a double-s noun stays singular",
-          "dress is off" in S.takes_off_clause([("Maya", "dress")], act))
+          "the dress off" in S.takes_off_clause([("Maya", "dress")], act))
     check("the impersonal form uses a SUBJECT pronoun",
           "they are off" in imp and "them are off" not in imp)
     check("every form rules out the reverse",
@@ -484,10 +484,10 @@ def check_detailed_wardrobe_items():
           not S._is_plural_garment("red jacket with silver zippers"))
     sing = S.takes_off_clause([("Kristy", "red jacket with silver zippers")], {"Kristy": ["she"]})
     check("...so the verb agrees with the jacket",
-          "red jacket is off" in sing and "not wearing it" in sing)
+          "the red jacket off" in sing and "no longer wearing it" in sing)
     plur = S.takes_off_clause([("Kristy", "black boots with steel buckles")], {"Kristy": ["she"]})
     check("a genuinely plural garment still takes a plural verb",
-          "black boots are off" in plur and "takes them off" in plur)
+          "the black boots off" in plur and "they are off" in plur)
 
 
 def check_anchor_hazards():
@@ -1830,8 +1830,11 @@ def main():
     check("scenery beats carry NO people",
           all(len([p for p in _parens(dshots[i]) if any(k in p.lower() for k in ("silver hair", "bald"))]) == 0
               for i in (5, 9)))
+    # The removal shot NAMES the garment (beat prose plus the direction clause);
+    # worn() cannot be used on that shot any more, because the clause states the
+    # removal and the absence in one sentence, which worn() strips whole.
     check("removal sticks to the end of a 12-shot chain",
-          worn(dshots[2], "red jacket") and all(not worn(s, "red jacket") for s in dshots[3:]))
+          "red jacket" in dshots[2] and all(not worn(s, "red jacket") for s in dshots[3:]))
 
     # --- exits: a character who leaves must never come back ----------------------
     ebeats = ["She and he work on the engine.",

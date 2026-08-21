@@ -1574,13 +1574,19 @@ def takes_off_clause(pairs, active=None):
         # ("they are off") -- the impersonal branch needs the latter.
         verb, pron, subj_pron = ("are", "them", "they") if plural else ("is", "it", "it")
         subj = _subject_term(name, active) if name else ""
+        # Name the garment ONCE. It was named twice here and again in the beat prose,
+        # which made it the most-referenced thing in the shot -- and a garment
+        # referenced that often gets rendered as a prominent object, picked up and
+        # handled by whoever is nearby. Same rule as people: repeat the reference,
+        # get the thing repeated. Saying where it ENDS UP is what stops it lingering
+        # in someone's hands.
         if subj:
-            bits.append(f"{subj} starts this shot wearing the {what} and takes {pron} off during the "
-                        f"shot; by the last frame the {what} {verb} off and {subj.lower()} is not "
-                        f"wearing {pron}")
+            bits.append(f"{subj} takes the {what} off during this shot; by the last frame "
+                        f"{subj_pron} {verb} off, dropped away out of frame, and {subj.lower()} is "
+                        f"no longer wearing {pron}")
         else:
-            bits.append(f"the {what} {verb} worn at the start of this shot and {'come' if plural else 'comes'} "
-                        f"off during it; by the last frame {subj_pron} {verb} off")
+            bits.append(f"the {what} {'come' if plural else 'comes'} off during this shot; by the "
+                        f"last frame {subj_pron} {verb} off and dropped away out of frame")
         # SAY WHAT IS STILL ON. The clause is five statements about clothing coming
         # off; without this, nothing in it says the body is still covered, and the
         # model completes the obvious continuation -- shorts worn UNDER trousers were
