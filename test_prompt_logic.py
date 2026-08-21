@@ -709,6 +709,19 @@ def check_props_survive_the_shot_boundary():
     check("adjectives are kept, circumstance is not", props["van"] == "white van")
     check("generic frame/body nouns are never props",
           S.introduced_props("a shot of the ground, a moment of light, a hand") == {})
+    # A body part is never an object to carry between shots: "reveals a nipple" was
+    # tracked and a later mention got the full continuity treatment.
+    for t in ["Her breasts are visible.", "Mara reveals a nipple.",
+              "a thigh presses against the sheet", "his penis is visible"]:
+        check(f"anatomy is not a prop: {t[:30]!r}", S.introduced_props(t) == {})
+    # A VERB ends the noun phrase. Without that, "a bare breast catches the light"
+    # was read four words deep and keyed on the trailing determiner.
+    check("a determiner never becomes a prop name",
+          "the" not in S.introduced_props("a bare breast catches the light"))
+    check("...nor from any a/verb/the phrasing",
+          "the" not in S.introduced_props("a lantern hangs over the bench"))
+    check("real objects still tracked either way",
+          S.introduced_props("Mara lights a brass lantern.") == {"lantern": "brass lantern"})
     # binding
     body, bound = S.bind_props("He opens the van and the barn.", {"van": "white van"})
     check("only tracked nouns bind", bound == ["van"] and "the barn" in body)

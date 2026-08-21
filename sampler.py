@@ -1151,16 +1151,32 @@ _NOT_A_PROP = {
     "ground", "air", "sky", "floor", "ceiling", "background", "foreground", "distance",
     "camera", "frame", "shot", "scene", "screen", "view", "angle", "light", "lighting",
     "shadow", "sun", "moment", "time", "day", "night", "morning", "evening", "way",
+    # anatomy -- a body part is never a prop to carry between shots. Without these,
+    # "reveals a nipple" was tracked as an object and a later mention got the full
+    # continuity treatment: "exactly one nipple in this shot, the same nipple from
+    # the previous shot, in the same place".
     "head", "face", "eyes", "eye", "hand", "hands", "arm", "arms", "leg", "legs",
-    "body", "hair", "mouth", "jaw", "lips", "shoulder", "shoulders", "back", "front",
-    "side", "top", "bottom", "edge", "middle", "end", "left", "right", "centre", "center",
+    "body", "hair", "mouth", "jaw", "lips", "shoulder", "shoulders", "chest", "torso",
+    "waist", "hip", "hips", "knee", "knees", "foot", "feet", "ankle", "wrist", "neck",
+    "throat", "stomach", "belly", "navel", "skin", "thigh", "thighs", "breast",
+    "breasts", "nipple", "nipples", "genitals", "genitalia", "penis", "vagina",
+    "vulva", "groin", "crotch", "buttock", "buttocks", "backside", "bottom",
+    # frame-relative words and bare determiners/pronouns, which are never objects
+    "back", "front", "side", "top", "edge", "middle", "end", "left", "right",
+    "centre", "center", "the", "a", "an", "it", "this", "that", "these", "those",
+    "they", "them", "her", "his", "him", "its", "one", "other", "another", "something",
 }
 # Where a prop's NAME stops and its circumstance begins: "a van PARKED in the bay",
 # "a barn WITH a red roof". Same idea as _ITEM_DETAIL for garments.
 _PROP_TAIL = re.compile(
     r"\b(?:parked|standing|sitting|leaning|lying|resting|waiting|stopped|covered|"
     r"filled|loaded|painted|marked|in|on|at|by|near|beside|behind|under|over|with|"
-    r"and|that|which|down|across|toward|towards|from)\b")
+    r"and|that|which|down|across|toward|towards|from|"
+    # a VERB ends the noun phrase too: "a bare breast CATCHES the light" was being
+    # read four words deep and keyed on the trailing "the".
+    r"is|are|was|were|has|have|had|catches|catch|presses|press|hangs|hang|rests|"
+    r"sits|sit|stands|stand|lies|lie|falls|fall|moves|move|shows|show|reveals|reveal|"
+    r"appears|appear|becomes|become|looks|look|seems|seem|glints|glows|shines)\b")
 
 
 def introduced_props(text):
