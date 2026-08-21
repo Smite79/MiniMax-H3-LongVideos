@@ -2247,6 +2247,56 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_audio_scale_coupling():
+    """The two flow shifts are COUPLED on ComfyUI 0.31+, and that is new.
+
+    ModelSamplingAV carries the audio latent on the VIDEO schedule scaled by
+    audio_scale = shift_video / shift_audio (12/3 = 4). That ratio drives
+    process_latent_in, process_latent_out, the minimax payload and the DiT
+    forward. Flatten it toward 1.0 and the audio branch loses the scaling it is
+    built around -- babble or silence.
+
+    Before 0.31 the audio velocity was scaled by a derivative instead, so the
+    shifts were effectively independent and lowering shift_video ALONE was
+    harmless. Advice written for that behaviour is actively wrong now."""
+    print("\n=== video/audio shift coupling ===")
+
+    for sv, sa in ((12, 3), (12, 4), (12, 6), (8, 2), (4, 1), (3, 0.75), (3, 1)):
+        check(f"shift {sv}/{sa} (ratio {sv / sa:.2f}) is accepted",
+              S.audio_scale_note(sv, sa) == "")
+    for sv, sa in ((3, 3), (2, 2), (12, 12), (6, 6)):
+        n = S.audio_scale_note(sv, sa)
+        check(f"equal shifts {sv}/{sa} warn", bool(n))
+        check(f"...naming the collapsed scale for {sv}/{sa}", "1.00" in n)
+    n = S.audio_scale_note(3, 3)
+    check("the warning says what breaks", "babble" in n or "silence" in n)
+    check("...and gives the corrected value", "shift_audio 0.75" in n)
+
+    # The schedule advice must not recommend a change that breaks the audio --
+    # suggesting a bare shift_video is what caused this.
+    sched = S.schedule_balance_note(12.0, 4, "simple")
+    check("the schedule advice also names shift_audio", "shift_audio" in sched)
+    check("...and says why", "audio breaks" in sched)
+
+    # Degenerate input stays silent rather than dividing by zero.
+    check("a zero audio shift is silent", S.audio_scale_note(12, 0) == "")
+    check("a zero video shift is silent", S.audio_scale_note(0, 3) == "")
+    check("non-numeric input is silent", S.audio_scale_note(None, "x") == "")
+
+    # The widget must be ABLE to express a correct low ratio.
+    if not hasattr(sys.modules["comfy.samplers"], "KSampler"):
+        class _KS:
+            SAMPLERS = ["res_multistep", "euler"]
+            SCHEDULERS = ["simple", "beta"]
+        sys.modules["comfy.samplers"].KSampler = _KS
+    for _n in ("samplers", "utils", "nested_tensor", "model_management"):
+        setattr(sys.modules["comfy"], _n, sys.modules["comfy." + _n])
+    opt = S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["optional"]
+    lo = opt["shift_audio"][1]["min"]
+    check("shift_audio can go low enough to hold the ratio at low shift_video",
+          lo <= 0.75)
+
+
 def check_schedule_balance():
     """A high flow shift at a low step count buries the run in its last step.
 
@@ -2755,6 +2805,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_audio_scale_coupling()
     check_schedule_balance()
     check_megapixel_sizing()
     check_audio_vae_guard()

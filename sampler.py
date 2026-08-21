@@ -3082,6 +3082,41 @@ def flow_step_shares(shift, steps, timesteps=1000):
     return [d / total for d in deltas]
 
 
+# On ComfyUI 0.31+ the two shifts are COUPLED, and that is new. ModelSamplingAV
+# carries the audio latent on the VIDEO schedule scaled by
+#
+#     audio_scale = shift_video / shift_audio        (12 / 3 = 4.0 by default)
+#
+# and that ratio drives process_latent_in, process_latent_out, the minimax payload
+# and the DiT forward (comfy/model_base.py 2141/2144/2181, ldm/minimax/model.py:530).
+# Collapse it to 1.0 by setting the two shifts equal and the audio pipeline loses
+# the scaling it is built around -- which comes back as babble or silence.
+#
+# Before 0.31 the audio velocity was scaled by a derivative instead, so the two
+# shifts were effectively independent and lowering shift_video alone was harmless.
+# It is not harmless now.
+H3_AUDIO_SCALE = 4.0            # the model's own 12/3
+
+
+def audio_scale_note(shift_video, shift_audio):
+    """Warn when the video/audio shift RATIO has drifted from what H3 expects."""
+    try:
+        sv, sa = float(shift_video), float(shift_audio)
+    except (TypeError, ValueError):
+        return ""
+    if sa <= 0 or sv <= 0:
+        return ""
+    ratio = sv / sa
+    if ratio >= 1.75:
+        return ""
+    return (f"shift_video {sv:g} / shift_audio {sa:g} gives audio_scale {ratio:.2f}, "
+            f"against the {H3_AUDIO_SCALE:g} this model is built around. The audio latent "
+            f"rides the VIDEO schedule scaled by that ratio, so flattening it toward 1.0 "
+            f"breaks the audio branch -- babble or silence. Keep the two shifts about "
+            f"{H3_AUDIO_SCALE:g}:1 apart: for shift_video {sv:g}, use shift_audio "
+            f"{max(0.25, sv / H3_AUDIO_SCALE):g}")
+
+
 def schedule_balance_note(shift, steps, scheduler, worst_allowed=0.55):
     """Warn when one sampler step carries most of the denoising.
 
@@ -3101,8 +3136,14 @@ def schedule_balance_note(shift, steps, scheduler, worst_allowed=0.55):
     for cand in (6.0, 5.0, 4.0, 3.0, 2.5, 2.0, 1.5, 1.0):
         cand_shares = flow_step_shares(cand, steps)
         if cand_shares and max(cand_shares) <= worst_allowed:
+            # shift_audio has to come down WITH it. The two are coupled on 0.31+:
+            # audio_scale = shift_video / shift_audio, and lowering only the video
+            # shift flattens that ratio toward 1.0, which breaks the audio branch.
+            # Suggesting a bare shift_video here is what produced babble.
             better = (f"; shift_video {cand:g} spreads it to "
-                      + "/".join(f"{s * 100:.0f}%" for s in cand_shares))
+                      + "/".join(f"{s * 100:.0f}%" for s in cand_shares)
+                      + f" -- lower shift_audio to {max(0.25, cand / H3_AUDIO_SCALE):g} "
+                        f"at the same time, or the audio breaks")
             break
     return (f"shift_video {float(shift):g} at {int(steps)} steps puts "
             + "/".join(f"{s * 100:.0f}%" for s in shares)
@@ -3960,9 +4001,13 @@ class H3LongVideos:
                 "shift_video": ("FLOAT", {"default": 12.0, "min": 1.0, "max": 32.0, "step": 0.5,
                     "tooltip": "Video flow shift. 12 = base H3 (correct default). A low-step MXFP8 "
                                "checkpoint wants ~8. Only used when apply_model_sampling is on."}),
-                "shift_audio": ("FLOAT", {"default": 3.0, "min": 1.0, "max": 16.0, "step": 0.5,
-                    "tooltip": "Audio flow shift. 3 = base H3. A 4-step distill/turbo LoRA setup wants "
-                               "~4-6. Only used when apply_model_sampling is on."}),
+                "shift_audio": ("FLOAT", {"default": 3.0, "min": 0.25, "max": 16.0, "step": 0.25,
+                    "tooltip": "Audio flow shift. 3 = base H3. COUPLED to shift_video on ComfyUI "
+                               "0.31+: the audio latent rides the video schedule scaled by "
+                               "audio_scale = shift_video / shift_audio (12/3 = 4). Flattening that "
+                               "ratio toward 1.0 breaks the audio branch -- babble or silence -- so "
+                               "if you lower shift_video, lower this by the same factor. Only used "
+                               "when apply_model_sampling is on."}),
                 "trim_seam": ("BOOLEAN", {"default": True}),
                 "vary_seed_per_shot": ("BOOLEAN", {"default": True}),
                 "handoff_offset": ("INT", {"default": 0, "min": 0, "max": 12, "step": 1,
@@ -4409,6 +4454,8 @@ class H3LongVideos:
         # The quantization kernels are ComfyUI's, not this node's -- but losing them
         # is silent, and the symptom (soft output) looks like a dozen other causes.
         kernel_note = kernel_backend_note(model)
+        audio_note = (audio_scale_note(shift_video, shift_audio)
+                      if apply_model_sampling else "")
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
@@ -4488,6 +4535,7 @@ class H3LongVideos:
                    ((mp_note + ". ") if mp_note else "") + \
                    ((f"SCHEDULE -- {sched_note}. ") if sched_note else "") + \
                    ((f"KERNELS -- {kernel_note}. ") if kernel_note else "") + \
+                   ((f"AUDIO -- {audio_note}. ") if audio_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4758,6 +4806,7 @@ class H3LongVideos:
                 + (f" {mp_note}." if mp_note else "")
                 + (f" SCHEDULE -- {sched_note}." if sched_note else "")
                 + (f" KERNELS -- {kernel_note}." if kernel_note else "")
+                + (f" AUDIO -- {audio_note}." if audio_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")
