@@ -2805,28 +2805,40 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         # ComfyUI 0.31+ concatenates instead:
         #     payload["cond_video_latents"] = payload.get("cond_video_latents", []) + [...]
         # and PackedLayout appends keyframe segments before ref segments, so the two
-        # orders agree. Both channels CAN coexist there, and this split is a
-        # limitation kept for behavioural stability rather than a requirement. Moving
-        # a tagged shot's handoff from the ref channel to a real keyframe would be
-        # strictly better on 0.31+ -- a keyframe anchors the first frame, a reference
-        # only supplies identity -- but it changes conditioning, so it is a
-        # deliberate change and not a silent one.
+        # orders agree and both channels coexist. A tagged shot therefore takes its
+        # references AND a real keyframe: the keyframe ANCHORS the first frame,
+        # which is what continuity needs, while a reference only supplies identity.
+        # Passing the handoff as a reference (the 0.30 workaround) asked the model to
+        # look like the previous frame rather than to start from it.
         items, blocks = _build_ref_images(vae, refs, width, height, ref_image_size)
         tokens = clip.tokenize(prompt, minimax_ref_items=items)
         cond = clip.encode_from_tokens_scheduled(tokens)
+        vals = {}
         if blocks:
-            vals = {"minimax_refs": blocks}
+            vals["minimax_refs"] = blocks
             # How CLEAN the reference is presented as. The DiT both blends the
             # condition latent with noise at (1 - aug) and labels those rows with a
             # timestep of max(t_video, aug) -- so the model default of 0.999 hands it
             # a finished, noise-free image, which is an invitation to REPRODUCE it
             # rather than to take an identity from it. Lower says "approximate".
-            # Applied only here: a keyframe shot must keep its handoff authoritative
-            # or continuity breaks, and a shot never carries both channels.
+            #
+            # It is a payload-level value, so it reaches the keyframe rows too. That
+            # is why the handoff stays out of the ref channel: a keyframe softened to
+            # 0.90 would stop anchoring, and continuity is exactly what it is for.
             if ref_noise_aug is not None:
                 vals["minimax_visual_cond_noise_aug"] = float(ref_noise_aug)
+        # Enforced here as well as in run(): one aug covers every cond latent, so a
+        # softened reference would soften the anchor. Refusing at the source means no
+        # caller can assemble that combination by accident.
+        if handoff is not None and keyframe_rides_with_refs(ref_noise_aug):
+            kf = {"resolved_frame_index": 0,
+                  "latent": vae.encode(_resize(handoff[:1], width, height, "disabled"))}
+            vals["minimax_keyframes"] = [kf]
+            vals["minimax_frame_count"] = fc
+        if vals:
             cond = node_helpers.conditioning_set_values(cond, vals)
         return cond, latent
+    # (fall through to the keyframe-only path below)
     images, keyframes = [], []
     if handoff is not None:
         img = _resize(handoff[:1], width, height, "disabled")
@@ -2839,6 +2851,25 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
             kf["latent"] = vae.encode(kf.pop("image"))
         cond = node_helpers.conditioning_set_values(cond, {"minimax_keyframes": keyframes, "minimax_frame_count": fc})
     return cond, latent
+
+
+# Below this, softening the references would soften the handoff KEYFRAME with them.
+# visual_cond_noise_aug is a single payload value applied to every cond video latent
+# (ldm/minimax/model.py:502-510) and it labels both segments the same way (:584:
+# "cond": max(t_v, vis_aug), "ref_img": max(t_v, vis_aug)). There is no per-channel
+# control, so a lowered ref_noise_aug would blend the anchor frame with noise and
+# push its timestep up -- destroying exactly the continuity the keyframe is for.
+KEYFRAME_SAFE_AUG = 0.99
+
+
+def keyframe_rides_with_refs(ref_noise_aug):
+    """Can a tagged shot carry its handoff as a real KEYFRAME alongside references?
+
+    Yes at the default aug, where the keyframe passes through essentially untouched.
+    No once the user has softened the references, because the same value would soften
+    the keyframe -- there the handoff falls back to riding as an extra reference,
+    which is weaker for continuity but leaves nothing to compromise."""
+    return ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG
 
 
 # <Picture 1>, <picture_1>, <PICTURE 1> -- all the ways people write the tag.
@@ -4582,6 +4613,7 @@ class H3LongVideos:
         ref_shots = []                     # which shots ended up ref-conditioned
         ref_missing = []                   # <Picture N> tags naming an unconnected slot
         ref_carried = []                   # tagged shots that kept continuity as an extra ref
+        ref_keyframed = []                 # tagged shots that kept it as a real keyframe
         # 'where tagged' reads the prompt instead of counting shots. If references are
         # connected but nothing is tagged anywhere, fall back to first-shot placement
         # rather than silently conditioning nothing at all.
@@ -4597,9 +4629,10 @@ class H3LongVideos:
             # denoise is fixed at 1.0 (partial denoise desyncs the joint AV schedule).
             sa = (seed + i if vary_seed_per_shot else seed, steps, cfg, sampler_name, scheduler, 1.0)
             ln_i = shot_lens[i]        # this beat's own length (<= the VRAM ceiling)
-            # A shot is EITHER ref-conditioned or keyframe-conditioned (see
-            # _build_shot_conditioning). Deciding here keeps the two channels from
-            # ever meeting in one payload.
+            # Which conditioning channels this shot carries is decided here; see
+            # _build_shot_conditioning for how they are packed. On ComfyUI 0.31+ a
+            # shot may carry BOTH references and a keyframe.
+            carry_keyframe = False       # tagged shot keeps its handoff as a keyframe
             if tag_driven:
                 # The prompt itself says where each reference belongs: the shot whose
                 # text names <Picture N> gets image N, renumbered to match what that
@@ -4608,16 +4641,21 @@ class H3LongVideos:
                 for n in dropped:
                     if n not in ref_missing:
                         ref_missing.append(n)
-                # A tagged shot takes references, and references REPLACE the handoff --
-                # so on a long chain every tag was a hard cut, and cohesion went with
-                # it. The previous shot's last frame rides along as one more reference
-                # instead: same single ref2va payload, nothing conflicts, and the shot
-                # is shown where the last one ended rather than starting from nothing.
-                # It is appended AFTER the tagged images, so their <Picture N> numbers
-                # are untouched.
+                # A tagged shot keeps its continuity, but by which channel depends on
+                # ref_noise_aug. On ComfyUI 0.31+ refs and keyframes coexist, so the
+                # handoff can be a REAL keyframe -- it anchors the first frame, which
+                # is what continuity means. Once references are softened that same
+                # aug would soften the keyframe too, so there it falls back to riding
+                # as an extra reference (the pre-0.31 workaround): weaker, but it
+                # leaves no anchor to compromise. Appended AFTER the tagged images, so
+                # their <Picture N> numbers are untouched.
                 if shot_refs and handoff is not None:
-                    shot_refs = shot_refs + [handoff]
-                    ref_carried.append(i + 1)
+                    if keyframe_rides_with_refs(ref_noise_aug):
+                        carry_keyframe = True
+                        ref_keyframed.append(i + 1)
+                    else:
+                        shot_refs = shot_refs + [handoff]
+                        ref_carried.append(i + 1)
             else:
                 shot_refs = shot_references(ref_list, ref_mode, i, handoff)
             # A shot that follows a strip starts FRESH. Continuing from a frame that
@@ -4625,7 +4663,8 @@ class H3LongVideos:
             # text every time. Costs a cut exactly where the state changes, which is
             # where a cut belongs anyway.
             after_strip = i in strip_shots          # strip_shots is 1-based, i is 0-based
-            shot_handoff = None if (shot_refs or after_strip) else handoff
+            shot_handoff = (None if after_strip
+                            else handoff if (carry_keyframe or not shot_refs) else None)
             if shot_refs:
                 ref_shots.append(i + 1)
             if i == 0:
@@ -4793,15 +4832,20 @@ class H3LongVideos:
             kept = [n for n in range(1, len(gens) + 1) if n not in ref_shots]
             ref_note = (f" ref2va: {len(ref_list)} reference image(s) at '{ref_image_size}' on shot(s) "
                         f"{','.join(str(n) for n in ref_shots)} "
-                        f"({'placed by <Picture N> tags' if tag_driven else f"ref_mode '{ref_mode}'"}) -- those shots "
-                        f"carry references INSTEAD of the last-frame handoff"
+                        f"({'placed by <Picture N> tags' if tag_driven else f"ref_mode '{ref_mode}'"})"
                         + (f", ref_noise_aug {ref_noise_aug:.3f}" if ref_noise_aug is not None
                            and float(ref_noise_aug) < 0.999 else "")
                         + (f"; shot(s) {','.join(str(n) for n in kept)} keep the handoff" if kept
-                           else ", so every cut between beats is a CUT, not a continuous take")
+                           else "")
+                        + (f"; shot(s) {','.join(str(n) for n in ref_keyframed)} carry the previous "
+                           f"frame as a real KEYFRAME alongside their references, so a tag anchors "
+                           f"rather than cuts" if ref_keyframed else "")
                         + (f"; the previous frame rides along as an extra reference on shot(s) "
-                           f"{','.join(str(n) for n in ref_carried)}, so a tag is not a cut"
-                           if ref_carried else "")
+                           f"{','.join(str(n) for n in ref_carried)} -- weaker than a keyframe, but "
+                           f"ref_noise_aug below {KEYFRAME_SAFE_AUG:g} would soften a keyframe too "
+                           f"(one aug covers every cond latent)" if ref_carried else "")
+                        + ("" if (ref_keyframed or ref_carried or kept)
+                           else ", so every cut between beats is a CUT, not a continuous take")
                         + ref_note_missing)
         elif ref_list:
             ref_note = (f" ref2va: {len(ref_list)} reference image(s) connected but ref_mode "

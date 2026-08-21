@@ -213,10 +213,17 @@ tagged`) they land on the shot whose text names them:
 Dom, <Picture 1>, drives a van down the driveway.
 ```
 
-Only that shot is reference-conditioned; every other shot keeps its handoff, and a
-tagged shot carries the previous frame as an extra reference so a tag is never a
-cut. If a reference gets reproduced in the opening frames, lower `ref_noise_aug`
-(0.95, then 0.90).
+Only that shot is reference-conditioned; every other shot keeps its handoff. A
+tagged shot **also carries the previous frame as a real keyframe**, so a tag
+anchors rather than cuts — the keyframe fixes the opening frame, the references
+supply identity.
+
+If a reference gets reproduced in the opening frames, lower `ref_noise_aug` (0.95,
+then 0.90). Note the trade: `visual_cond_noise_aug` is a single value covering
+*every* conditioning latent, so a softened reference would soften the anchor with
+it. Below **0.99** the node therefore drops back to carrying the previous frame as
+an extra *reference* instead — weaker for continuity, but it leaves no anchor to
+compromise. `info` says which of the two you got.
 
 ## Speed: Sol-Attn (optional, third-party)
 

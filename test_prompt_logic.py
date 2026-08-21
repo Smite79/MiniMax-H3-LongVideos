@@ -1511,10 +1511,32 @@ def check_ref_conditioning_channels():
     check("every reference reaches the tokenizer", len(tok.get("minimax_ref_items", [])) == 2)
     check("every reference reaches the DiT", len(vals.get("minimax_refs", [])) == 2)
 
+    # ComfyUI 0.31+ CONCATENATES refs onto keyframes in cond_video_latents, and
+    # PackedLayout appends keyframe segments before ref segments, so the two orders
+    # agree and both channels coexist. On 0.30 the refs branch overwrote the
+    # keyframes while the layout still reserved rows for both -- hence the old
+    # either/or. A keyframe anchors the first frame; a reference only supplies
+    # identity, so carrying both is strictly better for continuity.
     vals, _ = build(handoff=_FakeImg(), refs=[_FakeImg()])
-    check("refs WIN when both are offered", "minimax_refs" in vals)
-    check("the keyframe channel stays empty when refs are present",
+    check("refs and a keyframe now ride together", "minimax_refs" in vals)
+    check("...the handoff becomes a real keyframe", "minimax_keyframes" in vals)
+    check("...anchored at the first frame",
+          vals["minimax_keyframes"][0]["resolved_frame_index"] == 0)
+    check("...and the frame count travels with it", "minimax_frame_count" in vals)
+
+    # ...but only while the references are presented CLEAN. visual_cond_noise_aug is
+    # one payload value covering every cond video latent (ldm/minimax/model.py:502)
+    # and it labels both segments identically (:584), so softening the references
+    # would soften the anchor with them. There the handoff has to stay out.
+    vals, _ = build(handoff=_FakeImg(), refs=[_FakeImg()], aug=0.90)
+    check("a softened reference does NOT get a keyframe alongside it",
           "minimax_keyframes" not in vals)
+    check("...the references are still applied", "minimax_refs" in vals)
+    check("...and the aug still reaches them",
+          vals.get("minimax_visual_cond_noise_aug") == 0.90)
+    check("the gate is the threshold, not the presence of an aug",
+          S.keyframe_rides_with_refs(None) and S.keyframe_rides_with_refs(0.999)
+          and S.keyframe_rides_with_refs(0.99) and not S.keyframe_rides_with_refs(0.95))
 
     vals, tok = build(refs=[None, None])
     check("all-empty ref slots fall back to the keyframe path",
