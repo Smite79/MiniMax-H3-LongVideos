@@ -2050,7 +2050,7 @@ def speech_flags(beats):
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
                            notes_out=None, auto_props=True, prevent_nudity=True,
-                           exposed_terms=""):
+                           exposed_terms="", strip_out=None):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2183,10 +2183,19 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             # the prompt SAY the body is bare, which is the thing that renders. The
             # garment still comes off either way; without the marker the model simply
             # covers what nobody described. `info` still reports the empty zone.
-            if prevent_nudity:
+            #
+            # Filling in exposed_terms IS the intent, so it overrides the guard for the
+            # people it names. Requiring both switches was a footgun: the terms sat
+            # there looking configured and did nothing.
+            if prevent_nudity and not exposed:
                 add = []
             for mark in add:
                 active[nm].append(mark)
+                # This shot newly bared a zone. The NEXT shot must not continue from
+                # its last frame: that frame is the removal in progress, and a picture
+                # of the garment still being worn beats any sentence saying it is off.
+                if strip_out is not None and gi not in strip_out:
+                    strip_out.append(gi)
             for mark in drop:
                 active[nm].remove(mark)
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
@@ -3776,12 +3785,13 @@ class H3LongVideos:
                 + ". Turn per_beat_length ON to size these shots from their line, or set "
                   "'seconds:' on the beat")
         wardrobe_notes = []
+        strip_shots = []      # shots that newly bared a zone -> the NEXT shot starts fresh
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),
                                       auto_wardrobe, auto_silence_nonspeech, count_subjects,
                                       lora_on, notes_out=wardrobe_notes, auto_props=auto_props,
                                       prevent_nudity=prevent_nudity,
-                                      exposed_terms=exposed_terms)
+                                      exposed_terms=exposed_terms, strip_out=strip_shots)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.
@@ -3878,7 +3888,12 @@ class H3LongVideos:
                     ref_carried.append(i + 1)
             else:
                 shot_refs = shot_references(ref_list, ref_mode, i, handoff)
-            shot_handoff = None if shot_refs else handoff
+            # A shot that follows a strip starts FRESH. Continuing from a frame that
+            # still shows the garment is how it reappears -- the picture outvotes the
+            # text every time. Costs a cut exactly where the state changes, which is
+            # where a cut belongs anyway.
+            after_strip = i in strip_shots          # strip_shots is 1-based, i is 0-based
+            shot_handoff = None if (shot_refs or after_strip) else handoff
             if shot_refs:
                 ref_shots.append(i + 1)
             if i == 0:

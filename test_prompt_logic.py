@@ -602,10 +602,26 @@ def check_exposed_terms():
           S.exposed_mark("lower", "Jon", ["he"], t) == "bare below the waist")
     check("empty config is the generic wording",
           S.exposed_mark("lower", "Mara", ["she"], S.parse_exposed_terms("")) == "bare below the waist")
-    # the guard still governs the whole path
+    # Filling in exposed_terms IS the intent, so it overrides the default guard.
+    # Requiring BOTH switches was a footgun: the terms sat there looking configured
+    # and silently did nothing.
     g = D("A bedroom.", B, "", "", cm_, exposed_terms=TERMS)
-    check("prevent_nudity ON suppresses it entirely",
-          all("visible vagina" not in s and "visible penis" not in s for s in g))
+    check("configured terms apply even with prevent_nudity at its default",
+          "visible vagina" in g[2])
+    plain = D("A bedroom.", B, "", "", cm_)
+    check("...while the guard still suppresses the GENERIC marker",
+          all("bare below the waist" not in s for s in plain))
+
+    # The shot after a strip must start fresh: continuing from a frame that still
+    # shows the garment is how it reappears -- a picture outvotes the sentence.
+    strips = []
+    D("A bedroom.", B, "", "", cm_, exposed_terms=TERMS, strip_out=strips)
+    check("every stripping shot is reported so the next one drops the handoff",
+          strips == [2, 4])
+    none = []
+    D("A bedroom.", ["Mara stands.", "Mara walks on."], "", "", cm_,
+      exposed_terms=TERMS, strip_out=none)
+    check("a chain with no strip reports none", none == [])
 
 
 def check_stripped_state_persists():

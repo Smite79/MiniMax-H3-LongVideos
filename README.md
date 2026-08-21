@@ -84,7 +84,10 @@ rendering**. Do that first; it is near-instant.
   Mara upper = bare breasts
   ```
 
-  Requires `prevent_nudity` off.
+  Filling this in **is** the intent, so it overrides `prevent_nudity` — no second
+  switch to remember. The shot after a strip also starts **fresh**, without the
+  handoff frame, because continuing from a frame that still shows the garment is
+  how it reappears: a picture outvotes the sentence.
 - **Nudity.** `prevent_nudity` is **on by default**: the prompt never states that a
   body is bare. Removals still happen — what is gated is the sentence, and a video
   model's default is a clothed person, so it covers what nobody described. `info`
