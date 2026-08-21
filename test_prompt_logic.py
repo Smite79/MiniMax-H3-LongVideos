@@ -2157,72 +2157,64 @@ def check_ref_modes():
           and S.ref_image_canvas(512, 512, 1344, 768, "max") == (512, 512))
 
 
-def check_megapixel_node():
-    """H3 Megapixel Size: a pixel budget plus a shape -> a legal H3 width/height.
+def check_megapixel_sizing():
+    """A pixel BUDGET sets the size; the resolution preset supplies the shape.
 
-    Separate node on purpose. Adding a widget to the sampler, or re-wording one of
-    its resolution options, would break saved workflows: ComfyUI restores widget
-    values by POSITION and stores a combo's value as its label STRING."""
-    print("\n=== H3 Megapixel Size node ===")
-    _spec = importlib.util.spec_from_file_location(
-        "h3_mp_size", os.path.join(_HERE, "mp_size.py"))
-    MP = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(MP)
-    n = MP.H3MegapixelSize()
+    Cost and training fit are functions of token count -- (h/16)*(w/16)*frames --
+    which tracks total pixels, not the short edge. The two disagree at the extremes
+    of aspect ratio, so a short-edge target makes two shapes look comparable when
+    they are not."""
+    print("\n=== megapixel sizing ===")
+    MPU = S.MP_UNIT
 
-    # The point of the node: at 1.00MP every H3 shape reproduces its native size.
-    for aspect, expect in (("H3 wide (1344x768)", (1344, 768)),
-                           ("H3 tall (768x1344)", (768, 1344)),
-                           ("H3 ultrawide (1536x672)", (1536, 672)),
-                           ("H3 square (768x768)", (1024, 1024))):
-        w, h, mp, _info = n.emit(1.0, aspect)
-        check(f"{aspect} at 1.00MP -> {expect}", (w, h) == expect)
+    check("0 is off -- the preset is used verbatim",
+          S.scale_to_megapixels(1344, 768, 0.0) == (1344, 768))
+    check("a negative budget is also a no-op",
+          S.scale_to_megapixels(1344, 768, -2.0) == (1344, 768))
 
-    # Every shape, every tier, must be legal for H3.
-    for aspect in MP.ASPECTS:
-        if aspect == "custom":
-            continue
+    # The property that makes scaling FROM THE PRESET the right choice: at 1.00MP
+    # every native preset reproduces its own size. Computing from a nominal ratio
+    # would not -- 1344x768 is 1.750 (7:4), not 16:9 (1.778).
+    for r, (w, h) in S.NATIVE_RES.items():
+        nw, nh = S.scale_to_megapixels(w, h, 1.0)
+        if r in ("16:9", "9:16", "21:9"):
+            check(f"{r} native reproduces itself at 1.00MP", (nw, nh) == (w, h))
+        check(f"{r} at 1.00MP is a legal /32 size", nw % 32 == 0 and nh % 32 == 0)
+        check(f"{r} at 1.00MP keeps its ratio", abs((nw / nh) - (w / h)) < 0.05)
+    check("the 'native' names are not the true ratios",
+          abs(1344 / 768 - 16 / 9) > 0.02 and abs(1536 / 672 - 21 / 9) > 0.04)
+
+    # The under-budget square is what the feature exists for.
+    check("a 1:1 preset scales up to the budget",
+          S.scale_to_megapixels(768, 768, 1.0) == (1024, 1024))
+
+    # Every preset at every tier must stay legal and near its budget.
+    for o in S.resolution_options():
+        w, h = S.parse_resolution(o)
         for tier in (0.26, 0.52, 0.83, 1.0, 1.2, 2.1):
-            w, h, mp, _ = n.emit(tier, aspect)
-            check(f"{aspect} @ {tier} is a legal /32 size",
-                  w % 32 == 0 and h % 32 == 0 and w >= 32 and h >= 32)
-            check(f"{aspect} @ {tier} lands near its budget",
-                  abs(mp - tier) / tier < 0.08)
+            nw, nh = S.scale_to_megapixels(w, h, tier)
+            check(f"{o[:18]} @ {tier} is legal", nw % 32 == 0 and nh % 32 == 0 and nw >= 32)
+            check(f"{o[:18]} @ {tier} lands near budget",
+                  abs((nw * nh / MPU) - tier) / tier < 0.08)
 
-    # The conventional names are NOT the model's shapes, and the node says so.
-    tw, th, _, _ = n.emit(1.0, "true 16:9")
-    hw, hh, _, _ = n.emit(1.0, "H3 wide (1344x768)")
-    check("true 16:9 is not H3's 'wide' preset shape", (tw, th) != (hw, hh))
-    check("...because 1344/768 is 1.75, not 16/9", abs(1344 / 768 - 16 / 9) > 0.02)
-
-    # custom reads a RATIO, not pixels.
-    w, h, _, _ = n.emit(1.0, "custom", custom_aspect_w=21, custom_aspect_h=9)
-    check("custom 21:9 gives a ~2.33 ratio", abs(w / h - 21 / 9) < 0.05)
-    check("custom is still snapped", w % 32 == 0 and h % 32 == 0)
-    w, h, _, _ = n.emit(1.0, "custom", custom_aspect_w=0, custom_aspect_h=0)
-    check("a zero custom ratio does not crash or divide by zero",
-          w >= 32 and h >= 32 and w % 32 == 0)
-
-    # Reported values must describe what was PRODUCED, not what was asked for.
-    w, h, mp, info = n.emit(1.0, "H3 wide (1344x768)")
-    # The output is rounded to 4dp for readability, so compare at that precision.
-    check("the reported MP is the achieved one", abs(mp - (w * h) / MP.MP_UNIT) < 1e-4)
-    check("info names the actual size", f"{w}x{h}" in info)
-    check("info flags it as actual, not requested", "actual" in info)
-
-    # Extremes must stay legal rather than collapsing to 0.
-    for tier in (0.05, 8.0):
-        w, h, _, _ = n.emit(tier, "H3 wide (1344x768)")
+    # Extremes must not collapse to zero.
+    for tier in (0.001, 8.0):
+        nw, nh = S.scale_to_megapixels(1344, 768, tier)
         check(f"budget {tier} still yields a legal size",
-              w >= 32 and h >= 32 and w % 32 == 0 and h % 32 == 0)
-    w, h, _, _ = n.emit(1.0, "H3 wide (1344x768)", multiple=8)
-    check("a different multiple is honoured", w % 8 == 0 and h % 8 == 0)
+              nw >= 32 and nh >= 32 and nw % 32 == 0 and nh % 32 == 0)
 
-    # Registered, and NOT by disturbing the sampler.
-    check("the node is registered", "H3MegapixelSize" in MP.NODE_CLASS_MAPPINGS)
-    check("the sampler's resolution list is untouched",
-          all("MP" not in o for o in S.resolution_options()))
-    check("the sampler has no megapixels widget", "megapixels" not in S.ADDED_WIDGETS)
+    # It lives on the SAMPLER now, next to resolution -- not in a separate node and
+    # not appended to the end.
+    req = list(S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["required"])
+    check("megapixels is a required widget on the sampler", "megapixels" in req)
+    check("...positioned immediately after resolution",
+          req.index("megapixels") == req.index("resolution") + 1)
+    check("...and NOT appended at the end", "megapixels" not in S.ADDED_WIDGETS)
+    check("the resolution list is still the 18 short-edge presets",
+          len(S.resolution_options()) == 18)
+    check("run() accepts it", "megapixels" in
+          __import__("inspect").signature(
+              S.NODE_CLASS_MAPPINGS["H3LongVideos"].run).parameters)
 
 
 def check_vram_budget():
@@ -2613,7 +2605,6 @@ def main():
     check_dialogue_filler()
     check_dialogue_fit()
     check_model_change_flush()
-    check_megapixel_node()
     check_vram_budget()
     check_ref_conditioning_channels()
     check_tagged_references()

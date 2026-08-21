@@ -189,6 +189,42 @@ def parse_resolution(choice):
     return NATIVE_RES["16:9"]
 
 
+# --- sizing by pixel budget -------------------------------------------------
+# Cost and training-distribution match are functions of TOKEN COUNT --
+# (h/16)*(w/16)*frames -- which tracks total pixels, not the short edge. A
+# short-edge target makes two aspect ratios look comparable when they are not:
+#
+#   1:1  768x768   short edge 768, reads native      ->  0.56 MP, 43% under
+#   21:9 1536x672  short edge 672, reads sub-native  ->  0.98 MP, full budget
+#
+# Scaling from the PRESET's own dimensions (rather than from a nominal ratio) is
+# what makes 1.00MP reproduce each preset's native size exactly. That distinction
+# is real: 1344x768 is 1.750, i.e. 7:4 -- NOT 16:9, which is 1.778 -- and
+# 1536x672 is 16:7, not 21:9. Computing from a nominal 16:9 lands on 1376x768 and
+# never reproduces the native.
+#
+# This does NOT change the sigma schedule. H3's shift is a fixed 12.0 in its model
+# config with no resolution-dependent term, unlike Flux/SD3 dynamic shifting.
+MP_UNIT = 1024 * 1024          # 1 MP == 1024x1024, matching ComfyUI's own convention
+RES_MULTIPLE = 32              # every shipped preset is a multiple of 32
+
+
+def scale_to_megapixels(w, h, mp, multiple=RES_MULTIPLE):
+    """Resize (w, h) to hit `mp` megapixels, keeping the aspect ratio.
+
+    Constant-area square root, snapped to `multiple` on both axes -- which is what
+    H3's patchified latent grid needs. Snapping moves the real area off the request
+    slightly, so callers report the ACHIEVED value: a readout of what was asked for
+    hides what was produced. mp <= 0 means "leave the preset alone"."""
+    if not mp or mp <= 0 or w <= 0 or h <= 0:
+        return int(w), int(h)
+    multiple = max(1, int(multiple))
+    scale = math.sqrt((float(mp) * MP_UNIT) / float(w * h))
+    nw = max(multiple, int(round(w * scale / multiple)) * multiple)
+    nh = max(multiple, int(round(h * scale / multiple)) * multiple)
+    return nw, nh
+
+
 # --- prompt parsing + auto time distribution -------------------------------
 def split_paragraphs(text, delimiter):
     raw = text.replace("\r\n", "\n").strip()
@@ -3709,7 +3745,19 @@ class H3LongVideos:
                 "resolution": (resolution_options(), {
                     "tooltip": "Preset, all multiples of 32. Three short-edge tiers per ratio: native 768 "
                                "(best detail), balanced 640, fast 512 (generate-then-upscale). Lower tiers "
-                               "render faster, free VRAM, and unlock longer shots (budget is res-aware)."}),
+                               "render faster, free VRAM, and unlock longer shots (budget is res-aware). "
+                               "When `megapixels` is above 0 this preset supplies the ASPECT RATIO only -- "
+                               "the budget decides the size."}),
+                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 8.0, "step": 0.01,
+                    "tooltip": "Pixel BUDGET, applied to the preset's aspect ratio. 1.00 = 1024x1024 "
+                               "worth of pixels, the same convention as ComfyUI's Scale Image to Total "
+                               "Pixels. START at 1.00: every NATIVE preset reproduces its own size there "
+                               "(1344x768, 1536x672, ...), then step down -- 0.83 gives a 704 short edge, "
+                               "0.65 gives 640 -- for speed, VRAM and longer shots. Cost and training fit "
+                               "track TOTAL PIXELS, not the short edge: 1:1 768x768 reads as native by "
+                               "short edge but is only 0.56MP, while 21:9 1536x672 reads as sub-native at "
+                               "a full 0.98MP. Snapped to multiples of 32; `info` reports the size and MP "
+                               "actually produced. Set 0 to use the preset's own dimensions instead."}),
                 # Base H3 (NVFP4/FP8, no distill LoRA) needs ~20 steps with res_multistep+simple.
                 # 6-8 steps only makes sense WITH a working 4-step distill/turbo LoRA or an MXFP8
                 # checkpoint tuned for low steps -- at 6-8 on the bare base model the frame comes
@@ -4043,6 +4091,7 @@ class H3LongVideos:
 
     def run(self, model, clip, vae, audio_vae, prompt, resolution,
             steps, cfg, sampler_name, scheduler, seed,
+            megapixels=1.0,
             first_frame=None, fps=24, plan_only=False,
             global_soundscape="", non_diegetic_music="", apply_model_sampling=True,
             shift_video=12.0, shift_audio=3.0, trim_seam=True, vary_seed_per_shot=True,
@@ -4083,6 +4132,26 @@ class H3LongVideos:
                     f"computed at {H3_FPS}; set your video-save node to {H3_FPS} too")
         fps = H3_FPS
         w, h = parse_resolution(resolution)
+        # A pixel budget overrides the preset's SIZE while keeping its aspect ratio,
+        # so the dropdown chooses the shape and this chooses how big. Scaling from
+        # the preset's own dimensions is what makes 1.00MP reproduce each native
+        # size exactly -- the preset NAMES are approximations (1344x768 is 7:4, not
+        # 16:9), so computing from a nominal ratio would not.
+        #
+        # Reported as ACHIEVED, not requested: snapping to the 32-grid moves the
+        # real area, and echoing the asked-for figure would print a number the
+        # render never used.
+        mp_note = ""
+        if megapixels and float(megapixels) > 0:
+            nw, nh = scale_to_megapixels(w, h, float(megapixels))
+            if (nw, nh) != (w, h):
+                mp_note = (f"megapixels {float(megapixels):.2f} -> {nw}x{nh} "
+                           f"({nw * nh / MP_UNIT:.3f}MP actual; preset was {w}x{h} "
+                           f"@ {w * h / MP_UNIT:.3f}MP)")
+                w, h = nw, nh
+            else:
+                mp_note = (f"megapixels {float(megapixels):.2f} -> {w}x{h} "
+                           f"({w * h / MP_UNIT:.3f}MP), the preset's own size")
         # H3 is CFG-free (cfg 1): the sampler skips the negative, but common_ksampler
         # still needs a conditioning object, so build an empty one from the clip.
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
@@ -4259,6 +4328,7 @@ class H3LongVideos:
             plan = ((anchor_note + " ") if anchor_note else "") + \
                    ((f"SLA: {sla_note}. ") if sla_note else "") + \
                    (("LORA HINTS -- " + "; ".join(hint_notes) + ". ") if hint_notes else "") + \
+                   ((mp_note + ". ") if mp_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4526,6 +4596,7 @@ class H3LongVideos:
                     + ").") if count_subjects else "")
                 + (f" SLA: {sla_note}." if sla_note else "")
                 + (" LORA HINTS -- " + "; ".join(hint_notes) + "." if hint_notes else "")
+                + (f" {mp_note}." if mp_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")
