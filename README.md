@@ -93,7 +93,9 @@ rendering**. Do that first; it is near-instant.
   ```
 
   Left unset, the node uses its own neutral wording, matched to the character's
-  declared pronoun.
+  declared pronoun. A key that matches no character and no pronoun is reported in
+  `info` rather than silently doing nothing — which is what a mistyped name, or an
+  object form like `her` instead of `she`, would otherwise do.
 
   A character can also **start** with a zone uncovered rather than arriving there
   through a removal — add `nude` (or `naked`, `undressed`, `unclothed`) for both

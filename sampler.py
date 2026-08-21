@@ -2196,6 +2196,10 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     props = {}                               # objects introduced so far -> their phrase
     stripped = {}                            # person -> body zones stripped so far
     exposed = parse_exposed_terms(exposed_terms)
+    # Every person key that existed at any point, so an entry naming someone who is
+    # only introduced later by a 'wardrobe: Name = ...' directive is not called
+    # unmatched. Checked after the loop, once the full cast is known.
+    seen_names = {k for k in active if k}
     blocks = []
     for gi, b in enumerate(beats, 1):
         body, wardrobe_change = extract_wardrobe((b or "").strip())
@@ -2401,6 +2405,31 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # Anything this beat introduces indefinitely becomes referable later.
         for _n, _ph in introduced_props(body).items():
             props.setdefault(_n, _ph)
+        seen_names |= {k for k in active if k}
+    # An exposed_terms key that matches neither a character nor a usable pronoun
+    # never fires, and it fails SILENTLY: the lookup falls through to the pronoun,
+    # then to the default wording, so a typo'd name looks configured and does
+    # nothing. Only the three canonical pronouns work as pronoun keys, because
+    # _pronoun_of() normalizes to those -- an object form like 'her' is dead
+    # config for the same reason and is worth the same warning.
+    if exposed and notes_out is not None:
+        known = {n.lower() for n in seen_names} | set(_PRO.values())
+        for key in exposed:
+            if key in known:
+                continue
+            hint = ""
+            if key in _PRO:                       # 'her'/'him'/'his'/'them'...
+                hint = f" -- use '{_PRO[key]}' for the pronoun form"
+            elif seen_names:
+                hint = " -- known characters: " + ", ".join(sorted(seen_names))
+            # Echo the key as the user typed it: parse_exposed_terms() lowercases,
+            # and quoting something back in different case than they wrote reads
+            # like a different entry.
+            m = re.search(r"^\s*(" + re.escape(key) + r")\b", exposed_terms or "",
+                          re.I | re.M)
+            notes_out.append(
+                f"exposed_terms entry '{m.group(1) if m else key}' matches no character "
+                f"and no pronoun, so it never applies{hint}")
     return blocks
 
 

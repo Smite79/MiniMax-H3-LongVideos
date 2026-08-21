@@ -1741,6 +1741,44 @@ def check_declared_bare():
     check("...and stays cleared", "penis" not in b[2])
 
 
+def check_exposed_terms_key_warning():
+    """An exposed_terms key that matches nobody must SAY so.
+
+    The lookup falls through name -> pronoun -> default, so a typo'd name looks
+    configured and silently does nothing. Object pronoun forms ('her', 'him') fail
+    the same way, because _pronoun_of() normalizes to she/he/they."""
+    print("\n=== exposed_terms keys that match nobody ===")
+    cm = "Mara = she, 30, blonde, nude\nJon = he, 35, bald, nude"
+
+    def warn(et, beats=None, sheet=cm):
+        out = []
+        S.distribute_generations("A room.", beats or ["Mara and Jon stand."], "", "",
+                                 sheet, prevent_nudity=True, exposed_terms=et,
+                                 notes_out=out)
+        return [n for n in out if "exposed_terms" in n]
+
+    w = warn("Marra = X")
+    check("a typo'd name warns", len(w) == 1)
+    check("...quoting the key as the user typed it", "'Marra'" in w[0])
+    check("...and listing who IS known", "Mara" in w[0] and "Jon" in w[0])
+    w = warn("her = X")
+    check("an object pronoun 'her' warns", len(w) == 1)
+    check("...and points at the usable form", "use 'she'" in w[0])
+    check("'him' points at 'he'", "use 'he'" in warn("him = X")[0])
+
+    check("a valid name does not warn", warn("Mara = X") == [])
+    check("a valid name with a zone does not warn", warn("Mara upper = X") == [])
+    check("valid pronouns do not warn", warn("she = X\nhe = Y") == [])
+    check("a name in different case does not warn", warn("MARA = X") == [])
+    check("only the bad key is reported", len(warn("she = X\nJonn = Y")) == 1)
+    check("no exposed_terms at all is silent", warn("") == [])
+
+    # A character introduced mid-chain by directive is still a known character.
+    check("a name introduced later by a wardrobe directive does not warn",
+          warn("Ash = X", beats=["Mara and Jon stand.",
+                                 "Ash walks in.\nwardrobe: Ash = he, 20, tall, nude"]) == [])
+
+
 def check_bare_wording_follows_pronoun():
     """The upper-zone default has to be worded for the right body.
 
@@ -2430,6 +2468,7 @@ def main():
     check_lora_hints()
     check_audio_vae_guard()
     check_declared_bare()
+    check_exposed_terms_key_warning()
     check_bare_wording_follows_pronoun()
     check_plural_cast_binding()
 
