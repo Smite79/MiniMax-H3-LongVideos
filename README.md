@@ -52,29 +52,10 @@ Mara = she, 30, red hair, grey coat, black jeans
 ```
 
 **3. `resolution` + `megapixels`** — the preset picks the **shape**, the budget
-picks the **size**. `megapixels` sits directly under `resolution`; `1.0` =
-1024×1024 worth of pixels, the same convention as ComfyUI's `Scale Image to Total
-Pixels`. Set `0` to use the preset's own dimensions verbatim.
-
-Start at **1.00** and step down — every native preset reproduces its own size at
-1.00, and lower budgets buy speed, VRAM and longer shots:
-
-```
-preset                      1.00MP      0.83MP      0.65MP
-16:9  - 1344x768 (native)   1344x768    1248x704    1088x640
-1:1   -  768x768 (native)   1024x1024    928x928     832x832   <- was 43% under
-21:9  - 1536x672 (native)   1536x672    1408x608    1248x544
-```
-
-Sizing by budget rather than short edge because cost and training fit track
-**token count** — `(h/16)·(w/16)·frames` — which follows total pixels. The two
-disagree at the extremes: `1:1 768x768` reads as native by short edge but is only
-0.56MP, while `21:9 1536x672` reads as sub-native at a full 0.98MP.
-
-Scaling from the preset's own dimensions is what makes 1.00MP land exactly on each
-native size — the preset *names* are approximations: **1344×768 is 1.750, i.e. 7:4,
-not 16:9 (1.778)**, and 1536×672 is 16:7, not 21:9. `info` reports the size and MP
-actually produced, since snapping to the 32-grid moves the real area.
+picks the **size**. Start at `1.0` (= 1024×1024 worth of pixels), where every
+native preset reproduces its own dimensions, and step down for speed, VRAM and
+longer shots. `0` uses the preset verbatim. Full explanation and a size table:
+[Resolution and megapixels](#resolution-and-megapixels).
 
 **4. `shot_seconds`** — a **ceiling**, not the length of every shot. Leave it at 0
 to let the VRAM budget decide.
@@ -143,6 +124,85 @@ rendering**. Do that first; it is near-instant.
 `info` reports what it did and warns before you waste a render — thin beats,
 dialogue that will be cut off or padded with invented speech, a removal that leaves
 a body zone bare, anchor content that misfires on every shot.
+
+## Resolution and megapixels
+
+Two widgets, and they do different jobs. **`resolution` picks the shape,
+`megapixels` picks the size.**
+
+`megapixels` is a **pixel budget**: `1.0` means 1024×1024 worth of pixels —
+1,048,576 — the same convention as ComfyUI's own `Scale Image to Total Pixels`, so
+the number means the same thing across your graph. The preset's aspect ratio is
+kept and both axes are snapped to a multiple of 32, which is what H3's latent grid
+requires. Set `megapixels` to **0** to switch it off and use the preset's own
+dimensions verbatim.
+
+### Why a budget instead of a short edge
+
+Cost and training-distribution match are functions of **token count** —
+`(h/16) · (w/16) · frames` — which tracks *total pixels*. The short edge does not,
+and the two disagree badly at the extremes of aspect ratio:
+
+| preset | short edge | reads as | actual |
+|---|---|---|---|
+| `1:1 768x768` | 768 | native | **0.56 MP** — 43% under budget |
+| `21:9 1536x672` | 672 | sub-native | **0.98 MP** — full budget |
+
+So the square preset that looks native is starved, and the ultra-wide that looks
+starved is fine. Judging by short edge gets both backwards. Holding megapixels
+constant is what makes two aspect ratios genuinely comparable — VRAM and token
+count stay put when you change shape.
+
+### Start at 1.00, then step down
+
+At **1.00MP** every native preset reproduces its own dimensions, so it is the
+natural starting point. Lower budgets buy speed, VRAM headroom and longer shots
+(the shot-length budget is resolution-aware and rescales automatically).
+
+| preset | 1.20MP | 1.00MP | 0.83MP | 0.65MP | 0.52MP | 0.36MP |
+|---|---|---|---|---|---|---|
+| `16:9 - 1344x768` | 1472×832 | 1344×768 | 1248×704 | 1088×640 | 992×544 | 800×480 |
+| `9:16 - 768x1344` | 832×1472 | 768×1344 | 704×1248 | 640×1088 | 544×992 | 480×800 |
+| `4:3 - 1024x768` | 1280×960 | 1184×896 | 1088×800 | 960×704 | 864×640 | 704×544 |
+| `3:4 - 768x1024` | 960×1280 | 896×1184 | 800×1088 | 704×960 | 640×864 | 544×704 |
+| `1:1 - 768x768` | 1120×1120 | 1024×1024 | 928×928 | 832×832 | 736×736 | 608×608 |
+| `21:9 - 1536x672` | 1696×736 | 1536×672 | 1408×608 | 1248×544 | 1120×480 | 928×416 |
+
+On 16:9 those budgets walk the short edge down 832 → 768 → 704 → 640 → 544 → 480.
+The `balanced` and `fast` presets remain available and behave the same way — they
+simply start from a smaller shape.
+
+### The preset names are approximations
+
+Worth knowing, because it explains why scaling works the way it does:
+
+```
+1344 / 768  = 1.750  ->  7:4    NOT 16:9, which is 1.778
+1536 / 672  = 2.286  ->  16:7   NOT 21:9, which is 2.333
+```
+
+Scaling runs from the preset's **own dimensions**, not from the nominal ratio in
+its name. That is precisely what makes 1.00MP land exactly on 1344×768 rather than
+on 1376×768, which is where a true 16:9 at the same budget would put you.
+
+### What gets reported
+
+`info` prints the size and MP **actually produced**, never what was requested.
+Snapping to the 32-grid moves the real area — typically by 1–2%, up to about 4% at
+the smallest budgets where a 32px step is a larger fraction of the image — and
+echoing your input back would hide what the render used:
+
+```
+megapixels 1.00 -> 1024x1024 (1.000MP actual; preset was 768x768 @ 0.562MP)
+```
+
+Both `plan_only` and a full render report it, so you can check the size before
+spending anything.
+
+**One thing this does not touch: sampling.** H3's shift is a fixed `12.0` in its
+model config with no resolution-dependent term — unlike Flux and SD3, there is no
+dynamic shift derived from sequence length. Changing `megapixels` changes cost and
+detail, not your sigma schedule.
 
 ## Reference images (REF2VA)
 
