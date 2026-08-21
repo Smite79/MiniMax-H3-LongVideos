@@ -12,7 +12,7 @@ anywhere with no GPU and no ComfyUI:
 Exits non-zero if any invariant fails, so you can wire it into CI or run it after
 any edit to the prompt-assembly code.
 """
-import sys, types, os, importlib.util
+import sys, types, os, re, importlib.util
 
 # --- stub heavy deps so sampler.py imports without ComfyUI / torch ------------
 for _name in ["torch", "nodes", "comfy", "comfy.utils", "comfy.samplers",
@@ -359,7 +359,8 @@ def check_overlay_resolutions():
     _s.loader.exec_module(OV)
 
     presets = [S.parse_resolution(o) for o in S.resolution_options()]
-    check("all three tiers x six ratios are offered", len(presets) == 18)
+    check("three short-edge tiers plus the MP tiers, all six ratios",
+          len(presets) == 18 + 6 * len(S.MP_TIERS))
 
     cases = [("watermark", "(c) H3 Studios 2026", 4.0, 3.0, False),
              ("intro", "THE GARAGE", 9.0, 6.0, True),
@@ -1711,11 +1712,29 @@ def check_megapixel_sizing():
     check("an absurdly small target still yields a legal size",
           nw >= 32 and nh >= 32 and nw % 32 == 0 and nh % 32 == 0)
 
-    # The widget must be LAST in the schema: ComfyUI restores saved workflows by
-    # widget position, so anything inserted mid-list silently shifts every value
-    # after it onto the wrong widget.
-    check("'megapixels' is registered as an appended widget",
-          "megapixels" in S.ADDED_WIDGETS)
+    # MP tiers ride in the resolution DROPDOWN rather than a separate widget.
+    # Adding a widget mid-schema would have shifted every later value in every
+    # saved workflow -- ComfyUI restores widget values by position -- whereas
+    # extending a combo's option list shifts nothing: old values still match.
+    opts = S.resolution_options()
+    check("no separate megapixels widget exists", "megapixels" not in S.ADDED_WIDGETS)
+    check("the dropdown offers MP tiers", any("MP" in o for o in opts))
+    check("every option still parses to a legal H3 size",
+          all(S.parse_resolution(o)[0] % 32 == 0 and S.parse_resolution(o)[1] % 32 == 0
+              for o in opts))
+    check("no duplicate labels", len(opts) == len(set(opts)))
+    # The label states the size the render actually uses, because snapping to the
+    # 32-grid moves the real area off the requested budget.
+    for o in [x for x in opts if "MP" in x]:
+        w, h = S.parse_resolution(o)
+        want = float(re.search(r"@ ([\d.]+)MP", o).group(1))
+        check(f"{o} is within 5% of its stated budget",
+              abs((w * h / S.MP_UNIT) - want) / want < 0.05)
+    # Every short-edge preset a saved workflow could hold must still be present,
+    # or loading one would silently fall back to the 16:9 default.
+    for r, (w, h) in S.NATIVE_RES.items():
+        check(f"the {r} native preset is still offered",
+              any(f"{r} - {w}x{h} (native)" == o for o in opts))
 
 
 def check_written_text_is_not_speech():

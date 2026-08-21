@@ -51,13 +51,18 @@ Dom = he, tall, 35, brunette, white t-shirt, blue jeans, work boots
 Mara = she, 30, red hair, grey coat, black jeans
 ```
 
-**3. `resolution`** — presets only, all valid H3 sizes, three tiers per ratio.
-Optionally set **`megapixels`** to override the *size* while keeping the preset's
-*shape*: the dropdown picks the aspect ratio, the number picks how many pixels.
-`1.0` = 1024×1024 worth. Cost and training-distribution match track total pixels
-rather than the short edge — `1:1 768x768` reads as native by short edge but is
-only 0.56MP, while `21:9 1536x672` reads as sub-native at a full 0.98MP. Snapped
-to multiples of 32; `info` reports the size and MP actually used. `0` = off.
+**3. `resolution`** — presets only, all valid H3 sizes, in two flavours:
+
+- **short-edge tiers** — `native` 768, `balanced` 640, `fast` 512
+- **megapixel tiers** — `16:9 @ 1.00MP - 1344x768`, a constant pixel budget applied
+  to each aspect ratio, so VRAM and token count stay put when you change shape
+
+Prefer the MP tiers when comparing across aspect ratios. Cost and training-fit
+track total pixels, not the short edge, and the two disagree at the extremes:
+`1:1 768x768` reads as native by short edge but is only 0.56MP, while
+`21:9 1536x672` reads as sub-native at a full 0.98MP. 1 MP = 1024×1024, matching
+ComfyUI's own `Scale Image to Total Pixels`, so the number means the same thing
+everywhere. Each label states the size the render actually uses.
 
 **4. `shot_seconds`** — a **ceiling**, not the length of every shot. Leave it at 0
 to let the VRAM budget decide.

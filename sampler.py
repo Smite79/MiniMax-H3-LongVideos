@@ -163,15 +163,44 @@ SPIKE_RESERVE = 0.12
 FRAMES_BASELINE_GB = 10.91
 
 
+# Megapixel tiers, offered alongside the short-edge presets. A pixel BUDGET is the
+# more defensible way to size a DiT run: cost and training-distribution match are
+# functions of token count -- (h/16)*(w/16)*frames -- which tracks total pixels,
+# not the short edge. The two disagree at the extremes of aspect ratio, where the
+# short-edge tiers mis-rank in both directions:
+#
+#   1:1  768x768   short edge 768, reads native      -> 0.56 MP, well under budget
+#   21:9 1536x672  short edge 672, reads sub-native  -> 0.98 MP, full budget
+#
+# 1 MP == 1024x1024, matching ComfyUI's own `Scale Image to Total Pixels` node and
+# the community resolution calculators, so the same number means the same size
+# everywhere. At 1.00MP the 16:9 and 21:9 entries land exactly on H3's native
+# presets, which is a good sign the native size really is a ~1MP budget.
+MP_TIERS = (0.52, 0.83, 1.00, 1.20)
+
+
 def resolution_options():
-    """All-preset, all-multiple-of-32 resolution list -- three short-edge tiers per
-    ratio: native 768 (best detail), balanced 640, and fast 512 (generate-then-
-    upscale). No custom entry: every option is a valid H3 size, so nothing to snap
-    or mis-type. The length budget is resolution-aware, so lower tiers unlock
-    longer shots."""
+    """All-preset, all-multiple-of-32 resolution list. Two ways to pick a size:
+
+    SHORT-EDGE tiers -- native 768 (best detail), balanced 640, fast 512
+    (generate-then-upscale).
+    MEGAPIXEL tiers -- a constant pixel budget applied to each aspect ratio, so
+    VRAM and token count stay put when you change shape.
+
+    No custom entry either way: every option is a valid H3 size, so there is
+    nothing to snap or mis-type. The length budget is resolution-aware, so lower
+    tiers unlock longer shots."""
     opts  = [f"{r} - {w}x{h} (native)" for r, (w, h) in NATIVE_RES.items()]
     opts += [f"{r} - {w}x{h} (balanced)" for r, (w, h) in MID_RES.items()]
     opts += [f"{r} - {w}x{h} (fast, upscale later)" for r, (w, h) in FAST_RES.items()]
+    # Precomputed rather than resolved at run time, so the label always states the
+    # size the render will actually use -- snapping to the 32-grid moves the real
+    # area off the requested budget, and a label promising a figure the render
+    # never used is worse than no label.
+    for mp in MP_TIERS:
+        for r, (w, h) in NATIVE_RES.items():
+            nw, nh = scale_to_megapixels(w, h, mp)
+            opts.append(f"{r} @ {mp:.2f}MP - {nw}x{nh}")
     return opts
 
 
@@ -232,7 +261,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms", "megapixels",
+    "exposed_terms",
 )
 
 NL = "\n"
@@ -3785,14 +3814,6 @@ class H3LongVideos:
                     "tooltip": "Patch ModelSamplingMiniMaxH3 (the dual video/audio schedule) inside the "
                                "node so you don't have to wire it upstream. Without it, H3's audio comes "
                                "out as gibberish. Turn OFF only if you patch it yourself upstream."}),
-                "megapixels": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 4.0, "step": 0.05,
-                    "tooltip": "Override the preset's SIZE while keeping its aspect ratio. "
-                               "0 = off (use the preset as-is). 1.0 MP = 1024x1024 worth of "
-                               "pixels. Cost and training-distribution match track total "
-                               "pixels, not the short edge -- 1:1 768x768 reads as native by "
-                               "short edge but is only 0.59MP, while 21:9 1536x672 reads as "
-                               "sub-native and is a full 1.03MP. Snapped to multiples of 32; "
-                               "`info` reports the size and MP actually used."}),
                 "shift_video": ("FLOAT", {"default": 12.0, "min": 1.0, "max": 32.0, "step": 0.5,
                     "tooltip": "Video flow shift. 12 = base H3 (correct default). A low-step MXFP8 "
                                "checkpoint wants ~8. Only used when apply_model_sampling is on."}),
@@ -4097,7 +4118,6 @@ class H3LongVideos:
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0,
             ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_image_4=None,
             ref_mode="where tagged", ref_image_size="match", ref_noise_aug=0.999,
-            megapixels=0.0,
             graph=None, node_id=None):
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
@@ -4117,18 +4137,6 @@ class H3LongVideos:
                     f"computed at {H3_FPS}; set your video-save node to {H3_FPS} too")
         fps = H3_FPS
         w, h = parse_resolution(resolution)
-        # A megapixel target overrides the preset's SIZE but keeps its aspect ratio,
-        # so the dropdown still chooses the shape. Reported as the ACHIEVED value:
-        # snapping to the 32-grid moves the area off the request, and echoing the
-        # asked-for number would print a figure the render never used.
-        mp_note = ""
-        if megapixels and float(megapixels) > 0:
-            nw, nh = scale_to_megapixels(w, h, float(megapixels))
-            if (nw, nh) != (w, h):
-                mp_note = (f"megapixels {float(megapixels):.2f} requested -> {nw}x{nh} "
-                           f"({nw * nh / MP_UNIT:.2f}MP actual, was {w}x{h} "
-                           f"@ {w * h / MP_UNIT:.2f}MP)")
-                w, h = nw, nh
         # H3 is CFG-free (cfg 1): the sampler skips the negative, but common_ksampler
         # still needs a conditioning object, so build an empty one from the clip.
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
@@ -4305,7 +4313,6 @@ class H3LongVideos:
             plan = ((anchor_note + " ") if anchor_note else "") + \
                    ((f"SLA: {sla_note}. ") if sla_note else "") + \
                    (("LORA HINTS -- " + "; ".join(hint_notes) + ". ") if hint_notes else "") + \
-                   ((mp_note + ". ") if mp_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4573,7 +4580,6 @@ class H3LongVideos:
                     + ").") if count_subjects else "")
                 + (f" SLA: {sla_note}." if sla_note else "")
                 + (" LORA HINTS -- " + "; ".join(hint_notes) + "." if hint_notes else "")
-                + (f" {mp_note}." if mp_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")
