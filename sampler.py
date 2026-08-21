@@ -3944,9 +3944,14 @@ class H3LongVideos:
     # and the nodes that want a frame rate are split -- CreateVideo / SaveWEBM /
     # VHS Video Combine take a FLOAT, while plenty of utility nodes take an INT.
     # Wiring the wrong one is a red link, not a runtime error, so both are offered.
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "INT", "INT", "INT", "FLOAT", "FLOAT", "INT")
+    # LATENT is APPENDED, never inserted: ComfyUI stores a link by output SLOT
+    # INDEX, so adding at the end leaves every existing wire pointing at the same
+    # output. Inserting mid-list would silently re-target them.
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "INT", "INT", "INT", "FLOAT", "FLOAT", "INT",
+                    "LATENT")
     RETURN_NAMES = ("images", "audio", "info", "script", "frames_per_shot", "total_frames",
-                    "shots", "video_seconds", "fps", "fps_int")
+                    "shots", "video_seconds", "fps", "fps_int",
+                    "latent")
 
     @classmethod
     def IS_CHANGED(cls, plan_only=False, **kwargs):
@@ -4332,12 +4337,26 @@ class H3LongVideos:
         _evict_all_but(model)
         (out,) = nodes.common_ksampler(model, seed, steps, cfg, sn, sch, positive, negative,
                                        latent, denoise=denoise)
+        # Keep a CPU copy of the sampled latent BEFORE decoding, for the `latent`
+        # output. Latents are ~1000x smaller than the frames they decode to (a
+        # 1344x768 124f shot is ~1.5MB against ~1.5GB), so carrying one per shot for
+        # the whole chain is free. Detached and moved off the card immediately, for
+        # the same reason the decoded frames are.
+        raw = out.get("samples") if isinstance(out, dict) else None
+        shot_latent = None
+        if raw is not None:
+            try:
+                parts = raw.unbind() if hasattr(raw, "unbind") else None
+                shot_latent = ([t.detach().to("cpu", copy=True) for t in parts]
+                               if parts else raw.detach().to("cpu", copy=True))
+            except Exception:
+                shot_latent = None      # never fail a render for the sake of an output
         video = _decode_video(vae, out, tiled, free_first=model,
                               tile_t=decode_tile_frames, tile_xy=decode_tile_size)
         audio = _decode_audio(audio_vae, out)
         del out, positive, latent
         _deep_cleanup()
-        return video, audio
+        return video, audio, shot_latent
 
     def run(self, model, clip, vae, audio_vae, prompt, resolution,
             steps, cfg, sampler_name, scheduler, seed,
@@ -4615,14 +4634,20 @@ class H3LongVideos:
                     + (f" {ln_note}." if ln_note else ""))
             ph_img = torch.zeros((1, 64, 64, 3))
             ph_audio = {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}
+            # plan_only samples nothing, so there is no latent to hand out. Emit a
+            # correctly-SHAPED empty one rather than None: a downstream LATENT input
+            # would choke on None, and this keeps the preview wireable exactly like
+            # a real run.
             return (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
-                    sum(plan_lens), shots, total, float(fps), int(fps))
+                    sum(plan_lens), shots, total, float(fps), int(fps),
+                    _empty_av_latent(w, h, 5, fps)[0])
 
         spk = speech_flags(beats)          # which shots have real (quoted) dialogue
         vram_trace = []                    # free VRAM after each shot
         muted_flags = []                   # which shots were audio-silenced
         hoff = max(0, int(handoff_offset))
         backoff, video_chunks, audio_chunks = [], [], []
+        latent_chunks = []                 # per-shot sampled latents, pre-decode
         handoff, sr = first_frame, None
         ref_list = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4) if r is not None]
         ref_shots = []                     # which shots ended up ref-conditioned
@@ -4685,7 +4710,7 @@ class H3LongVideos:
             if i == 0:
                 while True:
                     try:
-                        frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
+                        frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
@@ -4701,15 +4726,17 @@ class H3LongVideos:
                                                "Pick a smaller resolution, close other GPU apps, or use a smaller quant.")
             else:
                 try:
-                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
+                    frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if not _is_oom(e) or tiled:
                         raise
                     mm.soft_empty_cache(True); tiled = True; backoff.append(f"shot {i+1}: tiled")
-                    frames, audio = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
+                    frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug)
 
+            if shot_latent is not None:
+                latent_chunks.append(shot_latent)
             sr = audio["sample_rate"]; wav = audio["waveform"]
 
             # End the shot `hoff` frames early so the frame handed to the NEXT shot
@@ -4790,6 +4817,44 @@ class H3LongVideos:
 
         all_frames = torch.cat(video_chunks, dim=0)
         all_audio = torch.cat(audio_chunks, dim=-1)
+
+        # --- the `latent` output ------------------------------------------------
+        # The sampled latents, joined on the temporal axis. This is NOT the latent
+        # form of `images`, and the difference is not cosmetic:
+        #
+        #   * trim_seam and handoff_offset cut DECODED frames. H3 compresses time,
+        #     so one pixel frame is not one latent step and those cuts have no exact
+        #     latent equivalent -- the seam frames trim_seam removes are still here.
+        #   * the overlap fade and any post-pass upscale are pixel-space too.
+        #
+        # So decoding this yourself gives a slightly longer video with the seams
+        # intact. On a SINGLE-shot run none of those apply and it is exact, which is
+        # the case that matters for testing a latent upscaler.
+        latent_note = ""
+        latent_out = {"samples": _empty_av_latent(w, h, 5, fps)[0]["samples"]}
+        if latent_chunks:
+            try:
+                if all(isinstance(c, list) and len(c) == 2 for c in latent_chunks):
+                    vids = [c[0] for c in latent_chunks]
+                    auds = [c[1] for c in latent_chunks]
+                    # A mid-chain resolution backoff makes the shots un-concatenable.
+                    if len({tuple(v.shape[1:2] + v.shape[3:]) for v in vids}) == 1:
+                        latent_out = {"samples": comfy.nested_tensor.NestedTensor(
+                            (torch.cat(vids, dim=2), torch.cat(auds, dim=-1)))}
+                        if len(latent_chunks) > 1:
+                            latent_note = (f" latent: {len(latent_chunks)} shot(s) joined on the "
+                                           f"time axis -- PRE-trim, so it holds the seam frames "
+                                           f"trim_seam drops from `images` and is longer by "
+                                           f"{len(latent_chunks) - 1} frame(s)")
+                        else:
+                            latent_note = " latent: single shot, exact match for `images`"
+                    else:
+                        latent_out = {"samples": comfy.nested_tensor.NestedTensor(
+                            (vids[-1], auds[-1]))}
+                        latent_note = (" latent: shots differ in size after a resolution backoff, "
+                                       "so only the LAST shot's latent is emitted")
+            except Exception as e:
+                latent_note = f" latent: could not be assembled ({type(e).__name__})"
 
         # Optional post-pass upscale of the finished frames (safe: any failure
         # falls back to lanczos / raw frames and never breaks the render).
@@ -4880,6 +4945,7 @@ class H3LongVideos:
                        if lora_on else "")
                     + ").") if count_subjects else "")
                 + ((" " + preflight_txt.strip()) if preflight_txt else "")
+                + (f"{latent_note}." if latent_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")
@@ -4900,7 +4966,7 @@ class H3LongVideos:
         # shot, which is what a downstream consumer must be able to hold.
         return (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
                 max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
-                float(fps), int(fps))
+                float(fps), int(fps), latent_out)
 
 
 # REF2VA registers under its OWN key. The FL2VA pack one directory up keeps

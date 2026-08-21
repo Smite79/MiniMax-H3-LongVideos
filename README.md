@@ -22,10 +22,21 @@ Copy this folder into `ComfyUI/custom_nodes/` and restart the ComfyUI **server**
 ## Quick start
 
 ```
-UNETLoader ─┐
-CLIPLoader ─┼─> H3 Long Videos ─> images ─> Video Combine
-VAELoader ──┘                     audio  ─┘
+UNETLoader ─┐                     images ─> Video Combine
+CLIPLoader ─┼─> H3 Long Videos ─> audio  ─┘
+VAELoader ──┘                     latent ─> (optional) latent post-processing
 ```
+
+The **`latent`** output carries the sampled latents, joined on the time axis, for
+things like a latent upscaler. It is emitted *as well as* `images`, never instead:
+the shot chain hands each shot the previous one's decoded last frame, so decoding
+cannot be deferred.
+
+It is **not** the latent form of `images` on a multi-shot run. `trim_seam` and
+`handoff_offset` cut decoded frames, and H3 compresses time — one pixel frame is
+not one latent step — so those cuts have no exact latent equivalent and the seam
+frames are still present. On a **single-shot** run nothing trims and it matches
+exactly. `info` says which you got.
 
 You write four things:
 

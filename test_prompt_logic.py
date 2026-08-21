@@ -2269,6 +2269,46 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_latent_output():
+    """The node emits the sampled latent ALONGSIDE images, never instead of them.
+
+    The chain cannot defer decoding: each shot's handoff is `frames[-1:]`, a decoded
+    frame, and both trims (trim_seam, handoff_offset) cut pixel frames. So a
+    latent-only mode is not possible -- but the pre-decode latent is ~1000x smaller
+    than the frames it becomes, so carrying one per shot is free."""
+    print("\n=== latent output ===")
+    cls = S.NODE_CLASS_MAPPINGS["H3LongVideos"]
+    check("RETURN_TYPES and RETURN_NAMES agree",
+          len(cls.RETURN_TYPES) == len(cls.RETURN_NAMES))
+    check("a LATENT output exists", "LATENT" in cls.RETURN_TYPES)
+    check("...named 'latent'", "latent" in cls.RETURN_NAMES)
+    # APPENDED, not inserted: ComfyUI stores a link by output SLOT INDEX, so
+    # inserting mid-list would silently re-target every existing wire.
+    check("it is the LAST output", cls.RETURN_NAMES[-1] == "latent")
+    check("images is still slot 0", cls.RETURN_NAMES[0] == "images")
+    check("audio is still slot 1", cls.RETURN_NAMES[1] == "audio")
+    check("info is still slot 2", cls.RETURN_NAMES[2] == "info")
+    check("script is still slot 3", cls.RETURN_NAMES[3] == "script")
+    check("fps_int is still slot 9", cls.RETURN_NAMES[9] == "fps_int")
+
+    # Every return path must carry the same arity, or ComfyUI errors on unpack.
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("the plan_only path returns a latent too",
+          "float(fps), int(fps),\n                    _empty_av_latent(" in src)
+    check("the render path returns latent_out", "float(fps), int(fps), latent_out)" in src)
+    # It must never be None -- a downstream LATENT input cannot take that.
+    check("plan_only emits a real empty latent, not None",
+          "_empty_av_latent(w, h, 5, fps)[0])" in src)
+    check("the render path seeds a real empty latent before assembly",
+          'latent_out = {"samples": _empty_av_latent(' in src)
+    # And the caveat has to be stated, because the latent is NOT the latent form of
+    # `images` on a multi-shot chain.
+    check("the pre-trim caveat is reported", "PRE-trim" in src)
+    check("...and a single shot is called exact", "exact match for `images`" in src)
+    check("a resolution backoff is handled rather than crashing",
+          "resolution backoff" in src)
+
+
 def check_preflight_note_assembly():
     """The preflight notes are built ONCE and emitted at both output sites.
 
@@ -2869,6 +2909,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_latent_output()
     check_preflight_note_assembly()
     check_audio_scale_coupling()
     check_schedule_balance()
