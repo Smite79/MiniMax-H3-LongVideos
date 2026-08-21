@@ -1523,6 +1523,15 @@ def garment_zones(item):
 # a physical description, not as a negation, and they live in the wardrobe channel
 # so they persist and clear exactly like a garment.
 _BARE_MARK = {"lower": "bare below the waist", "upper": "bare chest"}
+# The upper-zone default has to follow the person. "bare chest" on a woman is both
+# odd phrasing and a weak cue -- it describes a male torso, and H3 renders roughly
+# what the words describe. The lower default stays neutral: it is a position on the
+# body, not an anatomy, and naming anatomy there is exactly what exposed_terms is
+# for. A person with no declared pronoun keeps the neutral wording.
+_BARE_MARK_BY_PRON = {
+    "she": {"lower": "bare below the waist", "upper": "bare breasts"},
+    "he": {"lower": "bare below the waist", "upper": "bare chest"},
+}
 
 
 # A character can START bare rather than becoming bare. Until this existed the
@@ -1595,18 +1604,22 @@ def parse_exposed_terms(text):
 def exposed_mark(zone, name, items, terms):
     """The phrase to stamp for a stripped `zone` on this person.
 
-    Name beats pronoun, pronoun beats the generic default -- so one setup covers a
-    whole cast, and a single character can still be given their own wording."""
+    Name beats pronoun, pronoun beats the person's own default, which beats the
+    neutral one -- so one setup covers a whole cast, and a single character can
+    still be given their own wording."""
+    pron = _pronoun_of(items or [])
     if terms:
         by_name = terms.get((name or "").strip().lower(), {})
         if zone in by_name:
             return by_name[zone]
-        pron = _pronoun_of(items or [])
         if pron:
             by_pron = terms.get(pron.lower(), {})
             if zone in by_pron:
                 return by_pron[zone]
-    return _BARE_MARK[zone]
+    # Configuring only the lower zone is the common case ('she = vagina'), and the
+    # upper zone still has to be worded for the right body rather than defaulting
+    # to a male torso.
+    return _BARE_MARK_BY_PRON.get(pron or "", _BARE_MARK)[zone]
 
 
 def bare_state_items(items, stripped_zones, marks=None):
@@ -1616,8 +1629,12 @@ def bare_state_items(items, stripped_zones, marks=None):
     put back on -- drops its marker, which is what "unless requested" means."""
     marks = marks or dict(_BARE_MARK)
     # Every phrase this function could have stamped, so a marker is recognised for
-    # removal even if the configured wording changed between runs.
+    # removal even if the configured wording changed between runs -- including the
+    # per-pronoun defaults, or a marker stamped as 'bare breasts' on one run could
+    # not be dropped on the next.
     known = set(_BARE_MARK.values()) | set(marks.values())
+    for d in _BARE_MARK_BY_PRON.values():
+        known |= set(d.values())
     add, drop = [], []
     for zone in _BARE_MARK:
         mark = marks.get(zone, _BARE_MARK[zone])

@@ -1741,6 +1741,59 @@ def check_declared_bare():
     check("...and stays cleared", "penis" not in b[2])
 
 
+def check_bare_wording_follows_pronoun():
+    """The upper-zone default has to be worded for the right body.
+
+    'bare chest' describes a male torso; H3 renders roughly what the words say, so
+    a woman defaulting to it is both odd phrasing and a weak cue. Configuring only
+    the lower zone ('she = vagina') is the common case, and the upper zone still
+    has to come out right on its own."""
+    print("\n=== bare-zone wording follows the declared pronoun ===")
+
+    def para(who, cm, et="", beats=None):
+        beats = beats or ["%s stands by the window." % who]
+        out = []
+        for g in S.distribute_generations("A room.", beats, "", "", cm,
+                                          prevent_nudity=True, exposed_terms=et):
+            t = g.split("] ", 1)[-1].split("\n")[0]
+            i = t.find(who + " (")
+            out.append(t[i:t.find(")", i) + 1] if i >= 0 else t)
+        return out
+
+    w = para("Mara", "Mara = she, 30, blonde, nude", "she = vagina")[0]
+    check("a nude woman fires her configured lower term", "vagina" in w)
+    check("...and her upper zone reads as breasts, not a chest",
+          "bare breasts" in w and "bare chest" not in w)
+    w = para("Mara", "Mara = she, 30, blonde, nude")[0]
+    check("with no terms at all she still gets the right upper wording",
+          "bare breasts" in w and "bare chest" not in w)
+    check("...and the neutral lower wording", "bare below the waist" in w)
+    check("'topless' alone uses it too",
+          "bare breasts" in para("Mara", "Mara = she, 30, jeans, topless")[0])
+
+    m = para("Jon", "Jon = he, 35, bald, nude", "he = penis")[0]
+    check("a nude man is unchanged", "penis" in m and "bare chest" in m)
+    check("...and never gets the feminine wording", "bare breasts" not in m)
+    n = para("Ash", "Ash = 40, tall, nude")[0]
+    check("no declared pronoun keeps the neutral wording",
+          "bare chest" in n and "bare breasts" not in n)
+
+    # An explicit term still outranks the per-pronoun default.
+    o = para("Mara", "Mara = she, 30, nude", "she upper = topless silhouette")[0]
+    check("an explicit upper term still wins",
+          "topless silhouette" in o and "bare breasts" not in o)
+
+    # A per-pronoun marker must still be recognised for REMOVAL when covered again.
+    b = para("Mara", "Mara = she, 30, blonde, nude", "she = vagina",
+             beats=["Mara stands.",
+                    "Mara pulls on a shirt.\nwardrobe: Mara += white shirt",
+                    "Mara sits."])
+    check("covering the upper zone drops the feminine marker",
+          "bare breasts" not in b[1] and "white shirt" in b[1])
+    check("...and the still-bare lower zone keeps its term", "vagina" in b[1])
+    check("...and it stays that way", "bare breasts" not in b[2] and "vagina" in b[2])
+
+
 def check_plural_cast_binding():
     """A beat that addresses the cast only in the plural must still bind them.
 
@@ -2377,6 +2430,7 @@ def main():
     check_lora_hints()
     check_audio_vae_guard()
     check_declared_bare()
+    check_bare_wording_follows_pronoun()
     check_plural_cast_binding()
 
     print()
