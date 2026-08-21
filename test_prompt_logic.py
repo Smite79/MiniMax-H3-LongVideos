@@ -1672,6 +1672,75 @@ def check_sla_pairing():
         check(f"'sla' NOT falsely found in {name}", not S._SLA_NAME.search(name))
 
 
+def check_declared_bare():
+    """A character can START bare, not only become bare.
+
+    exposed_terms used to fire only on a REMOVAL, so someone naked from shot 1 was
+    never marked and their configured wording never applied. The state has to be
+    DECLARED though -- inferring it from a sheet that simply doesn't list clothes
+    would put nudity in scenes nobody asked for."""
+    print("\n=== declared-bare characters ===")
+
+    def para(cm, et="he = penis", beats=None, pn=True, strip_out=None):
+        beats = beats or ["Jon stands by the bed.", "Jon walks to the window."]
+        return [g.split("] ", 1)[-1].split("\n")[0]
+                for g in S.distribute_generations("A room.", beats, "", "", cm,
+                                                  prevent_nudity=pn, exposed_terms=et,
+                                                  strip_out=strip_out)]
+
+    b = para("Jon = he, 35, bald, nude")
+    check("'nude' fires the configured term from shot 1", "penis" in b[0])
+    check("...and marks the upper zone too", "bare chest" in b[0])
+    check("...and persists into later shots", "penis" in b[1])
+    check("...and the literal token is replaced, not doubled up",
+          "nude" not in b[0].lower())
+
+    b = para("Jon = he, 35, bald, naked", et="")
+    check("without exposed_terms the generic wording is used",
+          "bare below the waist" in b[0] and "bare chest" in b[0])
+    check("a declaration is intent, so prevent_nudity does not blank it",
+          "bare below the waist" in para("Jon = he, 35, bald, nude", et="", pn=True)[0])
+
+    b = para("Jon = he, 35, bald, grey shirt, bottomless")
+    check("'bottomless' bares only the lower zone",
+          "penis" in b[0] and "bare chest" not in b[0])
+    check("...and leaves the upper garment on", "grey shirt" in b[0])
+    t = S.distribute_generations("A room.", ["Mara stands by the window."], "", "",
+                                 "Mara = she, 30, blue jeans, topless", prevent_nudity=True,
+                                 exposed_terms="she upper = bare breasts")[0]
+    check("'topless' bares only the upper zone",
+          "bare breasts" in t and "blue jeans" in t and "bare below the waist" not in t)
+
+    # THE case that must not regress: an under-specified sheet is not nudity.
+    b = para("Jon = he, 35, bald")
+    check("a sheet that lists no clothes is NOT treated as naked",
+          "penis" not in b[0] and "bare" not in b[0])
+    check("only whole-item tokens count",
+          S.declared_bare_zones(["nude beach backdrop"])[0] == set())
+    check("an ordinary attribute is not a nudity token",
+          S.declared_bare_zones(["bald"])[0] == set())
+
+    # Nothing came off, so the next shot must keep its handoff frame.
+    so = []
+    para("Jon = he, 35, bald, nude", strip_out=so)
+    check("a declared-bare start does not cost the next shot its handoff", so == [])
+    # ...whereas an actual removal still does.
+    so = []
+    para("Jon = he, 35, bald, blue boxers",
+         beats=["Jon stands.", "Jon pulls down his boxers and steps out of them."],
+         strip_out=so)
+    check("an actual removal still suppresses the next handoff", so == [2])
+
+    # Dressing the zone again clears that zone's marker only.
+    b = para("Jon = he, 35, bald, nude",
+             beats=["Jon stands by the bed.",
+                    "Jon pulls on his boxers.\nwardrobe: Jon += blue boxers",
+                    "Jon walks out."])
+    check("covering a zone clears its marker", "penis" not in b[1])
+    check("...and leaves the other zone's marker alone", "bare chest" in b[1])
+    check("...and stays cleared", "penis" not in b[2])
+
+
 def check_plural_cast_binding():
     """A beat that addresses the cast only in the plural must still bind them.
 
@@ -2307,6 +2376,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_audio_vae_guard()
+    check_declared_bare()
     check_plural_cast_binding()
 
     print()

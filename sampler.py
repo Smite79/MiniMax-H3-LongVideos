@@ -1525,6 +1525,43 @@ def garment_zones(item):
 _BARE_MARK = {"lower": "bare below the waist", "upper": "bare chest"}
 
 
+# A character can START bare rather than becoming bare. Until this existed the
+# exposure marker only fired on a REMOVAL, so someone naked from shot 1 was never
+# marked and exposed_terms never applied to them.
+#
+# This has to be DECLARED, never inferred. Absence of clothing in a sheet means the
+# author did not enumerate it -- "Jon = he, 35, bald" is an ordinary
+# under-specified sheet, not a naked man -- and inferring nudity from a short sheet
+# would put it in scenes nobody asked for. Only these explicit tokens count.
+_DECLARED_BARE = {
+    "nude": {"lower", "upper"}, "naked": {"lower", "upper"},
+    "fully nude": {"lower", "upper"}, "fully naked": {"lower", "upper"},
+    "completely nude": {"lower", "upper"}, "completely naked": {"lower", "upper"},
+    "undressed": {"lower", "upper"}, "unclothed": {"lower", "upper"},
+    "bottomless": {"lower"}, "topless": {"upper"},
+    "waist down nude": {"lower"}, "nude below the waist": {"lower"},
+    "bare chested": {"upper"}, "barechested": {"upper"}, "bare-chested": {"upper"},
+}
+
+
+def declared_bare_zones(items):
+    """Zones a person's sheet says are bare from the outset, and the tokens saying so.
+
+    Returns (zones, tokens). The tokens are returned so the caller can drop them
+    from the description: they are replaced by the exposure marker, and leaving both
+    in would state the same fact twice in one parenthetical."""
+    zones, tokens = set(), []
+    for it in items or []:
+        key = _item_name(it).strip().lower()
+        z = _DECLARED_BARE.get(key)
+        if z is None:
+            z = _DECLARED_BARE.get(re.sub(r"[^a-z ]", "", (it or "").strip().lower()))
+        if z:
+            zones |= z
+            tokens.append(it)
+    return zones, tokens
+
+
 def parse_exposed_terms(text):
     """Per-person text for a stripped zone: {key: {zone: phrase}}.
 
@@ -2229,6 +2266,18 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             z = garment_zones(it)
             if z:
                 stripped.setdefault(nm, set()).update(z)
+        # A sheet can DECLARE a zone bare from the outset ('Jon = he, 35, nude'),
+        # which is the start-naked case: there is no removal to trigger on, so
+        # without this the marker never fires and exposed_terms never reaches them.
+        # The token itself is swapped out for the marker so the fact is stated once.
+        declared = {}
+        for nm in list(active):
+            zones, tokens = declared_bare_zones(active.get(nm, []))
+            if zones:
+                declared[nm] = zones
+                stripped.setdefault(nm, set()).update(zones)
+                for tok in tokens:
+                    active[nm].remove(tok)
         for nm in list(active):
             marks = {z: exposed_mark(z, nm, active.get(nm, []), exposed)
                      for z in ("lower", "upper")}
@@ -2243,14 +2292,20 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             # Filling in exposed_terms IS the intent, so it overrides the guard for the
             # people it names. Requiring both switches was a footgun: the terms sat
             # there looking configured and did nothing.
-            if prevent_nudity and not exposed:
+            # Declaring nudity in the sheet is as explicit as filling in
+            # exposed_terms, so it overrides the guard for that person the same way.
+            if prevent_nudity and not exposed and nm not in declared:
                 add = []
+            stripped_here = any(n == nm for n, _ in off_now)
             for mark in add:
                 active[nm].append(mark)
-                # This shot newly bared a zone. The NEXT shot must not continue from
-                # its last frame: that frame is the removal in progress, and a picture
-                # of the garment still being worn beats any sentence saying it is off.
-                if strip_out is not None and gi not in strip_out:
+                # This shot newly bared a zone by REMOVING something. The NEXT shot
+                # must not continue from its last frame: that frame is the removal in
+                # progress, and a picture of the garment still being worn beats any
+                # sentence saying it is off. A zone that was declared bare from the
+                # start has no such frame -- nothing came off -- so it must NOT cost
+                # the next shot its handoff.
+                if stripped_here and strip_out is not None and gi not in strip_out:
                     strip_out.append(gi)
             for mark in drop:
                 active[nm].remove(mark)

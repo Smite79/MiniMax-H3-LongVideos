@@ -84,6 +84,12 @@ rendering**. Do that first; it is near-instant.
   Mara upper = bare breasts
   ```
 
+  A character can also **start** bare rather than becoming bare — put `nude`,
+  `naked`, `topless` or `bottomless` in their `character_memory` and the wording
+  applies from shot 1, with no removal needed. This must be written explicitly;
+  a sheet that simply doesn't list clothes (`Jon = he, 35, bald`) is treated as
+  under-specified, never as naked.
+
   Filling this in **is** the intent, so it overrides `prevent_nudity` — no second
   switch to remember. The shot after a strip also starts **fresh**, without the
   handoff frame, because continuing from a frame that still shows the garment is
