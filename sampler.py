@@ -2791,14 +2791,26 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
     latent, fc = _empty_av_latent(width, height, length, fps)
     refs = [r for r in (ref_images or []) if r is not None]
     if refs:
-        # ref2va: references REPLACE the keyframe channel for this shot -- the two
-        # cannot ride together. comfy/model_base.py fills ONE `cond_video_latents`
-        # list, and the refs branch overwrites whatever the keyframe branch put
-        # there (model_base.py:2094 then :2098), while PackedLayout still lays out
-        # rows for both. The row count and the latent count then disagree, which
-        # lands as a shape error deep inside the DiT -- or worse, feeds the keyframe
-        # rows a reference's latent. So a shot is EITHER ref-conditioned or
-        # keyframe-conditioned, and run() decides which per shot.
+        # ref2va: this shot is reference-conditioned rather than keyframe-conditioned,
+        # and run() decides which per shot. A tagged shot is handed the previous
+        # frame as an extra REFERENCE so a tag never reads as a cut.
+        #
+        # WHY it is either/or is now historical. On ComfyUI 0.30 the two channels
+        # could not ride together: model_base.py filled ONE `cond_video_latents`
+        # list and the refs branch OVERWROTE whatever the keyframe branch had put
+        # there, while PackedLayout still laid out rows for both -- so the row count
+        # and the latent count disagreed, landing as a shape error deep in the DiT
+        # or feeding keyframe rows a reference's latent.
+        #
+        # ComfyUI 0.31+ concatenates instead:
+        #     payload["cond_video_latents"] = payload.get("cond_video_latents", []) + [...]
+        # and PackedLayout appends keyframe segments before ref segments, so the two
+        # orders agree. Both channels CAN coexist there, and this split is a
+        # limitation kept for behavioural stability rather than a requirement. Moving
+        # a tagged shot's handoff from the ref channel to a real keyframe would be
+        # strictly better on 0.31+ -- a keyframe anchors the first frame, a reference
+        # only supplies identity -- but it changes conditioning, so it is a
+        # deliberate change and not a silent one.
         items, blocks = _build_ref_images(vae, refs, width, height, ref_image_size)
         tokens = clip.tokenize(prompt, minimax_ref_items=items)
         cond = clip.encode_from_tokens_scheduled(tokens)
@@ -3285,7 +3297,14 @@ def _direct_model_sampling(model, shift_video, shift_audio):
     and applies audio_shift only if the installed set_parameters accepts it."""
     import inspect, copy
     m = model.clone()
-    ms = copy.copy(m.get_model_object("model_sampling"))
+    # deepcopy, not copy: model_sampling is an nn.Module, and a SHALLOW copy shares
+    # its `_buffers` dict with the original. set_parameters() re-registers `sigmas`
+    # into that shared dict, so a shallow copy silently rewrites the BASE model's
+    # sigma table -- the very thing this copy exists to prevent. Our own run reads
+    # the patched object either way, but ComfyUI caches the model across queue
+    # runs, so the damage outlives this execution and reaches anything else holding
+    # that model. The buffer is ~1000 floats; the deepcopy is free.
+    ms = copy.deepcopy(m.get_model_object("model_sampling"))
     sig = inspect.signature(ms.set_parameters)
     kwargs = {}
     if "shift" in sig.parameters:

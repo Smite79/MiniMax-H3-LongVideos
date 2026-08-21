@@ -301,7 +301,8 @@ Note the sparse paths are **approximate** — A/B a shot before adopting them.
 
 ## Requirements
 
-- ComfyUI 0.30+ with native MiniMax-H3 support
+- ComfyUI 0.31+ with native MiniMax-H3 support (tested on 0.33; on 0.30 the audio
+  shifts behave differently -- see Requirements in REFERENCE.md)
 - **Pillow** only for the text overlays (ComfyUI already ships it)
 - No negative prompt — H3 is CFG-free at `cfg 1`; the node makes an empty one
 - No denoise input — fixed at 1.0; partial denoise desyncs the audio schedule
