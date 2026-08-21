@@ -1869,6 +1869,26 @@ def check_plural_cast_binding():
           "vagina" not in b[4] and "penis" not in b[4])
     check("'both of them' also binds the cast", "vagina" in b[5] and "penis" in b[5])
 
+    # The silence gate must agree with the binding. It did not: person_referenced()
+    # answers False for 'they', so a beat the roll-call had just described in full
+    # counted as having nobody in it and got NO mouth constraint -- two people on
+    # screen with nothing saying their lips are closed, which renders as mouths
+    # opening at random.
+    sil = S.distribute_generations(
+        "A room.",
+        ["Mara and Jon walk in.", "She looks at him.", "They face each other.",
+         "Both of them sit down.", "The hangar doors roll open.",
+         'They stop and Mara says: "Wait."'],
+        "", "", "Mara = she, 30, blonde\nJon = he, 35, bald")
+    lips = ["mouth closed" in s.lower() for s in sil]
+    check("a named beat gets the mouth constraint", lips[0])
+    check("a singular-pronoun beat gets it", lips[1])
+    check("a PLURAL beat gets it too", lips[2] and lips[3])
+    check("a scenery beat with nobody in it does NOT get a mouth constraint",
+          not lips[4])
+    check("...but is still given a no-voice soundscape", "no voices" in sil[4].lower())
+    check("a beat with real dialogue is not silenced", not lips[5])
+
     # Bare 'them'/'their' must not trigger it -- they are object-prone.
     check("bare 'them' is not a cast reference", not S._PLURAL_CAST.search("steps out of them"))
     check("bare 'their' is not a cast reference", not S._PLURAL_CAST.search("their edges glow"))

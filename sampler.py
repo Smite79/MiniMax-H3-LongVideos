@@ -2368,8 +2368,17 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         #                 there to have a mouth. On a scenery beat it describes
         #                 nobody and can only invite a face into an empty frame.
         no_speech = bool(auto_silence_nonspeech and not has_speech(body))
-        people_here = bool(active.get("")) or any(
-            n and person_referenced(body, n, active) for n in active)
+        # Must agree with compose_persistent()'s binding, including the PLURAL case.
+        # It did not: person_referenced() resolves a pronoun to one person, so
+        # 'they'/'both of them' answered False for everyone, and a beat that the
+        # roll-call had just described in full counted as having nobody in it. Those
+        # shots got no mouth constraint at all -- two people on screen, nothing
+        # saying their lips are closed -- which is exactly a shot that opens mouths
+        # at random.
+        present_names = [n for n in active if n and n not in departed]
+        people_here = (bool(active.get(""))
+                       or any(person_referenced(body, n, active) for n in present_names)
+                       or (len(present_names) > 1 and bool(_PLURAL_CAST.search(body))))
         if no_speech and people_here:
             persistent = persistent.rstrip(". ") + "." + LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL
         silent_shot = no_speech
