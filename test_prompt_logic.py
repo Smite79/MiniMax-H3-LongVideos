@@ -1672,6 +1672,69 @@ def check_sla_pairing():
         check(f"'sla' NOT falsely found in {name}", not S._SLA_NAME.search(name))
 
 
+def check_plural_cast_binding():
+    """A beat that addresses the cast only in the plural must still bind them.
+
+    _resolve_subject() maps a pronoun to ONE person, so 'they' with two people
+    resolved to neither and the shot described nobody -- dropping both characters
+    and, after a removal, their exposure markers. The fix prepends a roll-call
+    rather than rewriting the sentence, because 'they' can mean a subset and
+    expanding it in place would assert a cast list the author did not write."""
+    print("\n=== plural cast reference ===")
+    cm = ("Mara = she, 30, blonde hair, white top, black panties\n"
+          "Jon = he, 35, bald, grey shirt, blue boxers")
+    ET = "she = vagina\nhe = penis"
+    beats = ["Mara and Jon stand in the room.",
+             "Mara pulls down her panties and steps out of them.",
+             "Jon pulls down his boxers and steps out of them.",
+             "They face each other.",
+             "The window rattles and light floods through them.",
+             "Both of them sit down."]
+    g = S.distribute_generations("A room.", beats, "", "", cm,
+                                 prevent_nudity=True, exposed_terms=ET)
+    b = [x.split("] ", 1)[-1].split("\n")[0].lower() for x in g]
+
+    check("a removal names the stripped zone for the person who stripped",
+          "vagina" in b[1] and "penis" not in b[1])
+    check("the other character's removal names his zone", "penis" in b[2])
+    check("a plural beat binds BOTH characters", "vagina" in b[3] and "penis" in b[3])
+    check("...via a roll-call, leaving the sentence intact",
+          "are both in this shot" in b[3] and "they face each other." in b[3])
+    check("...and does not rewrite the pronoun away", "they face" in b[3])
+    # The case the roll-call must NOT fire on: a plural pronoun for OBJECTS in a
+    # beat with no people. Binding here would summon the cast into a scenery shot.
+    check("an object 'them' keeps a scenery beat empty",
+          "mara" not in b[4] and "jon" not in b[4]),
+    check("...and stamps no exposure marks there",
+          "vagina" not in b[4] and "penis" not in b[4])
+    check("'both of them' also binds the cast", "vagina" in b[5] and "penis" in b[5])
+
+    # Bare 'them'/'their' must not trigger it -- they are object-prone.
+    check("bare 'them' is not a cast reference", not S._PLURAL_CAST.search("steps out of them"))
+    check("bare 'their' is not a cast reference", not S._PLURAL_CAST.search("their edges glow"))
+    check("'they' is a cast reference", bool(S._PLURAL_CAST.search("they face each other")))
+    check("'each other' is a cast reference", bool(S._PLURAL_CAST.search("facing each other")))
+
+    # A single-character scene has nothing to roll-call: the singular path covers it.
+    one = S.distribute_generations("A room.", ["They stand still."], "", "",
+                                   "Mara = she, 30, blonde hair")
+    check("a one-person cast does not get a roll-call",
+          "are both in this shot" not in one[0].lower())
+    # Someone whose DECLARED pronoun is 'they' owns the word: it resolves to them
+    # individually and the roll-call must stay out of it.
+    ari = S.distribute_generations(
+        "A room.", ["They all look up."], "", "",
+        "Mara = she, 30, blonde\nJon = he, 35, bald\nAri = they, 40, tall")
+    check("a declared 'they' pronoun resolves to that person, not the whole cast",
+          "are all in this shot" not in ari[0].lower() and "(40, tall)" in ari[0])
+    # With nobody owning 'they', three people get the plural wording.
+    three = S.distribute_generations(
+        "A room.", ["They all look up."], "", "",
+        "Mara = she, 30, blonde\nJon = he, 35, bald\nAri = she, 40, tall")
+    check("three people read 'are all in this shot'",
+          "are all in this shot" in three[0].lower())
+
+
 class _Vec:
     """The few tensor operations check_audio_vae_loaded() actually performs."""
     def __init__(self, vals):
@@ -2244,6 +2307,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_audio_vae_guard()
+    check_plural_cast_binding()
 
     print()
     if _fails:

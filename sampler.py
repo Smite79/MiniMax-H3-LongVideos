@@ -1007,13 +1007,32 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
             if person and person not in refs:
                 refs[person] = m.end()
 
+        # Nobody bound individually, but the beat addresses the cast in the plural:
+        # bind everyone with a roll-call in FRONT of the beat rather than rewriting
+        # the sentence. Prepending keeps the author's prose exactly as written --
+        # 'they' can mean a subset, and expanding it in place would assert a cast
+        # list the author did not write.
+        roll_call = ""
+        if not refs and len(names) > 1 and _PLURAL_CAST.search(body):
+            bits = []
+            for n in names:
+                desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=speaking))
+                bits.append(f"{n} ({desc})" if desc else n)
+            roll_call = ((", ".join(bits[:-1]) + " and " + bits[-1])
+                         + (" are both in this shot." if len(bits) == 2
+                            else " are all in this shot."))
+            refs = {n: 0 for n in names}     # for the subject count below
+
         if refs:
             # inject from rightmost position first so earlier indices stay valid
-            for n in sorted(refs, key=lambda k: refs[k], reverse=True):
-                desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=speaking))
-                if desc:
-                    pos = refs[n]
-                    body = body[:pos] + f" ({desc})" + body[pos:]
+            if not roll_call:
+                for n in sorted(refs, key=lambda k: refs[k], reverse=True):
+                    desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=speaking))
+                    if desc:
+                        pos = refs[n]
+                        body = body[:pos] + f" ({desc})" + body[pos:]
+            else:
+                prefix_bits.append(roll_call)
             # An EXPLICIT SUBJECT COUNT is the strongest prompt-side defence against
             # the model rendering a character twice. Duplication gets much more
             # likely below the model's native resolution: fewer pixels per subject
@@ -1375,6 +1394,21 @@ LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement.
 NO_VOICE_SOUNDSCAPE = ("ambient background sound and room tone only, no voices, no speech, "
                        "no talking, no whispering, no singing, no vocal sounds")
 NO_VOICE_CLAUSE = ", no voices, no speech, no talking, no vocal sounds"
+
+
+# A beat that refers to the cast only in the PLURAL ("they face each other") used
+# to bind nobody: _resolve_subject() maps a pronoun to ONE person, and 'they' with
+# two people resolves to neither. The shot then silently described no one -- losing
+# both characters' descriptions and, after a removal, their exposure markers, so a
+# stripped character quietly went back to being unmarked.
+#
+# Bare 'them'/'their' are deliberately NOT here. They refer to objects at least as
+# often as to people -- "she steps out of them" is a garment, "light floods through
+# them" is a pair of doors -- and this fires only when nobody was bound by name or
+# singular pronoun, which is exactly the scenery-beat case that must stay empty.
+_PLURAL_CAST = re.compile(
+    r"\b(?:they|themselves|both|each other|one another|"
+    r"the two of them|all of them)\b", re.I)
 
 
 def person_referenced(body, name, active):
