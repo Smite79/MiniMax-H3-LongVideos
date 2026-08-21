@@ -2157,6 +2157,49 @@ def check_ref_modes():
           and S.ref_image_canvas(512, 512, 1344, 768, "max") == (512, 512))
 
 
+def check_schedule_balance():
+    """A high flow shift at a low step count buries the run in its last step.
+
+    Reproduces ModelSamplingDiscreteFlow's time_snr_shift plus the 'simple'
+    scheduler's linear indexing of the sigma table. 12 is H3's own declared shift
+    and is well balanced at ~20 steps; it only misbehaves when a distill LoRA drops
+    the step count under it, and it does so silently -- soft, painterly output and
+    no error."""
+    print("\n=== flow shift vs step count ===")
+
+    sh12_4 = S.flow_step_shares(12.0, 4)
+    check("shift 12 at 4 steps is measured, not guessed", len(sh12_4) == 4)
+    check("...and the shares sum to 1", abs(sum(sh12_4) - 1.0) < 1e-9)
+    check("...with the last step carrying ~80%", 0.79 < sh12_4[-1] < 0.81)
+    check("...and the first three under 21% between them", sum(sh12_4[:3]) < 0.21)
+
+    sh12_20 = S.flow_step_shares(12.0, 20)
+    check("the same shift at 20 steps is fine", max(sh12_20) < 0.55)
+    check("shift 1 is perfectly even at 4 steps",
+          all(abs(s - 0.25) < 0.01 for s in S.flow_step_shares(1.0, 4)))
+
+    n = S.schedule_balance_note(12.0, 4, "simple")
+    check("a tail-heavy schedule warns", bool(n))
+    check("...quoting the actual distribution", "3%/5%/12%/80%" in n)
+    check("...naming the symptom", "painterly" in n)
+    check("...and suggesting a workable shift", "shift_video 3" in n)
+    check("20 steps at shift 12 does not warn",
+          S.schedule_balance_note(12.0, 20, "simple") == "")
+    for good in (3.0, 2.0, 1.0):
+        check(f"shift {good} at 4 steps does not warn",
+              S.schedule_balance_note(good, 4, "simple") == "")
+
+    # Only the scheduler whose curve this reproduces. Reporting these numbers for a
+    # scheduler that spaces sigmas differently would be inventing them.
+    check("a non-simple scheduler is not second-guessed",
+          S.schedule_balance_note(12.0, 4, "beta") == "")
+    # Degenerate inputs must be silent, not a crash.
+    check("one step is not a schedule", S.schedule_balance_note(12.0, 1, "simple") == "")
+    check("a zero shift is silent", S.schedule_balance_note(0, 4, "simple") == "")
+    check("a negative shift is silent", S.schedule_balance_note(-3, 4, "simple") == "")
+    check("zero steps is silent", S.schedule_balance_note(12.0, 0, "simple") == "")
+
+
 def check_megapixel_sizing():
     """A pixel BUDGET sets the size; the resolution preset supplies the shape.
 
@@ -2205,6 +2248,16 @@ def check_megapixel_sizing():
 
     # It lives on the SAMPLER now, next to resolution -- not in a separate node and
     # not appended to the end.
+    # INPUT_TYPES reads comfy.samplers.KSampler. The stubs live in sys.modules only;
+    # a submodule found there is never attached to its parent package, so the
+    # attribute lookup would fail without this.
+    if not hasattr(sys.modules["comfy.samplers"], "KSampler"):
+        class _KS:
+            SAMPLERS = ["res_multistep", "euler"]
+            SCHEDULERS = ["simple", "beta"]
+        sys.modules["comfy.samplers"].KSampler = _KS
+    for _n in ("samplers", "utils", "nested_tensor", "model_management"):
+        setattr(sys.modules["comfy"], _n, sys.modules["comfy." + _n])
     req = list(S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["required"])
     check("megapixels is a required widget on the sampler", "megapixels" in req)
     check("...positioned immediately after resolution",
@@ -2611,6 +2664,8 @@ def main():
     check_ref_modes()
     check_sla_pairing()
     check_lora_hints()
+    check_schedule_balance()
+    check_megapixel_sizing()
     check_audio_vae_guard()
     check_written_text_is_not_speech()
     check_declared_bare()

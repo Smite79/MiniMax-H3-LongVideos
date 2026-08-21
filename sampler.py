@@ -2962,6 +2962,70 @@ def _cond_embed_dim(cond):
         return None
 
 
+# --- flow-shift vs step count ----------------------------------------------
+# The shift maps timesteps onto sigmas, and the 'simple' scheduler then samples
+# that curve at evenly spaced INDICES. At a high shift the curve is steep at the
+# low-sigma end, so the last interval swallows most of the run:
+#
+#     4 steps, shift 12   ->  2.7% / 5.0% / 12.3% / 80.0%
+#     4 steps, shift 3    -> 10.0% / 15.0% / 25.0% / 50.0%
+#    20 steps, shift 12   ->  worst single step 38.7%
+#
+# 12 is the right default -- it is what H3's own model config declares, and at ~20
+# steps it is well balanced. It only misbehaves when a distill LoRA drops the step
+# count under it, and then it does so invisibly: nothing errors, the picture just
+# comes back soft and painterly because one enormous final jump cannot resolve fine
+# detail. Cheap to detect, so detect it.
+def flow_step_shares(shift, steps, timesteps=1000):
+    """Fraction of total denoising each sampler step performs.
+
+    Mirrors comfy.model_sampling.ModelSamplingDiscreteFlow (time_snr_shift) plus
+    comfy.samplers.simple_scheduler, which indexes the precomputed sigma table
+    linearly. Returns [] when the inputs cannot form a schedule."""
+    steps = int(steps)
+    if steps < 2 or shift is None or float(shift) <= 0:
+        return []
+    a = float(shift)
+    table = [a * t / (1.0 + (a - 1.0) * t)
+             for t in ((i + 1) / timesteps for i in range(timesteps))]
+    stride = len(table) / steps
+    sig = [table[-(1 + int(x * stride))] for x in range(steps)] + [0.0]
+    deltas = [sig[i] - sig[i + 1] for i in range(steps)]
+    total = sum(deltas)
+    if total <= 0:
+        return []
+    return [d / total for d in deltas]
+
+
+def schedule_balance_note(shift, steps, scheduler, worst_allowed=0.55):
+    """Warn when one sampler step carries most of the denoising.
+
+    Only for the 'simple' scheduler, because that is the curve this reproduces --
+    reporting these numbers for a scheduler that spaces sigmas differently would be
+    making them up. The suggestion is searched rather than guessed: the lowest
+    shift whose worst step falls under the threshold."""
+    if str(scheduler) != "simple":
+        return ""
+    shares = flow_step_shares(shift, steps)
+    if not shares:
+        return ""
+    worst = max(shares)
+    if worst <= worst_allowed:
+        return ""
+    better = ""
+    for cand in (6.0, 5.0, 4.0, 3.0, 2.5, 2.0, 1.5, 1.0):
+        cand_shares = flow_step_shares(cand, steps)
+        if cand_shares and max(cand_shares) <= worst_allowed:
+            better = (f"; shift_video {cand:g} spreads it to "
+                      + "/".join(f"{s * 100:.0f}%" for s in cand_shares))
+            break
+    return (f"shift_video {float(shift):g} at {int(steps)} steps puts "
+            + "/".join(f"{s * 100:.0f}%" for s in shares)
+            + f" of the denoising into each step -- one step doing {worst * 100:.0f}% "
+            f"cannot resolve fine detail, which renders as soft, painterly output"
+            + better)
+
+
 def check_text_encoder(model, cond):
     """Raise a readable RuntimeError when clip and model disagree. Silent when
     either side can't be read -- never block a run on a failed introspection."""
@@ -4252,6 +4316,11 @@ class H3LongVideos:
         # run. Reports only -- never overrides a widget, so the render stays
         # reproducible from what the graph shows.
         hint_notes = lora_hint_notes(model, graph, node_id, steps, min(w, h))
+        # The flow shift is right for base H3 at ~20 steps and wrong for a distill
+        # at 4-8, and it fails silently -- soft output, no error. Computed here so
+        # plan_only reports it before anything is sampled.
+        sched_note = (schedule_balance_note(shift_video, steps, scheduler)
+                      if apply_model_sampling else "")
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
@@ -4329,6 +4398,7 @@ class H3LongVideos:
                    ((f"SLA: {sla_note}. ") if sla_note else "") + \
                    (("LORA HINTS -- " + "; ".join(hint_notes) + ". ") if hint_notes else "") + \
                    ((mp_note + ". ") if mp_note else "") + \
+                   ((f"SCHEDULE -- {sched_note}. ") if sched_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4597,6 +4667,7 @@ class H3LongVideos:
                 + (f" SLA: {sla_note}." if sla_note else "")
                 + (" LORA HINTS -- " + "; ".join(hint_notes) + "." if hint_notes else "")
                 + (f" {mp_note}." if mp_note else "")
+                + (f" SCHEDULE -- {sched_note}." if sched_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")
