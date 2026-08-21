@@ -3833,8 +3833,6 @@ class H3LongVideos:
                     + (f" {beats_note}." if beats_note else "")
                     + (" ANCHOR: " + "; ".join(anchor_hazards) + "."
                        if anchor_hazards else "")
-                + (" ANCHOR: " + "; ".join(anchor_hazards) + "."
-                   if anchor_hazards else "")
                     + (f"{plan_audio}." if plan_audio else "")
                     + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
                        if wardrobe_notes else "")
