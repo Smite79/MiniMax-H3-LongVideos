@@ -1672,6 +1672,68 @@ def check_sla_pairing():
         check(f"'sla' NOT falsely found in {name}", not S._SLA_NAME.search(name))
 
 
+class _MDModel:
+    """A patcher carrying a LoRA's safetensors metadata, as ComfyUI stashes it."""
+    def __init__(self, md):
+        self._md = md
+
+    def get_attachment(self, key):
+        return self._md if key == "lora_metadata" else None
+
+
+def check_lora_hints():
+    """What a LoRA declares about itself, versus how this run is configured.
+
+    Only two of these come from metadata; step count and training resolution are
+    FILENAME convention, and the notes have to say so -- a filename is something
+    anyone can break by renaming, and it must not read like a trainer's word."""
+    print("\n=== LoRA self-declaration vs this run ===")
+    SLA4 = "minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_comfyui_bf16.safetensors"
+    R8 = "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_resized_avg_rank_21_bf16.safetensors"
+    AITK = "HMPenis_v2_e35.safetensors"
+    LTX = "ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors"
+    H3MD = {"base_model": "Comfy-Org/MiniMax-H3 minimax_h3_fl2va_bf16.safetensors"}
+    AIMD = {"ss_base_model_version": "minimax_h3"}     # ai-toolkit spelling
+    LTXMD = {"base_model": "LTX-Video 2.5 22b"}
+
+    def hints(name, md, steps, short_edge):
+        return S.lora_hint_notes(_MDModel(md), _sla_graph(name, False), "9", steps, short_edge)
+
+    n = hints(SLA4, H3MD, 8, 768)
+    check("a 4-step LoRA run at 8 steps warns", len(n) == 1 and "4-step" in n[0])
+    check("...and says the number came from the filename", "not metadata" in n[0])
+    check("...and says what overshooting the step count does", "re-noises" in n[0])
+    check("matching steps is silent", hints(SLA4, H3MD, 4, 768) == [])
+    check("under the step count warns too", "not finished resolving" in " ".join(hints(SLA4, H3MD, 2, 768)))
+
+    n = hints(SLA4, H3MD, 4, 1080)
+    check("768p LoRA rendered at 1080 short edge warns", len(n) == 1 and "768p" in n[0])
+    check("...and names tiling, which is the actual failure", "tile" in n[0])
+    check("768p LoRA at 720 short edge is within tolerance", hints(SLA4, H3MD, 4, 720) == [])
+    check("a name with no resolution token warns about nothing",
+          hints(R8, H3MD, 8, 720) == [])
+
+    check("ai-toolkit's ss_base_model_version counts as H3", hints(AITK, AIMD, 8, 720) == [])
+    n = hints(LTX, LTXMD, 8, 720)
+    check("a non-H3 LoRA on the chain warns", len(n) == 1 and "not MiniMax-H3" in n[0])
+    check("...and does not falsely read a step count out of '2.5-22b'",
+          not any("step" in x for x in n))
+
+    # Absent metadata must be silence, never a guess.
+    check("no metadata at all produces no base-model claim",
+          not any("base_model" in x for x in hints(R8, {}, 8, 720)))
+    check("no LoRA on the chain produces nothing",
+          S.lora_hint_notes(_MDModel({}), _FakeGraph({"9": {"class_type": "X", "inputs": {}}}),
+                            "9", 8, 720) == [])
+    check("a missing graph is not an error",
+          S.lora_hint_notes(_MDModel({}), None, None, 8, 720) == [])
+    # The scan reports; it must never mutate anything it was handed.
+    md = {"base_model": "Comfy-Org/MiniMax-H3"}
+    S.lora_hint_notes(_MDModel(md), _sla_graph(SLA4, False), "9", 8, 768)
+    check("scanning does not mutate the metadata it read",
+          md == {"base_model": "Comfy-Org/MiniMax-H3"})
+
+
 def check_ref_modes():
     """Which shots take the reference channel, and what they give up for it."""
     print("\n=== ref_mode over a 6-shot chain ===")
@@ -2097,6 +2159,7 @@ def main():
     check_tagged_references()
     check_ref_modes()
     check_sla_pairing()
+    check_lora_hints()
 
     print()
     if _fails:

@@ -3211,6 +3211,92 @@ def sla_pairing(model, graph, node_id):
     return sla, sparse, note
 
 
+# --- what a LoRA actually declares about itself ------------------------------
+# Verified against all six LoRAs in this install before any of it was written,
+# because most of what a "LoRA scanner" sounds like it should do is not in the
+# files. What IS there:
+#
+#   base model     metadata: 'base_model' (Comfy-Org turbo builds) or
+#                  'ss_base_model_version' (ai-toolkit builds, e.g. 'minimax_h3')
+#   strength       metadata: 'training_scale' / 'baked_scale', both 1.0
+#   step count     FILENAME only ('..._turbo_4step_...') -- no metadata field
+#   training res   FILENAME only ('..._768p_...'), plus 'ss_resolution' on kohya
+#                  builds, which none of these are
+#
+# What is NOT there, checked file by file:
+#
+#   trigger words  no 'ss_tag_frequency' in any of them. The ai-toolkit LoRAs carry
+#                  nine metadata keys and none is a caption or tag list, so a
+#                  trigger like 'mpenis' cannot be discovered -- it stays a manual
+#                  exposed_terms entry.
+#   sampler/cfg/   no field for these exists in any LoRA metadata standard, and
+#   scheduler      none of these files has one. Reporting them would be invention.
+#
+# Everything below therefore either quotes metadata or says the filename said it.
+# Nothing here overrides a widget: a render must stay reproducible from what the
+# graph shows.
+_LORA_STEPS = re.compile(r"(?:^|[^a-z0-9])(\d{1,2})[ _-]?step", re.I)
+_LORA_RES = re.compile(r"(?:^|[^a-z0-9])(\d{3,4})p(?:[^a-z0-9]|$)", re.I)
+
+
+def lora_declared(model):
+    """The nearest LoRA's own metadata dict, as ComfyUI stashed it, or {}.
+
+    comfy.sd.load_lora_for_models() calls set_attachments('lora_metadata', ...) on
+    the patcher, so this is the LoRA's real safetensors header -- not a guess. With
+    several stacked, the attachment holds the last one applied."""
+    try:
+        get = getattr(model, "get_attachment", None)
+        return (get("lora_metadata") if get else None) or {}
+    except Exception:
+        return {}
+
+
+def lora_hint_notes(model, graph, node_id, steps, short_edge):
+    """Warnings where a LoRA's declared training disagrees with this run.
+
+    Each note says WHERE the number came from, because the two sources are not
+    equally trustworthy: metadata is what the trainer wrote, a filename is a naming
+    convention that anyone can break by renaming the file."""
+    notes = []
+    names = upstream_lora_names(graph, node_id)
+    if not names:
+        return notes
+    name = os.path.basename(str(names[-1]))
+    md = lora_declared(model)
+
+    # --- base model: the one check that is pure metadata ---
+    base = str(md.get("base_model") or md.get("ss_base_model_version") or "")
+    if base and "minimax" not in base.lower() and "h3" not in base.lower():
+        notes.append(f"'{name}' declares base_model '{base}', which is not MiniMax-H3 -- "
+                     f"it will apply as noise on an H3 DiT")
+
+    # --- step count: filename convention only ---
+    m = _LORA_STEPS.search(name)
+    if m:
+        want = int(m.group(1))
+        if want and int(steps) != want:
+            notes.append(f"'{name}' is named as a {want}-step LoRA but steps={int(steps)} "
+                         f"(from the filename, not metadata)" +
+                         ("; a distill LoRA run past its step count re-noises a composition it "
+                          "already settled" if int(steps) > want else
+                          "; under its step count the distill has not finished resolving"))
+
+    # --- training resolution: filename convention only ---
+    m = _LORA_RES.search(name)
+    if m and short_edge:
+        want = int(m.group(1))
+        if short_edge > want * 1.34:
+            notes.append(f"'{name}' is named for {want}p but the short edge here is "
+                         f"{int(short_edge)}px (from the filename, not metadata); well above a "
+                         f"LoRA's training resolution H3 tends to tile the figure")
+        elif short_edge * 1.34 < want:
+            notes.append(f"'{name}' is named for {want}p but the short edge here is "
+                         f"{int(short_edge)}px (from the filename, not metadata); well below it "
+                         f"the LoRA's detail work has nothing to land on")
+    return notes
+
+
 # Fingerprint of the model used by the previous run, so a checkpoint swap can be
 # detected between queue executions. Module-level: it must outlive the node
 # instance, which ComfyUI recreates per execution.
@@ -3878,6 +3964,10 @@ class H3LongVideos:
         # alone costs a full render to discover. Computed here so plan_only reports
         # it too -- that is the point of catching it, before anything is sampled.
         sla_name, sparse_on, sla_note = sla_pairing(model, graph, node_id)
+        # Same idea, wider: where a LoRA's own declared training disagrees with this
+        # run. Reports only -- never overrides a widget, so the render stays
+        # reproducible from what the graph shows.
+        hint_notes = lora_hint_notes(model, graph, node_id, steps, min(w, h))
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
@@ -3953,6 +4043,7 @@ class H3LongVideos:
                             f"those shots drop the last-frame handoff")
             plan = ((anchor_note + " ") if anchor_note else "") + \
                    ((f"SLA: {sla_note}. ") if sla_note else "") + \
+                   (("LORA HINTS -- " + "; ".join(hint_notes) + ". ") if hint_notes else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4219,6 +4310,7 @@ class H3LongVideos:
                        if lora_on else "")
                     + ").") if count_subjects else "")
                 + (f" SLA: {sla_note}." if sla_note else "")
+                + (" LORA HINTS -- " + "; ".join(hint_notes) + "." if hint_notes else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")

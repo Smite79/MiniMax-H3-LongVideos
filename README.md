@@ -152,6 +152,27 @@ its metadata and is byte-shape-identical to any un-resized rank-128 turbo LoRA. 
 LoRA with `sla` as a delimited token in its name counts (`..._768p_sla_...`);
 `slack`, `translate` and `SLAYER` do not.
 
+## What the node reads off a LoRA
+
+It reports where a LoRA's declared training disagrees with your settings. It never
+overrides a widget — a render has to stay reproducible from what the graph shows.
+
+| Checked | Source |
+|---|---|
+| Base model is MiniMax-H3 | metadata (`base_model` / `ss_base_model_version`) |
+| Step count vs your `steps` | **filename** (`..._4step_...`) |
+| Training resolution vs your preset | **filename** (`..._768p_...`) |
+
+Notes say which source they came from, because the two aren't equally trustworthy:
+metadata is what the trainer wrote, a filename is a convention anyone can break by
+renaming.
+
+**Not available, so not offered.** LoRA files carry no field for a recommended
+sampler, scheduler, cfg or shift — no metadata standard defines one — so the node
+does not pretend to know them. Trigger words are also unreadable in practice: they
+live in `ss_tag_frequency`, which kohya writes and ai-toolkit does not, so a trigger
+like `mpenis` still has to be typed into `exposed_terms` yourself.
+
 **On ComfyUI portable its Triton kernels will not build**, and they fail *silently*
 — the patch reports itself inactive and you simply get the slower path. The
 embedded Python ships without development files:
