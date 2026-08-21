@@ -2157,6 +2157,96 @@ def check_ref_modes():
           and S.ref_image_canvas(512, 512, 1344, 768, "max") == (512, 512))
 
 
+def check_kernel_backend_note():
+    """Notice when the quantization kernels are not actually available.
+
+    The node does not call these kernels -- comfy/ops.py routes quantized Linears
+    through comfy_kitchen automatically. But losing that path is SILENT: ComfyUI
+    logs one startup line and then runs a slower, lower-fidelity dequantize
+    fallback, and the symptom is soft output, which looks like a dozen other
+    causes."""
+    print("\n=== quantization kernel availability ===")
+
+    class _P:
+        convrot = True
+
+    class _W:
+        _params = _P()
+
+    class _Mod:
+        quant_format = "int8_tensorwise"
+        weight = _W()
+
+    class _DM:
+        def modules(self):
+            return [_Mod() for _ in range(50)]
+
+    class _Inner:
+        diffusion_model = _DM()
+
+    class _Model:
+        model = _Inner()
+
+    m = _Model()
+    check("int8+convrot is detected from the module tags",
+          S.quant_format_of(m) == "int8_tensorwise+convrot")
+
+    ck = sys.modules.get("comfy_kitchen")
+    if ck is None:
+        ck = types.ModuleType("comfy_kitchen")
+        sys.modules["comfy_kitchen"] = ck
+    saved = getattr(ck, "list_backends", None)
+    try:
+        ck.list_backends = lambda: {
+            "cuda": {"available": True, "disabled": False, "unavailable_reason": None,
+                     "capabilities": ["int8_linear", "scaled_mm_nvfp4"]}}
+        check("a capable backend is silent", S.kernel_backend_note(m) == "")
+
+        ck.list_backends = lambda: {
+            "cuda": {"available": True, "disabled": True, "unavailable_reason": None,
+                     "capabilities": ["int8_linear"]},
+            "eager": {"available": False, "disabled": False,
+                      "unavailable_reason": "n/a", "capabilities": []}}
+        n = S.kernel_backend_note(m)
+        check("every backend down warns", bool(n))
+        check("...naming the format", "int8_tensorwise+convrot" in n)
+        check("...naming the missing capability", "int8_linear" in n)
+        check("...and saying what the fallback costs", "lower fidelity" in n)
+
+        # A disabled CUDA backend is fine as long as SOMETHING still serves it.
+        ck.list_backends = lambda: {
+            "cuda": {"available": False, "disabled": True,
+                     "unavailable_reason": "cu126", "capabilities": []},
+            "eager": {"available": True, "disabled": False, "unavailable_reason": None,
+                      "capabilities": ["int8_linear"]}}
+        check("a fallback backend that still serves the format is silent",
+              S.kernel_backend_note(m) == "")
+
+        # Backends up, but none offering what this format needs.
+        ck.list_backends = lambda: {
+            "cuda": {"available": True, "disabled": False, "unavailable_reason": None,
+                     "capabilities": ["scaled_mm_nvfp4"]}}
+        check("a backend without the needed capability warns",
+              bool(S.kernel_backend_note(m)))
+
+        # Introspection failure must never block a render.
+        def _boom():
+            raise RuntimeError("nope")
+        ck.list_backends = _boom
+        check("a failed backend query is silent", S.kernel_backend_note(m) == "")
+    finally:
+        if saved is not None:
+            ck.list_backends = saved
+
+    # An unquantized checkpoint has nothing to accelerate.
+    class _Plain:
+        class model:
+            diffusion_model = None
+    check("an unquantized checkpoint is silent", S.kernel_backend_note(_Plain()) == "")
+    check("...and reports no format", S.quant_format_of(_Plain()) == "")
+    check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
+
+
 def check_schedule_balance():
     """A high flow shift at a low step count buries the run in its last step.
 
@@ -2664,6 +2754,7 @@ def main():
     check_ref_modes()
     check_sla_pairing()
     check_lora_hints()
+    check_kernel_backend_note()
     check_schedule_balance()
     check_megapixel_sizing()
     check_audio_vae_guard()

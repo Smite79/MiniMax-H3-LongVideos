@@ -2962,6 +2962,91 @@ def _cond_embed_dim(cond):
         return None
 
 
+# --- quantization kernels ---------------------------------------------------
+# The kernels are NOT something this node installs or calls. comfy_kitchen (imported
+# as `ck` in comfy/quant_ops.py) is a compiled package shipped with ComfyUI, and
+# comfy/ops.py routes every quantized Linear through it -- ck.int8_linear() and
+# friends -- whenever the loaded weights carry a quant_format. Sampling runs the
+# model, so the node gets that path for free and cannot opt in or out of it.
+#
+# What the node CAN do is notice when the path is not there, because that failure
+# is silent. If the CUDA backend is disabled (torch built against CUDA < 13
+# triggers ck.registry.disable("cuda")) or comfy_kitchen fails to import, ComfyUI
+# logs one line at startup and then quietly runs a slower, lower-fidelity route.
+# Nothing errors, and the first sign is soft output -- which is indistinguishable
+# from a dozen other causes unless something says so.
+#
+# Every format the checkpoint might use, mapped to the comfy-kitchen capability
+# that serves it. The names come from ck.list_backends()[...]["capabilities"].
+_QUANT_CAPABILITY = {
+    "int8_tensorwise": "int8_linear",
+    "int8_tensorwise+convrot": "int8_linear",
+    "convrot_w4a4": "convrot_w4a4_linear",
+    "asym_w4a8_int8": "w4a8_int8_linear",
+    "nvfp4": "scaled_mm_nvfp4",
+    "mxfp8": "scaled_mm_mxfp8",
+}
+
+
+def quant_format_of(model):
+    """The dominant quant format of the loaded DiT, or "" when it is unquantized.
+
+    Same detection the inspector node uses: a module's `quant_format` tag, with
+    int8 split by whether its packed weight carries convrot."""
+    try:
+        dm = getattr(getattr(model, "model", None), "diffusion_model", None)
+        if dm is None or not hasattr(dm, "modules"):
+            return ""
+        counts = {}
+        for m in dm.modules():
+            fmt = getattr(m, "quant_format", None)
+            if fmt is None:
+                continue
+            if fmt == "int8_tensorwise":
+                params = getattr(getattr(m, "weight", None), "_params", None)
+                if getattr(params, "convrot", False):
+                    fmt = "int8_tensorwise+convrot"
+            counts[fmt] = counts.get(fmt, 0) + 1
+        return max(counts.items(), key=lambda kv: kv[1])[0] if counts else ""
+    except Exception:
+        return ""
+
+
+def kernel_backend_note(model):
+    """Warn when the loaded checkpoint's quant format has no accelerated backend.
+
+    Silent on an unquantized checkpoint (nothing to accelerate) and silent when a
+    capable backend is present, so it only speaks when something is actually
+    wrong."""
+    fmt = quant_format_of(model)
+    if not fmt:
+        return ""
+    want = _QUANT_CAPABILITY.get(fmt)
+    try:
+        import comfy_kitchen as ck
+    except Exception as e:
+        return (f"the checkpoint is {fmt} but comfy_kitchen failed to import "
+                f"({type(e).__name__}) -- ComfyUI is running the slow dequantize "
+                f"fallback, which is lower fidelity as well as slower")
+    try:
+        backends = ck.list_backends()
+    except Exception:
+        return ""                       # cannot introspect; never block on that
+    live = [name for name, b in backends.items()
+            if b.get("available") and not b.get("disabled")
+            and (want is None or want in (b.get("capabilities") or ()))]
+    if live:
+        return ""
+    disabled = [f"{name} ({b.get('unavailable_reason') or 'disabled'})"
+                for name, b in backends.items() if not b.get("available") or b.get("disabled")]
+    return (f"the checkpoint is {fmt} but no comfy-kitchen backend offers "
+            f"'{want or fmt}' -- " + ("; ".join(disabled) if disabled else "none available")
+            + ". ComfyUI falls back to a dequantize path: slower, and lower fidelity. "
+              "Check the startup log for 'Found comfy_kitchen backend', and that torch "
+              "is built against CUDA 13+ (cu130), which is what keeps the CUDA backend "
+              "enabled")
+
+
 # --- flow-shift vs step count ----------------------------------------------
 # The shift maps timesteps onto sigmas, and the 'simple' scheduler then samples
 # that curve at evenly spaced INDICES. At a high shift the curve is steep at the
@@ -4321,6 +4406,9 @@ class H3LongVideos:
         # plan_only reports it before anything is sampled.
         sched_note = (schedule_balance_note(shift_video, steps, scheduler)
                       if apply_model_sampling else "")
+        # The quantization kernels are ComfyUI's, not this node's -- but losing them
+        # is silent, and the symptom (soft output) looks like a dozen other causes.
+        kernel_note = kernel_backend_note(model)
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
@@ -4399,6 +4487,7 @@ class H3LongVideos:
                    (("LORA HINTS -- " + "; ".join(hint_notes) + ". ") if hint_notes else "") + \
                    ((mp_note + ". ") if mp_note else "") + \
                    ((f"SCHEDULE -- {sched_note}. ") if sched_note else "") + \
+                   ((f"KERNELS -- {kernel_note}. ") if kernel_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4668,6 +4757,7 @@ class H3LongVideos:
                 + (" LORA HINTS -- " + "; ".join(hint_notes) + "." if hint_notes else "")
                 + (f" {mp_note}." if mp_note else "")
                 + (f" SCHEDULE -- {sched_note}." if sched_note else "")
+                + (f" KERNELS -- {kernel_note}." if kernel_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")
