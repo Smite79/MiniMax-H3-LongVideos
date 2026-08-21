@@ -203,6 +203,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
+    "exposed_terms",
 )
 
 NL = "\n"
@@ -1452,15 +1453,67 @@ def garment_zones(item):
 _BARE_MARK = {"lower": "bare below the waist", "upper": "bare chest"}
 
 
-def bare_state_items(items, stripped_zones):
+def parse_exposed_terms(text):
+    """Per-person text for a stripped zone: {key: {zone: phrase}}.
+
+    Written like the wardrobe sheet, so there is one syntax to learn:
+
+        she = visible vulva, mvagina
+        he  = visible penis, mpenis
+        Mara upper = bare breasts
+
+    A key is a PRONOUN (applies to everyone declaring it) or a NAME (which wins
+    over the pronoun). Without a trailing 'upper' the entry describes the lower
+    zone. Empty means the generic wording is used."""
+    out = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key, val = key.strip(), val.strip()
+        if not key or not val:
+            continue
+        zone = "lower"
+        parts = key.split()
+        if len(parts) > 1 and parts[-1].lower() in ("upper", "lower"):
+            zone = parts[-1].lower()
+            key = " ".join(parts[:-1])
+        out.setdefault(_norm_name(key).lower(), {})[zone] = val
+    return out
+
+
+def exposed_mark(zone, name, items, terms):
+    """The phrase to stamp for a stripped `zone` on this person.
+
+    Name beats pronoun, pronoun beats the generic default -- so one setup covers a
+    whole cast, and a single character can still be given their own wording."""
+    if terms:
+        by_name = terms.get((name or "").strip().lower(), {})
+        if zone in by_name:
+            return by_name[zone]
+        pron = _pronoun_of(items or [])
+        if pron:
+            by_pron = terms.get(pron.lower(), {})
+            if zone in by_pron:
+                return by_pron[zone]
+    return _BARE_MARK[zone]
+
+
+def bare_state_items(items, stripped_zones, marks=None):
     """Markers to add / remove so a stripped zone keeps saying it is stripped.
 
     Returns (add, drop). A zone that something covers again -- because a garment was
     put back on -- drops its marker, which is what "unless requested" means."""
+    marks = marks or dict(_BARE_MARK)
+    # Every phrase this function could have stamped, so a marker is recognised for
+    # removal even if the configured wording changed between runs.
+    known = set(_BARE_MARK.values()) | set(marks.values())
     add, drop = [], []
-    for zone, mark in _BARE_MARK.items():
+    for zone in _BARE_MARK:
+        mark = marks.get(zone, _BARE_MARK[zone])
         present = mark in items
-        covered = bool(remaining_cover([i for i in items if i not in _BARE_MARK.values()], {zone}))
+        covered = bool(remaining_cover([i for i in items if i not in known], {zone}))
         if zone in stripped_zones and not covered and not present:
             add.append(mark)
         elif (covered or zone not in stripped_zones) and present:
@@ -1996,7 +2049,8 @@ def speech_flags(beats):
 
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
-                           notes_out=None, auto_props=True, prevent_nudity=True):
+                           notes_out=None, auto_props=True, prevent_nudity=True,
+                           exposed_terms=""):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2033,6 +2087,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     departed = set()                         # characters who left the scene -> never reappear
     props = {}                               # objects introduced so far -> their phrase
     stripped = {}                            # person -> body zones stripped so far
+    exposed = parse_exposed_terms(exposed_terms)
     blocks = []
     for gi, b in enumerate(beats, 1):
         body, wardrobe_change = extract_wardrobe((b or "").strip())
@@ -2119,7 +2174,9 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             if z:
                 stripped.setdefault(nm, set()).update(z)
         for nm in list(active):
-            add, drop = bare_state_items(active.get(nm, []), stripped.get(nm, set()))
+            marks = {z: exposed_mark(z, nm, active.get(nm, []), exposed)
+                     for z in ("lower", "upper")}
+            add, drop = bare_state_items(active.get(nm, []), stripped.get(nm, set()), marks)
             # prevent_nudity gates the ASSERTION, not the removal. Deleting a garment
             # only leaves the zone undescribed, and a video model's default prior is a
             # clothed person -- so it dresses them again. It is this marker that makes
@@ -3443,6 +3500,17 @@ class H3LongVideos:
                                "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
                                "Override any single beat with 'seconds: 8' on its own line inside that "
                                "paragraph -- that wins over everything, including this toggle."}),
+                "exposed_terms": ("STRING", {"multiline": True, "default": "",
+                    "tooltip": "What a stripped body zone is CALLED, per character, so it persists "
+                               "automatically instead of being typed into every beat. Same syntax as "
+                               "character_memory -- a PRONOUN covers everyone who declares it, a NAME "
+                               "overrides it, and a trailing 'upper' targets the chest. "
+                               "For example -- 'she = visible vulva, mvagina' / "
+                               "'he = visible penis, mpenis' / 'Mara upper = bare breasts'. "
+                               "Once a removal empties that zone the phrase is stamped into every "
+                               "later shot that person is in, and clears by itself when something "
+                               "covers the zone again. Put LoRA trigger words here too. Requires "
+                               "prevent_nudity OFF; empty falls back to 'bare below the waist'."}),
                 "prevent_nudity": ("BOOLEAN", {"default": True,
                     "tooltip": "Never let the prompt ASSERT that a body is bare. A removal still "
                                "happens either way -- this gates the sentence, not the garment. "
@@ -3548,6 +3616,7 @@ class H3LongVideos:
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
+            exposed_terms="",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
@@ -3711,7 +3780,8 @@ class H3LongVideos:
                                       non_diegetic_music.strip(), character_memory.strip(),
                                       auto_wardrobe, auto_silence_nonspeech, count_subjects,
                                       lora_on, notes_out=wardrobe_notes, auto_props=auto_props,
-                                      prevent_nudity=prevent_nudity)
+                                      prevent_nudity=prevent_nudity,
+                                      exposed_terms=exposed_terms)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.

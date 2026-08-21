@@ -72,6 +72,19 @@ rendering**. Do that first; it is near-instant.
   ground"), stated with direction so they don't play in reverse, and an under-layer
   is named so a removal doesn't come out as nudity.
 - **Props.** "the van" in a later shot means the van from the earlier one.
+- **Exposed state.** When a removal empties a body zone, `exposed_terms` says what
+  that is called, per character, and the node keeps stating it in every later shot
+  until something covers the zone again — no retyping it into each beat. Same
+  syntax as the sheet, pronoun for a whole cast, name to override one person, and
+  LoRA trigger words ride along:
+
+  ```
+  she = visible vagina
+  he  = visible penis, mpenis
+  Mara upper = bare breasts
+  ```
+
+  Requires `prevent_nudity` off.
 - **Nudity.** `prevent_nudity` is **on by default**: the prompt never states that a
   body is bare. Removals still happen — what is gated is the sentence, and a video
   model's default is a clothed person, so it covers what nobody described. `info`

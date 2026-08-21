@@ -558,6 +558,56 @@ def check_naming_brings_a_character_back():
           "red hair" not in p[2] and "red hair" not in p[3])
 
 
+def check_exposed_terms():
+    """A stripped zone keeps saying WHAT is exposed, per character, automatically.
+
+    The generic marker persisted the state but said only "bare below the waist",
+    so anything more specific had to be typed into every beat by hand. exposed_terms
+    supplies the wording once -- pronoun for a whole cast, name to override one
+    person -- and LoRA trigger words ride along with it."""
+    print("\n=== exposed_terms: per-character wording for a stripped zone ===")
+    TERMS = "she = visible vagina\nhe = visible penis, mpenis"
+    cm_ = ("Mara = she, 30, red hair, grey coat, black panties\n"
+           "Dom = he, 35, brunette, white t-shirt, blue jeans")
+    B = ["Mara and Dom stand by the bed.",
+         "She pulls down her panties and steps out of them.",
+         "Mara walks to the window.",
+         "Dom takes off his blue jeans.",
+         "Dom follows her to the window.",
+         "wardrobe: Mara += black panties\nMara pulls her panties back on."]
+    sh = D("A bedroom.", B, "", "", cm_, prevent_nudity=False, exposed_terms=TERMS)
+    check("her pronoun picks her wording", "visible vagina" in sh[1])
+    check("...and it persists without being retyped", "visible vagina" in sh[2])
+    check("his pronoun picks his", "visible penis" in sh[3])
+    check("...with the LoRA trigger alongside it", "mpenis" in sh[3])
+    check("both persist together in a shared shot",
+          "visible vagina" in sh[4] and "visible penis" in sh[4])
+    check("no generic marker once wording is configured",
+          "bare below the waist" not in sh[2])
+    check("covering the zone again clears it", "visible vagina" not in sh[5])
+    check("...and the garment is back", worn(sh[5], "black panties"))
+    check("a clothed character is never given the wording", "visible penis" not in sh[1])
+
+    # resolution order and syntax
+    t = S.parse_exposed_terms("she = visible vagina\nMara = custom wording\n"
+                              "Mara upper = bare breasts")
+    check("a pronoun key parses", t["she"]["lower"] == "visible vagina")
+    check("a name key parses", t["mara"]["lower"] == "custom wording")
+    check("an 'upper' key targets the chest", t["mara"]["upper"] == "bare breasts")
+    check("name beats pronoun",
+          S.exposed_mark("lower", "Mara", ["she", "red hair"], t) == "custom wording")
+    check("pronoun applies to anyone else",
+          S.exposed_mark("lower", "Ana", ["she", "dark hair"], t) == "visible vagina")
+    check("no match falls back to the generic wording",
+          S.exposed_mark("lower", "Jon", ["he"], t) == "bare below the waist")
+    check("empty config is the generic wording",
+          S.exposed_mark("lower", "Mara", ["she"], S.parse_exposed_terms("")) == "bare below the waist")
+    # the guard still governs the whole path
+    g = D("A bedroom.", B, "", "", cm_, exposed_terms=TERMS)
+    check("prevent_nudity ON suppresses it entirely",
+          all("visible vagina" not in s and "visible penis" not in s for s in g))
+
+
 def check_stripped_state_persists():
     """A stripped zone must keep saying it is stripped, until something covers it.
 
@@ -1864,6 +1914,7 @@ def main():
     check_detailed_wardrobe_items()
     check_anchor_hazards()
     check_naming_brings_a_character_back()
+    check_exposed_terms()
     check_stripped_state_persists()
     check_emergence_is_not_an_exit()
     check_props_survive_the_shot_boundary()
