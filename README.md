@@ -72,6 +72,11 @@ rendering**. Do that first; it is near-instant.
   ground"), stated with direction so they don't play in reverse, and an under-layer
   is named so a removal doesn't come out as nudity.
 - **Props.** "the van" in a later shot means the van from the earlier one.
+- **Nudity.** `prevent_nudity` is **on by default**: the prompt never states that a
+  body is bare. Removals still happen — what is gated is the sentence, and a video
+  model's default is a clothed person, so it covers what nobody described. `info`
+  still reports any zone a removal left uncovered. Turn it off only when nudity is
+  intended.
 - **Silence.** Beats with no quoted dialogue get a lips-closed clause, a no-voice
   soundscape, and optionally muted audio — H3 babbles otherwise.
 - **Overlays.** Optional PIL watermark and intro title, composited after any

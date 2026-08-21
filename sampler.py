@@ -202,7 +202,7 @@ ADDED_WIDGETS = (
     "watermark_text", "watermark_position", "watermark_size", "watermark_opacity",
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
-    "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props",
+    "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
 )
 
 NL = "\n"
@@ -1980,7 +1980,7 @@ def speech_flags(beats):
 
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
-                           notes_out=None, auto_props=True):
+                           notes_out=None, auto_props=True, prevent_nudity=True):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2104,6 +2104,14 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 stripped.setdefault(nm, set()).update(z)
         for nm in list(active):
             add, drop = bare_state_items(active.get(nm, []), stripped.get(nm, set()))
+            # prevent_nudity gates the ASSERTION, not the removal. Deleting a garment
+            # only leaves the zone undescribed, and a video model's default prior is a
+            # clothed person -- so it dresses them again. It is this marker that makes
+            # the prompt SAY the body is bare, which is the thing that renders. The
+            # garment still comes off either way; without the marker the model simply
+            # covers what nobody described. `info` still reports the empty zone.
+            if prevent_nudity:
+                add = []
             for mark in add:
                 active[nm].append(mark)
             for mark in drop:
@@ -3419,6 +3427,16 @@ class H3LongVideos:
                                "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
                                "Override any single beat with 'seconds: 8' on its own line inside that "
                                "paragraph -- that wins over everything, including this toggle."}),
+                "prevent_nudity": ("BOOLEAN", {"default": True,
+                    "tooltip": "Never let the prompt ASSERT that a body is bare. A removal still "
+                               "happens either way -- this gates the sentence, not the garment. "
+                               "Deleting the last item covering a zone only leaves it undescribed, "
+                               "and a video model's default is a clothed person, so it covers what "
+                               "nobody described. With this OFF the node states the state outright "
+                               "('bare below the waist') and keeps stating it until something covers "
+                               "that zone again, which is what makes a strip actually stick. ON is "
+                               "the safe default; turn it OFF only when nudity is intended. Either "
+                               "way info reports which zone a removal left uncovered."}),
                 "auto_props": ("BOOLEAN", {"default": True,
                     "tooltip": "Carry OBJECTS across shots. Each shot is a separate generation, so "
                                "'the van' in shot 2 has no antecedent -- nothing in that prompt "
@@ -3513,7 +3531,8 @@ class H3LongVideos:
             cleanup_between_shots=True,
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
             per_beat_length=True, beat_split="auto",
-            character_memory="", auto_wardrobe=True, auto_props=True, auto_silence_nonspeech=True,
+            character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
+            auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
@@ -3675,7 +3694,8 @@ class H3LongVideos:
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),
                                       auto_wardrobe, auto_silence_nonspeech, count_subjects,
-                                      lora_on, notes_out=wardrobe_notes, auto_props=auto_props)
+                                      lora_on, notes_out=wardrobe_notes, auto_props=auto_props,
+                                      prevent_nudity=prevent_nudity)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.

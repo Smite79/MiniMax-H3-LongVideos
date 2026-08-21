@@ -575,7 +575,10 @@ def check_stripped_state_persists():
          "Mara looks outside.",
          "wardrobe: Mara += grey shorts\nMara pulls on grey shorts.",
          "Mara turns back to the door."]
-    sh = D("A barn interior.", B, "", "", cm_)
+    # prevent_nudity gates the ASSERTION, so the stripped-state behaviour is what you
+    # get with it OFF. With it ON (the default) the removal still happens; the prompt
+    # simply never says the body is bare, and the model's clothed prior takes over.
+    sh = D("A barn interior.", B, "", "", cm_, prevent_nudity=False)
     check("the under-layer holds while it is worn", worn(sh[1], "black panties"))
     check("stripping the last layer states the state", "bare below the waist" in sh[2])
     check("...and it persists into later shots",
@@ -593,6 +596,28 @@ def check_stripped_state_persists():
     add2, drop2 = S.bare_state_items(["grey coat", "grey shorts", "bare below the waist"], {"lower"})
     check("...and loses it once covered", drop2 == ["bare below the waist"])
     check("a zone never stripped is never marked", S.bare_state_items(["grey coat"], set())[0] == [])
+
+    # --- prevent_nudity (default ON) --------------------------------------------
+    # The prompt must never ASSERT a bare body. The removal still happens; what is
+    # gated is the sentence. Deleting a garment only leaves the zone undescribed, and
+    # a video model's default prior is a clothed person, so it covers what nobody
+    # described. The failure this guards is an INCOMPLETE sheet: "grey coat, jeans"
+    # lists no shirt, so taking the coat off empties the upper body by accident.
+    guarded = []
+    g = D("A barn interior.", B, "", "", cm_, notes_out=guarded)
+    check("with the guard ON nothing is stated as bare",
+          all("bare below the waist" not in s and "bare chest" not in s for s in g))
+    check("...but the removal still applies", not worn(g[3], "black panties"))
+    check("...and info still reports the uncovered zone", any("nothing on the" in n for n in guarded))
+    inc = []
+    D("A barn.", ["Mara takes off her grey coat.", "Mara walks on."], "", "",
+      "Mara = she, red hair, grey coat, black jeans", notes_out=inc)
+    check("an incomplete sheet is reported, not silently bared", inc != [])
+    # an ordinary jacket beat must not be disturbed by the guard
+    jk = D("A garage.", ["Kristy takes off her red jacket.", "Kristy walks on."], "", "",
+           "Kristy = she, silver hair, red jacket, blue jeans")
+    check("an ordinary removal is untouched by the guard", not worn(jk[1], "red jacket"))
+    check("...and says nothing about a bare chest", "bare chest" not in jk[1])
 
 
 def check_emergence_is_not_an_exit():
