@@ -163,44 +163,20 @@ SPIKE_RESERVE = 0.12
 FRAMES_BASELINE_GB = 10.91
 
 
-# Megapixel tiers, offered alongside the short-edge presets. A pixel BUDGET is the
-# more defensible way to size a DiT run: cost and training-distribution match are
-# functions of token count -- (h/16)*(w/16)*frames -- which tracks total pixels,
-# not the short edge. The two disagree at the extremes of aspect ratio, where the
-# short-edge tiers mis-rank in both directions:
-#
-#   1:1  768x768   short edge 768, reads native      -> 0.56 MP, well under budget
-#   21:9 1536x672  short edge 672, reads sub-native  -> 0.98 MP, full budget
-#
-# 1 MP == 1024x1024, matching ComfyUI's own `Scale Image to Total Pixels` node and
-# the community resolution calculators, so the same number means the same size
-# everywhere. At 1.00MP the 16:9 and 21:9 entries land exactly on H3's native
-# presets, which is a good sign the native size really is a ~1MP budget.
-MP_TIERS = (0.52, 0.83, 1.00, 1.20)
-
-
 def resolution_options():
-    """All-preset, all-multiple-of-32 resolution list. Two ways to pick a size:
+    """All-preset, all-multiple-of-32 resolution list -- three short-edge tiers per
+    ratio: native 768 (best detail), balanced 640, and fast 512 (generate-then-
+    upscale). No custom entry: every option is a valid H3 size, so nothing to snap
+    or mis-type. The length budget is resolution-aware, so lower tiers unlock
+    longer shots.
 
-    SHORT-EDGE tiers -- native 768 (best detail), balanced 640, fast 512
-    (generate-then-upscale).
-    MEGAPIXEL tiers -- a constant pixel budget applied to each aspect ratio, so
-    VRAM and token count stay put when you change shape.
-
-    No custom entry either way: every option is a valid H3 size, so there is
-    nothing to snap or mis-type. The length budget is resolution-aware, so lower
-    tiers unlock longer shots."""
+    Sizing by a PIXEL BUDGET instead lives in its own node, H3 Megapixel Size
+    (mp_size.py). It stays out of this list deliberately: a combo stores its value
+    in a saved workflow as the label STRING, so adding or re-wording entries here
+    is a compatibility event, and a separate node costs nobody anything."""
     opts  = [f"{r} - {w}x{h} (native)" for r, (w, h) in NATIVE_RES.items()]
     opts += [f"{r} - {w}x{h} (balanced)" for r, (w, h) in MID_RES.items()]
     opts += [f"{r} - {w}x{h} (fast, upscale later)" for r, (w, h) in FAST_RES.items()]
-    # Precomputed rather than resolved at run time, so the label always states the
-    # size the render will actually use -- snapping to the 32-grid moves the real
-    # area off the requested budget, and a label promising a figure the render
-    # never used is worse than no label.
-    for mp in MP_TIERS:
-        for r, (w, h) in NATIVE_RES.items():
-            nw, nh = scale_to_megapixels(w, h, mp)
-            opts.append(f"{r} @ {mp:.2f}MP - {nw}x{nh}")
     return opts
 
 
@@ -211,35 +187,6 @@ def parse_resolution(choice):
     if m:
         return int(m.group(1)), int(m.group(2))
     return NATIVE_RES["16:9"]
-
-
-# The preset grid is built on a 768 SHORT EDGE, but cost and training-distribution
-# match are functions of TOKEN COUNT -- (h/16)*(w/16)*frames -- which tracks total
-# pixels, not the short edge. The two disagree at the extremes of aspect ratio:
-#
-#   1:1  768x768   short edge 768 (reads native)  ->  0.590 MP, 43% under budget
-#   21:9 1536x672  short edge 672 (reads sub-native) -> 1.032 MP, full budget
-#
-# So a megapixel target is the more defensible way to ask for a size. This does
-# NOT change the sigma schedule: H3's shift is a fixed 12.0 in its model config
-# with no resolution-dependent term, unlike Flux/SD3 dynamic shifting.
-MP_UNIT = 1024 * 1024          # 1 MP == 1024x1024, matching ComfyUI's own convention
-RES_MULTIPLE = 32              # every shipped preset is a multiple of 32
-
-
-def scale_to_megapixels(w, h, mp, multiple=RES_MULTIPLE):
-    """Resize (w, h) to hit `mp` megapixels, keeping the aspect ratio.
-
-    Snapped to `multiple` in both axes, which is what H3's patchified latent grid
-    needs. Snapping moves the real area off the request slightly -- report the
-    achieved value rather than the asked-for one, or the number in `info` is a
-    number the render never used."""
-    if not mp or mp <= 0 or w <= 0 or h <= 0:
-        return int(w), int(h)
-    scale = math.sqrt((float(mp) * MP_UNIT) / float(w * h))
-    nw = max(multiple, int(round(w * scale / multiple)) * multiple)
-    nh = max(multiple, int(round(h * scale / multiple)) * multiple)
-    return nw, nh
 
 
 # --- prompt parsing + auto time distribution -------------------------------
@@ -2775,7 +2722,6 @@ def ref_image_canvas(w, h, gen_w, gen_h, mode="match"):
     reference pipeline's 2048 short edge for the best identity fidelity, which on a
     long chain is several times slower because the rows are re-attended every step
     of every shot. Never upscales: a small reference stays small."""
-    import math
     w, h = max(1, int(w)), max(1, int(h))
     if mode == "max":
         scale = min(1.0, REF_IMAGE_SHORT_EDGE / min(w, h))

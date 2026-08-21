@@ -20,6 +20,14 @@ Nodes:
                                            `frames` -> a preview override
   * H3 Model Inspector (inspector.py)    - report base precision (BF16/FP8/NVFP4/MXFP8)
                                            and whether this card runs it natively
+  * H3 Megapixel Size  (mp_size.py)      - a pixel BUDGET (1 MP = 1024x1024) plus an
+                                           aspect ratio -> width/height snapped to 32.
+                                           Cost and training fit track token count,
+                                           which follows total pixels rather than the
+                                           short edge, so holding MP constant is what
+                                           makes two aspect ratios comparable. Feeds
+                                           any node taking width/height; the sampler
+                                           keeps its own resolution dropdown.
 
 The sampler registers under four keys -- H3LongVideos, H3LongVideosFL2VA,
 H3LongVideosV1 and H3LongVideosREF2VA -- all aliases onto the same class, so every
@@ -33,7 +41,8 @@ Install: put this whole folder in ComfyUI/custom_nodes/ and restart ComfyUI.
 from .sampler import NODE_CLASS_MAPPINGS as _s_c, NODE_DISPLAY_NAME_MAPPINGS as _s_d
 from .shot_length import NODE_CLASS_MAPPINGS as _sl_c, NODE_DISPLAY_NAME_MAPPINGS as _sl_d
 from .inspector import NODE_CLASS_MAPPINGS as _i_c, NODE_DISPLAY_NAME_MAPPINGS as _i_d
+from .mp_size import NODE_CLASS_MAPPINGS as _mp_c, NODE_DISPLAY_NAME_MAPPINGS as _mp_d
 
-NODE_CLASS_MAPPINGS = {**_s_c, **_sl_c, **_i_c}
-NODE_DISPLAY_NAME_MAPPINGS = {**_s_d, **_sl_d, **_i_d}
+NODE_CLASS_MAPPINGS = {**_s_c, **_sl_c, **_i_c, **_mp_c}
+NODE_DISPLAY_NAME_MAPPINGS = {**_s_d, **_sl_d, **_i_d, **_mp_d}
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

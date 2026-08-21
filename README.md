@@ -51,18 +51,8 @@ Dom = he, tall, 35, brunette, white t-shirt, blue jeans, work boots
 Mara = she, 30, red hair, grey coat, black jeans
 ```
 
-**3. `resolution`** — presets only, all valid H3 sizes, in two flavours:
-
-- **short-edge tiers** — `native` 768, `balanced` 640, `fast` 512
-- **megapixel tiers** — `16:9 @ 1.00MP - 1344x768`, a constant pixel budget applied
-  to each aspect ratio, so VRAM and token count stay put when you change shape
-
-Prefer the MP tiers when comparing across aspect ratios. Cost and training-fit
-track total pixels, not the short edge, and the two disagree at the extremes:
-`1:1 768x768` reads as native by short edge but is only 0.56MP, while
-`21:9 1536x672` reads as sub-native at a full 0.98MP. 1 MP = 1024×1024, matching
-ComfyUI's own `Scale Image to Total Pixels`, so the number means the same thing
-everywhere. Each label states the size the render actually uses.
+**3. `resolution`** — presets only, all valid H3 sizes, three tiers per ratio.
+To size by a **pixel budget** instead, see [H3 Megapixel Size](#h3-megapixel-size).
 
 **4. `shot_seconds`** — a **ceiling**, not the length of every shot. Leave it at 0
 to let the VRAM budget decide.
@@ -131,6 +121,38 @@ rendering**. Do that first; it is near-instant.
 `info` reports what it did and warns before you waste a render — thin beats,
 dialogue that will be cut off or padded with invented speech, a removal that leaves
 a body zone bare, anchor content that misfires on every shot.
+
+## H3 Megapixel Size
+
+A separate utility node: give it a **pixel budget** and an aspect ratio, get back
+`width` / `height` snapped to a multiple of 32. Feeds anything that takes width and
+height, including ComfyUI's core `MiniMaxH3EmptyLatent`.
+
+Cost and training fit are functions of **token count** — `(h/16)·(w/16)·frames` —
+which tracks total pixels, not the short edge. The two disagree at the extremes of
+aspect ratio, so a short-edge target makes two shapes look comparable when they
+aren't:
+
+```
+1:1  768x768    short edge 768, reads native      ->  0.56 MP, 43% under budget
+21:9 1536x672   short edge 672, reads sub-native  ->  0.98 MP, full budget
+```
+
+Start at **1.00MP** and step down from there — at 1.00 every `H3 …` aspect lands
+exactly on that preset's native size, and 0.83 / 0.65 / 0.52 walk the short edge
+down to 704 / 640 / 544 for speed, VRAM and longer shots.
+
+The aspect list separates the model's real shapes from their conventional names,
+because they are not the same thing: **1344×768 is 1.750, i.e. 7:4 — not 16:9
+(1.778)**, and 1536×672 is 16:7, not 21:9. Pick an `H3 …` entry to stay on a shape
+the model was trained on, or a `true …` ratio when the geometry matters more.
+
+1 MP = 1024×1024, matching ComfyUI's own `Scale Image to Total Pixels`, so the
+number means the same size across the graph. `info` and the `megapixels` output
+report what was **actually produced** — snapping moves the real area off the
+request — never what was asked for.
+
+This node does not touch the sampler, which keeps its own `resolution` dropdown.
 
 ## Reference images (REF2VA)
 
