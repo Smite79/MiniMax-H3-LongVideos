@@ -67,38 +67,49 @@ rendering**. Do that first; it is near-instant.
   ends up repeating or *reversing* the action.
 - **Characters.** Descriptions bind once per shot, at the first mention; repeat
   names collapse to pronouns, because naming someone twice renders them twice.
-- **Wardrobe.** Clothing lives in one mutable channel. Removals are read from your
-  prose ("takes off her jacket", "steps out of her jeans", "the coat falls to the
-  ground"), stated with direction so they don't play in reverse, and an under-layer
-  is named so a removal doesn't come out as nudity.
+- **Wardrobe.** Clothing lives in one mutable channel, tracked per person. Removals
+  are read from your prose ("takes off her jacket", "steps out of her jeans", "the
+  coat falls to the ground") and stated with direction so they don't play in
+  reverse. A garment named in a quoted line is an instruction, not an action, so
+  asking for something to come off doesn't remove it a shot early. Whatever is
+  still on underneath is named, so a removal doesn't read as more than it was.
 - **Props.** "the van" in a later shot means the van from the earlier one.
-- **Exposed state.** When a removal empties a body zone, `exposed_terms` says what
-  that is called, per character, and the node keeps stating it in every later shot
-  until something covers the zone again — no retyping it into each beat. Same
-  syntax as the sheet, pronoun for a whole cast, name to override one person, and
-  LoRA trigger words ride along:
+- **Uncovered zones.** The node tracks two body zones, `lower` and `upper`. When a
+  removal leaves one with nothing on it, it keeps that state **stated** in every
+  later shot until something covers the zone again — because deleting a garment is
+  only a silence, and a video model's default is a clothed person, so silence puts
+  the clothes back on a shot or two later.
+
+  `exposed_terms` is where you choose the wording, per character. Same syntax as
+  the sheet: a pronoun sets it for everyone who declares that pronoun, a name
+  overrides one person, and a trailing `upper` targets that zone instead of the
+  default `lower`. Anything after the `=` is passed through verbatim, so LoRA
+  trigger words ride along:
 
   ```
-  she = visible vagina
-  he  = visible penis, mpenis
-  Mara upper = bare breasts
+  she = <wording for the lower zone>
+  he  = <wording for the lower zone>, <lora trigger>
+  Mara upper = <wording for Mara's upper zone>
   ```
 
-  A character can also **start** bare rather than becoming bare — put `nude`,
-  `naked`, `topless` or `bottomless` in their `character_memory` and the wording
-  applies from shot 1, with no removal needed. This must be written explicitly;
-  a sheet that simply doesn't list clothes (`Jon = he, 35, bald`) is treated as
-  under-specified, never as naked.
+  Left unset, the node uses its own neutral wording, matched to the character's
+  declared pronoun.
 
-  Filling this in **is** the intent, so it overrides `prevent_nudity` — no second
-  switch to remember. The shot after a strip also starts **fresh**, without the
-  handoff frame, because continuing from a frame that still shows the garment is
-  how it reappears: a picture outvotes the sentence.
-- **Nudity.** `prevent_nudity` is **on by default**: the prompt never states that a
-  body is bare. Removals still happen — what is gated is the sentence, and a video
-  model's default is a clothed person, so it covers what nobody described. `info`
-  still reports any zone a removal left uncovered. Turn it off only when nudity is
-  intended.
+  A character can also **start** with a zone uncovered rather than arriving there
+  through a removal — add `nude` (or `naked`, `undressed`, `unclothed`) for both
+  zones, `topless` or `bottomless` for one, to their `character_memory`, and the
+  wording applies from shot 1. This has to be written explicitly: a sheet that
+  simply doesn't list clothes (`Jon = he, 35, bald`) is read as under-specified,
+  never as a declaration.
+
+  Configuring any of this **is** the intent, so it overrides `prevent_nudity` — no
+  second switch to remember. The shot after a removal also starts **fresh**,
+  without the handoff frame, because continuing from a frame that still shows the
+  garment is how it comes back: a picture outvotes the sentence.
+- **`prevent_nudity`.** **On by default**: the prompt never asserts that a body is
+  uncovered. Removals still happen — what is gated is the sentence, and since the
+  model's default is a clothed person, it covers what nobody described. `info`
+  still reports any zone a removal left uncovered, so you find out either way.
 - **Silence.** Beats with no quoted dialogue get a lips-closed clause, a no-voice
   soundscape, and optionally muted audio — H3 babbles otherwise.
 - **Overlays.** Optional PIL watermark and intro title, composited after any
@@ -176,8 +187,9 @@ renaming.
 **Not available, so not offered.** LoRA files carry no field for a recommended
 sampler, scheduler, cfg or shift — no metadata standard defines one — so the node
 does not pretend to know them. Trigger words are also unreadable in practice: they
-live in `ss_tag_frequency`, which kohya writes and ai-toolkit does not, so a trigger
-like `mpenis` still has to be typed into `exposed_terms` yourself.
+live in `ss_tag_frequency`, which kohya writes and ai-toolkit does not, so a LoRA's
+trigger still has to be typed in yourself — into the prompt, the sheet, or
+`exposed_terms`, depending on where it needs to land.
 
 **On ComfyUI portable its Triton kernels will not build**, and they fail *silently*
 — the patch reports itself inactive and you simply get the slower path. The
