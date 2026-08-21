@@ -1672,6 +1672,42 @@ def check_sla_pairing():
         check(f"'sla' NOT falsely found in {name}", not S._SLA_NAME.search(name))
 
 
+def check_written_text_is_not_speech():
+    """Quoted WRITTEN text must not turn a silent shot into a talking one.
+
+    has_speech() counted any double-quoted span, so a sign, label or headline in
+    the prose made the whole beat count as dialogue -- no lips-closed clause, no
+    no-voice soundscape -- and the characters stood there opening their mouths at
+    something nobody said."""
+    print("\n=== quoted text that nobody speaks ===")
+    for b in ['Mara reads the sign marked "EXIT".',
+              'A poster reads "OPEN".',
+              'The screen displays "NO SIGNAL".',
+              'A note is written "GONE".',
+              'She checks the label "FRAGILE" and frowns.']:
+        check(f"written text is not speech: {b[:34]}...", not S.has_speech(b))
+    for b in ['Mara says: "Ready."',
+              'She asks him, "Where?"',
+              '"Wait," he says.',
+              'He whispers "now".',
+              'Jon calls out, "Over here!"',
+              '<d>Ready.</d>']:
+        check(f"real dialogue still counts: {b[:34]}...", S.has_speech(b))
+    # The NEAREST cue decides. Comparing presence rather than position got these
+    # backwards in both directions.
+    check("a speech verb closer to the quote wins over an earlier reading verb",
+          S.has_speech('Mara reads the sign, then says "We go left."'))
+    check("a second, spoken quote still counts when the first is written",
+          S.has_speech('Mara reads the sign marked "EXIT" and shouts "This way!"'))
+
+    # End to end: a beat whose only quote is written must be silenced like any
+    # other action beat.
+    g = S.distribute_generations("A room.", ['Mara reads the sign marked "EXIT".'],
+                                 "", "", "Mara = she, 30, blonde")[0]
+    check("a written-text beat gets the mouth constraint", "mouth closed" in g.lower())
+    check("...and the no-voice soundscape", "no voices" in g.lower())
+
+
 def check_declared_bare():
     """A character can START bare, not only become bare.
 
@@ -2516,6 +2552,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_audio_vae_guard()
+    check_written_text_is_not_speech()
     check_declared_bare()
     check_exposed_terms_key_warning()
     check_bare_wording_follows_pronoun()

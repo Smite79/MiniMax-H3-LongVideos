@@ -1354,18 +1354,51 @@ def prop_continuity_clause(bound, props):
     return " " + s[0].upper() + s[1:] + "."
 
 
+# Cues that the quoted words are PRINTED in the scene rather than spoken aloud.
+# Kept to things that are unambiguously written surfaces or reading/marking verbs.
+_WRITTEN_CUE = re.compile(
+    r"\b(?:reads?|reading|marked|labell?ed|titled|captioned|headlined|written|"
+    r"printed|engraved|stamped|embroidered|scrawled|painted|spells?|spelled|"
+    r"signs?|posters?|banner|placard|plaque|sticker|label|headline|"
+    r"caption|graffiti|screen|display|monitor|billboard|tattoo|note|letter|"
+    r"envelope|book|page|menu|ticket|receipt|badge|nameplate)\b", re.I)
+
+# ...and the verbs that mean someone said it out loud.
+_SPOKEN_CUE = re.compile(
+    r"\b(?:says?|said|saying|asks?|asked|asking|replies|replied|answers?|answered|"
+    r"shouts?|shouted|yells?|yelled|calls?|called|whispers?|whispered|murmurs?|"
+    r"murmured|mutters?|muttered|adds?|added|tells?|told|cries|cried|barks?|"
+    r"barked|snaps?|snapped|breathes?|offers?|insists?|repeats?|begins?|continues?|"
+    r"declares?|announces?|responds?|responded|urges?|warns?|pleads?|laughs?)\b",
+    re.I)
+
+
 def has_speech(body):
     """True only if a beat contains ACTUAL scripted speech -- double-quoted words
     or an explicit <d>...</d> tag. Bare speech VERBS ('calls out', 'tells', 'says'
     with no quoted line) deliberately do NOT count: unscripted speech is exactly
     what H3 fills with gibberish, so those beats get silenced too. If you want
     someone to speak, quote the line: She says, "Ready for departure."
-    Apostrophes/single quotes never count (they'd false-fire on "she's")."""
+    Apostrophes/single quotes never count (they'd false-fire on "she's").
+
+    WRITTEN text in quotes is not speech. A sign, a label, a headline -- 'reads the
+    sign marked "EXIT"' -- used to make the whole shot count as dialogue, so it got
+    neither the lips-closed clause nor the no-voice soundscape and the characters
+    stood there opening their mouths. Nothing in the beat was ever spoken."""
     if not body:
         return False
     if re.search(r"<d>.*?</d>", body, re.S):
         return True
-    if re.search(r'["\u201c\u201d].+?["\u201c\u201d]', body):     # double/curly quotes only
+    for m in re.finditer(r'["\u201c\u201d].+?["\u201c\u201d]', body, re.S):
+        # Look at what introduces this quote, and let the NEAREST cue decide.
+        # "Mara reads the sign, then says 'we go left'" is speech: 'says' sits
+        # closer to the quote than 'reads' does. Comparing presence rather than
+        # position got that backwards.
+        lead = body[max(0, m.start() - 60):m.start()].lower()
+        written = [x.end() for x in _WRITTEN_CUE.finditer(lead)]
+        spoken = [x.end() for x in _SPOKEN_CUE.finditer(lead)]
+        if written and (not spoken or written[-1] > spoken[-1]):
+            continue                       # printed in the scene, nobody said it
         return True
     return False
 
