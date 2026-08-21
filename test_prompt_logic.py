@@ -1672,6 +1672,52 @@ def check_sla_pairing():
         check(f"'sla' NOT falsely found in {name}", not S._SLA_NAME.search(name))
 
 
+def check_megapixel_sizing():
+    """A megapixel target sets the SIZE; the preset still chooses the shape.
+
+    The preset grid is built on a 768 short edge, but cost and training-distribution
+    match track TOKEN COUNT, which follows total pixels. The two disagree at the
+    extremes of aspect ratio -- 1:1 768x768 reads as native by short edge yet is
+    43% under budget, while 21:9 1536x672 reads as sub-native at a full budget."""
+    print("\n=== megapixel sizing ===")
+    MP = S.MP_UNIT
+
+    check("0 is off -- the preset is untouched",
+          S.scale_to_megapixels(1344, 768, 0.0) == (1344, 768))
+    check("a negative target is also a no-op",
+          S.scale_to_megapixels(1344, 768, -2.0) == (1344, 768))
+
+    for w, h in [(1344, 768), (768, 1344), (1024, 768), (768, 768), (1536, 672), (896, 512)]:
+        nw, nh = S.scale_to_megapixels(w, h, 1.0)
+        check(f"{w}x{h} keeps its aspect ratio at 1.0MP",
+              abs((nw / nh) - (w / h)) < 0.05)
+        check(f"{w}x{h} snaps to multiples of 32", nw % 32 == 0 and nh % 32 == 0)
+        check(f"{w}x{h} lands near the 1.0MP target",
+              abs((nw * nh / MP) - 1.0) < 0.10)
+
+    # The case the feature exists for: a square preset is well under budget and
+    # scaling up should visibly change it.
+    nw, nh = S.scale_to_megapixels(768, 768, 1.0)
+    check("a 1:1 preset scales up to the budget", (nw, nh) == (1024, 1024))
+    # ...while a preset already at budget is left where it is.
+    check("a preset already at ~1MP barely moves",
+          S.scale_to_megapixels(1344, 768, 1.0) == (1344, 768))
+    # Scaling DOWN works too.
+    nw, nh = S.scale_to_megapixels(1344, 768, 0.5)
+    check("a lower target scales down", nw * nh < 1344 * 768)
+    check("...and still holds the ratio", abs((nw / nh) - (1344 / 768)) < 0.05)
+    # Degenerate input must not produce a zero or negative dimension.
+    nw, nh = S.scale_to_megapixels(1344, 768, 0.001)
+    check("an absurdly small target still yields a legal size",
+          nw >= 32 and nh >= 32 and nw % 32 == 0 and nh % 32 == 0)
+
+    # The widget must be LAST in the schema: ComfyUI restores saved workflows by
+    # widget position, so anything inserted mid-list silently shifts every value
+    # after it onto the wrong widget.
+    check("'megapixels' is registered as an appended widget",
+          "megapixels" in S.ADDED_WIDGETS)
+
+
 def check_written_text_is_not_speech():
     """Quoted WRITTEN text must not turn a silent shot into a talking one.
 
@@ -2552,6 +2598,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_audio_vae_guard()
+    check_megapixel_sizing()
     check_written_text_is_not_speech()
     check_declared_bare()
     check_exposed_terms_key_warning()

@@ -39,6 +39,7 @@ ldm/minimax/model.py, text_encoders/minimax.py, sd.py).
 """
 
 import gc
+import math
 import os
 import re
 import torch
@@ -183,6 +184,35 @@ def parse_resolution(choice):
     return NATIVE_RES["16:9"]
 
 
+# The preset grid is built on a 768 SHORT EDGE, but cost and training-distribution
+# match are functions of TOKEN COUNT -- (h/16)*(w/16)*frames -- which tracks total
+# pixels, not the short edge. The two disagree at the extremes of aspect ratio:
+#
+#   1:1  768x768   short edge 768 (reads native)  ->  0.590 MP, 43% under budget
+#   21:9 1536x672  short edge 672 (reads sub-native) -> 1.032 MP, full budget
+#
+# So a megapixel target is the more defensible way to ask for a size. This does
+# NOT change the sigma schedule: H3's shift is a fixed 12.0 in its model config
+# with no resolution-dependent term, unlike Flux/SD3 dynamic shifting.
+MP_UNIT = 1024 * 1024          # 1 MP == 1024x1024, matching ComfyUI's own convention
+RES_MULTIPLE = 32              # every shipped preset is a multiple of 32
+
+
+def scale_to_megapixels(w, h, mp, multiple=RES_MULTIPLE):
+    """Resize (w, h) to hit `mp` megapixels, keeping the aspect ratio.
+
+    Snapped to `multiple` in both axes, which is what H3's patchified latent grid
+    needs. Snapping moves the real area off the request slightly -- report the
+    achieved value rather than the asked-for one, or the number in `info` is a
+    number the render never used."""
+    if not mp or mp <= 0 or w <= 0 or h <= 0:
+        return int(w), int(h)
+    scale = math.sqrt((float(mp) * MP_UNIT) / float(w * h))
+    nw = max(multiple, int(round(w * scale / multiple)) * multiple)
+    nh = max(multiple, int(round(h * scale / multiple)) * multiple)
+    return nw, nh
+
+
 # --- prompt parsing + auto time distribution -------------------------------
 def split_paragraphs(text, delimiter):
     raw = text.replace("\r\n", "\n").strip()
@@ -202,7 +232,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms",
+    "exposed_terms", "megapixels",
 )
 
 NL = "\n"
@@ -3755,6 +3785,14 @@ class H3LongVideos:
                     "tooltip": "Patch ModelSamplingMiniMaxH3 (the dual video/audio schedule) inside the "
                                "node so you don't have to wire it upstream. Without it, H3's audio comes "
                                "out as gibberish. Turn OFF only if you patch it yourself upstream."}),
+                "megapixels": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 4.0, "step": 0.05,
+                    "tooltip": "Override the preset's SIZE while keeping its aspect ratio. "
+                               "0 = off (use the preset as-is). 1.0 MP = 1024x1024 worth of "
+                               "pixels. Cost and training-distribution match track total "
+                               "pixels, not the short edge -- 1:1 768x768 reads as native by "
+                               "short edge but is only 0.59MP, while 21:9 1536x672 reads as "
+                               "sub-native and is a full 1.03MP. Snapped to multiples of 32; "
+                               "`info` reports the size and MP actually used."}),
                 "shift_video": ("FLOAT", {"default": 12.0, "min": 1.0, "max": 32.0, "step": 0.5,
                     "tooltip": "Video flow shift. 12 = base H3 (correct default). A low-step MXFP8 "
                                "checkpoint wants ~8. Only used when apply_model_sampling is on."}),
@@ -4059,6 +4097,7 @@ class H3LongVideos:
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0,
             ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_image_4=None,
             ref_mode="where tagged", ref_image_size="match", ref_noise_aug=0.999,
+            megapixels=0.0,
             graph=None, node_id=None):
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
@@ -4078,6 +4117,18 @@ class H3LongVideos:
                     f"computed at {H3_FPS}; set your video-save node to {H3_FPS} too")
         fps = H3_FPS
         w, h = parse_resolution(resolution)
+        # A megapixel target overrides the preset's SIZE but keeps its aspect ratio,
+        # so the dropdown still chooses the shape. Reported as the ACHIEVED value:
+        # snapping to the 32-grid moves the area off the request, and echoing the
+        # asked-for number would print a figure the render never used.
+        mp_note = ""
+        if megapixels and float(megapixels) > 0:
+            nw, nh = scale_to_megapixels(w, h, float(megapixels))
+            if (nw, nh) != (w, h):
+                mp_note = (f"megapixels {float(megapixels):.2f} requested -> {nw}x{nh} "
+                           f"({nw * nh / MP_UNIT:.2f}MP actual, was {w}x{h} "
+                           f"@ {w * h / MP_UNIT:.2f}MP)")
+                w, h = nw, nh
         # H3 is CFG-free (cfg 1): the sampler skips the negative, but common_ksampler
         # still needs a conditioning object, so build an empty one from the clip.
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
@@ -4254,6 +4305,7 @@ class H3LongVideos:
             plan = ((anchor_note + " ") if anchor_note else "") + \
                    ((f"SLA: {sla_note}. ") if sla_note else "") + \
                    (("LORA HINTS -- " + "; ".join(hint_notes) + ". ") if hint_notes else "") + \
+                   ((mp_note + ". ") if mp_note else "") + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \
                    (f"PLAN (no render): {shape} = ~{total:g}s at {w}x{h}. "
                     f"{len(beats) or 1} beat(s). decode {'tiled' if tiled else 'full'}. {vram_str}."
@@ -4521,6 +4573,7 @@ class H3LongVideos:
                     + ").") if count_subjects else "")
                 + (f" SLA: {sla_note}." if sla_note else "")
                 + (" LORA HINTS -- " + "; ".join(hint_notes) + "." if hint_notes else "")
+                + (f" {mp_note}." if mp_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
                 + (f" {beats_note}." if beats_note else "")

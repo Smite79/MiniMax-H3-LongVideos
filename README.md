@@ -52,6 +52,12 @@ Mara = she, 30, red hair, grey coat, black jeans
 ```
 
 **3. `resolution`** — presets only, all valid H3 sizes, three tiers per ratio.
+Optionally set **`megapixels`** to override the *size* while keeping the preset's
+*shape*: the dropdown picks the aspect ratio, the number picks how many pixels.
+`1.0` = 1024×1024 worth. Cost and training-distribution match track total pixels
+rather than the short edge — `1:1 768x768` reads as native by short edge but is
+only 0.56MP, while `21:9 1536x672` reads as sub-native at a full 0.98MP. Snapped
+to multiples of 32; `info` reports the size and MP actually used. `0` = off.
 
 **4. `shot_seconds`** — a **ceiling**, not the length of every shot. Leave it at 0
 to let the VRAM budget decide.
