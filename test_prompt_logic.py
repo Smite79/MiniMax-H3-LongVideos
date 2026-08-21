@@ -2005,6 +2005,35 @@ def check_lora_hints():
     def hints(name, md, steps, short_edge):
         return S.lora_hint_notes(_MDModel(md), _sla_graph(name, False), "9", steps, short_edge)
 
+    def stack(*loras):
+        g = {"1": {"class_type": "UNETLoader", "inputs": {}}}
+        prev = "1"
+        for i, l in enumerate(loras, 2):
+            g[str(i)] = {"class_type": "LoraLoaderModelOnly",
+                         "inputs": {"model": [prev, 0], "lora_name": l}}
+            prev = str(i)
+        g["9"] = {"class_type": "H3LongVideos", "inputs": {"model": [prev, 0]}}
+        return _FakeGraph(g)
+
+    # On a stack the step-count LoRA is usually NOT the nearest one, and checking
+    # only the nearest silently skipped the very LoRA the sampler has to match.
+    st = S.lora_hint_notes(_MDModel(AIMD), stack(SLA4, AITK, "vagassist_e40.safetensors"),
+                           "9", 8, 768)
+    check("a step-count LoRA behind others on the chain is still checked",
+          any("4-step" in x for x in st))
+    check("stacking a distill with subject LoRAs warns", any("3 LoRAs" in x for x in st))
+    check("...and names the distill", any(SLA4 in x for x in st))
+    check("...and points at the SUBJECT strengths, not the distill's",
+          any("SUBJECT LoRA strengths" in x for x in st))
+    check("...and says order is irrelevant", any("sums the patches" in x for x in st))
+    check("a distill alone is not a fight",
+          not any("LoRAs on this chain" in x
+                  for x in S.lora_hint_notes(_MDModel(AIMD), stack(SLA4), "9", 4, 768)))
+    check("subject LoRAs with no distill are not a fight",
+          not any("LoRAs on this chain" in x for x in
+                  S.lora_hint_notes(_MDModel(AIMD), stack(AITK, "vagassist_e40.safetensors"),
+                                    "9", 8, 768)))
+
     n = hints(SLA4, H3MD, 8, 768)
     check("a 4-step LoRA run at 8 steps warns", len(n) == 1 and "4-step" in n[0])
     check("...and says the number came from the filename", "not metadata" in n[0])

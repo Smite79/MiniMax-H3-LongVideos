@@ -3397,38 +3397,71 @@ def lora_hint_notes(model, graph, node_id, steps, short_edge):
     names = upstream_lora_names(graph, node_id)
     if not names:
         return notes
-    name = os.path.basename(str(names[-1]))
     md = lora_declared(model)
 
     # --- base model: the one check that is pure metadata ---
+    # ComfyUI's set_attachments('lora_metadata', ...) is overwritten by each loader
+    # in turn, so on a stack this describes the LAST one applied only. Attributed to
+    # that file by name rather than to "your LoRA", so the note cannot be read as a
+    # claim about the others.
     base = str(md.get("base_model") or md.get("ss_base_model_version") or "")
+    nearest = os.path.basename(str(names[-1]))
     if base and "minimax" not in base.lower() and "h3" not in base.lower():
-        notes.append(f"'{name}' declares base_model '{base}', which is not MiniMax-H3 -- "
+        notes.append(f"'{nearest}' declares base_model '{base}', which is not MiniMax-H3 -- "
                      f"it will apply as noise on an H3 DiT")
 
-    # --- step count: filename convention only ---
-    m = _LORA_STEPS.search(name)
-    if m:
-        want = int(m.group(1))
-        if want and int(steps) != want:
-            notes.append(f"'{name}' is named as a {want}-step LoRA but steps={int(steps)} "
-                         f"(from the filename, not metadata)" +
-                         ("; a distill LoRA run past its step count re-noises a composition it "
-                          "already settled" if int(steps) > want else
-                          "; under its step count the distill has not finished resolving"))
+    # Filename-derived checks run over EVERY LoRA on the chain. Only the nearest
+    # one's metadata is reachable, but every one of their names is -- and on a stack
+    # the step-count LoRA is usually NOT the nearest, so checking one file silently
+    # skipped the very LoRA whose step count the sampler has to match.
+    for raw in names:
+        name = os.path.basename(str(raw))
 
-    # --- training resolution: filename convention only ---
-    m = _LORA_RES.search(name)
-    if m and short_edge:
-        want = int(m.group(1))
-        if short_edge > want * 1.34:
-            notes.append(f"'{name}' is named for {want}p but the short edge here is "
-                         f"{int(short_edge)}px (from the filename, not metadata); well above a "
-                         f"LoRA's training resolution H3 tends to tile the figure")
-        elif short_edge * 1.34 < want:
-            notes.append(f"'{name}' is named for {want}p but the short edge here is "
-                         f"{int(short_edge)}px (from the filename, not metadata); well below it "
-                         f"the LoRA's detail work has nothing to land on")
+        # --- step count: filename convention only ---
+        m = _LORA_STEPS.search(name)
+        if m:
+            want = int(m.group(1))
+            if want and int(steps) != want:
+                notes.append(f"'{name}' is named as a {want}-step LoRA but steps={int(steps)} "
+                             f"(from the filename, not metadata)" +
+                             ("; a distill LoRA run past its step count re-noises a composition it "
+                              "already settled" if int(steps) > want else
+                              "; under its step count the distill has not finished resolving"))
+
+        # --- training resolution: filename convention only ---
+        m = _LORA_RES.search(name)
+        if m and short_edge:
+            want = int(m.group(1))
+            if short_edge > want * 1.34:
+                notes.append(f"'{name}' is named for {want}p but the short edge here is "
+                             f"{int(short_edge)}px (from the filename, not metadata); well above a "
+                             f"LoRA's training resolution H3 tends to tile the figure")
+            elif short_edge * 1.34 < want:
+                notes.append(f"'{name}' is named for {want}p but the short edge here is "
+                             f"{int(short_edge)}px (from the filename, not metadata); well below "
+                             f"it the LoRA's detail work has nothing to land on")
+
+    # --- stacking a distill/turbo LoRA with others ---
+    # The genuine conflict, and the one that reads as "a LoRA fight". A distill LoRA
+    # rewrites the sampling trajectory: it settles global composition in the first
+    # step or two of a 4-8 step schedule. A subject LoRA trained against BASE H3 at
+    # a normal step count contributes deltas calibrated for a schedule that no
+    # longer exists, and at full strength those land in exactly the steps the
+    # distill is using to fix composition. Order does not matter -- ComfyUI sums the
+    # patches -- so strength is the only lever.
+    distill = [os.path.basename(str(n)) for n in names
+               if _LORA_STEPS.search(os.path.basename(str(n)))
+               or re.search(r"turbo|distill", os.path.basename(str(n)), re.I)]
+    if distill and len(names) > 1:
+        others = [os.path.basename(str(n)) for n in names
+                  if os.path.basename(str(n)) not in distill]
+        if others:
+            notes.append(
+                f"{len(names)} LoRAs on this chain, one of them a distill/turbo build "
+                f"('{distill[0]}'). It settles composition in its first step or two, and the "
+                f"deltas from {', '.join(f'{o!r}' for o in others[:3])} land in those same "
+                f"steps -- lower the SUBJECT LoRA strengths first (0.6-0.8), not the distill's. "
+                f"Stacking order does not matter; ComfyUI sums the patches")
     return notes
 
 
