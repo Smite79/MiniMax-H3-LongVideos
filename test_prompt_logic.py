@@ -2797,11 +2797,22 @@ def check_auto_shift():
     check("...quoting what the DEFAULTS would have done, not the new value",
           "80%" in note)
 
-    # A value the user typed is a decision.
+    # A value the user typed is a decision -- but declining must be REPORTED. This
+    # is the path that actually fires in practice: one widget nudged off the default
+    # (a real graph had shift_audio 4.0 rather than 3.0) holds the whole feature off,
+    # and returning silently made it look dead. It was the last silent exit left.
     check("a hand-set shift_video is never overridden",
-          S.auto_shift_for(4, chain(TURBO), "9", 6.0, 3.0) == (6.0, 3.0, ""))
+          S.auto_shift_for(4, chain(TURBO), "9", 6.0, 3.0)[:2] == (6.0, 3.0))
     check("a hand-set shift_audio is never overridden",
-          S.auto_shift_for(4, chain(TURBO), "9", 12.0, 1.5) == (12.0, 1.5, ""))
+          S.auto_shift_for(4, chain(TURBO), "9", 12.0, 1.5)[:2] == (12.0, 1.5))
+    _n = S.auto_shift_for(6, chain(TURBO), "9", 12.0, 4.0)[2]
+    check("...and declining names the widget holding it off",
+          "shift_audio 4" in _n and "default 3" in _n)
+    check("...and says how to re-enable it", "Reset them to 12/3" in _n)
+    check("the OTHER widget is named when that is the one that differs",
+          "shift_video 6" in S.auto_shift_for(6, chain(TURBO), "9", 6.0, 3.0)[2])
+    check("resetting the widget re-enables derivation",
+          abs(S.auto_shift_for(6, chain(TURBO), "9", 12.0, 3.0)[0] - 3.15) < 0.05)
     # No distill, nothing to match. The VALUES must stay put -- but not silently.
     # Reporting nothing here is what made a working feature look broken: no widget
     # movement, no console line, no note, nothing to tell the two states apart.
@@ -2906,7 +2917,7 @@ def check_auto_shift():
     check("the note also reaches the ComfyUI console",
           'logging.info("[H3 Long Videos] %s.", shift_note)' in src)
     check("a value the user typed still stops it",
-          S.auto_shift_for(8, chain(TURBO), "9", 5.0, 1.25) == (5.0, 1.25, ""))
+          S.auto_shift_for(8, chain(TURBO), "9", 5.0, 1.25)[:2] == (5.0, 1.25))
     S._AUTO_SHIFT_SET.clear()
 
     # --- the MODEL may declare its own shift -------------------------------------
@@ -2942,7 +2953,7 @@ def check_auto_shift():
     check("a model with no audio_shift keeps the widget's", (sv, sa) == (8.0, 3.0))
     # A hand-typed widget still outranks the model.
     check("a hand-set shift beats a model declaration",
-          S.auto_shift_for(4, chain(TURBO), "9", 5.0, 3.0, _M(8.0, 2.0)) == (5.0, 3.0, ""))
+          S.auto_shift_for(4, chain(TURBO), "9", 5.0, 3.0, _M(8.0, 2.0))[:2] == (5.0, 3.0))
     check("an upstream node's 6/1.5 is preserved",
           S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(6.0, 1.5))[:2] == (6.0, 1.5))
     # Reading it must never throw.

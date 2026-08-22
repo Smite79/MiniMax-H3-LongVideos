@@ -3675,7 +3675,20 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
     is_ours = bool(ours and abs(float(shift_video) - ours[0]) <= 1e-6
                    and abs(float(shift_audio) - ours[1]) <= 1e-6)
     if not (at_default or is_ours):
-        return shift_video, shift_audio, ""      # user has set these; leave them alone
+        # Leave them alone -- but SAY so. This is the path that actually fires in
+        # practice (one widget nudged away from the default, e.g. shift_audio 4.0
+        # rather than 3.0) and it was the last one still returning silently, so the
+        # whole feature read as dead. Name the widget that is holding it off.
+        held = []
+        if abs(float(shift_video) - H3_BASE_SHIFT) > 1e-6:
+            held.append(f"shift_video {float(shift_video):g} (default {H3_BASE_SHIFT:g})")
+        if abs(float(shift_audio) - H3_BASE_AUDIO_SHIFT) > 1e-6:
+            held.append(f"shift_audio {float(shift_audio):g} (default {H3_BASE_AUDIO_SHIFT:g})")
+        return shift_video, shift_audio, (
+            "auto_shift is on but " + " and ".join(held) + " differ(s) from the "
+            "defaults, so both are being treated as your own setting and left alone. "
+            f"Reset them to {H3_BASE_SHIFT:g}/{H3_BASE_AUDIO_SHIFT:g} to let auto_shift "
+            "derive them from the step count")
     # The MODEL may already declare a shift of its own -- a repacked checkpoint whose
     # config carries different sampling_settings, or an upstream
     # ModelSamplingMiniMaxH3 node. Deriving from step count alone would throw that
