@@ -3355,8 +3355,11 @@ def shot_references(ref_list, ref_mode, shot_index, handoff):
     """Pure: which reference images shot `shot_index` is conditioned on, or [] when
     the shot should use the keyframe handoff instead.
 
-    The three modes trade identity against continuity, and they trade because a
-    shot cannot carry both channels:
+    NOTE: on ComfyUI 0.31+ a shot CAN carry both channels, and run() adds the handoff
+    as a real keyframe alongside whatever this returns (unless ref_noise_aug has been
+    lowered, which would soften the anchor too). The descriptions below are what each
+    mode contributes to the REFERENCE channel; they no longer describe a shot's whole
+    conditioning, and 'no handoff at all' is no longer a consequence of picking one:
 
       'first shot'  -- references establish the cast in shot 1; every later shot
                        uses the last-frame handoff. Continuity is unbroken and the
@@ -5304,6 +5307,27 @@ class H3LongVideos:
                         ref_carried.append(i + 1)
             else:
                 shot_refs = shot_references(ref_list, ref_mode, i, handoff)
+                # ComfyUI 0.31+ lets references and a keyframe ride TOGETHER, and only
+                # the tagged branch above was ever updated for it. Everywhere else a
+                # ref-conditioned shot still dropped its handoff, as 0.30 required:
+                #   'every shot'                -> no keyframe at all, so consecutive
+                #                                  shots meet as CUTS
+                #   'every shot + handoff ref'  -> the handoff demoted to a soft
+                #                                  reference ("look like this") rather
+                #                                  than an anchor ("start from this")
+                #   'first shot', shot 0        -> the start_image was ignored outright
+                # In each case the last frame of a shot does not become the first frame
+                # of the next, which is exactly the reported symptom.
+                if shot_refs and handoff is not None and keyframe_rides_with_refs(ref_noise_aug):
+                    carry_keyframe = True
+                    ref_keyframed.append(i + 1)
+                    # It is anchoring as a keyframe now, so the SAME frame repeated in
+                    # the ref channel would only spend rows saying it twice -- and say
+                    # it more weakly.
+                    shot_refs = [r for r in shot_refs if r is not handoff]
+                elif (shot_refs and handoff is not None
+                      and ref_mode == "every shot + handoff ref"):
+                    ref_carried.append(i + 1)      # softened refs: the 0.30 fallback
             # A shot that follows a strip starts FRESH. Continuing from a frame that
             # still shows the garment is how it reappears -- the picture outvotes the
             # text every time. Costs a cut exactly where the state changes, which is
@@ -5552,8 +5576,8 @@ class H3LongVideos:
                         + (f"; shot(s) {','.join(str(n) for n in kept)} keep the handoff" if kept
                            else "")
                         + (f"; shot(s) {','.join(str(n) for n in ref_keyframed)} carry the previous "
-                           f"frame as a real KEYFRAME alongside their references, so a tag anchors "
-                           f"rather than cuts" if ref_keyframed else "")
+                           f"frame as a real KEYFRAME alongside their references, so they anchor "
+                           f"rather than cut" if ref_keyframed else "")
                         + (f"; the previous frame rides along as an extra reference on shot(s) "
                            f"{','.join(str(n) for n in ref_carried)} -- weaker than a keyframe, but "
                            f"ref_noise_aug below {KEYFRAME_SAFE_AUG:g} would soften a keyframe too "

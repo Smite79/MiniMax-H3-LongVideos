@@ -2176,6 +2176,30 @@ def check_ref_modes():
           all(S.shot_references([], m, i, ho(i)) == []
               for m in ("first shot", "every shot", "every shot + handoff ref")
               for i in range(6)))
+
+    # A ref-conditioned shot must ALSO anchor on the handoff. ComfyUI 0.31+ lets the
+    # two channels ride together, but only the <Picture N>-tagged branch was updated
+    # for it: everywhere else a shot with references dropped its handoff, as 0.30
+    # required. That is why the last frame of a shot did not become the first frame of
+    # the next -- 'every shot' produced cuts, '+ handoff ref' demoted the anchor to a
+    # soft "look like this", and on shot 1 the start_image was ignored outright.
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("run() lets refs and a keyframe coexist outside the tagged branch",
+          src.count("carry_keyframe = True") == 2)
+    check("...gated on the aug, so a softened reference cannot soften the anchor",
+          "and keyframe_rides_with_refs(ref_noise_aug):\n                    carry_keyframe = True"
+          in src)
+    check("...and the handoff is not ALSO repeated in the ref channel",
+          "shot_refs = [r for r in shot_refs if r is not handoff]" in src)
+    check("the '+ handoff ref' fallback survives for softened refs",
+          'ref_mode == "every shot + handoff ref"' in src)
+    check("shot_handoff still drops after a wardrobe strip",
+          "None if after_strip" in src)
+    # The aug gate itself, which decides which way a ref shot goes.
+    check("at H3's default aug the keyframe rides along",
+          S.keyframe_rides_with_refs(0.999) and S.keyframe_rides_with_refs(None))
+    check("...and a softened reference sends it back to the ref channel",
+          not S.keyframe_rides_with_refs(0.90))
     # sizing: 'match' must never exceed the generation area by more than the 32px snap,
     # and neither mode may ever upscale a small reference
     big = S.ref_image_canvas(4096, 2160, 1344, 768, "match")
