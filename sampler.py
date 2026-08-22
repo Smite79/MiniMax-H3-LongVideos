@@ -2353,6 +2353,38 @@ def dialogue_fit_warnings(beats, seconds_per_shot):
     return out
 
 
+def continuity_warnings(gens):
+    """Shots that describe NOBODY while people are still in the story.
+
+    The chain hands each shot the previous one's last decoded frame. A scenery beat
+    describes no one, so the frame it produces has no one in it -- and the next
+    shot has to re-establish every character from an empty room. That is a cohesion
+    break, and it is invisible in the prompt: the text of both shots is individually
+    correct, which is why chains lose their people in the middle rather than
+    degrading steadily.
+
+    Only flagged when people appear on BOTH sides. A scenery beat that opens or
+    closes a chain hands its frame to nobody, so it costs nothing."""
+    if len(gens or []) < 3:
+        return []
+    # A bound person shows up as an inline parenthetical of real description.
+    peopled = []
+    for g in gens:
+        body = (g or "").split("\n")[0]
+        body = re.sub(r"^\[Generation \d+\]\s*", "", body)
+        body = re.sub(r"^Exactly [a-z]+ (?:person|people)[^.]*\.\s*", "", body)
+        peopled.append(bool(re.search(r"\([^)]{6,}\)", body)))
+    out = []
+    for i in range(1, len(peopled) - 1):
+        if not peopled[i] and peopled[i - 1] and any(peopled[i + 1:]):
+            out.append(
+                f"shot {i + 1} describes nobody, between shots that do -- it hands shot "
+                f"{i + 2} a frame with no people in it, so every character has to be "
+                f"re-established from an empty room. Give it someone ('Dom watches from "
+                f"the doorway'), or move it to the start or end of the chain")
+    return out
+
+
 def dialogue_filler_warnings(beats, seconds_per_shot):
     """Dialogue shots with far more time than their line, which H3 fills with speech.
 
@@ -4737,14 +4769,6 @@ class H3LongVideos:
         # did not: `audio_note` collided with the mute-reporting variable of the same
         # name, so the shift-ratio warning reached plan_only and never a real render,
         # while the mute note was printed twice under the wrong label.
-        preflight = [("SLA", sla_note),
-                     ("LORA HINTS", "; ".join(hint_notes)),
-                     ("", mp_note),
-                     ("SCHEDULE", sched_note),
-                     ("KERNELS", kernel_note),
-                     ("AUDIO", audio_ratio_note)]
-        preflight_txt = "".join(f"{(lbl + ' -- ') if lbl else ''}{txt}. "
-                                for lbl, txt in preflight if txt)
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
@@ -4794,6 +4818,21 @@ class H3LongVideos:
                                       exposed_terms=exposed_terms, strip_out=strip_shots,
                                       anatomy_guard=anatomy_on,
                                       lock_restraints=lock_restraints)
+
+        # A scenery beat mid-chain hands the next shot a frame with no people in
+        # it. Both prompts are individually correct, so this is invisible without
+        # looking at the sequence -- which is why chains lose their cast in the
+        # middle rather than degrading steadily.
+        cohesion_notes = continuity_warnings(gens)
+        preflight = [("SLA", sla_note),
+                     ("LORA HINTS", "; ".join(hint_notes)),
+                     ("", mp_note),
+                     ("SCHEDULE", sched_note),
+                     ("KERNELS", kernel_note),
+                     ("AUDIO", audio_ratio_note),
+                     ("CONTINUITY", "; ".join(cohesion_notes))]
+        preflight_txt = "".join(f"{(lbl + ' -- ') if lbl else ''}{txt}. "
+                                for lbl, txt in preflight if txt)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.

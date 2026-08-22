@@ -2277,6 +2277,58 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_continuity_warning():
+    """A scenery beat MID-CHAIN breaks the visual chain.
+
+    Each shot is handed the previous one's last decoded frame. A beat describing
+    nobody produces a frame with nobody in it, so the next shot has to re-establish
+    every character from an empty room. Both prompts are individually correct,
+    which is why this is invisible without looking at the sequence -- and why a
+    chain loses its cast in the middle rather than degrading steadily.
+
+    Established first that the prompt itself does NOT drift with length: the first
+    six shots are byte-identical at 6, 9 and 13 beats."""
+    print("\n=== mid-chain continuity ===")
+    CM = "Mara = she, 30, red hair\nDom = he, tall, 35, brunette"
+
+    def run(beats):
+        return S.distribute_generations("A hangar.", beats, "", "", CM)
+
+    mid = ["Mara walks in.", "Dom follows her.", "The hangar doors roll open.",
+           "Dom looks out.", "Mara joins him."]
+    w = S.continuity_warnings(run(mid))
+    check("a scenery beat mid-chain warns", len(w) == 1)
+    check("...naming the shot that produces the empty frame", "shot 3" in w[0])
+    check("...and the shot that pays for it", "shot 4" in w[0])
+    check("...and suggesting a fix", "watches from the doorway" in w[0])
+
+    # A scenery beat that hands its frame to nobody costs nothing.
+    check("scenery at the END does not warn",
+          S.continuity_warnings(run(["Mara walks in.", "Dom follows her.",
+                                     "Mara joins him.", "The doors roll open."])) == [])
+    check("scenery at the START does not warn",
+          S.continuity_warnings(run(["The doors roll open.", "Mara walks in.",
+                                     "Dom follows her."])) == [])
+    check("a chain with people throughout does not warn",
+          S.continuity_warnings(run(["Mara walks in.", "Dom follows her.",
+                                     "Mara joins him."])) == [])
+    check("a two-beat chain is too short to warn",
+          S.continuity_warnings(run(["Mara walks in.", "The doors roll open."])) == [])
+    check("an empty chain is handled", S.continuity_warnings([]) == [])
+
+    # The finding that framed this: length alone does not change the prompt.
+    beats = ["Mara walks into the hangar.", "Dom climbs out of the van.",
+             'Mara says to Dom: "Ready?"', "Dom lifts a crate.",
+             "Mara takes off her grey coat.", "They look at the crate together.",
+             "Dom opens the door.", "Mara follows him.", "They stand together."]
+    cm2 = ("Mara = she, 30, red hair, grey coat\nDom = he, tall, 35, brunette")
+    six = [g.split("\n")[0] for g in
+           S.distribute_generations("A hangar.", beats[:6], "", "", cm2)]
+    nine = [g.split("\n")[0] for g in
+            S.distribute_generations("A hangar.", beats, "", "", cm2)][:6]
+    check("the same beat renders identically at 6 and 9 beats", six == nine)
+
+
 def check_restraints_stay_on():
     """A restraint is a plot state, not a garment: prose never takes one off.
 
@@ -3083,6 +3135,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_continuity_warning()
     check_restraints_stay_on()
     check_anatomy_guard()
     check_latent_output()
