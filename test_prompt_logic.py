@@ -2277,6 +2277,79 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_mouth_stays_closed():
+    """Three layers, because the prompt alone was never going to do it.
+
+    1. TEXT   -- the lips-closed clause and no-voice soundscape (gated on
+                 person_in_shot, so plural beats are covered).
+    2. PICTURE-- a dialogue shot handing its LAST frame to a silent shot seeds an
+                 open mouth mid-word. A picture outvotes a sentence, which is the
+                 same thing that made removed garments come back. The handoff frame
+                 is taken MOUTH_SETTLE_FRAMES earlier at exactly that boundary.
+    3. AUDIO  -- H3 is joint: the mouth follows the audio branch. On a shot with no
+                 line that branch is otherwise unconditioned, invents a voice, and
+                 the picture lip-syncs to it. The keyframe's audio channel is
+                 anchored to encoded silence instead."""
+    print("\n=== mouths stay closed until dialogue ===")
+
+    beats = ['Mara says: "Ready?"', "Mara nods.", "Mara walks out.",
+             'Dom says: "Wait."', "Dom follows."]
+    spk = S.speech_flags(beats)
+    check("speech flags read the quoted lines", spk == [True, False, False, True, False])
+
+    # Layer 2: only the speech -> silence boundary is worth paying for.
+    settle = [spk[i] and not spk[i + 1] for i in range(len(spk) - 1)]
+    check("a speech->silence boundary settles the mouth", settle[0] and settle[3])
+    check("silence->silence needs nothing", not settle[1])
+    check("silence->speech keeps the literal last frame", not settle[2])
+    check("the settle window is a syllable tail, not a cut",
+          2 <= S.MOUTH_SETTLE_FRAMES <= 6)
+
+    # Layer 3 must never be able to break a render.
+    class _Boom:
+        audio_sample_rate = 32000
+
+        def encode(self, w):
+            raise RuntimeError("boom")
+
+    class _NoSR:
+        pass
+    check("an audio VAE that raises degrades to None",
+          S._silent_audio_latent(_Boom(), 124, 24, 206) is None)
+    check("an audio VAE with no sample rate degrades to None",
+          S._silent_audio_latent(_NoSR(), 124, 24, 206) is None)
+    check("a zero-length request degrades to None",
+          S._silent_audio_latent(_Boom(), 124, 24, 0) is None)
+
+    # A latent of the wrong shape must be rejected, not passed to the DiT.
+    class _WrongShape:
+        audio_sample_rate = 32000
+
+        def encode(self, w):
+            return T_torch_zeros((1, 16, 2, 206))
+    def T_torch_zeros(shape):
+        class _Z:
+            def dim(self_):
+                return len(shape)
+            shape_ = shape
+            @property
+            def shape(self_):
+                return shape
+        return _Z()
+    check("a latent with the wrong channel count is rejected",
+          S._silent_audio_latent(_WrongShape(), 124, 24, 206) is None)
+
+    # Layer 1 still applies, including on the plural beats that used to miss it.
+    cm = "Mara = she, 30, red hair\nDom = he, tall, 35"
+    g = S.distribute_generations("A room.", ["Mara and Dom walk in.",
+                                             "They face each other.",
+                                             'Mara says: "Ready?"'], "", "", cm)
+    check("a silent named beat gets the mouth state", "mouth closed" in g[0])
+    check("a silent PLURAL beat gets it too", "mouth closed" in g[1])
+    check("...and the no-voice soundscape", "no voices" in g[1].lower())
+    check("a dialogue beat is left alone", "mouth closed" not in g[2])
+
+
 def check_presence_test_is_shared():
     """ONE presence test, because this bug has already been written twice.
 
@@ -3177,6 +3250,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_mouth_stays_closed()
     check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()

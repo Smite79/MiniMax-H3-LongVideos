@@ -149,8 +149,20 @@ rendering**. Do that first; it is near-instant.
   the anchor, and never to a shot with nobody in it — describing a body in an empty
   frame is what burned faces into opening frames before. `auto` = on below a 768
   short edge or when a LoRA is applied.
-- **Silence.** Beats with no quoted dialogue get a lips-closed clause, a no-voice
-  soundscape, and optionally muted audio — H3 babbles otherwise.
+- **Silence, in three layers.** A prompt clause alone was never enough, because
+  two of the three causes aren't text.
+  1. **Text** — beats with no quoted dialogue get a lips-closed clause and a
+     no-voice soundscape.
+  2. **Picture** — a dialogue shot handing its *last* frame to a silent shot seeds
+     an open mouth mid-word, and a picture outvotes a sentence. The handoff frame is
+     taken 3 frames (~125 ms) earlier at exactly that boundary, automatically.
+  3. **Audio** — H3 is a *joint* model: the mouth follows the audio branch. On a
+     shot with no line that branch is otherwise unconditioned, invents a voice, and
+     the picture lip-syncs to it. The keyframe's audio channel is anchored to
+     encoded silence instead.
+
+  `mute_nonspeech_audio` is a fourth, weaker thing: it zeroes the waveform *after*
+  generation, so it silences the track but cannot close a mouth.
 - **Overlays.** Optional PIL watermark and intro title, composited after any
   upscale, never asked of the model.
 

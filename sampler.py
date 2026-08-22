@@ -1616,6 +1616,12 @@ def has_speech(body):
 # Placed per-shot, never in the anchor. Anchor body words are what burned a face
 # into the opening frames of every shot, found by bisection, and limb words there
 # would carry the same risk on every shot including scenery.
+# How many frames of grace a mouth gets to close before its frame is handed on.
+# ~125ms at 24fps -- the tail of a syllable. Applied ONLY at a dialogue -> silence
+# boundary, where the next shot's keyframe would otherwise be an open mouth
+# mid-word, and where no amount of lips-closed text can outvote it.
+MOUTH_SETTLE_FRAMES = 3
+
 ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers each, "
                  "and two legs, in correct human proportion.")
 
@@ -2959,6 +2965,40 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
     return imgs
 
 
+def _silent_audio_latent(audio_vae, frame_count, fps, want_t):
+    """A keyframe audio latent of actual SILENCE, or None if it cannot be made.
+
+    H3 is a JOINT model: the mouth follows the audio branch. On a shot with no
+    scripted line the branch is otherwise unconditioned, and an unconditioned audio
+    branch invents a voice -- which the picture then lip-syncs to. The lips-closed
+    sentence is arguing with a stream that has already decided someone is talking.
+
+    Seeding the keyframe's audio channel with encoded silence anchors that stream
+    instead. comfy/ldm/minimax/audio_vae.py encode() takes stereo [B, 2, L] at
+    32 kHz and returns [B, 32, 2, T] on the same 40 Hz grid temporal_shape() uses.
+
+    Everything here is defensive. The shape is CHECKED against what the layout
+    expects rather than assumed, and any failure returns None so the shot falls
+    back to today's behaviour instead of breaking the render."""
+    try:
+        sr = int(getattr(audio_vae, "audio_sample_rate", 0) or 0)
+        if sr <= 0 or want_t <= 0:
+            return None
+        n = max(1, int(round(frame_count / float(fps or H3_FPS) * sr)))
+        silence = torch.zeros((1, 2, n))
+        lat = audio_vae.encode(silence)
+        if lat is None or lat.dim() != 4 or lat.shape[1] != 32:
+            return None
+        t = lat.shape[-1]
+        if t > want_t:                      # encode rounds up on the hop grid
+            lat = lat[..., :want_t]
+        elif t < want_t:
+            return None                     # short is a real mismatch, not padding
+        return lat
+    except Exception:
+        return None                         # never fail a render for a nicety
+
+
 def _decode_audio(audio_vae, out_latent):
     latent = out_latent["samples"]
     if latent.is_nested:
@@ -3016,7 +3056,8 @@ def _build_ref_images(vae, images, gen_w, gen_h, mode="match"):
 
 
 def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, handoff,
-                             ref_images=None, ref_image_size="match", ref_noise_aug=None):
+                             ref_images=None, ref_image_size="match", ref_noise_aug=None,
+                             audio_vae=None, silent=False):
     latent, fc = _empty_av_latent(width, height, length, fps)
     refs = [r for r in (ref_images or []) if r is not None]
     if refs:
@@ -3078,6 +3119,16 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
     if keyframes:
         for kf in keyframes:
             kf["latent"] = vae.encode(kf.pop("image"))
+            # A shot with no scripted line gets its audio channel anchored to real
+            # silence. H3 is joint -- the mouth follows the audio branch -- so an
+            # unconditioned branch invents a voice and the picture lip-syncs to it.
+            # The lips-closed sentence cannot outvote a stream that has already
+            # decided someone is speaking; this conditions the stream itself.
+            if silent and audio_vae is not None:
+                _, _, want_at = temporal_shape(fc, fps)
+                sil = _silent_audio_latent(audio_vae, fc, fps, want_at)
+                if sil is not None:
+                    kf["audio_latent"] = sil
         cond = node_helpers.conditioning_set_values(cond, {"minimax_keyframes": keyframes, "minimax_frame_count": fc})
     return cond, latent
 
@@ -4578,10 +4629,11 @@ class H3LongVideos:
 
     def _render(self, model, clip, vae, audio_vae, negative, prompt, w, h, ln, fps, tiled, sa,
                 handoff, decode_tile_frames=0, decode_tile_size=0,
-                refs=None, ref_image_size="match", ref_noise_aug=None):
+                refs=None, ref_image_size="match", ref_noise_aug=None, silent=False):
         positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff,
                                                     ref_images=refs, ref_image_size=ref_image_size,
-                                                    ref_noise_aug=ref_noise_aug)
+                                                    ref_noise_aug=ref_noise_aug,
+                                                    audio_vae=audio_vae, silent=silent)
         seed, steps, cfg, sn, sch, denoise = sa
         # Conditioning is built, so the text encoder and VAEs are dead weight for the
         # whole sampling loop -- evict them and keep only the DiT on the card.
@@ -4910,6 +4962,7 @@ class H3LongVideos:
         hoff = max(0, int(handoff_offset))
         backoff, video_chunks, audio_chunks = [], [], []
         latent_chunks = []                 # per-shot sampled latents, pre-decode
+        mouth_settled = []                 # shots seeded from a settled (closed) mouth
         handoff, sr = first_frame, None
         ref_list = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4) if r is not None]
         ref_shots = []                     # which shots ended up ref-conditioned
@@ -4964,6 +5017,8 @@ class H3LongVideos:
             # still shows the garment is how it reappears -- the picture outvotes the
             # text every time. Costs a cut exactly where the state changes, which is
             # where a cut belongs anyway.
+            # No scripted line -> anchor this shot's audio branch to silence.
+            shot_silent = bool(auto_silence_nonspeech and i < len(spk) and not spk[i])
             after_strip = i in strip_shots          # strip_shots is 1-based, i is 0-based
             shot_handoff = (None if after_strip
                             else handoff if (carry_keyframe or not shot_refs) else None)
@@ -4973,7 +5028,7 @@ class H3LongVideos:
                 while True:
                     try:
                         frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size, ref_noise_aug)
+                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -4989,13 +5044,13 @@ class H3LongVideos:
             else:
                 try:
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size, ref_noise_aug)
+                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if not _is_oom(e) or tiled:
                         raise
                     mm.soft_empty_cache(True); tiled = True; backoff.append(f"shot {i+1}: tiled")
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size, ref_noise_aug)
+                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent)
 
             if shot_latent is not None:
                 latent_chunks.append(shot_latent)
@@ -5009,9 +5064,28 @@ class H3LongVideos:
             # frames to nobody, so it just deletes the tail of the finished video -- on a
             # single-shot run that is the whole point of handoff_offset applied to the one
             # thing it cannot help (243f requested came back as 231 frames).
-            if hoff and i < len(gens) - 1 and frames.shape[0] > hoff + 1:
-                cut = round(hoff * sr / fps)
-                frames = frames[:-hoff]
+            # A dialogue shot handing its last frame to a SILENT shot is the one
+            # boundary where this matters, and it is where the prompt cannot help.
+            # The next shot's lips-closed clause is a sentence; its keyframe is a
+            # PICTURE of an open mouth mid-word, and a picture outvotes a sentence --
+            # the same thing that made removed garments come back. So the mouth gets
+            # a moment to close before the frame is taken, automatically, at exactly
+            # that transition. 3 frames is ~125ms at 24fps: the tail of a syllable.
+            #
+            # Only when the user has not set their own offset, and only speech ->
+            # silence. Silence -> silence needs nothing, and silence -> speech wants
+            # the literal last frame so the mouth is already in place.
+            shot_hoff = hoff
+            auto_settle = (not hoff and auto_silence_nonspeech
+                           and i < len(gens) - 1 and i < len(spk) - 1
+                           and spk[i] and not spk[i + 1])
+            if auto_settle:
+                shot_hoff = MOUTH_SETTLE_FRAMES
+                if (i + 1) not in mouth_settled:
+                    mouth_settled.append(i + 1)
+            if shot_hoff and i < len(gens) - 1 and frames.shape[0] > shot_hoff + 1:
+                cut = round(shot_hoff * sr / fps)
+                frames = frames[:-shot_hoff]
                 if cut:
                     wav = wav[..., :max(0, wav.shape[-1] - cut)]
 
@@ -5207,6 +5281,9 @@ class H3LongVideos:
                        if lora_on else "")
                     + ").") if count_subjects else "")
                 + ((" " + preflight_txt.strip()) if preflight_txt else "")
+                + (f" MOUTH -- shot(s) {','.join(str(n) for n in mouth_settled)} were seeded "
+                   f"from a settled mouth ({MOUTH_SETTLE_FRAMES}f before the cut), because the "
+                   f"shot before them ended on dialogue." if mouth_settled else "")
                 + (f"{latent_note}." if latent_note else "")
                 + (f" SLA LoRA '{os.path.basename(str(sla_name))}' paired with sparse attention."
                    if sla_name and sparse_on else "")
