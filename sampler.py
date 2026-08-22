@@ -3801,9 +3801,12 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
         f"{what} is loaded and steps={int(steps)}, so shift_video "
         f"{sv:g} / shift_audio {sa:g} were set automatically. The 12/3 defaults are for the "
         f"~20 steps H3 ships for; at {int(steps)} steps they put "
-        f"{max(was) * 100:.0f}% of the denoising into a single step, which renders soft. "
-        f"These match H3's own balance and keep audio_scale at {H3_AUDIO_SCALE:g}. Set "
-        f"either shift by hand to take over")
+        f"{max(was) * 100:.0f}% of the denoising into a single step. audio_scale stays at "
+        f"{H3_AUDIO_SCALE:g}. CAVEAT: a distill LoRA is TRAINED to make that big final jump, "
+        f"so the concentration may be the distilled behaviour rather than a fault, and "
+        f"lowering the shift can put the steps at noise levels the LoRA never saw "
+        f"(artifacting). No turbo LoRA declares its schedule, so this is a heuristic, not a "
+        f"looked-up value. Set either shift by hand, or turn auto_shift off, to take over")
 
 
 def schedule_balance_note(shift, steps, scheduler, worst_allowed=0.55):
@@ -4951,17 +4954,21 @@ class H3LongVideos:
                                "snow, fog. NO human sounds are ever generated -- no chatter, crowd or "
                                "announcements -- because an ambient bed that implies voices is how H3 "
                                "starts talking. 'fill if blank' leaves anything you typed alone."}),
-                "auto_shift": ("BOOLEAN", {"default": True,
-                    "tooltip": "When a distill/turbo LoRA is on the chain, set shift_video and "
-                               "shift_audio to match your step count instead of leaving H3's 12/3 "
-                               "defaults, which are for the ~20 steps it ships for. At 4 steps those "
-                               "defaults put 80% of the denoising in the FINAL step, which renders "
-                               "soft and painterly. The value is derived, not looked up: it is the "
-                               "shift whose worst step carries the same share as 12 does at 20 steps "
-                               "(4 steps -> 1.89, 8 -> 4.42, 20 -> 12.00). shift_audio moves with it "
-                               "to hold audio_scale at 4.0, because flattening that ratio breaks the "
-                               "audio branch. Touch either shift by hand and this stops -- a value "
-                               "you typed is never overridden."}),
+                "auto_shift": ("BOOLEAN", {"default": False,
+                    "tooltip": "OFF by default, and treat it as an experiment. It lowers "
+                               "shift_video so no sampler step carries more than the 38.7% "
+                               "H3's own 12/20-step default does (4 steps -> 1.89, 8 -> 4.42), "
+                               "with shift_audio following to hold audio_scale at 4.0.\n\n"
+                               "The premise is doubtful for DISTILLED LoRAs. At 4 steps, shift 12 "
+                               "puts 80% of the denoising in the final jump (sigma 0.80 -> 0) and "
+                               "a turbo LoRA is TRAINED to make exactly that jump -- so the "
+                               "concentration is the distilled behaviour, not a fault to correct. "
+                               "Lowering the shift moves every step to noise levels the LoRA never "
+                               "saw, which shows up as artifacting. None of the turbo/lightx2v "
+                               "LoRAs declare a schedule in their metadata, so there is nothing to "
+                               "look up and this number is a heuristic, not a recommendation.\n\n"
+                               "Leave it off and keep 12/3 unless you are deliberately sweeping "
+                               "shift. Touch either shift by hand and this stops regardless."}),
                 "lock_restraints": ("BOOLEAN", {"default": True,
                     "tooltip": "Physical restraints stay ON until something explicitly removes them. "
                                "Handcuffs, shackles, manacles, fetters, irons, gags, blindfolds, "
@@ -5133,7 +5140,7 @@ class H3LongVideos:
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
-            auto_shift=True, auto_soundscape="fill if blank",
+            auto_shift=False, auto_soundscape="fill if blank",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",

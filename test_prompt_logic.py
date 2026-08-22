@@ -2844,6 +2844,20 @@ def check_auto_shift():
           0 < i_set < src.find("audio_ratio_note = (audio_scale_note(shift_video"))
     check("auto_shift is an appended widget", "auto_shift" in S.ADDED_WIDGETS)
 
+    # auto_shift is OFF by default. The 38.7%-worst-step target treats a 4-step
+    # LoRA's big final jump (sigma 0.80 -> 0) as a fault, but a distill LoRA is
+    # TRAINED to make that jump -- so lowering the shift moves every step to noise
+    # levels it never saw, which is artifacting. No turbo/lightx2v LoRA declares a
+    # schedule in its metadata, so there is nothing backing the number.
+    check("auto_shift defaults to OFF",
+          '"auto_shift": ("BOOLEAN", {"default": False' in src)
+    check("...and the run() default agrees", "auto_shift=False" in src)
+    check("...and the tooltip says why it is doubtful",
+          "TRAINED to make exactly that jump" in src)
+    check("the note carries the caveat too",
+          "CAVEAT" in S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)[2])
+    S._AUTO_SHIFT_SET.clear()
+
     # --- writing the values back into the widgets --------------------------------
     # A node cannot set a widget from Python, so the derived values are returned in
     # a `ui` dict and web/js/autoshift.js assigns them. Without that the graph lied:
