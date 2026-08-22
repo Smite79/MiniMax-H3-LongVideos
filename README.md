@@ -141,35 +141,19 @@ rendering**. Do that first; it is near-instant.
   uncovered. Removals still happen — what is gated is the sentence, and since the
   model's default is a clothed person, it covers what nobody described. `info`
   still reports any zone a removal left uncovered, so you find out either way.
-- **Shift, automatically.** Load a distill/turbo LoRA and `auto_shift` sets
-  `shift_video` / `shift_audio` to match your step count. H3's 12/3 defaults are for
-  the ~20 steps it ships for; at 4 steps they put **80% of the denoising into the
-  final step**, which renders soft and painterly. The value is derived, not looked
-  up — the shift whose worst step carries the same share as 12 does at 20:
+- **Shift is yours to set. Keep `shift_video` / `shift_audio` at 12 / 3.** There was
+  an `auto_shift` option here that lowered the shift to match a low step count. It has
+  been removed, because its premise was wrong. It read H3's 12/3 defaults as putting
+  "80% of the denoising into the final step" at 4 steps and flattened the schedule to
+  spread that out — but a 4-step distill LoRA is *trained* to jump from ~0.80 noise
+  straight to clean. That concentration is the distilled behaviour, not a fault, and
+  lowering the shift puts every step at noise levels the LoRA never saw, which shows
+  up as artifacting. None of the turbo/lightx2v LoRAs declares a schedule in its
+  metadata either, so there was nothing to look up and the number was a guess.
 
-  | steps | shift_video | shift_audio | worst step |
-  |---|---|---|---|
-  | 4 | 1.89 | 0.47 | 38.7% |
-  | 6 | 3.15 | 0.79 | 38.7% |
-  | 8 | 4.42 | 1.10 | 38.7% |
-  | 20 | 12.00 | 3.00 | 38.7% |
-
-  **A model that declares its own shift wins.** A repacked checkpoint whose config
-  carries different `sampling_settings`, or an upstream `ModelSamplingMiniMaxH3`
-  node, both land on the live model — and either is a deliberate choice. `auto_shift`
-  keeps it, passes it through so nothing overwrites it, and reports the conflict:
-  *"the model already declares shift_video 8 … a 4-step run would want ~1.89."*
-  You settle it by typing a shift, which outranks both.
-
-  The derived values are **written into the widgets** after the run, so the graph
-  matches what rendered and a saved workflow reproduces it. That needs a small
-  frontend script (`web/js/autoshift.js`) because a node cannot set a widget from
-  Python. The node records what it wrote, so changing `steps` re-derives — only a
-  value *you* type stops it.
-
-  `shift_audio` moves *with* it, holding `audio_scale` at 4.0 — flattening that
-  ratio breaks the audio branch. **Type either shift by hand and this stops**: a
-  value you set is a decision and is never overridden.
+  Whatever you set is passed through untouched. Keep `shift_audio` at
+  `shift_video / 4` if you do change it — `audio_scale` is that ratio, and flattening
+  it toward 1.0 breaks the audio branch. `info` still warns if the ratio drifts.
 
 - **Anatomy.** `anatomy_guard` states each person's limb *count* — one head, two
   arms, two hands with five fingers, two legs — on shots that have people in them.

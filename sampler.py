@@ -258,7 +258,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms", "anatomy_guard", "lock_restraints", "auto_shift",
+    "exposed_terms", "anatomy_guard", "lock_restraints",
     "auto_soundscape",
 )
 
@@ -3607,208 +3607,6 @@ def audio_scale_note(shift_video, shift_audio):
             f"{max(0.25, sv / H3_AUDIO_SCALE):g}")
 
 
-# H3's own designed balance: what shift 12 gives at the ~20 steps it ships for.
-# Reproducing THAT number at a lower step count is the whole idea -- not picking a
-# shift that "looks flat", but the one that puts the same share of work in the
-# heaviest step as the model's own default does.
-_H3_TARGET_WORST = None                 # computed once, from the model's own numbers
-
-
-def balanced_shift(steps):
-    """The flow shift whose worst sampler step carries the same share as H3's own
-    default does at 20 steps. None when it cannot be computed.
-
-    Bisection, not a table: worst-step share rises monotonically with shift, so
-    twelve iterations land on it exactly, and the answer stays correct if the
-    scheduler maths ever changes. Sanity check on the method -- at 20 steps it
-    returns 12.00, which is what H3 declares in its own model config."""
-    global _H3_TARGET_WORST
-    steps = int(steps)
-    if steps < 2:
-        return None
-    if _H3_TARGET_WORST is None:
-        ref = flow_step_shares(12.0, 20)
-        if not ref:
-            return None
-        _H3_TARGET_WORST = max(ref)
-    lo, hi = 0.25, 16.0
-    for _ in range(40):
-        mid = (lo + hi) / 2.0
-        sh = flow_step_shares(mid, steps)
-        if not sh:
-            return None
-        if max(sh) > _H3_TARGET_WORST:
-            hi = mid
-        else:
-            lo = mid
-    return round((lo + hi) / 2.0, 2)
-
-
-# H3's own declared base, from comfy/supported_models.py MiniMaxH3.sampling_settings.
-# Anything else on the live model came from somewhere deliberate.
-H3_BASE_SHIFT, H3_BASE_AUDIO_SHIFT = 12.0, 3.0
-
-# What auto_shift last wrote into each node's widgets, so a widget still holding
-# that value is recognised as OURS rather than as a user decision. Module-level: it
-# must outlive the node instance, which ComfyUI recreates per execution.
-_AUTO_SHIFT_SET = {}
-
-
-def _with_shift_ui(result, shift_video, shift_audio, changed):
-    """Wrap a return so the frontend can write the shifts back into the widgets.
-
-    A node cannot set a widget from Python -- widgets are frontend state and run()
-    only ever RECEIVES them. Without this, auto_shift left the graph lying: the
-    widget still read 12/3 while the render used 1.89/0.47, so a saved workflow did
-    not describe the render that produced it.
-
-    comfy/execution.py:359 delivers a returned `ui` dict to the frontend in the
-    `executed` event; web/js/autoshift.js listens for it and assigns the widgets.
-    `result` is passed through untouched, so nothing downstream changes."""
-    if not changed:
-        return result
-    return {"ui": {"h3_shift": [float(shift_video), float(shift_audio)]},
-            "result": result}
-
-
-def model_declared_shift(model):
-    """(shift, audio_shift) currently on the model, or (None, None).
-
-    Reads the LIVE model_sampling object, which is where both sources land:
-
-      * a checkpoint whose config carries its own sampling_settings -- ComfyUI does
-        populate these from the state dict for some models
-        (supported_models.py:218-229), and repacked H3 builds vary;
-      * an upstream ModelSamplingMiniMaxH3 node the user has already wired.
-
-    Either way a value that is not H3's declared base was put there on purpose, and
-    deriving a shift from step count alone would silently discard it."""
-    try:
-        ms = model.get_model_object("model_sampling")
-    except Exception:
-        return None, None
-    sv = getattr(ms, "shift", None)
-    sa = getattr(ms, "audio_shift", None)
-    try:
-        return (float(sv) if sv is not None else None,
-                float(sa) if sa is not None else None)
-    except (TypeError, ValueError):
-        return None, None
-
-
-def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
-    """(shift_video, shift_audio, note) -- shifts matched to a distill LoRA's steps.
-
-    Only fires when BOTH shifts are still at their factory defaults. A value the
-    user typed is a decision, and silently overriding it is how a render stops
-    being reproducible from what the graph shows.
-
-    The audio shift moves WITH the video one, preserving H3's 4:1 audio_scale. That
-    coupling is not optional on ComfyUI 0.31+ -- flattening the ratio breaks the
-    audio branch, which is exactly what a bare shift_video change did."""
-    # "Still at the defaults" is not enough once the values are written BACK into the
-    # widgets: after one run they hold 1.89/0.47, which would read as a user choice
-    # and stop this from ever deriving again -- so changing `steps` from 4 to 8 would
-    # silently keep the 4-step shift. What we last wrote for this node is recorded, so
-    # a widget still holding it counts as ours; anything else was typed by the user.
-    ours = _AUTO_SHIFT_SET.get(str(node_id))
-    at_default = (abs(float(shift_video) - 12.0) <= 1e-6
-                  and abs(float(shift_audio) - 3.0) <= 1e-6)
-    # Compare with the widget's own precision, not float-exact. The frontend stores
-    # what it can represent, so writing 1.89/0.47 into widgets that round left them
-    # holding 1.9/0.5 -- which then matched neither the defaults nor what was
-    # recorded, so the next run declined with "you set these yourself". The widgets
-    # are 0.01 now, and this absorbs the display rounding either way.
-    is_ours = bool(ours and abs(float(shift_video) - ours[0]) <= 0.05
-                   and abs(float(shift_audio) - ours[1]) <= 0.05)
-    if not (at_default or is_ours):
-        # Leave them alone -- but SAY so. This is the path that actually fires in
-        # practice (one widget nudged away from the default, e.g. shift_audio 4.0
-        # rather than 3.0) and it was the last one still returning silently, so the
-        # whole feature read as dead. Name the widget that is holding it off.
-        held = []
-        if abs(float(shift_video) - H3_BASE_SHIFT) > 1e-6:
-            held.append(f"shift_video {float(shift_video):g} (default {H3_BASE_SHIFT:g})")
-        if abs(float(shift_audio) - H3_BASE_AUDIO_SHIFT) > 1e-6:
-            held.append(f"shift_audio {float(shift_audio):g} (default {H3_BASE_AUDIO_SHIFT:g})")
-        return shift_video, shift_audio, (
-            "auto_shift is on but " + " and ".join(held) + " differ(s) from the "
-            "defaults, so both are being treated as your own setting and left alone. "
-            f"Reset them to {H3_BASE_SHIFT:g}/{H3_BASE_AUDIO_SHIFT:g} to let auto_shift "
-            "derive them from the step count")
-    # The MODEL may already declare a shift of its own -- a repacked checkpoint whose
-    # config carries different sampling_settings, or an upstream
-    # ModelSamplingMiniMaxH3 node. Deriving from step count alone would throw that
-    # away silently. Defer to it, and SAY so, because a checkpoint that wants ~8 and
-    # a 4-step LoRA that wants ~1.9 genuinely disagree and only the user can settle it.
-    m_sv, m_sa = model_declared_shift(model)
-    if m_sv is not None and abs(m_sv - H3_BASE_SHIFT) > 0.05:
-        want = balanced_shift(int(steps))
-        clash = (f" -- a {int(steps)}-step run would want ~{want:g}" if want else "")
-        # Pass the MODEL's values on, not the widget defaults. apply_h3_model_sampling()
-        # patches whatever it is handed, so returning 12/3 here would write the base
-        # shift straight over the 8.0 the checkpoint declared -- deferring in name only.
-        keep_sa = m_sa if m_sa is not None else shift_audio
-        # Record these as ours as well. They get written back into the widgets, so
-        # without this the widget would afterwards hold a value that is neither the
-        # default nor recognised -- reading as a user decision, bailing out on the
-        # next run, and taking the clash warning with it. The values would still be
-        # right (they equal what the model declares); the explanation of the genuine
-        # LoRA-vs-checkpoint conflict is what would silently stop being reported.
-        _AUTO_SHIFT_SET[str(node_id)] = (m_sv, keep_sa)
-        return m_sv, keep_sa, (
-            f"the model already declares shift_video {m_sv:g}"
-            + (f" / shift_audio {m_sa:g}" if m_sa is not None else "")
-            + f", not H3's base {H3_BASE_SHIFT:g}, so those are being kept{clash}. "
-              f"The value came from the checkpoint's own config or an upstream "
-              f"ModelSamplingMiniMaxH3 node. Set shift_video by hand to override either")
-    names = upstream_lora_names(graph, node_id)
-    trained, distill = None, False
-    for raw in names:
-        base = os.path.basename(str(raw))
-        m = _LORA_STEPS.search(base)
-        if m:
-            trained = int(m.group(1))
-        if m or _LORA_DISTILL.search(base):
-            distill = True
-    if not distill:
-        # SAY why nothing happened. Silence here is indistinguishable from the
-        # feature being broken, which is exactly how it read: no widget movement,
-        # no console line, no note. Name what was actually seen on the chain.
-        if graph is None or node_id is None:
-            return shift_video, shift_audio, (
-                "auto_shift is on but the workflow graph was not available, so the "
-                "LoRA chain could not be read. Set shift_video/shift_audio by hand")
-        seen = ", ".join(os.path.basename(str(n)) for n in names[-3:])
-        return shift_video, shift_audio, (
-            "auto_shift is on but no distill/turbo LoRA was found on the model chain, "
-            f"so the shifts were left at {shift_video:g}/{shift_audio:g}. "
-            + (f"LoRAs seen: {seen}" if seen else
-               "No LoRA loader was found feeding this node's model input")
-            + ". Only the model input is followed, so a LoRA wired elsewhere is ignored")
-    sv = balanced_shift(int(steps))
-    if not sv:
-        return shift_video, shift_audio, ""
-    sa = max(0.25, round(sv / H3_AUDIO_SCALE, 2))
-    if abs(sv - 12.0) < 0.05 and abs(sa - 3.0) < 0.05:
-        return shift_video, shift_audio, ""   # already what the defaults give; say nothing
-    # The share to quote is what the DEFAULTS would have done -- that is the thing
-    # being fixed. Quoting the new shift's share just restates the target.
-    was = flow_step_shares(12.0, int(steps))
-    _AUTO_SHIFT_SET[str(node_id)] = (sv, sa)
-    what = f"a {trained}-step distill LoRA" if trained else "a distill/turbo LoRA"
-    return sv, sa, (
-        f"{what} is loaded and steps={int(steps)}, so shift_video "
-        f"{sv:g} / shift_audio {sa:g} were set automatically. The 12/3 defaults are for the "
-        f"~20 steps H3 ships for; at {int(steps)} steps they put "
-        f"{max(was) * 100:.0f}% of the denoising into a single step. audio_scale stays at "
-        f"{H3_AUDIO_SCALE:g}. CAVEAT: a distill LoRA is TRAINED to make that big final jump, "
-        f"so the concentration may be the distilled behaviour rather than a fault, and "
-        f"lowering the shift can put the steps at noise levels the LoRA never saw "
-        f"(artifacting). No turbo LoRA declares its schedule, so this is a heuristic, not a "
-        f"looked-up value. Set either shift by hand, or turn auto_shift off, to take over")
-
-
 def schedule_balance_note(shift, steps, scheduler, worst_allowed=0.55):
     """Warn when one sampler step carries most of the denoising.
 
@@ -4308,11 +4106,10 @@ def lora_names_in_widget(key, val, _depth=0):
     "lora", and that was all this understood. Stacked loaders do not: DaSiWa packs
     every LoRA into ONE json string under `stack_data`, and rgthree's Power Lora
     Loader stores a dict per slot. Neither has "lora" in the key it is filed under,
-    so a chain with four LoRAs on it read as having none -- and auto_shift then
-    reported, wrongly, that no loader was feeding the model input at all.
+    so a chain carrying four LoRAs read as carrying none.
 
     Disabled slots and zero-strength entries are skipped: a LoRA that is switched
-    off is not affecting this render and must not be allowed to pick the shift."""
+    off is not affecting this render and should not be reported as if it were."""
     if _depth > 6:                                   # cyclic or absurdly nested
         return []
     if isinstance(val, str):
@@ -4402,15 +4199,6 @@ def sla_pairing(model, graph, node_id):
 # graph shows.
 _LORA_STEPS = re.compile(r"(?:^|[^a-z0-9])(\d{1,2})[ _-]?step", re.I)
 
-# A distill LoRA whose name does NOT carry an inference step count. Both of the
-# step600 builds are like this -- 600 is a TRAINING checkpoint, not a step count,
-# and _LORA_STEPS rightly refuses it. Gating auto_shift on the step count was
-# still wrong: the derived shift comes from the `steps` WIDGET, and the parsed
-# count is only ever a gate, so a distill LoRA that does not advertise its steps
-# got no shift and no explanation. Match the family instead.
-_LORA_DISTILL = re.compile(
-    r"turbo|distill|lightx2v|lightning|light_?x2v|lcm|hyper[ _-]?sd|dmd2?|"
-    r"(?:^|[^a-z0-9])(?:\d{1,2})[ _-]?step", re.I)
 _LORA_RES = re.compile(r"(?:^|[^a-z0-9])(\d{3,4})p(?:[^a-z0-9]|$)", re.I)
 
 
@@ -4954,21 +4742,6 @@ class H3LongVideos:
                                "snow, fog. NO human sounds are ever generated -- no chatter, crowd or "
                                "announcements -- because an ambient bed that implies voices is how H3 "
                                "starts talking. 'fill if blank' leaves anything you typed alone."}),
-                "auto_shift": ("BOOLEAN", {"default": False,
-                    "tooltip": "OFF by default, and treat it as an experiment. It lowers "
-                               "shift_video so no sampler step carries more than the 38.7% "
-                               "H3's own 12/20-step default does (4 steps -> 1.89, 8 -> 4.42), "
-                               "with shift_audio following to hold audio_scale at 4.0.\n\n"
-                               "The premise is doubtful for DISTILLED LoRAs. At 4 steps, shift 12 "
-                               "puts 80% of the denoising in the final jump (sigma 0.80 -> 0) and "
-                               "a turbo LoRA is TRAINED to make exactly that jump -- so the "
-                               "concentration is the distilled behaviour, not a fault to correct. "
-                               "Lowering the shift moves every step to noise levels the LoRA never "
-                               "saw, which shows up as artifacting. None of the turbo/lightx2v "
-                               "LoRAs declare a schedule in their metadata, so there is nothing to "
-                               "look up and this number is a heuristic, not a recommendation.\n\n"
-                               "Leave it off and keep 12/3 unless you are deliberately sweeping "
-                               "shift. Touch either shift by hand and this stops regardless."}),
                 "lock_restraints": ("BOOLEAN", {"default": True,
                     "tooltip": "Physical restraints stay ON until something explicitly removes them. "
                                "Handcuffs, shackles, manacles, fetters, irons, gags, blindfolds, "
@@ -5140,7 +4913,7 @@ class H3LongVideos:
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
-            auto_shift=False, auto_soundscape="fill if blank",
+            auto_soundscape="fill if blank",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
@@ -5197,24 +4970,6 @@ class H3LongVideos:
         # Cheapest possible preflight: this empty encode already went through the
         # text encoder, so compare its width to the DiT's before anything expensive.
         check_text_encoder(model, negative)
-
-        # Match the shifts to the step count when a distill LoRA is loaded. Done
-        # before every consumer -- the schedule warning, the audio-ratio guard and
-        # apply_h3_model_sampling all have to see the values actually used.
-        shift_note, shift_changed = "", False
-        if auto_shift:
-            _was = (float(shift_video), float(shift_audio))
-            shift_video, shift_audio, shift_note = auto_shift_for(
-                steps, graph, node_id, shift_video, shift_audio, model)
-            # Gate the widget write-back on the VALUES changing, not on there being
-            # a note -- a note now also reports that nothing fired, and that must not
-            # trigger a graph-dirtying write of identical numbers.
-            shift_changed = (abs(float(shift_video) - _was[0]) > 1e-9
-                             or abs(float(shift_audio) - _was[1]) > 1e-9)
-            if shift_note:
-                # To the ComfyUI console as well. This lived only in the `plan` text
-                # output, so anyone not wiring that output up saw nothing at all.
-                logging.info("[H3 Long Videos] %s.", shift_note)
 
         # Patch the dual video/audio schedule onto the model here, so a missing
         # upstream ModelSamplingMiniMaxH3 can't silently produce gibberish audio.
@@ -5401,7 +5156,6 @@ class H3LongVideos:
                      ("KERNELS", kernel_note),
                      ("AUDIO", audio_ratio_note),
                      ("CONTINUITY", "; ".join(cohesion_notes)),
-                     ("SHIFT", shift_note),
                      ("SOUND", sound_note)]
         preflight_txt = "".join(f"{(lbl + ' -- ') if lbl else ''}{txt}. "
                                 for lbl, txt in preflight if txt)
@@ -5453,11 +5207,9 @@ class H3LongVideos:
             # correctly-SHAPED empty one rather than None: a downstream LATENT input
             # would choke on None, and this keeps the preview wireable exactly like
             # a real run.
-            return _with_shift_ui(
-                (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
-                 sum(plan_lens), shots, total, float(fps), int(fps),
-                 _empty_av_latent(w, h, 5, fps)[0]),
-                shift_video, shift_audio, shift_changed)
+            return (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
+                    sum(plan_lens), shots, total, float(fps), int(fps),
+                    _empty_av_latent(w, h, 5, fps)[0])
 
         spk = speech_flags(beats)          # which shots have real (quoted) dialogue
         vram_trace = []                    # free VRAM after each shot
@@ -5813,11 +5565,9 @@ class H3LongVideos:
                 + (f" Adjusted: {'; '.join(backoff)}." if backoff else ""))
         # frames_per_shot is a single INT for a now-variable series: report the LONGEST
         # shot, which is what a downstream consumer must be able to hold.
-        return _with_shift_ui(
-            (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
-             max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
-             float(fps), int(fps), latent_out),
-            shift_video, shift_audio, shift_changed)
+        return (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
+                max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
+                float(fps), int(fps), latent_out)
 
 
 # REF2VA registers under its OWN key. The FL2VA pack one directory up keeps

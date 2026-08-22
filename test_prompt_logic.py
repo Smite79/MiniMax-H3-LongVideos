@@ -2624,12 +2624,12 @@ def check_latent_output():
 
     # Every return path must carry the same arity, or ComfyUI errors on unpack.
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
-    # Both returns are now wrapped by _with_shift_ui() so the frontend can write the
-    # derived shifts back into the widgets, which changed their indentation.
+    # Plain tuple returns again: the _with_shift_ui() wrapper existed only so the
+    # frontend could write auto-derived shifts into the widgets, and auto_shift is gone.
     check("the plan_only path returns a latent too",
-          "float(fps), int(fps),\n                 _empty_av_latent(" in src)
-    check("the render path returns latent_out", "float(fps), int(fps), latent_out)," in src)
-    check("both returns go through the ui wrapper", src.count("_with_shift_ui(\n") == 2)
+          "float(fps), int(fps),\n                    _empty_av_latent(" in src)
+    check("the render path returns latent_out", "float(fps), int(fps), latent_out)" in src)
+    check("no ui wrapper is left on either return", "_with_shift_ui" not in src)
     # It must never be None -- a downstream LATENT input cannot take that.
     check("plan_only emits a real empty latent, not None",
           "_empty_av_latent(w, h, 5, fps)[0])" in src)
@@ -2748,185 +2748,16 @@ def check_auto_soundscape():
     check("auto_soundscape is an appended widget", "auto_soundscape" in S.ADDED_WIDGETS)
 
 
-def check_auto_shift():
-    """Shifts derived from the step count when a distill LoRA is loaded.
+def check_lora_chain_and_oom():
+    """The graph walk that finds LoRAs, and what a sampling OOM reports.
 
-    H3's 12/3 defaults are for the ~20 steps it ships for. At 4 steps they put 80%
-    of the denoising into the final step, which renders soft and painterly. The
-    replacement is DERIVED, not tabulated: the shift whose worst step carries the
-    same share as 12 does at 20 steps."""
-    print("\n=== automatic shift for a distill LoRA ===")
-
-    class _G:
-        def __init__(self, d):
-            self._d = d
-
-        def get_node(self, i):
-            return self._d[str(i)]
-
-    def chain(lora=None):
-        g = {"1": {"class_type": "UNETLoader", "inputs": {}}}
-        prev = "1"
-        if lora:
-            g["2"] = {"class_type": "LoraLoaderModelOnly",
-                      "inputs": {"model": [prev, 0], "lora_name": lora}}
-            prev = "2"
-        g["9"] = {"class_type": "H3LongVideos", "inputs": {"model": [prev, 0]}}
-        return _G(g)
-
-    TURBO = "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_resized_avg_rank_64_bf16.safetensors"
-
-    # The method validates itself: at H3's own step count it returns H3's own shift.
-    check("balanced_shift(20) reproduces H3's declared 12.0", S.balanced_shift(20) == 12.0)
-    for steps in (4, 6, 8, 12, 20):
-        sv = S.balanced_shift(steps)
-        sh = S.flow_step_shares(sv, steps)
-        ref = max(S.flow_step_shares(12.0, 20))
-        check(f"{steps} steps at shift {sv:g} matches H3's balance",
-              abs(max(sh) - ref) < 0.01)
-    check("fewer steps want a lower shift",
-          S.balanced_shift(4) < S.balanced_shift(8) < S.balanced_shift(20))
-    check("a single step is not a schedule", S.balanced_shift(1) is None)
-
-    # Applied, with the audio shift moving WITH it to hold the 4:1 ratio.
-    sv, sa, note = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)
-    check("a 4-step LoRA sets the shift", abs(sv - 1.89) < 0.05)
-    check("...and the audio shift with it", abs(sv / sa - S.H3_AUDIO_SCALE) < 0.1)
-    check("...so the ratio guard stays quiet", S.audio_scale_note(sv, sa) == "")
-    check("...and it says what it did", "set automatically" in note)
-    check("...quoting what the DEFAULTS would have done, not the new value",
-          "80%" in note)
-
-    # A value the user typed is a decision -- but declining must be REPORTED. This
-    # is the path that actually fires in practice: one widget nudged off the default
-    # (a real graph had shift_audio 4.0 rather than 3.0) holds the whole feature off,
-    # and returning silently made it look dead. It was the last silent exit left.
-    check("a hand-set shift_video is never overridden",
-          S.auto_shift_for(4, chain(TURBO), "9", 6.0, 3.0)[:2] == (6.0, 3.0))
-    check("a hand-set shift_audio is never overridden",
-          S.auto_shift_for(4, chain(TURBO), "9", 12.0, 1.5)[:2] == (12.0, 1.5))
-    _n = S.auto_shift_for(6, chain(TURBO), "9", 12.0, 4.0)[2]
-    check("...and declining names the widget holding it off",
-          "shift_audio 4" in _n and "default 3" in _n)
-    check("...and says how to re-enable it", "Reset them to 12/3" in _n)
-    check("the OTHER widget is named when that is the one that differs",
-          "shift_video 6" in S.auto_shift_for(6, chain(TURBO), "9", 6.0, 3.0)[2])
-    check("resetting the widget re-enables derivation",
-          abs(S.auto_shift_for(6, chain(TURBO), "9", 12.0, 3.0)[0] - 3.15) < 0.05)
-    # No distill, nothing to match. The VALUES must stay put -- but not silently.
-    # Reporting nothing here is what made a working feature look broken: no widget
-    # movement, no console line, no note, nothing to tell the two states apart.
-    check("no LoRA leaves the defaults",
-          S.auto_shift_for(4, chain(), "9", 12.0, 3.0)[:2] == (12.0, 3.0))
-    check("...and explains why it did nothing",
-          "no distill/turbo LoRA" in S.auto_shift_for(4, chain(), "9", 12.0, 3.0)[2])
-    check("a LoRA with no step count in its name leaves them",
-          S.auto_shift_for(4, chain("vagassist_e40.safetensors"), "9", 12.0, 3.0)[:2]
-          == (12.0, 3.0))
-    # Already correct -> say nothing rather than announce a no-op.
-    sv, sa, note = S.auto_shift_for(20, chain(TURBO), "9", 12.0, 3.0)
-    check("at 20 steps the defaults are already right, and it stays silent",
-          (sv, sa, note) == (12.0, 3.0, ""))
-    check("a missing graph is handled",
-          S.auto_shift_for(4, None, None, 12.0, 3.0)[:2] == (12.0, 3.0))
-
-    # It must be applied BEFORE anything reads the shifts -- especially the model
-    # sampling patch, which is what actually sets the schedule.
+    These outlived auto_shift, which was removed: its premise (that a low step
+    count needs a lower shift) is wrong for a distill LoRA, which is TRAINED to
+    make the big final jump the heuristic tried to flatten. The LoRA walk is
+    still needed by the SLA detection, and the OOM advice by every long shot.
+    """
+    print("\n=== LoRA chain walk, and sampling-OOM advice ===")
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
-    i_set = src.find("shift_video, shift_audio, shift_note = auto_shift_for")
-    # Match the CALL, not the def -- "apply_h3_model_sampling(model, shift_video"
-    # also matches the function signature, which of course comes earlier.
-    check("auto_shift runs before apply_h3_model_sampling",
-          0 < i_set < src.find("= apply_h3_model_sampling(model, shift_video"))
-    check("...before the schedule warning",
-          0 < i_set < src.find("schedule_balance_note(shift_video"))
-    check("...and before the audio-ratio guard",
-          0 < i_set < src.find("audio_ratio_note = (audio_scale_note(shift_video"))
-    check("auto_shift is an appended widget", "auto_shift" in S.ADDED_WIDGETS)
-
-    # auto_shift is OFF by default. The 38.7%-worst-step target treats a 4-step
-    # LoRA's big final jump (sigma 0.80 -> 0) as a fault, but a distill LoRA is
-    # TRAINED to make that jump -- so lowering the shift moves every step to noise
-    # levels it never saw, which is artifacting. No turbo/lightx2v LoRA declares a
-    # schedule in its metadata, so there is nothing backing the number.
-    check("auto_shift defaults to OFF",
-          '"auto_shift": ("BOOLEAN", {"default": False' in src)
-    check("...and the run() default agrees", "auto_shift=False" in src)
-    check("...and the tooltip says why it is doubtful",
-          "TRAINED to make exactly that jump" in src)
-    check("the note carries the caveat too",
-          "CAVEAT" in S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)[2])
-    S._AUTO_SHIFT_SET.clear()
-
-    # --- writing the values back into the widgets --------------------------------
-    # A node cannot set a widget from Python, so the derived values are returned in
-    # a `ui` dict and web/js/autoshift.js assigns them. Without that the graph lied:
-    # the widget read 12/3 while the render used 1.89/0.47.
-    check("nothing is emitted when the shifts were not changed",
-          S._with_shift_ui(("a",), 12.0, 3.0, False) == ("a",))
-    wrapped = S._with_shift_ui(("a",), 1.89, 0.47, True)
-    check("the derived values are emitted for the frontend",
-          wrapped["ui"]["h3_shift"] == [1.89, 0.47])
-    check("...and the result passes through untouched", wrapped["result"] == ("a",))
-    check("the web directory is registered",
-          os.path.isdir(os.path.join(_HERE, "web")))
-    check("the extension is present",
-          os.path.isfile(os.path.join(_HERE, "web", "js", "autoshift.js")))
-
-    # The import depth must match where server.py:363-366 actually SERVES the file:
-    # /extensions/<name>/<path under WEB_DIRECTORY>. A file in web/js/ is three deep,
-    # so ../../ resolved to /extensions/scripts/app.js -- a 404 that aborts the whole
-    # ES module without an error anyone would look for, leaving the listener
-    # unregistered and the shifts never written back. Derive the depth from the real
-    # location rather than hardcoding it, so moving the file cannot break it silently.
-    _js_rel = os.path.join("js", "autoshift.js")
-    _js = open(os.path.join(_HERE, "web", _js_rel), encoding="utf-8").read()
-    _want = "../" * (len(_js_rel.replace("\\", "/").split("/")) + 1)
-    _imports = re.findall(r'^import\s.*?from\s+"([^"]+)"', _js, re.M)
-    check("the extension imports something", bool(_imports))
-    for _spec in _imports:
-        check(f"...{_spec} climbs to the web root, not into /extensions",
-              _spec.startswith(_want) and not _spec.startswith(_want + "../"))
-
-    # Writing back would DISABLE the feature -- the widget would then hold a
-    # non-default value and read as a user choice -- so what was written is recorded
-    # and recognised on the next run. Otherwise changing steps 4 -> 8 would silently
-    # keep the 4-step shift.
-    S._AUTO_SHIFT_SET.clear()
-    sv1, sa1, _ = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)
-    check("run 1 derives from the defaults", abs(sv1 - 1.89) < 0.05)
-    sv2, _, _ = S.auto_shift_for(4, chain(TURBO), "9", sv1, sa1)
-    check("run 2 recognises its own value rather than stopping", abs(sv2 - sv1) < 1e-6)
-
-    sv3, _, _ = S.auto_shift_for(8, chain(TURBO), "9", sv1, sa1)
-    check("changing steps RE-DERIVES rather than keeping the old shift",
-          abs(sv3 - 4.42) < 0.05)
-
-    # A distill LoRA whose filename carries no INFERENCE step count. In both of
-    # these 600 is a training checkpoint, so _LORA_STEPS rightly refuses it -- but
-    # the derived shift comes from the `steps` widget and the parsed count is only
-    # ever a gate, so rejecting these meant no shift AND no explanation.
-    for _name in ("minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro.safetensors",
-                  "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
-                  "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors"):
-        S._AUTO_SHIFT_SET.clear()
-        _sv, _sa, _n = S.auto_shift_for(6, chain(_name), "9", 12.0, 3.0)
-        check(f"a distill LoRA fires without an inference step count: {_name[:34]}",
-              abs(_sv - 12.0) > 0.05 and abs(_sa - 3.0) > 0.05 and bool(_n))
-    check("600 is still not read as a step count",
-          S._LORA_STEPS.search("minimax_h3_turbo_v4_step600_ema_pruned") is None)
-
-    # The widget rounds what it is given. Writing 1.89/0.47 into widgets stepped at
-    # 0.5/0.25 left them holding 1.9/0.5, which matched neither the defaults nor what
-    # was recorded -- so the very next run declined with "you set these yourself" and
-    # the feature switched itself off after one successful run.
-    check("the shift widgets can hold a 2dp derived value",
-          '"step": 0.01' in src and '"round": 0.01' in src)
-    S._AUTO_SHIFT_SET.clear()
-    _sv, _sa, _ = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)
-    check("a display-rounded value is still recognised as ours",
-          abs(S.auto_shift_for(4, chain(TURBO), "9", round(_sv, 1), round(_sa, 1))[0]
-              - _sv) < 1e-6)
 
     # --- a SAMPLING oom cannot be tiled away -------------------------------------
     _help = S.sampling_oom_help(864, 864, 362, 24, 0.7)
@@ -2950,14 +2781,14 @@ def check_auto_shift():
     # Stacked loaders do not work that way: DaSiWa packs every LoRA into ONE json
     # string under `stack_data` (verbatim below, from a real prompt), and rgthree's
     # Power Lora Loader stores a dict per slot. A chain carrying four LoRAs read as
-    # carrying none, and auto_shift then reported that no loader fed the model input.
+    # carrying none.
     _dasiwa = ('[{"on":true,"lora":"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",'
                '"str":1,"vs":1,"as":1},{"on":true,"lora":"PenisV2_minimax-h3_epoch60.safetensors",'
                '"str":0.6,"vs":1,"as":1},{"on":true,"lora":"vagassist_e40.safetensors",'
                '"str":0.25,"vs":1,"as":1}]')
     _got = S.lora_names_in_widget("stack_data", _dasiwa)
     check("a DaSiWa json stack yields every LoRA in it", len(_got) == 3)
-    check("...including the turbo one that decides the shift",
+    check("...including the turbo one",
           any("turbo_v4_step600" in n for n in _got))
     check("an rgthree-style dict slot is read",
           S.lora_names_in_widget("lora_1",
@@ -2988,71 +2819,6 @@ def check_auto_shift():
                     "639": {"inputs": {}}}[str(nid)]
     check("the walk finds a stacked LoRA through intermediate model nodes",
           len(S.upstream_lora_names(_Stacked(), "571")) == 3)
-    S._AUTO_SHIFT_SET.clear()
-    _sv, _sa, _n = S.auto_shift_for(6, _Stacked(), "571", 12.0, 3.0)
-    check("...and auto_shift fires on it", abs(_sv - 3.15) < 0.05 and abs(_sa - 0.79) < 0.05)
-    check("...keeping H3's 4:1 audio_scale", abs(_sv / _sa - S.H3_AUDIO_SCALE) < 0.1)
-
-    # Not firing must never be SILENT -- silence is indistinguishable from the
-    # feature being broken, which is exactly how it read.
-    S._AUTO_SHIFT_SET.clear()
-    _sv, _sa, _n = S.auto_shift_for(6, chain("vagassist_e40.safetensors"), "9", 12.0, 3.0)
-    check("a non-distill LoRA leaves the shifts alone", (_sv, _sa) == (12.0, 3.0))
-    check("...but says so, and names what it saw",
-          "no distill/turbo LoRA" in _n and "vagassist" in _n)
-    check("a missing graph is reported rather than passed over",
-          "graph was not available" in S.auto_shift_for(6, None, "9", 12.0, 3.0)[2])
-    check("the write-back is gated on the VALUES changing, not on a note existing",
-          "shift_changed = (abs(float(shift_video)" in src
-          and "bool(shift_note))" not in src)
-    check("the note also reaches the ComfyUI console",
-          'logging.info("[H3 Long Videos] %s.", shift_note)' in src)
-    check("a value the user typed still stops it",
-          S.auto_shift_for(8, chain(TURBO), "9", 5.0, 1.25)[:2] == (5.0, 1.25))
-    S._AUTO_SHIFT_SET.clear()
-
-    # --- the MODEL may declare its own shift -------------------------------------
-    # A repacked checkpoint whose config carries different sampling_settings, or an
-    # upstream ModelSamplingMiniMaxH3 node. Both land on the live model_sampling
-    # object, and deriving from step count alone would discard either silently.
-    class _MS:
-        def __init__(self, sv, sa):
-            self.shift = sv
-            self.audio_shift = sa
-
-    class _M:
-        def __init__(self, sv, sa):
-            self._ms = _MS(sv, sa)
-
-        def get_model_object(self, k):
-            return self._ms
-
-    check("H3's base 12/3 on the model is not a declaration -- auto_shift applies",
-          abs(S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(12.0, 3.0))[0] - 1.89) < 0.05)
-
-    sv, sa, note = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(8.0, 2.0))
-    check("a model declaring 8.0 is deferred to", sv == 8.0)
-    # The part that makes deference real rather than cosmetic: apply_h3_model_sampling
-    # patches whatever it is handed, so returning the widget defaults here would write
-    # 12/3 straight over the 8.0 the checkpoint declared.
-    check("...and its audio shift is carried through too, not reset to 3", sa == 2.0)
-    check("...the note names the declared value", "shift_video 8" in note)
-    check("...and the clash with the step count", "would want ~1.89" in note)
-    check("...and where the value came from", "checkpoint's own config" in note)
-
-    sv, sa, _ = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(8.0, None))
-    check("a model with no audio_shift keeps the widget's", (sv, sa) == (8.0, 3.0))
-    # A hand-typed widget still outranks the model.
-    check("a hand-set shift beats a model declaration",
-          S.auto_shift_for(4, chain(TURBO), "9", 5.0, 3.0, _M(8.0, 2.0))[:2] == (5.0, 3.0))
-    check("an upstream node's 6/1.5 is preserved",
-          S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(6.0, 1.5))[:2] == (6.0, 1.5))
-    # Reading it must never throw.
-    check("a model with no get_model_object is handled",
-          S.model_declared_shift(object()) == (None, None))
-    check("no model at all still works",
-          abs(S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, None)[0] - 1.89) < 0.05)
-
 
 def check_audio_scale_coupling():
     """The two flow shifts are COUPLED on ComfyUI 0.31+, and that is new.
@@ -3637,7 +3403,7 @@ def main():
     check_latent_output()
     check_preflight_note_assembly()
     check_auto_soundscape()
-    check_auto_shift()
+    check_lora_chain_and_oom()
     check_audio_scale_coupling()
     check_schedule_balance()
     check_megapixel_sizing()
