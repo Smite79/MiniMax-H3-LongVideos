@@ -2902,6 +2902,54 @@ def check_auto_shift():
     check("600 is still not read as a step count",
           S._LORA_STEPS.search("minimax_h3_turbo_v4_step600_ema_pruned") is None)
 
+    # --- stacked LoRA loaders ----------------------------------------------------
+    # Only a bare filename under a key containing "lora" used to be recognised.
+    # Stacked loaders do not work that way: DaSiWa packs every LoRA into ONE json
+    # string under `stack_data` (verbatim below, from a real prompt), and rgthree's
+    # Power Lora Loader stores a dict per slot. A chain carrying four LoRAs read as
+    # carrying none, and auto_shift then reported that no loader fed the model input.
+    _dasiwa = ('[{"on":true,"lora":"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",'
+               '"str":1,"vs":1,"as":1},{"on":true,"lora":"PenisV2_minimax-h3_epoch60.safetensors",'
+               '"str":0.6,"vs":1,"as":1},{"on":true,"lora":"vagassist_e40.safetensors",'
+               '"str":0.25,"vs":1,"as":1}]')
+    _got = S.lora_names_in_widget("stack_data", _dasiwa)
+    check("a DaSiWa json stack yields every LoRA in it", len(_got) == 3)
+    check("...including the turbo one that decides the shift",
+          any("turbo_v4_step600" in n for n in _got))
+    check("an rgthree-style dict slot is read",
+          S.lora_names_in_widget("lora_1",
+              {"on": True, "lora": "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
+               "strength": 1.0}) == [
+              "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors"])
+    check("a slot switched off is ignored",
+          S.lora_names_in_widget("lora_1", {"on": False, "lora": "x.safetensors"}) == [])
+    check("a zero-strength slot is ignored -- it changes nothing",
+          S.lora_names_in_widget("lora_1",
+              {"on": True, "lora": "x.safetensors", "strength": 0.0}) == [])
+    check("an empty slot is not a LoRA name",
+          S.lora_names_in_widget("lora_name", "None") == [])
+    check("a plain filename still works", S.lora_names_in_widget(
+          "lora_name", "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors"))
+    check("a non-lora widget is not mined for filenames",
+          S.lora_names_in_widget("text", "a woman in a red coat") == [])
+    check("malformed json is survivable", S.lora_names_in_widget("stack_data", "[{oops") == [])
+
+    # End to end through the walk, with the stack behind an intermediate model node
+    # exactly as the real graph has it (loader -> H3AdaLNLoRAFix -> preview -> sampler).
+    class _Stacked:
+        def get_node(self, nid):
+            return {"571": {"inputs": {"model": ["527", 0]}},
+                    "527": {"inputs": {"model": ["668", 0]}},
+                    "668": {"inputs": {"model": ["655", 0]}},
+                    "655": {"inputs": {"stack_data": _dasiwa, "model": ["639", 0]}},
+                    "639": {"inputs": {}}}[str(nid)]
+    check("the walk finds a stacked LoRA through intermediate model nodes",
+          len(S.upstream_lora_names(_Stacked(), "571")) == 3)
+    S._AUTO_SHIFT_SET.clear()
+    _sv, _sa, _n = S.auto_shift_for(6, _Stacked(), "571", 12.0, 3.0)
+    check("...and auto_shift fires on it", abs(_sv - 3.15) < 0.05 and abs(_sa - 0.79) < 0.05)
+    check("...keeping H3's 4:1 audio_scale", abs(_sv / _sa - S.H3_AUDIO_SCALE) < 0.1)
+
     # Not firing must never be SILENT -- silence is indistinguishable from the
     # feature being broken, which is exactly how it read.
     S._AUTO_SHIFT_SET.clear()

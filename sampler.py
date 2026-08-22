@@ -39,6 +39,7 @@ ldm/minimax/model.py, text_encoders/minimax.py, sd.py).
 """
 
 import gc
+import json
 import logging
 import math
 import os
@@ -4242,9 +4243,61 @@ def upstream_lora_names(graph, node_id, _seen=None):
         if isinstance(val, (list, tuple)) and len(val) == 2 and not isinstance(val[1], (list, dict)):
             if "model" in str(key).lower():
                 names += upstream_lora_names(graph, val[0], _seen)
-        elif isinstance(val, str) and "lora" in str(key).lower() and val.strip():
-            names.append(val)
+        else:
+            names += lora_names_in_widget(key, val)
     return names
+
+
+# Filenames a stacked loader uses for an EMPTY slot.
+_LORA_EMPTY = {"", "none", "null", "no lora", "-", "undefined"}
+
+
+def lora_names_in_widget(key, val, _depth=0):
+    """LoRA filenames inside one widget value, however the loader packs them.
+
+    A one-LoRA-per-widget loader puts a bare filename under a key containing
+    "lora", and that was all this understood. Stacked loaders do not: DaSiWa packs
+    every LoRA into ONE json string under `stack_data`, and rgthree's Power Lora
+    Loader stores a dict per slot. Neither has "lora" in the key it is filed under,
+    so a chain with four LoRAs on it read as having none -- and auto_shift then
+    reported, wrongly, that no loader was feeding the model input at all.
+
+    Disabled slots and zero-strength entries are skipped: a LoRA that is switched
+    off is not affecting this render and must not be allowed to pick the shift."""
+    if _depth > 6:                                   # cyclic or absurdly nested
+        return []
+    if isinstance(val, str):
+        s = val.strip()
+        if s[:1] in "[{":                            # a packed json payload
+            try:
+                return lora_names_in_widget(key, json.loads(s), _depth + 1)
+            except (ValueError, TypeError):
+                return []
+        if s.lower() in _LORA_EMPTY:
+            return []
+        return [s] if "lora" in str(key).lower() else []
+    if isinstance(val, dict):
+        for flag in ("on", "enabled", "enable", "active"):
+            if flag in val and not val[flag]:
+                return []                            # slot switched off
+        for f in ("str", "strength", "strength_model", "model_strength", "weight"):
+            if f in val:
+                try:
+                    if abs(float(val[f])) < 1e-6:
+                        return []                    # at 0 it changes nothing
+                except (TypeError, ValueError):
+                    pass
+                break
+        out = []
+        for k, v in val.items():
+            out += lora_names_in_widget(k, v, _depth + 1)
+        return out
+    if isinstance(val, (list, tuple)):
+        out = []
+        for v in val:
+            out += lora_names_in_widget(key, v, _depth + 1)
+        return out
+    return []
 
 
 def sla_pairing(model, graph, node_id):
