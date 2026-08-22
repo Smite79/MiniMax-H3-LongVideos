@@ -3104,16 +3104,22 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
             # along time -- and encoding a full 15s shot instead cost a VAE pass big
             # enough to OOM mid-render on a 16GB card, where the failure again
             # degraded silently to no conditioning at all.
-            unit = audio_vae.encode(torch.zeros((1, sr, 2)))
-            if unit is None or unit.dim() != 4 or unit.shape[1] != 32:
+            enc = audio_vae.encode(torch.zeros((1, sr, 2)))
+            if enc is None or enc.dim() != 4 or enc.shape[1] != 32 or enc.shape[-1] < 3:
                 return None
-            _SILENT_UNIT["lat"] = unit.detach().to("cpu")
-            unit = _SILENT_UNIT["lat"]
-        t = unit.shape[-1]
-        if t <= 0:
+            # ONE STEADY FRAME, from the MIDDLE. The encoder's zero-padding leaves
+            # heavy edge artifacts -- measured deviation 0.351 at the first and last
+            # frames against 0.002 in the interior, ~170x -- and tiling the whole
+            # second therefore stamped a spike every 40 latent frames, which at 40Hz
+            # is once per SECOND. That is a metronome in the audio conditioning of a
+            # joint audio-video model, and the picture lip-syncs to it. Repeating a
+            # single interior frame gives conditioning that is genuinely constant.
+            mid = enc.shape[-1] // 2
+            _SILENT_UNIT["lat"] = enc[..., mid:mid + 1].detach().to("cpu").clone()
+        unit = _SILENT_UNIT["lat"]
+        if unit.shape[-1] != 1:
             return None
-        reps = -(-want_t // t)                       # ceil
-        return unit.repeat(1, 1, 1, reps)[..., :want_t].clone()
+        return unit.repeat(1, 1, 1, want_t).clone()
     except Exception:
         return None                         # never fail a render for a nicety
 

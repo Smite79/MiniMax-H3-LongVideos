@@ -2330,10 +2330,21 @@ def check_mouth_stays_closed():
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
     check("silence is encoded channels-last", "torch.zeros((1, sr, 2))" in src)
     check("...and the reason is recorded", "movedim(-1, 1)" in src)
-    check("the conditioning latent is tiled to the layout's length, not rejected",
-          "-(-want_t // t)" in src)
+    check("the conditioning latent is built to the layout's length, not rejected",
+          "repeat(1, 1, 1, want_t)" in src)
     check("one second is encoded once and cached",
           "_SILENT_UNIT" in src and 'audio_vae.encode(torch.zeros((1, sr, 2)))' in src)
+    # The encoder's zero-padding leaves heavy edge artifacts -- measured deviation
+    # 0.351 at the first/last frames against 0.002 in the interior. Tiling the whole
+    # second therefore stamped a spike every 40 latent frames, which at 40Hz is once
+    # per SECOND: a metronome in the audio conditioning of a JOINT model, which the
+    # picture then lip-syncs to. Only a steady interior frame may be repeated.
+    check("a single INTERIOR frame is what gets repeated",
+          "enc[..., mid:mid + 1]" in src and "mid = enc.shape[-1] // 2" in src)
+    check("...and the cached unit is one frame wide",
+          'if unit.shape[-1] != 1:' in src)
+    check("...so the bed is constant, with no periodic pulse",
+          "repeat(1, 1, 1, want_t)" in src)
 
     # Layer 1 still applies, including on the plural beats that used to miss it.
     cm = "Mara = she, 30, red hair\nDom = he, tall, 35"
