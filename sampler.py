@@ -822,7 +822,7 @@ def restraint_clause(active, body, lock_restraints=True):
         regions = restraint_regions(items)
         if not regions:
             continue
-        if name and not person_referenced(body, name, active):
+        if name and not person_in_shot(body, name, active):
             continue
         subj = _subject_term(name, active) if name else "the subject"
         # `their` rather than a repeated name: naming someone twice in a shot is
@@ -1662,6 +1662,25 @@ def person_referenced(body, name, active):
         if _resolve_subject(m.group(1), names, pron_map, single) == name:
             return True
     return False
+
+
+def person_in_shot(body, name, active, departed=()):
+    """Is this person IN this shot -- by name, by a resolvable pronoun, or as part
+    of a cast addressed in the plural?
+
+    The single presence test. person_referenced() alone is not it: it resolves a
+    pronoun to ONE person, so 'they' and 'both of them' answer False for everybody,
+    and any clause gated on it silently skips a beat that binds the whole cast.
+
+    That exact bug has now been written twice -- once in the mouth-state gate
+    (a plural beat got no lips-closed clause, so those shots babbled) and again in
+    the restraint clause (a plural beat dropped the physical constraint, so the
+    restraints appeared to break). Both are gated on this function now, so a third
+    caller cannot rediscover it."""
+    if person_referenced(body, name, active):
+        return True
+    present = [n for n in (active or {}) if n and n not in (departed or ())]
+    return len(present) > 1 and bool(_PLURAL_CAST.search(body or ""))
 
 
 def _subject_term(name, active):
@@ -2651,8 +2670,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # at random.
         present_names = [n for n in active if n and n not in departed]
         people_here = (bool(active.get(""))
-                       or any(person_referenced(body, n, active) for n in present_names)
-                       or (len(present_names) > 1 and bool(_PLURAL_CAST.search(body))))
+                       or any(person_in_shot(body, n, active, departed)
+                              for n in present_names))
         if no_speech and people_here:
             persistent = persistent.rstrip(". ") + "." + LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL
         # Same gate as the mouth state, and for the same reason: describing a body

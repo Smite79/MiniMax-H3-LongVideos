@@ -2277,6 +2277,48 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_presence_test_is_shared():
+    """ONE presence test, because this bug has already been written twice.
+
+    person_referenced() resolves a pronoun to a single person, so 'they' and 'both
+    of them' answer False for everybody. Any clause gated on it alone silently
+    skips a beat that binds the whole cast. That produced babble on plural shots
+    (the mouth state, fixed in db57367) and then restraints that appeared to break
+    on plural shots (the constraint clause). Both go through person_in_shot() now."""
+    print("\n=== shared presence test ===")
+    act = {"Mara": ["she", "30", "steel handcuffs"], "Dom": ["he", "tall"]}
+    for body, expect in [("Mara looks at the crate.", True),
+                         ("She looks at the crate.", True),
+                         ("They look at the crate together.", True),
+                         ("Both of them sit down.", True),
+                         ("The roller door rattles open.", False)]:
+        check(f"person_in_shot({body[:28]!r}) is {expect}",
+              S.person_in_shot(body, "Mara", act) is expect)
+    # A single-person cast has no plural to resolve.
+    solo = {"Mara": ["she", "30"]}
+    check("a lone character is not summoned by 'they'",
+          not S.person_in_shot("They face each other.", "Mara", solo))
+    # A departed character is not brought back by a plural either.
+    check("a departed character stays out of a plural beat",
+          not S.person_in_shot("They face each other.", "Dom", act, departed={"Dom"}))
+
+    # The regression itself: the constraint must survive a plural beat.
+    for body in ("They look at the crate together.", "Both of them sit down."):
+        check(f"the restraint clause survives {body[:26]!r}",
+              "physically restrained" in S.restraint_clause(act, body))
+    check("...and still skips a beat with nobody in it",
+          S.restraint_clause(act, "The roller door rattles open.") == "")
+
+    # End to end, the shot that caught it.
+    cm = ("Mara = she, 30, red hair, steel handcuffs\nDom = he, tall, 35, brunette")
+    g = S.distribute_generations("A workshop.",
+                                 ["Mara walks in.", "Dom follows her.",
+                                  "They look at the crate together."], "", "", cm)
+    check("a plural beat keeps the physical constraint",
+          "physically restrained" in g[2])
+    check("...and keeps the mouth state", "mouth closed" in g[2])
+
+
 def check_continuity_warning():
     """A scenery beat MID-CHAIN breaks the visual chain.
 
@@ -3135,6 +3177,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()
     check_anatomy_guard()
