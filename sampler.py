@@ -256,7 +256,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms", "anatomy_guard", "lock_restraints",
+    "exposed_terms", "anatomy_guard", "lock_restraints", "auto_shift",
 )
 
 NL = "\n"
@@ -3458,6 +3458,81 @@ def audio_scale_note(shift_video, shift_audio):
             f"{max(0.25, sv / H3_AUDIO_SCALE):g}")
 
 
+# H3's own designed balance: what shift 12 gives at the ~20 steps it ships for.
+# Reproducing THAT number at a lower step count is the whole idea -- not picking a
+# shift that "looks flat", but the one that puts the same share of work in the
+# heaviest step as the model's own default does.
+_H3_TARGET_WORST = None                 # computed once, from the model's own numbers
+
+
+def balanced_shift(steps):
+    """The flow shift whose worst sampler step carries the same share as H3's own
+    default does at 20 steps. None when it cannot be computed.
+
+    Bisection, not a table: worst-step share rises monotonically with shift, so
+    twelve iterations land on it exactly, and the answer stays correct if the
+    scheduler maths ever changes. Sanity check on the method -- at 20 steps it
+    returns 12.00, which is what H3 declares in its own model config."""
+    global _H3_TARGET_WORST
+    steps = int(steps)
+    if steps < 2:
+        return None
+    if _H3_TARGET_WORST is None:
+        ref = flow_step_shares(12.0, 20)
+        if not ref:
+            return None
+        _H3_TARGET_WORST = max(ref)
+    lo, hi = 0.25, 16.0
+    for _ in range(40):
+        mid = (lo + hi) / 2.0
+        sh = flow_step_shares(mid, steps)
+        if not sh:
+            return None
+        if max(sh) > _H3_TARGET_WORST:
+            hi = mid
+        else:
+            lo = mid
+    return round((lo + hi) / 2.0, 2)
+
+
+def auto_shift_for(steps, graph, node_id, shift_video, shift_audio):
+    """(shift_video, shift_audio, note) -- shifts matched to a distill LoRA's steps.
+
+    Only fires when BOTH shifts are still at their factory defaults. A value the
+    user typed is a decision, and silently overriding it is how a render stops
+    being reproducible from what the graph shows.
+
+    The audio shift moves WITH the video one, preserving H3's 4:1 audio_scale. That
+    coupling is not optional on ComfyUI 0.31+ -- flattening the ratio breaks the
+    audio branch, which is exactly what a bare shift_video change did."""
+    if abs(float(shift_video) - 12.0) > 1e-6 or abs(float(shift_audio) - 3.0) > 1e-6:
+        return shift_video, shift_audio, ""      # user has set these; leave them alone
+    names = upstream_lora_names(graph, node_id)
+    trained = None
+    for raw in names:
+        m = _LORA_STEPS.search(os.path.basename(str(raw)))
+        if m:
+            trained = int(m.group(1))
+    if not trained:
+        return shift_video, shift_audio, ""
+    sv = balanced_shift(int(steps))
+    if not sv:
+        return shift_video, shift_audio, ""
+    sa = max(0.25, round(sv / H3_AUDIO_SCALE, 2))
+    if abs(sv - 12.0) < 0.05 and abs(sa - 3.0) < 0.05:
+        return shift_video, shift_audio, ""   # already what the defaults give; say nothing
+    # The share to quote is what the DEFAULTS would have done -- that is the thing
+    # being fixed. Quoting the new shift's share just restates the target.
+    was = flow_step_shares(12.0, int(steps))
+    return sv, sa, (
+        f"a {trained}-step distill LoRA is loaded and steps={int(steps)}, so shift_video "
+        f"{sv:g} / shift_audio {sa:g} were set automatically. The 12/3 defaults are for the "
+        f"~20 steps H3 ships for; at {int(steps)} steps they put "
+        f"{max(was) * 100:.0f}% of the denoising into a single step, which renders soft. "
+        f"These match H3's own balance and keep audio_scale at {H3_AUDIO_SCALE:g}. Set "
+        f"either shift by hand to take over")
+
+
 def schedule_balance_note(shift, steps, scheduler, worst_allowed=0.55):
     """Warn when one sampler step carries most of the denoising.
 
@@ -4530,6 +4605,17 @@ class H3LongVideos:
                                "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
                                "Override any single beat with 'seconds: 8' on its own line inside that "
                                "paragraph -- that wins over everything, including this toggle."}),
+                "auto_shift": ("BOOLEAN", {"default": True,
+                    "tooltip": "When a distill/turbo LoRA is on the chain, set shift_video and "
+                               "shift_audio to match your step count instead of leaving H3's 12/3 "
+                               "defaults, which are for the ~20 steps it ships for. At 4 steps those "
+                               "defaults put 80% of the denoising in the FINAL step, which renders "
+                               "soft and painterly. The value is derived, not looked up: it is the "
+                               "shift whose worst step carries the same share as 12 does at 20 steps "
+                               "(4 steps -> 1.89, 8 -> 4.42, 20 -> 12.00). shift_audio moves with it "
+                               "to hold audio_scale at 4.0, because flattening that ratio breaks the "
+                               "audio branch. Touch either shift by hand and this stops -- a value "
+                               "you typed is never overridden."}),
                 "lock_restraints": ("BOOLEAN", {"default": True,
                     "tooltip": "Physical restraints stay ON until something explicitly removes them. "
                                "Handcuffs, shackles, manacles, fetters, irons, gags, blindfolds, "
@@ -4692,6 +4778,7 @@ class H3LongVideos:
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
+            auto_shift=True,
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
@@ -4748,6 +4835,14 @@ class H3LongVideos:
         # Cheapest possible preflight: this empty encode already went through the
         # text encoder, so compare its width to the DiT's before anything expensive.
         check_text_encoder(model, negative)
+
+        # Match the shifts to the step count when a distill LoRA is loaded. Done
+        # before every consumer -- the schedule warning, the audio-ratio guard and
+        # apply_h3_model_sampling all have to see the values actually used.
+        shift_note = ""
+        if auto_shift:
+            shift_video, shift_audio, shift_note = auto_shift_for(
+                steps, graph, node_id, shift_video, shift_audio)
 
         # Patch the dual video/audio schedule onto the model here, so a missing
         # upstream ModelSamplingMiniMaxH3 can't silently produce gibberish audio.
@@ -4919,7 +5014,8 @@ class H3LongVideos:
                      ("SCHEDULE", sched_note),
                      ("KERNELS", kernel_note),
                      ("AUDIO", audio_ratio_note),
-                     ("CONTINUITY", "; ".join(cohesion_notes))]
+                     ("CONTINUITY", "; ".join(cohesion_notes)),
+                     ("SHIFT", shift_note)]
         preflight_txt = "".join(f"{(lbl + ' -- ') if lbl else ''}{txt}. "
                                 for lbl, txt in preflight if txt)
 

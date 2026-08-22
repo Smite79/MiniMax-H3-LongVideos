@@ -2671,6 +2671,88 @@ def check_preflight_note_assembly():
           any(ln.strip().startswith("preflight_txt =") for ln in lines))
 
 
+def check_auto_shift():
+    """Shifts derived from the step count when a distill LoRA is loaded.
+
+    H3's 12/3 defaults are for the ~20 steps it ships for. At 4 steps they put 80%
+    of the denoising into the final step, which renders soft and painterly. The
+    replacement is DERIVED, not tabulated: the shift whose worst step carries the
+    same share as 12 does at 20 steps."""
+    print("\n=== automatic shift for a distill LoRA ===")
+
+    class _G:
+        def __init__(self, d):
+            self._d = d
+
+        def get_node(self, i):
+            return self._d[str(i)]
+
+    def chain(lora=None):
+        g = {"1": {"class_type": "UNETLoader", "inputs": {}}}
+        prev = "1"
+        if lora:
+            g["2"] = {"class_type": "LoraLoaderModelOnly",
+                      "inputs": {"model": [prev, 0], "lora_name": lora}}
+            prev = "2"
+        g["9"] = {"class_type": "H3LongVideos", "inputs": {"model": [prev, 0]}}
+        return _G(g)
+
+    TURBO = "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_resized_avg_rank_64_bf16.safetensors"
+
+    # The method validates itself: at H3's own step count it returns H3's own shift.
+    check("balanced_shift(20) reproduces H3's declared 12.0", S.balanced_shift(20) == 12.0)
+    for steps in (4, 6, 8, 12, 20):
+        sv = S.balanced_shift(steps)
+        sh = S.flow_step_shares(sv, steps)
+        ref = max(S.flow_step_shares(12.0, 20))
+        check(f"{steps} steps at shift {sv:g} matches H3's balance",
+              abs(max(sh) - ref) < 0.01)
+    check("fewer steps want a lower shift",
+          S.balanced_shift(4) < S.balanced_shift(8) < S.balanced_shift(20))
+    check("a single step is not a schedule", S.balanced_shift(1) is None)
+
+    # Applied, with the audio shift moving WITH it to hold the 4:1 ratio.
+    sv, sa, note = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)
+    check("a 4-step LoRA sets the shift", abs(sv - 1.89) < 0.05)
+    check("...and the audio shift with it", abs(sv / sa - S.H3_AUDIO_SCALE) < 0.1)
+    check("...so the ratio guard stays quiet", S.audio_scale_note(sv, sa) == "")
+    check("...and it says what it did", "set automatically" in note)
+    check("...quoting what the DEFAULTS would have done, not the new value",
+          "80%" in note)
+
+    # A value the user typed is a decision.
+    check("a hand-set shift_video is never overridden",
+          S.auto_shift_for(4, chain(TURBO), "9", 6.0, 3.0) == (6.0, 3.0, ""))
+    check("a hand-set shift_audio is never overridden",
+          S.auto_shift_for(4, chain(TURBO), "9", 12.0, 1.5) == (12.0, 1.5, ""))
+    # No distill, nothing to match.
+    check("no LoRA leaves the defaults", S.auto_shift_for(4, chain(), "9", 12.0, 3.0)
+          == (12.0, 3.0, ""))
+    check("a LoRA with no step count in its name leaves them",
+          S.auto_shift_for(4, chain("vagassist_e40.safetensors"), "9", 12.0, 3.0)
+          == (12.0, 3.0, ""))
+    # Already correct -> say nothing rather than announce a no-op.
+    sv, sa, note = S.auto_shift_for(20, chain(TURBO), "9", 12.0, 3.0)
+    check("at 20 steps the defaults are already right, and it stays silent",
+          (sv, sa, note) == (12.0, 3.0, ""))
+    check("a missing graph is handled",
+          S.auto_shift_for(4, None, None, 12.0, 3.0) == (12.0, 3.0, ""))
+
+    # It must be applied BEFORE anything reads the shifts -- especially the model
+    # sampling patch, which is what actually sets the schedule.
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    i_set = src.find("shift_video, shift_audio, shift_note = auto_shift_for")
+    # Match the CALL, not the def -- "apply_h3_model_sampling(model, shift_video"
+    # also matches the function signature, which of course comes earlier.
+    check("auto_shift runs before apply_h3_model_sampling",
+          0 < i_set < src.find("= apply_h3_model_sampling(model, shift_video"))
+    check("...before the schedule warning",
+          0 < i_set < src.find("schedule_balance_note(shift_video"))
+    check("...and before the audio-ratio guard",
+          0 < i_set < src.find("audio_ratio_note = (audio_scale_note(shift_video"))
+    check("auto_shift is an appended widget", "auto_shift" in S.ADDED_WIDGETS)
+
+
 def check_audio_scale_coupling():
     """The two flow shifts are COUPLED on ComfyUI 0.31+, and that is new.
 
@@ -3253,6 +3335,7 @@ def main():
     check_anatomy_guard()
     check_latent_output()
     check_preflight_note_assembly()
+    check_auto_shift()
     check_audio_scale_coupling()
     check_schedule_balance()
     check_megapixel_sizing()

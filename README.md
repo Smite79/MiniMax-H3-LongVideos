@@ -141,6 +141,23 @@ rendering**. Do that first; it is near-instant.
   uncovered. Removals still happen — what is gated is the sentence, and since the
   model's default is a clothed person, it covers what nobody described. `info`
   still reports any zone a removal left uncovered, so you find out either way.
+- **Shift, automatically.** Load a distill/turbo LoRA and `auto_shift` sets
+  `shift_video` / `shift_audio` to match your step count. H3's 12/3 defaults are for
+  the ~20 steps it ships for; at 4 steps they put **80% of the denoising into the
+  final step**, which renders soft and painterly. The value is derived, not looked
+  up — the shift whose worst step carries the same share as 12 does at 20:
+
+  | steps | shift_video | shift_audio | worst step |
+  |---|---|---|---|
+  | 4 | 1.89 | 0.47 | 38.7% |
+  | 6 | 3.15 | 0.79 | 38.7% |
+  | 8 | 4.42 | 1.10 | 38.7% |
+  | 20 | 12.00 | 3.00 | 38.7% |
+
+  `shift_audio` moves *with* it, holding `audio_scale` at 4.0 — flattening that
+  ratio breaks the audio branch. **Type either shift by hand and this stops**: a
+  value you set is a decision and is never overridden.
+
 - **Anatomy.** `anatomy_guard` states each person's limb *count* — one head, two
   arms, two hands with five fingers, two legs — on shots that have people in them.
   A **negative prompt cannot do this**: H3 is CFG-free at `cfg 1`, so the negative
