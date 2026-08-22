@@ -2315,29 +2315,25 @@ def check_mouth_stays_closed():
     class _NoSR:
         pass
     check("an audio VAE that raises degrades to None",
-          S._silent_audio_latent(_Boom(), 124, 24, 206) is None)
+          S._silent_audio_latent(_Boom(), 124, 24) is None)
     check("an audio VAE with no sample rate degrades to None",
-          S._silent_audio_latent(_NoSR(), 124, 24, 206) is None)
-    check("a zero-length request degrades to None",
-          S._silent_audio_latent(_Boom(), 124, 24, 0) is None)
+          S._silent_audio_latent(_NoSR(), 124, 24) is None)
+    check("a zero-length shot degrades to None",
+          S._silent_audio_latent(_Boom(), 0, 24) is None)
 
-    # A latent of the wrong shape must be rejected, not passed to the DiT.
-    class _WrongShape:
-        audio_sample_rate = 32000
-
-        def encode(self, w):
-            return T_torch_zeros((1, 16, 2, 206))
-    def T_torch_zeros(shape):
-        class _Z:
-            def dim(self_):
-                return len(shape)
-            shape_ = shape
-            @property
-            def shape(self_):
-                return shape
-        return _Z()
-    check("a latent with the wrong channel count is rejected",
-          S._silent_audio_latent(_WrongShape(), 124, 24, 206) is None)
+    # The two bugs that made this layer do NOTHING, verified against the real VAE:
+    #   1. comfy.sd.VAE.encode() does movedim(-1, 1), so the audio VAE -- which
+    #      wants [B, 2, L] -- must be handed [B, L, 2]. Passing [B, 2, L] raises
+    #      inside the encoder, and the guard swallowed it.
+    #   2. the encoder's hop grid returns 206 where temporal_shape() says 207, and
+    #      the length check rejected that as a mismatch.
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("silence is encoded channels-last", "torch.zeros((1, sr, 2))" in src)
+    check("...and the reason is recorded", "movedim(-1, 1)" in src)
+    check("the conditioning latent is tiled to the layout's length, not rejected",
+          "-(-want_t // t)" in src)
+    check("one second is encoded once and cached",
+          "_SILENT_UNIT" in src and 'audio_vae.encode(torch.zeros((1, sr, 2)))' in src)
 
     # Layer 1 still applies, including on the plural beats that used to miss it.
     cm = "Mara = she, 30, red hair\nDom = he, tall, 35"

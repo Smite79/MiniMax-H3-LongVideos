@@ -2965,7 +2965,12 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
     return imgs
 
 
-def _silent_audio_latent(audio_vae, frame_count, fps, want_t):
+# One second of encoded silence, made once per process and tiled to any length.
+# Module-level so it outlives the node instance, which ComfyUI recreates per run.
+_SILENT_UNIT = {"lat": None}
+
+
+def _silent_audio_latent(audio_vae, frame_count, fps):
     """A keyframe audio latent of actual SILENCE, or None if it cannot be made.
 
     H3 is a JOINT model: the mouth follows the audio branch. On a shot with no
@@ -2982,19 +2987,33 @@ def _silent_audio_latent(audio_vae, frame_count, fps, want_t):
     back to today's behaviour instead of breaking the render."""
     try:
         sr = int(getattr(audio_vae, "audio_sample_rate", 0) or 0)
-        if sr <= 0 or want_t <= 0:
+        if sr <= 0:
             return None
-        n = max(1, int(round(frame_count / float(fps or H3_FPS) * sr)))
-        silence = torch.zeros((1, 2, n))
-        lat = audio_vae.encode(silence)
-        if lat is None or lat.dim() != 4 or lat.shape[1] != 32:
+        _, _, want_t = temporal_shape(frame_count, fps)
+        if want_t <= 0:
             return None
-        t = lat.shape[-1]
-        if t > want_t:                      # encode rounds up on the hop grid
-            lat = lat[..., :want_t]
-        elif t < want_t:
-            return None                     # short is a real mismatch, not padding
-        return lat
+        unit = _SILENT_UNIT.get("lat")
+        if unit is None:
+            # CHANNELS LAST. comfy.sd.VAE.encode() does `pixel_samples.movedim(-1, 1)`
+            # before handing off, so the audio VAE -- which wants [B, 2, L] -- must be
+            # given [B, L, 2]. Passing [B, 2, L] raises inside the encoder, and the
+            # first version did exactly that: swallowed by the guard below, so the
+            # whole layer silently did nothing.
+            #
+            # ONE SECOND, encoded ONCE. Silence is homogeneous, so the result tiles
+            # along time -- and encoding a full 15s shot instead cost a VAE pass big
+            # enough to OOM mid-render on a 16GB card, where the failure again
+            # degraded silently to no conditioning at all.
+            unit = audio_vae.encode(torch.zeros((1, sr, 2)))
+            if unit is None or unit.dim() != 4 or unit.shape[1] != 32:
+                return None
+            _SILENT_UNIT["lat"] = unit.detach().to("cpu")
+            unit = _SILENT_UNIT["lat"]
+        t = unit.shape[-1]
+        if t <= 0:
+            return None
+        reps = -(-want_t // t)                       # ceil
+        return unit.repeat(1, 1, 1, reps)[..., :want_t].clone()
     except Exception:
         return None                         # never fail a render for a nicety
 
@@ -3125,8 +3144,7 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
             # The lips-closed sentence cannot outvote a stream that has already
             # decided someone is speaking; this conditions the stream itself.
             if silent and audio_vae is not None:
-                _, _, want_at = temporal_shape(fc, fps)
-                sil = _silent_audio_latent(audio_vae, fc, fps, want_at)
+                sil = _silent_audio_latent(audio_vae, fc, fps)
                 if sil is not None:
                     kf["audio_latent"] = sil
         cond = node_helpers.conditioning_set_values(cond, {"minimax_keyframes": keyframes, "minimax_frame_count": fc})
