@@ -2752,6 +2752,48 @@ def check_auto_shift():
           0 < i_set < src.find("audio_ratio_note = (audio_scale_note(shift_video"))
     check("auto_shift is an appended widget", "auto_shift" in S.ADDED_WIDGETS)
 
+    # --- the MODEL may declare its own shift -------------------------------------
+    # A repacked checkpoint whose config carries different sampling_settings, or an
+    # upstream ModelSamplingMiniMaxH3 node. Both land on the live model_sampling
+    # object, and deriving from step count alone would discard either silently.
+    class _MS:
+        def __init__(self, sv, sa):
+            self.shift = sv
+            self.audio_shift = sa
+
+    class _M:
+        def __init__(self, sv, sa):
+            self._ms = _MS(sv, sa)
+
+        def get_model_object(self, k):
+            return self._ms
+
+    check("H3's base 12/3 on the model is not a declaration -- auto_shift applies",
+          abs(S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(12.0, 3.0))[0] - 1.89) < 0.05)
+
+    sv, sa, note = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(8.0, 2.0))
+    check("a model declaring 8.0 is deferred to", sv == 8.0)
+    # The part that makes deference real rather than cosmetic: apply_h3_model_sampling
+    # patches whatever it is handed, so returning the widget defaults here would write
+    # 12/3 straight over the 8.0 the checkpoint declared.
+    check("...and its audio shift is carried through too, not reset to 3", sa == 2.0)
+    check("...the note names the declared value", "shift_video 8" in note)
+    check("...and the clash with the step count", "would want ~1.89" in note)
+    check("...and where the value came from", "checkpoint's own config" in note)
+
+    sv, sa, _ = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(8.0, None))
+    check("a model with no audio_shift keeps the widget's", (sv, sa) == (8.0, 3.0))
+    # A hand-typed widget still outranks the model.
+    check("a hand-set shift beats a model declaration",
+          S.auto_shift_for(4, chain(TURBO), "9", 5.0, 3.0, _M(8.0, 2.0)) == (5.0, 3.0, ""))
+    check("an upstream node's 6/1.5 is preserved",
+          S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, _M(6.0, 1.5))[:2] == (6.0, 1.5))
+    # Reading it must never throw.
+    check("a model with no get_model_object is handled",
+          S.model_declared_shift(object()) == (None, None))
+    check("no model at all still works",
+          abs(S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0, None)[0] - 1.89) < 0.05)
+
 
 def check_audio_scale_coupling():
     """The two flow shifts are COUPLED on ComfyUI 0.31+, and that is new.

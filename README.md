@@ -154,6 +154,13 @@ rendering**. Do that first; it is near-instant.
   | 8 | 4.42 | 1.10 | 38.7% |
   | 20 | 12.00 | 3.00 | 38.7% |
 
+  **A model that declares its own shift wins.** A repacked checkpoint whose config
+  carries different `sampling_settings`, or an upstream `ModelSamplingMiniMaxH3`
+  node, both land on the live model — and either is a deliberate choice. `auto_shift`
+  keeps it, passes it through so nothing overwrites it, and reports the conflict:
+  *"the model already declares shift_video 8 … a 4-step run would want ~1.89."*
+  You settle it by typing a shift, which outranks both.
+
   `shift_audio` moves *with* it, holding `audio_scale` at 4.0 — flattening that
   ratio breaks the audio branch. **Type either shift by hand and this stops**: a
   value you set is a decision and is never overridden.

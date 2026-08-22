@@ -3495,7 +3495,37 @@ def balanced_shift(steps):
     return round((lo + hi) / 2.0, 2)
 
 
-def auto_shift_for(steps, graph, node_id, shift_video, shift_audio):
+# H3's own declared base, from comfy/supported_models.py MiniMaxH3.sampling_settings.
+# Anything else on the live model came from somewhere deliberate.
+H3_BASE_SHIFT, H3_BASE_AUDIO_SHIFT = 12.0, 3.0
+
+
+def model_declared_shift(model):
+    """(shift, audio_shift) currently on the model, or (None, None).
+
+    Reads the LIVE model_sampling object, which is where both sources land:
+
+      * a checkpoint whose config carries its own sampling_settings -- ComfyUI does
+        populate these from the state dict for some models
+        (supported_models.py:218-229), and repacked H3 builds vary;
+      * an upstream ModelSamplingMiniMaxH3 node the user has already wired.
+
+    Either way a value that is not H3's declared base was put there on purpose, and
+    deriving a shift from step count alone would silently discard it."""
+    try:
+        ms = model.get_model_object("model_sampling")
+    except Exception:
+        return None, None
+    sv = getattr(ms, "shift", None)
+    sa = getattr(ms, "audio_shift", None)
+    try:
+        return (float(sv) if sv is not None else None,
+                float(sa) if sa is not None else None)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
     """(shift_video, shift_audio, note) -- shifts matched to a distill LoRA's steps.
 
     Only fires when BOTH shifts are still at their factory defaults. A value the
@@ -3507,6 +3537,25 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio):
     audio branch, which is exactly what a bare shift_video change did."""
     if abs(float(shift_video) - 12.0) > 1e-6 or abs(float(shift_audio) - 3.0) > 1e-6:
         return shift_video, shift_audio, ""      # user has set these; leave them alone
+    # The MODEL may already declare a shift of its own -- a repacked checkpoint whose
+    # config carries different sampling_settings, or an upstream
+    # ModelSamplingMiniMaxH3 node. Deriving from step count alone would throw that
+    # away silently. Defer to it, and SAY so, because a checkpoint that wants ~8 and
+    # a 4-step LoRA that wants ~1.9 genuinely disagree and only the user can settle it.
+    m_sv, m_sa = model_declared_shift(model)
+    if m_sv is not None and abs(m_sv - H3_BASE_SHIFT) > 0.05:
+        want = balanced_shift(int(steps))
+        clash = (f" -- a {int(steps)}-step run would want ~{want:g}" if want else "")
+        # Pass the MODEL's values on, not the widget defaults. apply_h3_model_sampling()
+        # patches whatever it is handed, so returning 12/3 here would write the base
+        # shift straight over the 8.0 the checkpoint declared -- deferring in name only.
+        keep_sa = m_sa if m_sa is not None else shift_audio
+        return m_sv, keep_sa, (
+            f"the model already declares shift_video {m_sv:g}"
+            + (f" / shift_audio {m_sa:g}" if m_sa is not None else "")
+            + f", not H3's base {H3_BASE_SHIFT:g}, so those are being kept{clash}. "
+              f"The value came from the checkpoint's own config or an upstream "
+              f"ModelSamplingMiniMaxH3 node. Set shift_video by hand to override either")
     names = upstream_lora_names(graph, node_id)
     trained = None
     for raw in names:
@@ -4842,7 +4891,7 @@ class H3LongVideos:
         shift_note = ""
         if auto_shift:
             shift_video, shift_audio, shift_note = auto_shift_for(
-                steps, graph, node_id, shift_video, shift_audio)
+                steps, graph, node_id, shift_video, shift_audio, model)
 
         # Patch the dual video/audio schedule onto the model here, so a missing
         # upstream ModelSamplingMiniMaxH3 can't silently produce gibberish audio.
