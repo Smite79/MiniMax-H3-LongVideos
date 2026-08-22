@@ -256,7 +256,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms",
+    "exposed_terms", "anatomy_guard",
 )
 
 NL = "\n"
@@ -1470,6 +1470,22 @@ def has_speech(body):
 #
 # The audio half of the babble fix does not depend on this: the no-voice soundscape
 # line and mute_nonspeech_audio both still apply.
+# Extra limbs, duplicated hands, a third arm. There is exactly one lever for this:
+# H3 is CFG-FREE at cfg 1, and comfy/samplers.py:610 sets uncond_ = None at that
+# scale, so the negative prompt is NEVER EVALUATED. "extra limbs, deformed hands"
+# in a negative does nothing at all on this model.
+#
+# So it has to be said POSITIVELY, in the same shape as the subject count clause
+# that already stops duplicate people. Stating a number gives the model a target;
+# negating one just puts the word in the prompt, and on this model a mention is a
+# presence cue -- which is why this says what the body HAS and never what it lacks.
+#
+# Placed per-shot, never in the anchor. Anchor body words are what burned a face
+# into the opening frames of every shot, found by bisection, and limb words there
+# would carry the same risk on every shot including scenery.
+ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers each, "
+                 "and two legs, in correct human proportion.")
+
 LIPS_CLOSED_STATE = (" Everyone in this shot is silent with their mouth closed and lips together, "
                      "jaw still, not talking.")
 LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement."
@@ -2245,7 +2261,7 @@ def speech_flags(beats):
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
                            notes_out=None, auto_props=True, prevent_nudity=True,
-                           exposed_terms="", strip_out=None):
+                           exposed_terms="", strip_out=None, anatomy_guard=False):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2468,6 +2484,10 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                        or (len(present_names) > 1 and bool(_PLURAL_CAST.search(body))))
         if no_speech and people_here:
             persistent = persistent.rstrip(". ") + "." + LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL
+        # Same gate as the mouth state, and for the same reason: describing a body
+        # in a frame that has none can only invite one in.
+        if anatomy_guard and people_here:
+            persistent = persistent.rstrip(". ") + "." + ANATOMY_STATE
         silent_shot = no_speech
         block = f"[Generation {gi}] {persistent}".strip()
         # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is
@@ -4244,6 +4264,16 @@ class H3LongVideos:
                                "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
                                "Override any single beat with 'seconds: 8' on its own line inside that "
                                "paragraph -- that wins over everything, including this toggle."}),
+                "anatomy_guard": (["off", "auto", "on"], {"default": "auto",
+                    "tooltip": "State each person's limb COUNT positively, to stop spare arms and "
+                               "duplicated hands. H3 is CFG-free at cfg 1, so a NEGATIVE prompt is "
+                               "never evaluated -- 'extra limbs' in a negative does nothing. Naming "
+                               "a number gives the model a target instead; negating one only puts "
+                               "the word in the prompt. Added per-shot and only where people are "
+                               "actually present, never in the anchor (anchor body words are what "
+                               "burn a face into every opening frame). 'auto' = on below 768 short "
+                               "edge OR when a LoRA is applied -- the conditions where anatomy "
+                               "breaks down. Costs ~18 tokens on shots with people."}),
                 "exposed_terms": ("STRING", {"multiline": True, "default": "",
                     "tooltip": "What a stripped body zone is CALLED, per character, so it persists "
                                "automatically instead of being typed into every beat. Same syntax as "
@@ -4383,7 +4413,7 @@ class H3LongVideos:
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
-            exposed_terms="",
+            exposed_terms="", anatomy_guard="auto",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
@@ -4561,6 +4591,8 @@ class H3LongVideos:
         # 'auto' fires below native resolution AND whenever a LoRA is applied: a
         # distilled LoRA fixes the subject count in its first step or two, so the
         # count has to be stated even at native size.
+        anatomy_on = (anatomy_guard == "on" or
+                      (anatomy_guard == "auto" and (min(w, h) < 768 or lora_on)))
         count_subjects = (subject_count_guard == "on" or
                           (subject_count_guard == "auto" and (min(w, h) < 768 or lora_on)))
         # `ln` is the CEILING (VRAM budget, or a forced shot_seconds). Each beat gets
@@ -4602,7 +4634,8 @@ class H3LongVideos:
                                       auto_wardrobe, auto_silence_nonspeech, count_subjects,
                                       lora_on, notes_out=wardrobe_notes, auto_props=auto_props,
                                       prevent_nudity=prevent_nudity,
-                                      exposed_terms=exposed_terms, strip_out=strip_shots)
+                                      exposed_terms=exposed_terms, strip_out=strip_shots,
+                                      anatomy_guard=anatomy_on)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.

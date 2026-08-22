@@ -2272,6 +2272,40 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_anatomy_guard():
+    """Limb counts stated POSITIVELY, because a negative cannot work here.
+
+    H3 is CFG-free at cfg 1, and comfy/samplers.py sets uncond_ = None at that
+    scale, so the negative prompt is never evaluated -- "extra limbs" in a negative
+    does nothing on this model. Naming the number gives the model a target, which
+    is the same mechanism the subject-count guard already uses for people."""
+    print("\n=== anatomy guard ===")
+    cm = "Mara = she, 30, blonde\nJon = he, 35, bald"
+    beats = ["Mara and Jon walk in.", "They face each other.",
+             "The hangar doors roll open.", 'Mara says: "Ready."']
+
+    off = S.distribute_generations("A room.", beats, "", "", cm, anatomy_guard=False)
+    on = S.distribute_generations("A room.", beats, "", "", cm, anatomy_guard=True)
+    check("off adds nothing", not any("two arms" in g for g in off))
+    check("on states the limb count where people are",
+          all("two arms" in g for g in (on[0], on[1], on[3])))
+    # The gate that matters: describing a body in an empty frame invites one in.
+    # That is what put a face in the opening frames of scenery shots before.
+    check("a scenery beat with nobody gets NO anatomy clause", "two arms" not in on[2])
+    check("a plural-bound beat does get it", "two arms" in on[1])
+    check("a dialogue beat gets it too", "two arms" in on[3])
+
+    # Positive counts only -- a negation would just put the word in the prompt.
+    txt = S.ANATOMY_STATE.lower()
+    for bad in (" no ", "without", "avoid", "extra", "deformed", "mutated", "malformed"):
+        check(f"the clause never negates ({bad.strip()})", bad not in txt)
+    for good in ("one head", "two arms", "two hands", "five fingers", "two legs"):
+        check(f"the clause states {good}", good in txt)
+
+    # The widget must be APPENDED, or saved workflows shift.
+    check("anatomy_guard is an appended widget", "anatomy_guard" in S.ADDED_WIDGETS)
+
+
 def check_latent_output():
     """The node emits the sampled latent ALONGSIDE images, never instead of them.
 
@@ -2929,6 +2963,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_anatomy_guard()
     check_latent_output()
     check_preflight_note_assembly()
     check_audio_scale_coupling()

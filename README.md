@@ -126,6 +126,14 @@ rendering**. Do that first; it is near-instant.
   uncovered. Removals still happen — what is gated is the sentence, and since the
   model's default is a clothed person, it covers what nobody described. `info`
   still reports any zone a removal left uncovered, so you find out either way.
+- **Anatomy.** `anatomy_guard` states each person's limb *count* — one head, two
+  arms, two hands with five fingers, two legs — on shots that have people in them.
+  A **negative prompt cannot do this**: H3 is CFG-free at `cfg 1`, so the negative
+  is never evaluated and "extra limbs" there does nothing. Naming the number gives
+  the model a target; negating one only puts the word in the prompt. Never added to
+  the anchor, and never to a shot with nobody in it — describing a body in an empty
+  frame is what burned faces into opening frames before. `auto` = on below a 768
+  short edge or when a LoRA is applied.
 - **Silence.** Beats with no quoted dialogue get a lips-closed clause, a no-voice
   soundscape, and optionally muted audio — H3 babbles otherwise.
 - **Overlays.** Optional PIL watermark and intro title, composited after any
