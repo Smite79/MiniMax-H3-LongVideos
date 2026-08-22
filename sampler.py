@@ -257,6 +257,7 @@ ADDED_WIDGETS = (
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "anatomy_guard", "lock_restraints", "auto_shift",
+    "auto_soundscape",
 )
 
 NL = "\n"
@@ -1282,6 +1283,105 @@ _ANCHOR_APPARATUS = re.compile(
 _ANCHOR_FRAMING = re.compile(
     r"\b(medium shot|close-?ups?|wide shot|long shot|full shot|two shot|"
     r"over the shoulder|low angle|high angle|aerial|overhead shot|establishing shot)\b", re.I)
+
+
+# Scene words -> the ambience they imply. Read from the ANCHOR, because the
+# soundscape is global: it is stamped on every shot, so it has to describe the
+# PLACE rather than what happens in any one beat.
+#
+# NOT ONE ENTRY NAMES A HUMAN SOUND. No chatter, no murmur, no crowd, no
+# announcements, no footsteps-of-people. This node spends most of its silence
+# machinery stopping H3 inventing a voice, and an auto-generated soundscape that
+# says "busy cafe" would hand it one on every shot. A bar gets glassware and room
+# tone; a station gets hall reverb and machinery.
+_SOUNDSCAPE_CUES = (
+    # weather and time first -- they layer over whatever the place is
+    (r"\bthunder|thunderstorm|lightning\b", "heavy rain and distant thunder"),
+    (r"\brain(y|ing|fall)?\b", "steady rain"),
+    (r"\bsnow(y|ing)?|blizzard\b", "muffled snowfall and thin wind"),
+    (r"\bfog|mist(y)?\b", "still muffled air"),
+    (r"\b(?:wind|windy|windswept|gale)\b", "gusting wind"),
+    # interiors
+    (r"\bhangar|warehouse|factory|silo\b", "cavernous interior, long reverb, distant metal ticks"),
+    (r"\bworkshop|garage|shed\b", "close interior room tone, faint metal clinks"),
+    (r"\bkitchen\b", "quiet room tone, faint appliance hum"),
+    (r"\bbathroom|shower\b", "tiled room tone, faint water drip"),
+    (r"\bcorridor|hallway|stairwell\b", "narrow interior reverb"),
+    (r"\bchurch|cathedral|chapel\b", "large stone reverb"),
+    (r"\bcave|tunnel|mine\b", "deep echoing reverb, dripping water"),
+    (r"\bbar\b|\bpub\b|\bcafe|\bdiner|restaurant\b", "low room tone, faint glassware and cutlery"),
+    (r"\bstation|platform|terminal|airport\b", "large hall reverb, distant machinery"),
+    (r"\boffice\b", "quiet room tone, faint ventilation hum"),
+    (r"\bhospital|clinic|ward\b", "quiet corridor tone, faint equipment beeps"),
+    # exteriors
+    (r"\bbeach|shore|ocean|\bsea\b|coast\b", "waves breaking, sea wind, distant gulls"),
+    (r"\bharbour|harbor|dock|pier|marina\b", "water lapping, hull and rigging creak, gulls"),
+    (r"\bforest|woods|jungle\b", "wind in leaves, birdsong"),
+    (r"\briver|stream|creek|waterfall\b", "running water"),
+    (r"\bdesert|dunes\b", "dry wind and drifting grit"),
+    (r"\bmountain|cliff|ridge\b", "high open wind"),
+    (r"\bfield|meadow|farm|barn|pasture\b", "open wind, insects, distant birds"),
+    (r"\brooftop|roof\b", "open wind, distant city hum"),
+    (r"\balley|alleyway\b", "close urban reverb, distant traffic"),
+    (r"\bcity|street|urban|downtown|sidewalk|pavement\b",
+     "distant traffic hum, occasional horn"),
+    (r"\bhighway|motorway|freeway\b", "passing vehicles and tyre noise"),
+    (r"\bpark|garden\b", "wind in trees, distant birds"),
+    # things that make noise wherever they are
+    (r"\bcampfire|bonfire|fireplace|fire\b", "crackling fire"),
+    (r"\baircraft|airplane|propeller|\bplane\b", "propeller drone"),
+    (r"\btrain|railway|locomotive\b", "rail rumble"),
+    (r"\bboat|ship|yacht\b", "hull creak and water"),
+    (r"\bvan\b|\bcar\b|\btruck\b|engine\b", "engine idle and road noise"),
+    (r"\bgenerator|machinery|turbine\b", "low machine hum"),
+    (r"\bnight|midnight|nocturnal\b", "night air, faint insects"),
+)
+# Tried only when nothing above matched: a generic interior is better than silence,
+# but naming it alongside a specific one ("kitchen ... and also a room") is noise.
+_SOUNDSCAPE_FALLBACK = (
+    (r"\b(?:bedroom|living room|apartment|house|home|room|indoors|interior)\b",
+     "quiet indoor room tone"),
+    (r"\b(?:outside|outdoors|exterior)\b", "open outdoor air, faint distant wind"),
+)
+
+# Camera and style vocabulary, stripped before matching. "shallow depth of FIELD"
+# is not a meadow, and an anchor is mostly camera language -- exactly the words a
+# naive scan trips over.
+_CAMERA_WORDS = re.compile(
+    r"\b(?:depth of field|field of view|shallow focus|deep focus|focal length|"
+    r"\d+\s*mm|f/\d+(?:\.\d+)?|bokeh|anamorphic|handheld|dolly|steadicam|"
+    r"colour grade|color grade|film grain|motion blur|golden hour)\b", re.I)
+
+_SOUNDSCAPE_MAX = 4          # more than this reads as a sound-effects list, not a bed
+
+
+def derive_soundscape(anchor, beats=()):
+    """An ambient bed inferred from the scene, or "" when nothing matches.
+
+    Reads the ANCHOR first, since that is the permanent scene and the soundscape is
+    global. Beats are read only as a fallback -- a location often appears in the
+    first beat rather than the anchor -- and never for one-off actions, which would
+    stamp a single shot's noise onto the whole chain.
+
+    Capped, ordered, de-duplicated. Weather layers before place, because "rain" over
+    "a city street" is the useful order to read."""
+    for source in (anchor or "", " ".join(beats or ())):
+        low = _CAMERA_WORDS.sub(" ", source.lower())
+        seen, out = set(), []
+        for rx, phrase in _SOUNDSCAPE_CUES:
+            if len(out) >= _SOUNDSCAPE_MAX:
+                break
+            if phrase not in seen and re.search(rx, low, re.I):
+                seen.add(phrase)
+                out.append(phrase)
+        if not out:
+            for rx, phrase in _SOUNDSCAPE_FALLBACK:
+                if re.search(rx, low, re.I):
+                    out.append(phrase)
+                    break
+        if out:
+            return ", ".join(out)    # the anchor described the place; stop there
+    return ""
 
 
 def anchor_warnings(anchor):
@@ -4687,6 +4787,15 @@ class H3LongVideos:
                                "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
                                "Override any single beat with 'seconds: 8' on its own line inside that "
                                "paragraph -- that wins over everything, including this toggle."}),
+                "auto_soundscape": (["off", "fill if blank", "always"], {"default": "fill if blank",
+                    "tooltip": "Build the ambient bed from the scene instead of typing one. Reads the "
+                               "ANCHOR (the soundscape is global, so it must describe the PLACE, not "
+                               "one beat's action), falling back to the beats when the anchor is pure "
+                               "camera language. 'A disused aircraft hangar' -> cavernous interior, "
+                               "long reverb, distant metal ticks. Weather layers first: rain, wind, "
+                               "snow, fog. NO human sounds are ever generated -- no chatter, crowd or "
+                               "announcements -- because an ambient bed that implies voices is how H3 "
+                               "starts talking. 'fill if blank' leaves anything you typed alone."}),
                 "auto_shift": ("BOOLEAN", {"default": True,
                     "tooltip": "When a distill/turbo LoRA is on the chain, set shift_video and "
                                "shift_audio to match your step count instead of leaving H3's 12/3 "
@@ -4860,7 +4969,7 @@ class H3LongVideos:
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
-            auto_shift=True,
+            auto_shift=True, auto_soundscape="fill if blank",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
@@ -4964,6 +5073,20 @@ class H3LongVideos:
         # Anchor extraction happens on PARAGRAPHS first, so a line-split can never
         # eat into the identity block; only the beat paragraphs are expanded.
         beats, split_note = expand_beats(beat_paras, beat_split)
+        # Build the ambient bed from the scene when asked. Done here, where the
+        # anchor and beats are both parsed, and BEFORE distribute_generations stamps
+        # the soundscape onto every shot.
+        sound_note = ""
+        if auto_soundscape != "off":
+            typed = global_soundscape.strip()
+            if auto_soundscape == "always" or not typed:
+                derived = derive_soundscape(anchor, beats)
+                if derived and derived != typed:
+                    sound_note = (f"soundscape {'replaced with' if typed else 'built from'} the "
+                                  f"scene: '{derived}'"
+                                  + (f" (yours: '{typed}')" if typed else "")
+                                  + ". Set auto_soundscape to 'off' to keep your own")
+                    global_soundscape = derived
         beats_note = (f"{len(beats)} beat(s) -> {len(beats)} shot(s) from {len(paras)} paragraph(s)"
                       + ("" if anchor_override.strip() else
                          "; paragraph 1 was consumed as the identity anchor (fill anchor_override "
@@ -5097,7 +5220,8 @@ class H3LongVideos:
                      ("KERNELS", kernel_note),
                      ("AUDIO", audio_ratio_note),
                      ("CONTINUITY", "; ".join(cohesion_notes)),
-                     ("SHIFT", shift_note)]
+                     ("SHIFT", shift_note),
+                     ("SOUND", sound_note)]
         preflight_txt = "".join(f"{(lbl + ' -- ') if lbl else ''}{txt}. "
                                 for lbl, txt in preflight if txt)
 

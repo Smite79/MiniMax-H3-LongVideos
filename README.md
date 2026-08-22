@@ -179,6 +179,22 @@ rendering**. Do that first; it is near-instant.
   the anchor, and never to a shot with nobody in it — describing a body in an empty
   frame is what burned faces into opening frames before. `auto` = on below a 768
   short edge or when a LoRA is applied.
+- **Soundscape from the scene.** `auto_soundscape` builds the ambient bed from your
+  prompt instead of you typing one. It reads the **anchor** — the soundscape is
+  global, stamped on every shot, so it must describe the *place*, not one beat's
+  action — falling back to the beats when the anchor is pure camera language.
+
+  ```
+  A disused aircraft hangar        -> cavernous interior, long reverb, distant metal ticks
+  Rain on the windows. A kitchen.  -> steady rain, quiet room tone, faint appliance hum
+  A rocky beach with waves         -> gusting wind, waves breaking, sea wind, distant gulls
+  Cinematic, shallow depth of field -> (nothing — that is a lens, not a meadow)
+  ```
+
+  Weather layers before place. **No human sound is ever generated** — no chatter,
+  crowd or announcements, even for a bar or a station — because an ambient bed that
+  implies voices is how H3 starts talking. `fill if blank` (default) leaves anything
+  you typed alone; `always` overrides it and says so in `info`.
 - **Silence, in three layers.** A prompt clause alone was never enough, because
   two of the three causes aren't text.
   1. **Text** — beats with no quoted dialogue get a lips-closed clause and a

@@ -2674,6 +2674,69 @@ def check_preflight_note_assembly():
           any(ln.strip().startswith("preflight_txt =") for ln in lines))
 
 
+def check_auto_soundscape():
+    """An ambient bed inferred from the scene.
+
+    Read from the ANCHOR, because the soundscape is global -- stamped on every shot
+    -- so it has to describe the PLACE, not one beat's action. And the vocabulary
+    contains no human sound at all: an ambient bed that implies voices is how H3
+    starts talking, which is the failure this node spends most of its silence
+    machinery on."""
+    print("\n=== soundscape from the scene ===")
+
+    for anchor, want in [
+        ("Natural daylight. A disused aircraft hangar.", "cavernous interior"),
+        ("Rain on the windows. A small home kitchen at night.", "steady rain"),
+        ("Overcast. A rocky beach with waves and wind.", "waves breaking"),
+        ("A city street at night, neon in puddles after rain.", "distant traffic hum"),
+        ("Warm interior light. A workshop with a roller door.", "close interior room tone"),
+        ("A forest clearing beside a stream, campfire burning.", "wind in leaves"),
+        ("A quiet bedroom, curtains drawn.", "quiet indoor room tone"),
+    ]:
+        check(f"{anchor[:34]!r} -> {want}", want in S.derive_soundscape(anchor))
+
+    # Camera language is not scenery. "shallow depth of FIELD" was read as a meadow.
+    check("a camera-only anchor yields nothing",
+          S.derive_soundscape("Cinematic, shallow depth of field, 35mm, f/2.8, film grain.") == "")
+    check("...and falls through to the beats",
+          "cavernous interior" in S.derive_soundscape(
+              "Cinematic, shallow depth of field, 35mm.",
+              ["Mara walks into the hangar."]))
+    check("nothing anywhere stays empty",
+          S.derive_soundscape("Cinematic, 35mm.", ["She smiles."]) == "")
+    # 'windows' is not 'wind' -- a missing trailing \b put gusting wind in a kitchen.
+    check("'windows' does not imply wind",
+          "gusting wind" not in S.derive_soundscape("Rain on the windows. A kitchen."))
+    check("real wind still registers",
+          "gusting wind" in S.derive_soundscape("A windswept ridge."))
+    # A specific interior must not also draw the generic one.
+    ss = S.derive_soundscape("A small home kitchen at night.")
+    check("a specific interior does not double up with the generic",
+          ss.count("room tone") == 1)
+
+    # THE constraint: never generate a human sound.
+    human = ("voice", "chatter", "murmur", "crowd", "talk", "speech", "announce",
+             "conversation", "people", "laugh", "shout", "sing")
+    allsound = " ".join(p for _, p in S._SOUNDSCAPE_CUES).lower() + " " + \
+               " ".join(p for _, p in S._SOUNDSCAPE_FALLBACK).lower()
+    # Whole words only -- a substring test flags "sing" inside "pasSING vehicles".
+    def says(word, text):
+        return bool(re.search(r"\b" + word + r"\w*\b", text))
+    for w in human:
+        check(f"the vocabulary never says {w!r}", not says(w, allsound))
+    # ...including for places full of people.
+    for anchor in ("A crowded bar, late evening.", "A busy railway station.",
+                   "A packed restaurant."):
+        out = S.derive_soundscape(anchor).lower()
+        check(f"{anchor[:26]!r} implies no voices",
+              not any(says(w, out) for w in human))
+
+    check("the bed stays short", len(S.derive_soundscape(
+        "Rain and wind over a city street at night beside a river, engine running.")
+        .split(",")) <= 8)
+    check("auto_soundscape is an appended widget", "auto_soundscape" in S.ADDED_WIDGETS)
+
+
 def check_auto_shift():
     """Shifts derived from the step count when a distill LoRA is loaded.
 
@@ -3411,6 +3474,7 @@ def main():
     check_anatomy_guard()
     check_latent_output()
     check_preflight_note_assembly()
+    check_auto_soundscape()
     check_auto_shift()
     check_audio_scale_coupling()
     check_schedule_balance()
