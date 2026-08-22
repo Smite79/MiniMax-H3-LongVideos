@@ -3688,6 +3688,13 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
         # patches whatever it is handed, so returning 12/3 here would write the base
         # shift straight over the 8.0 the checkpoint declared -- deferring in name only.
         keep_sa = m_sa if m_sa is not None else shift_audio
+        # Record these as ours as well. They get written back into the widgets, so
+        # without this the widget would afterwards hold a value that is neither the
+        # default nor recognised -- reading as a user decision, bailing out on the
+        # next run, and taking the clash warning with it. The values would still be
+        # right (they equal what the model declares); the explanation of the genuine
+        # LoRA-vs-checkpoint conflict is what would silently stop being reported.
+        _AUTO_SHIFT_SET[str(node_id)] = (m_sv, keep_sa)
         return m_sv, keep_sa, (
             f"the model already declares shift_video {m_sv:g}"
             + (f" / shift_audio {m_sa:g}" if m_sa is not None else "")

@@ -2844,6 +2844,21 @@ def check_auto_shift():
     check("the extension is present",
           os.path.isfile(os.path.join(_HERE, "web", "js", "autoshift.js")))
 
+    # The import depth must match where server.py:363-366 actually SERVES the file:
+    # /extensions/<name>/<path under WEB_DIRECTORY>. A file in web/js/ is three deep,
+    # so ../../ resolved to /extensions/scripts/app.js -- a 404 that aborts the whole
+    # ES module without an error anyone would look for, leaving the listener
+    # unregistered and the shifts never written back. Derive the depth from the real
+    # location rather than hardcoding it, so moving the file cannot break it silently.
+    _js_rel = os.path.join("js", "autoshift.js")
+    _js = open(os.path.join(_HERE, "web", _js_rel), encoding="utf-8").read()
+    _want = "../" * (len(_js_rel.replace("\\", "/").split("/")) + 1)
+    _imports = re.findall(r'^import\s.*?from\s+"([^"]+)"', _js, re.M)
+    check("the extension imports something", bool(_imports))
+    for _spec in _imports:
+        check(f"...{_spec} climbs to the web root, not into /extensions",
+              _spec.startswith(_want) and not _spec.startswith(_want + "../"))
+
     # Writing back would DISABLE the feature -- the widget would then hold a
     # non-default value and read as a user choice -- so what was written is recorded
     # and recognised on the next run. Otherwise changing steps 4 -> 8 would silently

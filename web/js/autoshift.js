@@ -10,8 +10,14 @@
 // Nothing is sent when the values were not changed, so a graph the user controls
 // is never touched.
 
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+// THREE levels up, not two. server.py:363-366 serves this at
+// /extensions/H3-LongVideos-V1/js/autoshift.js -- the WEB_DIRECTORY is the
+// /extensions/<name>/ root, so a file in its js/ subfolder sits three deep.
+// At ../../ these resolved to /extensions/scripts/app.js, a 404 that silently
+// aborted the whole module, so no listener was ever registered and the shifts
+// were never written back.
+import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 const NODE_TYPES = new Set([
     "H3LongVideos",
