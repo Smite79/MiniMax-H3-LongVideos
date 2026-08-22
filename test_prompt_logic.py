@@ -2291,6 +2291,7 @@ def check_mouth_stays_closed():
                  the picture lip-syncs to it. The keyframe's audio channel is
                  anchored to encoded silence instead."""
     print("\n=== mouths stay closed until dialogue ===")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
 
     beats = ['Mara says: "Ready?"', "Mara nods.", "Mara walks out.",
              'Dom says: "Wait."', "Dom follows."]
@@ -2318,6 +2319,39 @@ def check_mouth_stays_closed():
           S._silent_audio_latent(_Boom(), 124, 24) is None)
     check("an audio VAE with no sample rate degrades to None",
           S._silent_audio_latent(_NoSR(), 124, 24) is None)
+
+    # ...and layer 3 has to actually REACH the shot. It used to be attached inside
+    # `if keyframes:` on the keyframe-only path, so it was skipped entirely on:
+    #   * any shot with a ref_image wired  (the whole ref path ignored `silent`)
+    #   * the FIRST shot of every chain    (no handoff -> no keyframe)
+    # Wiring a single ref_image therefore made the mechanism dead code, and
+    # non-dialogue shots babbled exactly as if it had never been written.
+    # torch is stubbed in this harness, so the ENCODE is stood in for -- what is
+    # under test here is where the latent gets attached, not how it is made.
+    _v = object()
+    _real_sil = S._silent_audio_latent
+    S._silent_audio_latent = lambda vae, fc, fps: "SILENCE"
+    _empty = S._attach_silence([], _v, 362, 24, True)
+    check("a shot with no keyframe still gets a silence anchor", len(_empty) == 1)
+    check("...as an AUDIO-ONLY keyframe, carrying no video latent",
+          "audio_latent" in _empty[0] and "latent" not in _empty[0])
+    check("...positioned at frame 0", _empty[0]["resolved_frame_index"] == 0)
+    _kf = S._attach_silence([{"resolved_frame_index": 0, "latent": "V"}], _v, 362, 24, True)
+    check("an existing keyframe carries the silence instead of a second one",
+          len(_kf) == 1 and _kf[0]["latent"] == "V" and "audio_latent" in _kf[0])
+    check("a speaking shot is left alone",
+          S._attach_silence([], _v, 362, 24, False) == [])
+    check("no audio VAE degrades to no anchor",
+          S._attach_silence([], None, 362, 24, True) == [])
+    S._silent_audio_latent = lambda vae, fc, fps: None
+    check("an encode that fails leaves the shot unchanged rather than breaking it",
+          S._attach_silence([], _v, 362, 24, True) == [])
+    S._silent_audio_latent = _real_sil
+    check("both conditioning paths attach it", src.count("_attach_silence(") == 3)
+    check("the ref path no longer ignores `silent`",
+          "kfs = _attach_silence(kfs, audio_vae, fc, fps, silent)" in src)
+    check("...and it is not gated behind an existing keyframe",
+          "keyframes = _attach_silence(keyframes, audio_vae, fc, fps, silent)" in src)
     check("a zero-length shot degrades to None",
           S._silent_audio_latent(_Boom(), 0, 24) is None)
 

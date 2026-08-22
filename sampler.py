@@ -3227,10 +3227,23 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         # Enforced here as well as in run(): one aug covers every cond latent, so a
         # softened reference would soften the anchor. Refusing at the source means no
         # caller can assemble that combination by accident.
+        kfs = []
         if handoff is not None and keyframe_rides_with_refs(ref_noise_aug):
-            kf = {"resolved_frame_index": 0,
-                  "latent": vae.encode(_resize(handoff[:1], width, height, "disabled"))}
-            vals["minimax_keyframes"] = [kf]
+            kfs.append({"resolved_frame_index": 0,
+                        "latent": vae.encode(_resize(handoff[:1], width, height, "disabled"))})
+        # A reference-conditioned shot needs the silence anchor just as much as a
+        # keyframe-conditioned one, and it used to get NOTHING: `silent` was only
+        # honoured on the keyframe-only path below, so wiring any ref_image made the
+        # whole mechanism dead code and non-dialogue shots babbled again.
+        #
+        # It has to hang on a KEYFRAME, not a ref block. model_base.py:2174 does put a
+        # ref's audio_latent into cond_audio_latents, but PackedLayout only emits
+        # ref_audio rows for blocks of kind audio/video/video_audio (model.py:379-399)
+        # -- an "image" ref gets none -- so the latent list and the row layout would
+        # disagree and land as a shape error inside the DiT.
+        kfs = _attach_silence(kfs, audio_vae, fc, fps, silent)
+        if kfs:
+            vals["minimax_keyframes"] = kfs
             vals["minimax_frame_count"] = fc
         if vals:
             cond = node_helpers.conditioning_set_values(cond, vals)
@@ -3243,20 +3256,43 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         keyframes.append({"resolved_frame_index": 0, "image": img})
     tokens = clip.tokenize(prompt, images=images)
     cond = clip.encode_from_tokens_scheduled(tokens)
+    for kf in keyframes:
+        kf["latent"] = vae.encode(kf.pop("image"))
+    # Outside the `if keyframes:` it used to sit inside. A shot with no handoff --
+    # the FIRST shot of every chain -- has no keyframe, so the silence anchor was
+    # skipped there too, on exactly the shot that sets the tone for the rest.
+    keyframes = _attach_silence(keyframes, audio_vae, fc, fps, silent)
     if keyframes:
-        for kf in keyframes:
-            kf["latent"] = vae.encode(kf.pop("image"))
-            # A shot with no scripted line gets its audio channel anchored to real
-            # silence. H3 is joint -- the mouth follows the audio branch -- so an
-            # unconditioned branch invents a voice and the picture lip-syncs to it.
-            # The lips-closed sentence cannot outvote a stream that has already
-            # decided someone is speaking; this conditions the stream itself.
-            if silent and audio_vae is not None:
-                sil = _silent_audio_latent(audio_vae, fc, fps)
-                if sil is not None:
-                    kf["audio_latent"] = sil
         cond = node_helpers.conditioning_set_values(cond, {"minimax_keyframes": keyframes, "minimax_frame_count": fc})
     return cond, latent
+
+
+def _attach_silence(keyframes, audio_vae, fc, fps, silent):
+    """Anchor this shot's audio channel to real silence. Returns the keyframe list.
+
+    H3 is JOINT -- the mouth follows the audio branch -- so an unconditioned audio
+    stream invents a voice and the picture lip-syncs to it. A "lips closed" sentence
+    in the prompt cannot outvote a stream that has already decided someone is
+    speaking; this conditions the stream itself.
+
+    Hangs on a keyframe because that is the only carrier PackedLayout emits matching
+    `cond_audio` rows for (model.py:354-361). When the shot has no keyframe -- the
+    first shot of a chain, or a ref-conditioned shot -- an AUDIO-ONLY keyframe is
+    appended: model_base.py:2168 filters video latents on `latent` and audio on
+    `audio_latent` independently, and model.py:345 skips the video segment when
+    `latent` is absent, so a dict carrying only audio produces exactly one cond_audio
+    segment and no video rows.
+    """
+    if not silent or audio_vae is None:
+        return keyframes
+    sil = _silent_audio_latent(audio_vae, fc, fps)
+    if sil is None:
+        return keyframes
+    if keyframes:
+        keyframes[0]["audio_latent"] = sil      # one bed, on the first carrier only
+    else:
+        keyframes = [{"resolved_frame_index": 0, "audio_latent": sil}]
+    return keyframes
 
 
 # Below this, softening the references would soften the handoff KEYFRAME with them.
