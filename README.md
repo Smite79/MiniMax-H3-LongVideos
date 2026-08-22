@@ -88,6 +88,16 @@ rendering**. Do that first; it is near-instant.
   asking for something to come off doesn't remove it a shot early. Whatever is
   still on underneath is named, so a removal doesn't read as more than it was.
 - **Props.** "the van" in a later shot means the van from the earlier one.
+- **Restraints stay on.** `lock_restraints` (on by default) keeps handcuffs,
+  shackles, manacles, fetters, irons, gags, blindfolds, harnesses and leashes —
+  plus qualified forms like `ankle chain` or `leather wrist straps` — from being
+  removed by prose. A restraint is a plot state, not a garment. Without this they
+  came off by *accident*: "steps out of her jacket and the chain falls away" would
+  drop the ankle chain as a side effect of a beat about a jacket, because the
+  removal window reaches any tracked item near the cue. To take one off, say so
+  directly: `wardrobe: Mara -= handcuffs`. Bare `chain`, `collar`, `strap` and
+  `belt` are **not** treated as restraints — they are jewellery, a shirt part, a
+  dress part and a garment at least as often.
 - **Uncovered zones.** The node tracks two body zones, `lower` and `upper`. When a
   removal leaves one with nothing on it, it keeps that state **stated** in every
   later shot until something covers the zone again — because deleting a garment is

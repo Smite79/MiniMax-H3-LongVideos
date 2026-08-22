@@ -461,7 +461,12 @@ def check_detailed_wardrobe_items():
                        ("belt around her waist", "belt")]:
         check(f"head of {item!r} is {head!r}", S._item_head(item) == head)
         a = S.parse_wardrobe(f"Kristy = she, black t-shirt, {item}")
-        after = S.auto_wardrobe_removals(a, f"Kristy takes off her {head}.")
+        # lock_restraints=False here on purpose: this case is testing HEAD-NOUN
+        # extraction and that the removal machinery fires on it. Handcuffs are a
+        # restraint, and the shipped default refuses to remove those from prose --
+        # which is check_restraints_stay_on()'s job, not this one's.
+        after = S.auto_wardrobe_removals(a, f"Kristy takes off her {head}.",
+                                         lock_restraints=False)
         check(f"  ...and 'takes off her {head}' removes it",
               [x for x in a["Kristy"] if x not in after["Kristy"]] == [item])
     # "down" is a material, not a position: cutting there would leave "puffy"
@@ -2272,6 +2277,77 @@ def check_kernel_backend_note():
     check("a garbage model object does not raise", S.kernel_backend_note(object()) == "")
 
 
+def check_restraints_stay_on():
+    """A restraint is a plot state, not a garment: prose never takes one off.
+
+    Left to the ordinary removal detector they came off far too easily, and often
+    by ACCIDENT -- the removal window reaches any tracked item near the cue, so
+    "steps out of her jacket and the chain falls away" dropped the ankle chain as a
+    side effect of a beat about a jacket."""
+    print("\n=== restraints stay on until asked ===")
+
+    for item in ["steel handcuffs", "ankle chain", "shackles", "leather wrist straps",
+                 "ball gag", "blindfold", "leg irons", "zip-tie", "chain restraint",
+                 "manacles", "thumb cuffs", "padlocked collar", "fetters", "wrist ties"]:
+        check(f"{item!r} is a restraint", S.is_restraint(item))
+    # The false positives that matter: a word may not qualify ITSELF, and a material
+    # is not a qualifier. Both bugs were live in the first version of this.
+    for item in ["chain", "gold chain", "collar", "shirt collar", "black belt",
+                 "leather belt", "red jacket", "strap", "dress with thin straps",
+                 "rope", "silver necklace", "steel watch strap", "blue jeans", "corset"]:
+        check(f"{item!r} stays an ordinary garment", not S.is_restraint(item))
+
+    act = {"Mara": ["she", "steel handcuffs", "ankle chain", "red jacket"]}
+
+    def after(beat, lock=True):
+        out = S.auto_wardrobe_removals({k: list(v) for k, v in act.items()}, beat, lock)
+        return [i for i in act["Mara"] if i not in out["Mara"]]
+
+    check("prose cannot remove handcuffs", after("Mara slips out of the handcuffs.") == [])
+    check("prose cannot remove an ankle chain",
+          after("The ankle chain falls away.") == [])
+    check("a garment still comes off normally",
+          after("Mara takes off her red jacket.") == ["red jacket"])
+    # The accident this exists to stop.
+    check("a jacket beat no longer drags the chain off with it",
+          after("Mara steps out of her jacket and the chain falls away.") == ["red jacket"])
+    # ...and the escape hatch still works.
+    freed = S.apply_wardrobe_change({k: list(v) for k, v in act.items()},
+                                    "Mara -= handcuffs")
+    check("an explicit 'wardrobe: -=' still removes a restraint",
+          "steel handcuffs" not in freed["Mara"])
+    check("...leaving the other restraint alone", "ankle chain" in freed["Mara"])
+    # Off means off.
+    check("lock_restraints=False restores the old behaviour",
+          after("Mara slips out of the handcuffs.", lock=False) == ["steel handcuffs"])
+
+    # End to end, with the person referenced in every beat so she is always bound.
+    cm = "Mara = she, 30, blonde, steel handcuffs, ankle chain, red jacket"
+    beats = ["Mara stands in the room.",
+             "Mara takes off her red jacket.",
+             "Mara slips out of the handcuffs.",
+             "Mara shakes the ankle chain and it falls away.",
+             "Mara is freed by a guard.\nwardrobe: Mara -= handcuffs, ankle chain",
+             "Mara rubs her wrists and stands."]
+    g = S.distribute_generations("A room.", beats, "", "", cm, lock_restraints=True)
+    def worn_items(shot):
+        """What the character is DESCRIBED as wearing -- the bound parenthetical.
+
+        Not the whole shot text: the shot that performs a removal names the item in
+        its direction clause ("takes the steel handcuffs off during this shot"), so
+        a substring test there reports an item that has already come off."""
+        i = shot.find("Mara (")
+        return shot[i:shot.find(")", i) + 1] if i >= 0 else ""
+
+    check("restraints survive removal prose",
+          all("handcuff" in worn_items(s) for s in g[:4]))
+    check("...while the jacket still comes off", "red jacket" not in worn_items(g[2]))
+    check("an explicit directive frees them", "handcuff" not in worn_items(g[4]))
+    check("...and they stay off afterwards",
+          "handcuff" not in worn_items(g[5]) and "ankle chain" not in worn_items(g[5]))
+    check("lock_restraints is an appended widget", "lock_restraints" in S.ADDED_WIDGETS)
+
+
 def check_anatomy_guard():
     """Limb counts stated POSITIVELY, because a negative cannot work here.
 
@@ -2963,6 +3039,7 @@ def main():
     check_sla_pairing()
     check_lora_hints()
     check_kernel_backend_note()
+    check_restraints_stay_on()
     check_anatomy_guard()
     check_latent_output()
     check_preflight_note_assembly()

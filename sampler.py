@@ -256,7 +256,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms", "anatomy_guard",
+    "exposed_terms", "anatomy_guard", "lock_restraints",
 )
 
 NL = "\n"
@@ -705,7 +705,58 @@ def _removal_object_spans(text, m):
     return forward, backward
 
 
-def auto_wardrobe_removals(active, body):
+# Items that STAY ON until something explicitly says otherwise.
+#
+# A garment coming off by itself is usually what the prose meant. A restraint is
+# not: it is a plot state that the scene establishes and only the scene ends. Left
+# to the ordinary removal detector these came off far too easily, and often by
+# accident -- "steps out of her jacket and the chain falls away" removed the ankle
+# chain as a side effect of a beat about a jacket, because the removal window
+# reaches any tracked item near the cue.
+#
+# Deliberately narrow. Only nouns that are unambiguously a restraint: `chain`,
+# `collar`, `strap` and `belt` are all left OUT, because they are jewellery, a
+# shirt part, a dress part and a garment at least as often. A compound like
+# "ankle chain" or "chain restraint" is caught by its qualifier instead.
+_RESTRAINT_HEADS = {
+    "handcuff", "handcuffs", "cuff", "cuffs", "shackle", "shackles",
+    "manacle", "manacles", "fetter", "fetters", "iron", "irons",
+    "restraint", "restraints", "binding", "bindings", "bond", "bonds",
+    "gag", "blindfold", "hood", "muzzle", "harness", "leash", "hobble",
+    "strait-jacket", "straitjacket", "spreader", "zip-tie", "ziptie",
+}
+# ...and the qualifiers that turn an ambiguous noun into a restraint. Body parts
+# and binding participles ONLY.
+#
+# Materials are deliberately absent. "leather" would make a leather belt a
+# restraint, "steel" a steel watch strap. And a word may not appear in BOTH lists:
+# `chain` and `rope` were in each at first, so they qualified themselves and a bare
+# "gold chain" came out a restraint.
+_RESTRAINT_QUALIFIER = re.compile(
+    r"\b(?:ankle|wrist|leg|arm|thumb|neck|waist|"
+    r"chained|shackled|cuffed|bound|tied|locked|padlocked|restraining)\b", re.I)
+_RESTRAINT_NOUN = re.compile(
+    r"\b(?:chain|chains|rope|ropes|cord|cords|tie|ties|strap|straps|collar|collars|"
+    r"band|bands|belt|belts|cuff|cuffs)\b", re.I)
+
+
+def is_restraint(item):
+    """True when this wardrobe item is a physical restraint rather than clothing.
+
+    Either an unambiguous restraint noun on its own ("handcuffs", "shackles"), or
+    an ambiguous one carrying a restraint qualifier ("ankle chain", "leather wrist
+    straps"). A bare "chain" or "collar" is NOT a restraint -- it is jewellery or a
+    shirt part far more often, and a false positive here means a garment that can
+    never be taken off."""
+    name = _item_name(item or "").lower()
+    if not name:
+        return False
+    if _item_head(item) in _RESTRAINT_HEADS:
+        return True
+    return bool(_RESTRAINT_NOUN.search(name) and _RESTRAINT_QUALIFIER.search(name))
+
+
+def auto_wardrobe_removals(active, body, lock_restraints=True):
     """Infer clothing REMOVALS from a beat's own action text, so you don't have
     to write a 'wardrobe:' line at all -- "she takes off her jacket" drops the
     jacket by itself.
@@ -797,6 +848,10 @@ def auto_wardrobe_removals(active, body):
             for name in ([tgt] if tgt else list(active.keys())):
                 for it in list(active.get(name, [])):
                     if it.strip().lower() in _PRO:
+                        continue
+                    # A restraint is a plot state, not a garment. Prose never takes
+                    # one off; only an explicit 'wardrobe: Name -= handcuffs' does.
+                    if lock_restraints and is_restraint(it):
                         continue
                     if _item_mentioned(it, window):
                         active[name] = [x for x in active[name] if x != it]
@@ -2261,7 +2316,8 @@ def speech_flags(beats):
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
                            notes_out=None, auto_props=True, prevent_nudity=True,
-                           exposed_terms="", strip_out=None, anatomy_guard=False):
+                           exposed_terms="", strip_out=None, anatomy_guard=False,
+                           lock_restraints=True):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2371,11 +2427,16 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # END state, and the direction between them is stated outright below.
         if auto_wardrobe:
             before = {k: list(v) for k, v in active.items()}
-            active = _drop(before, auto_wardrobe_removals(active, body))
+            active = _drop(before, auto_wardrobe_removals(active, body, lock_restraints))
             # A garment that lives ONLY in the anchor prose (never in the wardrobe
             # channel): the removal phrase names it, so scrub it from the anchor or
             # the anchor re-applies it forever.
             anchor_gone = removed_phrase_items(body, anchor_id)
+            # Same rule on the anchor side: a restraint named in the anchor prose is
+            # not scrubbed by a removal phrase either, or it would vanish from every
+            # later shot without anything having asked for it.
+            if lock_restraints:
+                anchor_gone = [it for it in anchor_gone if not is_restraint(it)]
             removed += anchor_gone
             # Voice the anchor-side removal only when the channel didn't already cover
             # it, or the same jacket is announced twice.
@@ -4264,6 +4325,17 @@ class H3LongVideos:
                                "(shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. "
                                "Override any single beat with 'seconds: 8' on its own line inside that "
                                "paragraph -- that wins over everything, including this toggle."}),
+                "lock_restraints": ("BOOLEAN", {"default": True,
+                    "tooltip": "Physical restraints stay ON until something explicitly removes them. "
+                               "Handcuffs, shackles, manacles, fetters, irons, gags, blindfolds, "
+                               "harnesses, leashes, plus qualified forms like 'ankle chain' or "
+                               "'leather wrist straps'. Without this they come off like any garment, "
+                               "and often by ACCIDENT -- 'steps out of her jacket and the chain falls "
+                               "away' removed the ankle chain as a side effect of a jacket beat. To "
+                               "take one off, say so directly: 'wardrobe: Mara -= handcuffs'. Bare "
+                               "'chain', 'collar', 'strap' and 'belt' are NOT treated as restraints; "
+                               "they are jewellery, a shirt part, a dress part and a garment at least "
+                               "as often."}),
                 "anatomy_guard": (["off", "auto", "on"], {"default": "auto",
                     "tooltip": "State each person's limb COUNT positively, to stop spare arms and "
                                "duplicated hands. H3 is CFG-free at cfg 1, so a NEGATIVE prompt is "
@@ -4413,7 +4485,7 @@ class H3LongVideos:
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
-            exposed_terms="", anatomy_guard="auto",
+            exposed_terms="", anatomy_guard="auto", lock_restraints=True,
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
@@ -4635,7 +4707,8 @@ class H3LongVideos:
                                       lora_on, notes_out=wardrobe_notes, auto_props=auto_props,
                                       prevent_nudity=prevent_nudity,
                                       exposed_terms=exposed_terms, strip_out=strip_shots,
-                                      anatomy_guard=anatomy_on)
+                                      anatomy_guard=anatomy_on,
+                                      lock_restraints=lock_restraints)
 
         if plan_only:
             # Preview the split using THIS node's own settings -- no render, near-instant.
