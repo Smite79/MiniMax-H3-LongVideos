@@ -3499,6 +3499,28 @@ def balanced_shift(steps):
 # Anything else on the live model came from somewhere deliberate.
 H3_BASE_SHIFT, H3_BASE_AUDIO_SHIFT = 12.0, 3.0
 
+# What auto_shift last wrote into each node's widgets, so a widget still holding
+# that value is recognised as OURS rather than as a user decision. Module-level: it
+# must outlive the node instance, which ComfyUI recreates per execution.
+_AUTO_SHIFT_SET = {}
+
+
+def _with_shift_ui(result, shift_video, shift_audio, changed):
+    """Wrap a return so the frontend can write the shifts back into the widgets.
+
+    A node cannot set a widget from Python -- widgets are frontend state and run()
+    only ever RECEIVES them. Without this, auto_shift left the graph lying: the
+    widget still read 12/3 while the render used 1.89/0.47, so a saved workflow did
+    not describe the render that produced it.
+
+    comfy/execution.py:359 delivers a returned `ui` dict to the frontend in the
+    `executed` event; web/js/autoshift.js listens for it and assigns the widgets.
+    `result` is passed through untouched, so nothing downstream changes."""
+    if not changed:
+        return result
+    return {"ui": {"h3_shift": [float(shift_video), float(shift_audio)]},
+            "result": result}
+
 
 def model_declared_shift(model):
     """(shift, audio_shift) currently on the model, or (None, None).
@@ -3535,7 +3557,17 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
     The audio shift moves WITH the video one, preserving H3's 4:1 audio_scale. That
     coupling is not optional on ComfyUI 0.31+ -- flattening the ratio breaks the
     audio branch, which is exactly what a bare shift_video change did."""
-    if abs(float(shift_video) - 12.0) > 1e-6 or abs(float(shift_audio) - 3.0) > 1e-6:
+    # "Still at the defaults" is not enough once the values are written BACK into the
+    # widgets: after one run they hold 1.89/0.47, which would read as a user choice
+    # and stop this from ever deriving again -- so changing `steps` from 4 to 8 would
+    # silently keep the 4-step shift. What we last wrote for this node is recorded, so
+    # a widget still holding it counts as ours; anything else was typed by the user.
+    ours = _AUTO_SHIFT_SET.get(str(node_id))
+    at_default = (abs(float(shift_video) - 12.0) <= 1e-6
+                  and abs(float(shift_audio) - 3.0) <= 1e-6)
+    is_ours = bool(ours and abs(float(shift_video) - ours[0]) <= 1e-6
+                   and abs(float(shift_audio) - ours[1]) <= 1e-6)
+    if not (at_default or is_ours):
         return shift_video, shift_audio, ""      # user has set these; leave them alone
     # The MODEL may already declare a shift of its own -- a repacked checkpoint whose
     # config carries different sampling_settings, or an upstream
@@ -3573,6 +3605,7 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
     # The share to quote is what the DEFAULTS would have done -- that is the thing
     # being fixed. Quoting the new shift's share just restates the target.
     was = flow_step_shares(12.0, int(steps))
+    _AUTO_SHIFT_SET[str(node_id)] = (sv, sa)
     return sv, sa, (
         f"a {trained}-step distill LoRA is loaded and steps={int(steps)}, so shift_video "
         f"{sv:g} / shift_audio {sa:g} were set automatically. The 12/3 defaults are for the "
@@ -5115,9 +5148,11 @@ class H3LongVideos:
             # correctly-SHAPED empty one rather than None: a downstream LATENT input
             # would choke on None, and this keeps the preview wireable exactly like
             # a real run.
-            return (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
-                    sum(plan_lens), shots, total, float(fps), int(fps),
-                    _empty_av_latent(w, h, 5, fps)[0])
+            return _with_shift_ui(
+                (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
+                 sum(plan_lens), shots, total, float(fps), int(fps),
+                 _empty_av_latent(w, h, 5, fps)[0]),
+                shift_video, shift_audio, bool(shift_note))
 
         spk = speech_flags(beats)          # which shots have real (quoted) dialogue
         vram_trace = []                    # free VRAM after each shot
@@ -5466,9 +5501,11 @@ class H3LongVideos:
                 + (f" Adjusted: {'; '.join(backoff)}." if backoff else ""))
         # frames_per_shot is a single INT for a now-variable series: report the LONGEST
         # shot, which is what a downstream consumer must be able to hold.
-        return (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
-                max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
-                float(fps), int(fps), latent_out)
+        return _with_shift_ui(
+            (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
+             max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
+             float(fps), int(fps), latent_out),
+            shift_video, shift_audio, bool(shift_note))
 
 
 # REF2VA registers under its OWN key. The FL2VA pack one directory up keeps

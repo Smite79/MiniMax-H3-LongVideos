@@ -2613,9 +2613,12 @@ def check_latent_output():
 
     # Every return path must carry the same arity, or ComfyUI errors on unpack.
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    # Both returns are now wrapped by _with_shift_ui() so the frontend can write the
+    # derived shifts back into the widgets, which changed their indentation.
     check("the plan_only path returns a latent too",
-          "float(fps), int(fps),\n                    _empty_av_latent(" in src)
-    check("the render path returns latent_out", "float(fps), int(fps), latent_out)" in src)
+          "float(fps), int(fps),\n                 _empty_av_latent(" in src)
+    check("the render path returns latent_out", "float(fps), int(fps), latent_out)," in src)
+    check("both returns go through the ui wrapper", src.count("_with_shift_ui(\n") == 2)
     # It must never be None -- a downstream LATENT input cannot take that.
     check("plan_only emits a real empty latent, not None",
           "_empty_av_latent(w, h, 5, fps)[0])" in src)
@@ -2751,6 +2754,37 @@ def check_auto_shift():
     check("...and before the audio-ratio guard",
           0 < i_set < src.find("audio_ratio_note = (audio_scale_note(shift_video"))
     check("auto_shift is an appended widget", "auto_shift" in S.ADDED_WIDGETS)
+
+    # --- writing the values back into the widgets --------------------------------
+    # A node cannot set a widget from Python, so the derived values are returned in
+    # a `ui` dict and web/js/autoshift.js assigns them. Without that the graph lied:
+    # the widget read 12/3 while the render used 1.89/0.47.
+    check("nothing is emitted when the shifts were not changed",
+          S._with_shift_ui(("a",), 12.0, 3.0, False) == ("a",))
+    wrapped = S._with_shift_ui(("a",), 1.89, 0.47, True)
+    check("the derived values are emitted for the frontend",
+          wrapped["ui"]["h3_shift"] == [1.89, 0.47])
+    check("...and the result passes through untouched", wrapped["result"] == ("a",))
+    check("the web directory is registered",
+          os.path.isdir(os.path.join(_HERE, "web")))
+    check("the extension is present",
+          os.path.isfile(os.path.join(_HERE, "web", "js", "autoshift.js")))
+
+    # Writing back would DISABLE the feature -- the widget would then hold a
+    # non-default value and read as a user choice -- so what was written is recorded
+    # and recognised on the next run. Otherwise changing steps 4 -> 8 would silently
+    # keep the 4-step shift.
+    S._AUTO_SHIFT_SET.clear()
+    sv1, sa1, _ = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)
+    check("run 1 derives from the defaults", abs(sv1 - 1.89) < 0.05)
+    sv2, _, _ = S.auto_shift_for(4, chain(TURBO), "9", sv1, sa1)
+    check("run 2 recognises its own value rather than stopping", abs(sv2 - sv1) < 1e-6)
+    sv3, _, _ = S.auto_shift_for(8, chain(TURBO), "9", sv1, sa1)
+    check("changing steps RE-DERIVES rather than keeping the old shift",
+          abs(sv3 - 4.42) < 0.05)
+    check("a value the user typed still stops it",
+          S.auto_shift_for(8, chain(TURBO), "9", 5.0, 1.25) == (5.0, 1.25, ""))
+    S._AUTO_SHIFT_SET.clear()
 
     # --- the MODEL may declare its own shift -------------------------------------
     # A repacked checkpoint whose config carries different sampling_settings, or an

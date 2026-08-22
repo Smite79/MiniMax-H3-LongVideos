@@ -161,6 +161,12 @@ rendering**. Do that first; it is near-instant.
   *"the model already declares shift_video 8 … a 4-step run would want ~1.89."*
   You settle it by typing a shift, which outranks both.
 
+  The derived values are **written into the widgets** after the run, so the graph
+  matches what rendered and a saved workflow reproduces it. That needs a small
+  frontend script (`web/js/autoshift.js`) because a node cannot set a widget from
+  Python. The node records what it wrote, so changing `steps` re-derives — only a
+  value *you* type stops it.
+
   `shift_audio` moves *with* it, holding `audio_scale` at 4.0 — flattening that
   ratio breaks the audio branch. **Type either shift by hand and this stops**: a
   value you set is a decision and is never overridden.

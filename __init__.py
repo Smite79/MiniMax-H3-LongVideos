@@ -43,4 +43,11 @@ from .inspector import NODE_CLASS_MAPPINGS as _i_c, NODE_DISPLAY_NAME_MAPPINGS a
 
 NODE_CLASS_MAPPINGS = {**_s_c, **_sl_c, **_i_c}
 NODE_DISPLAY_NAME_MAPPINGS = {**_s_d, **_sl_d, **_i_d}
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+
+# web/js/autoshift.js writes auto-derived flow shifts back into the widgets. A node
+# cannot set a widget from Python -- widgets are frontend state and run() only
+# receives them -- so without this the graph would claim 12/3 while the render used
+# the derived values, and a saved workflow would not describe its own output.
+WEB_DIRECTORY = "./web"
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
