@@ -3510,6 +3510,47 @@ def kernel_backend_note(model):
 # count under it, and then it does so invisibly: nothing errors, the picture just
 # comes back soft and painterly because one enormous final jump cannot resolve fine
 # detail. Cheap to detect, so detect it.
+def shot_latent_cells(w, h, frames, fps):
+    """Latent cells in one shot: what sampling VRAM actually scales with.
+
+    Not a byte figure -- the constant depends on the quantisation path -- but it is
+    exactly linear in both shot length and area, so ratios between settings are
+    right even though the absolute number is not a prediction."""
+    _, lt, _ = temporal_shape(frames, fps)
+    return max(1, int(lt)) * max(1, w // 16) * max(1, h // 16)
+
+
+def sampling_oom_help(w, h, frames, fps, megapixels=0.0):
+    """What to change, in this shot's own numbers, after a SAMPLING OOM.
+
+    Tiling is a decode setting and cannot help here, so the generic "try tiling"
+    advice is worse than useless -- it costs another full sampling pass before
+    failing the same way. Give the two levers that do change sampling cost, each
+    priced from the shot that just failed."""
+    now = shot_latent_cells(w, h, frames, fps)
+    secs = frames / float(fps or 24)
+    out = [f"This is a SAMPLING out-of-memory, not a decode one, so tiled decode "
+           f"cannot help it. The shot is {w}x{h} x {frames}f (~{secs:.1f}s) = "
+           f"{now:,} latent cells, and sampling cost scales linearly with that."]
+    opts = []
+    for cut in (10.0, 7.0):
+        if cut < secs - 0.4:
+            f2 = align_frame_count(int(round(cut * (fps or 24))))
+            opts.append(f"shot_seconds {cut:g} ({f2}f) is "
+                        f"{100 - shot_latent_cells(w, h, f2, fps) * 100 // now}% smaller")
+    if megapixels:
+        for mp in (0.5, 0.35):
+            if mp < megapixels - 0.02:
+                w2, h2 = scale_to_megapixels(w, h, mp)
+                opts.append(f"megapixels {mp:g} ({w2}x{h2}) is "
+                            f"{100 - shot_latent_cells(w2, h2, frames, fps) * 100 // now}% smaller")
+    if opts:
+        out.append("Options: " + "; ".join(opts) + ".")
+    out.append("Shot length is the stronger lever on a chain, because every shot pays it. "
+               "H3's own cap is 362 frames and this shot is at or near it.")
+    return " ".join(out)
+
+
 def flow_step_shares(shift, steps, timesteps=1000):
     """Fraction of total denoising each sampler step performs.
 
@@ -3673,8 +3714,13 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
     ours = _AUTO_SHIFT_SET.get(str(node_id))
     at_default = (abs(float(shift_video) - 12.0) <= 1e-6
                   and abs(float(shift_audio) - 3.0) <= 1e-6)
-    is_ours = bool(ours and abs(float(shift_video) - ours[0]) <= 1e-6
-                   and abs(float(shift_audio) - ours[1]) <= 1e-6)
+    # Compare with the widget's own precision, not float-exact. The frontend stores
+    # what it can represent, so writing 1.89/0.47 into widgets that round left them
+    # holding 1.9/0.5 -- which then matched neither the defaults nor what was
+    # recorded, so the next run declined with "you set these yourself". The widgets
+    # are 0.01 now, and this absorbs the display rounding either way.
+    is_ours = bool(ours and abs(float(shift_video) - ours[0]) <= 0.05
+                   and abs(float(shift_audio) - ours[1]) <= 0.05)
     if not (at_default or is_ours):
         # Leave them alone -- but SAY so. This is the path that actually fires in
         # practice (one widget nudged away from the default, e.g. shift_audio 4.0
@@ -4722,10 +4768,12 @@ class H3LongVideos:
                     "tooltip": "Patch ModelSamplingMiniMaxH3 (the dual video/audio schedule) inside the "
                                "node so you don't have to wire it upstream. Without it, H3's audio comes "
                                "out as gibberish. Turn OFF only if you patch it yourself upstream."}),
-                "shift_video": ("FLOAT", {"default": 12.0, "min": 1.0, "max": 32.0, "step": 0.5,
+                "shift_video": ("FLOAT", {"default": 12.0, "min": 1.0, "max": 32.0, "step": 0.01,
+                    "round": 0.01,
                     "tooltip": "Video flow shift. 12 = base H3 (correct default). A low-step MXFP8 "
                                "checkpoint wants ~8. Only used when apply_model_sampling is on."}),
-                "shift_audio": ("FLOAT", {"default": 3.0, "min": 0.25, "max": 16.0, "step": 0.25,
+                "shift_audio": ("FLOAT", {"default": 3.0, "min": 0.25, "max": 16.0, "step": 0.01,
+                    "round": 0.01,
                     "tooltip": "Audio flow shift. 3 = base H3. COUPLED to shift_video on ComfyUI "
                                "0.31+: the audio latent rides the video schedule scaled by "
                                "audio_scale = shift_video / shift_audio (12/3 = 4). Flattening that "
@@ -5040,8 +5088,17 @@ class H3LongVideos:
         # Conditioning is built, so the text encoder and VAEs are dead weight for the
         # whole sampling loop -- evict them and keep only the DiT on the card.
         _evict_all_but(model)
-        (out,) = nodes.common_ksampler(model, seed, steps, cfg, sn, sch, positive, negative,
-                                       latent, denoise=denoise)
+        try:
+            (out,) = nodes.common_ksampler(model, seed, steps, cfg, sn, sch, positive, negative,
+                                           latent, denoise=denoise)
+        except Exception as e:
+            # Mark WHERE this failed. `tiled` only affects the DECODE, so the caller's
+            # OOM retry cannot help an OOM raised here -- it just re-runs the whole
+            # sampling pass and fails the same way, which on a 362-frame shot is four
+            # more minutes for nothing.
+            if _is_oom(e):
+                e._h3_stage = "sampling"
+            raise
         # Keep a CPU copy of the sampled latent BEFORE decoding, for the `latent`
         # output. Latents are ~1000x smaller than the frames they decode to (a
         # 1344x768 124f shot is ~1.5MB against ~1.5GB), so carrying one per shot for
@@ -5485,6 +5542,13 @@ class H3LongVideos:
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+                    if _is_oom(e) and getattr(e, "_h3_stage", "") == "sampling":
+                        # Retrying with tiles would re-run the whole sampling pass and
+                        # fail identically. Fail now, and say what actually shrinks it.
+                        raise RuntimeError(
+                            f"H3 Long Videos: shot {i + 1} of {len(gens)} ran out of VRAM "
+                            f"while sampling. " + sampling_oom_help(w, h, ln_i, fps, megapixels)
+                        ) from e
                     if not _is_oom(e) or tiled:
                         raise
                     mm.soft_empty_cache(True); tiled = True; backoff.append(f"shot {i+1}: tiled")

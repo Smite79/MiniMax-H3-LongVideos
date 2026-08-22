@@ -2902,6 +2902,35 @@ def check_auto_shift():
     check("600 is still not read as a step count",
           S._LORA_STEPS.search("minimax_h3_turbo_v4_step600_ema_pruned") is None)
 
+    # The widget rounds what it is given. Writing 1.89/0.47 into widgets stepped at
+    # 0.5/0.25 left them holding 1.9/0.5, which matched neither the defaults nor what
+    # was recorded -- so the very next run declined with "you set these yourself" and
+    # the feature switched itself off after one successful run.
+    check("the shift widgets can hold a 2dp derived value",
+          '"step": 0.01' in src and '"round": 0.01' in src)
+    S._AUTO_SHIFT_SET.clear()
+    _sv, _sa, _ = S.auto_shift_for(4, chain(TURBO), "9", 12.0, 3.0)
+    check("a display-rounded value is still recognised as ours",
+          abs(S.auto_shift_for(4, chain(TURBO), "9", round(_sv, 1), round(_sa, 1))[0]
+              - _sv) < 1e-6)
+
+    # --- a SAMPLING oom cannot be tiled away -------------------------------------
+    _help = S.sampling_oom_help(864, 864, 362, 24, 0.7)
+    check("the oom advice says tiling will not help", "tiled decode cannot help" in _help)
+    check("...and prices the shot in its own numbers", "864x864" in _help and "362f" in _help)
+    check("...and offers a shorter shot", "shot_seconds 10" in _help)
+    check("...and a smaller frame", "megapixels 0.5" in _help)
+    check("cost is linear in shot length",
+          abs(S.shot_latent_cells(864, 864, 362, 24)
+              / S.shot_latent_cells(864, 864, 181, 24) - 2.0) < 0.15)
+    check("cost falls with area",
+          S.shot_latent_cells(608, 608, 362, 24) < S.shot_latent_cells(864, 864, 362, 24))
+    check("a sampling oom is tagged at the sampling site", 'e._h3_stage = "sampling"' in src)
+    check("...and is not retried with tiles",
+          'getattr(e, "_h3_stage", "") == "sampling"' in src)
+    check("a shot already at the minimum is not offered a longer 'cut'",
+          "shot_seconds" not in S.sampling_oom_help(864, 864, 124, 24, 0.0))
+
     # --- stacked LoRA loaders ----------------------------------------------------
     # Only a bare filename under a key containing "lora" used to be recognised.
     # Stacked loaders do not work that way: DaSiWa packs every LoRA into ONE json
