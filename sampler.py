@@ -756,6 +756,84 @@ def is_restraint(item):
     return bool(_RESTRAINT_NOUN.search(name) and _RESTRAINT_QUALIFIER.search(name))
 
 
+# What a restraint DOES, once it is on. Keeping the item in the wardrobe list only
+# says it exists; nothing there says the body cannot move freely, so H3 renders a
+# cuffed character walking with their arms swinging. The restraint is present and
+# doing nothing -- which reads as it having broken.
+#
+# Stated as a POSITIVE physical state, the same as the mouth state and the limb
+# count. "cannot move her arms" is a negation and a weak cue; "her wrists stay
+# together in front of her" describes a pose the model can actually render.
+#
+# Keyed by the body region the restraint binds, so two wrist restraints produce one
+# clause rather than two competing ones.
+_RESTRAINT_EFFECT = {
+    "wrists": "the wrists stay bound close together, the arms moving as one and never "
+              "swinging apart",
+    "ankles": "the ankles stay bound close together, steps short and shuffling, the legs "
+              "never striding apart",
+    "mouth":  "the mouth stays covered and the jaw still",
+    "eyes":   "the eyes stay covered, the head turning toward sound rather than sight",
+    "body":   "the body stays held by the restraint, movement limited and tethered",
+}
+# Which region each restraint binds. Checked against the item's full name, so
+# "ankle chain" and "leg irons" both reach `ankles`.
+_RESTRAINT_REGION = (
+    ("mouth",  re.compile(r"\b(?:gag|gagged|muzzle|muzzled)\b", re.I)),
+    ("eyes",   re.compile(r"\b(?:blindfold|blindfolded|hood|hooded)\b", re.I)),
+    ("ankles", re.compile(r"\b(?:ankle|ankles|leg|legs|hobble|feet|foot)\b", re.I)),
+    ("wrists", re.compile(r"\b(?:handcuff|handcuffs|cuff|cuffs|wrist|wrists|manacle|"
+                          r"manacles|thumb|arm|arms)\b", re.I)),
+)
+
+
+def restraint_regions(items):
+    """Body regions currently bound, for everything this person is wearing.
+
+    A restraint with no region of its own ("shackles", "fetters", "restraints")
+    falls back to `body`, which says movement is limited without claiming to know
+    which limb. Guessing a specific limb there would be worse than saying less."""
+    out = []
+    for it in items or []:
+        if not is_restraint(it):
+            continue
+        name = _item_name(it)
+        for region, rx in _RESTRAINT_REGION:
+            if rx.search(name):
+                if region not in out:
+                    out.append(region)
+                break
+        else:
+            if "body" not in out:
+                out.append("body")
+    return out
+
+
+def restraint_clause(active, body, lock_restraints=True):
+    """State what each restrained person's body cannot do, for the people in shot.
+
+    Only for someone actually referenced in the beat -- describing a bound body in
+    a shot that person is not in would summon them into it, which is the same
+    failure the mouth state and the limb count are both gated against."""
+    if not lock_restraints:
+        return ""
+    bits = []
+    for name, items in (active or {}).items():
+        regions = restraint_regions(items)
+        if not regions:
+            continue
+        if name and not person_referenced(body, name, active):
+            continue
+        subj = _subject_term(name, active) if name else "the subject"
+        # `their` rather than a repeated name: naming someone twice in a shot is
+        # what renders them twice.
+        effects = "; ".join(_RESTRAINT_EFFECT[r] for r in regions)
+        bits.append(f"{subj} is physically restrained -- {effects}")
+    if not bits:
+        return ""
+    return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+
+
 def auto_wardrobe_removals(active, body, lock_restraints=True):
     """Infer clothing REMOVALS from a beat's own action text, so you don't have
     to write a 'wardrobe:' line at all -- "she takes off her jacket" drops the
@@ -2549,6 +2627,13 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # in a frame that has none can only invite one in.
         if anatomy_guard and people_here:
             persistent = persistent.rstrip(". ") + "." + ANATOMY_STATE
+        # What the restraints DO. Placed after the anatomy state so the limb count
+        # is established before the limits on it, and gated on the same presence
+        # test -- a bound body described in a shot with nobody in it invites one.
+        if lock_restraints and people_here:
+            rc = restraint_clause(active, body, lock_restraints)
+            if rc:
+                persistent = persistent.rstrip(". ") + "." + rc
         silent_shot = no_speech
         block = f"[Generation {gi}] {persistent}".strip()
         # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is

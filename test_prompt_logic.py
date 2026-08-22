@@ -2347,6 +2347,50 @@ def check_restraints_stay_on():
           "handcuff" not in worn_items(g[5]) and "ankle chain" not in worn_items(g[5]))
     check("lock_restraints is an appended widget", "lock_restraints" in S.ADDED_WIDGETS)
 
+    # --- and what the restraint DOES once it is on -----------------------------
+    # Keeping the item in the wardrobe list only says it exists. Nothing there says
+    # the body cannot move freely, so a cuffed character walks with arms swinging --
+    # the restraint present and doing nothing, which reads as having broken.
+    for item, region in [("steel handcuffs", "wrists"), ("wrist ties", "wrists"),
+                         ("thumb cuffs", "wrists"), ("ankle chain", "ankles"),
+                         ("leg irons", "ankles"), ("hobble", "ankles"),
+                         ("ball gag", "mouth"), ("blindfold", "eyes")]:
+        check(f"{item!r} binds the {region}", S.restraint_regions([item]) == [region])
+    # No region of its own -- say movement is limited without guessing a limb.
+    for item in ["shackles", "fetters", "harness"]:
+        check(f"{item!r} falls back to a general body constraint",
+              S.restraint_regions([item]) == ["body"])
+    check("a garment binds nothing", S.restraint_regions(["red jacket"]) == [])
+    check("two wrist restraints give ONE clause, not two",
+          S.restraint_regions(["steel handcuffs", "wrist ties"]) == ["wrists"])
+
+    # Positive physical state, never a negation -- "cannot move her arms" is a weak
+    # cue; "the wrists stay bound close together" is a pose the model can render.
+    eff = " ".join(S._RESTRAINT_EFFECT.values()).lower()
+    for bad in ("cannot", "can't", "unable", "no longer", "does not", "won't"):
+        check(f"the effect text never negates ({bad})", bad not in eff)
+
+    cm2 = ("Mara = she, 30, blonde, steel handcuffs, ankle chain\n"
+           "Jon = he, 35, bald, navy overalls")
+    beats2 = ["Mara and Jon stand in the room.", "Mara walks toward the door.",
+              "Jon opens the door.", "The hangar lights flicker.",
+              "Mara is freed.\nwardrobe: Mara -= handcuffs, ankle chain",
+              "Mara stretches her arms."]
+    r = S.distribute_generations("A room.", beats2, "", "", cm2)
+    said = ["physically restrained" in s for s in r]
+    check("a restrained person in shot gets the constraint", said[0] and said[1])
+    check("...naming both bound regions",
+          "wrists stay bound" in r[0] and "ankles stay bound" in r[0])
+    check("...by pronoun, not by re-naming her", "She is physically restrained" in r[0])
+    check("a shot she is not in gets no constraint", not said[2])
+    check("a scenery beat gets none", not said[3])
+    check("the freeing shot drops it", not said[4])
+    check("...and it stays gone", not said[5])
+    check("lock_restraints=False suppresses it entirely",
+          not any("physically restrained" in s for s in
+                  S.distribute_generations("A room.", beats2, "", "", cm2,
+                                           lock_restraints=False)))
+
 
 def check_anatomy_guard():
     """Limb counts stated POSITIVELY, because a negative cannot work here.

@@ -97,7 +97,12 @@ rendering**. Do that first; it is near-instant.
   removal window reaches any tracked item near the cue. To take one off, say so
   directly: `wardrobe: Mara -= handcuffs`. Bare `chain`, `collar`, `strap` and
   `belt` are **not** treated as restraints — they are jewellery, a shirt part, a
-  dress part and a garment at least as often.
+  dress part and a garment at least as often. It also states what the restraint
+  **does**: a cuffed character otherwise walks with their arms swinging, because
+  nothing said the body could not move freely — the restraint present and inert,
+  which reads as it having broken. The clause names the bound region positively
+  (`the wrists stay bound close together, the arms moving as one`), only for people
+  actually in the shot, and it disappears the moment the restraint is removed.
 - **Uncovered zones.** The node tracks two body zones, `lower` and `upper`. When a
   removal leaves one with nothing on it, it keeps that state **stated** in every
   later shot until something covers the zone again — because deleting a garment is
