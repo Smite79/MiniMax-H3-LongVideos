@@ -359,7 +359,10 @@ def check_overlay_resolutions():
     _s.loader.exec_module(OV)
 
     presets = [S.parse_resolution(o) for o in S.resolution_options()]
-    check("all three tiers x six ratios are offered", len(presets) == 18)
+    check("every aspect ratio is offered, size comes from megapixels",
+          len(presets) == len(S.NATIVE_RES))
+    check("every ratio resolves to a legal /32 reference size",
+          all(w % 32 == 0 and h % 32 == 0 for w, h in presets))
 
     cases = [("watermark", "(c) H3 Studios 2026", 4.0, 3.0, False),
              ("intro", "THE GARAGE", 9.0, 6.0, True),
@@ -2507,8 +2510,25 @@ def check_megapixel_sizing():
     check("...positioned immediately after resolution",
           req.index("megapixels") == req.index("resolution") + 1)
     check("...and NOT appended at the end", "megapixels" not in S.ADDED_WIDGETS)
-    check("the resolution list is still the 18 short-edge presets",
-          len(S.resolution_options()) == 18)
+    # The dropdown is ASPECT RATIOS only now; size comes entirely from megapixels.
+    check("the resolution list is bare aspect ratios",
+          all(":" in o and "x" not in o for o in S.resolution_options()))
+    check("every landscape ratio has its portrait transpose",
+          all(f"{b}:{a}" in S.NATIVE_RES for a, b in
+              (o.split(":") for o in S.resolution_options()) if a != b))
+    # A workflow saved with an old "16:9 - 1344x768 (native)" label must still
+    # resolve to that shape rather than silently falling back to the first entry.
+    check("a legacy sized label still resolves",
+          S.parse_resolution("16:9 - 1344x768 (native)") == (1344, 768))
+    check("a legacy fast-tier label still resolves",
+          S.parse_resolution("1:1 - 512x512 (fast, upscale later)") == (512, 512))
+    check("an unknown label falls back to 16:9",
+          S.parse_resolution("nonsense") == S.NATIVE_RES["16:9"])
+    # megapixels can no longer be 0: a bare ratio has no size to fall back to.
+    _req = S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["required"]
+    check("megapixels has a non-zero floor", _req["megapixels"][1]["min"] > 0)
+    check("...and defaults to the native budget",
+          _req["megapixels"][1]["default"] == 1.0)
     check("run() accepts it", "megapixels" in
           __import__("inspect").signature(
               S.NODE_CLASS_MAPPINGS["H3LongVideos"].run).parameters)

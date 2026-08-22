@@ -62,11 +62,10 @@ Dom = he, tall, 35, brunette, white t-shirt, blue jeans, work boots
 Mara = she, 30, red hair, grey coat, black jeans
 ```
 
-**3. `resolution` + `megapixels`** — the preset picks the **shape**, the budget
-picks the **size**. Start at `1.0` (= 1024×1024 worth of pixels), where every
-native preset reproduces its own dimensions, and step down for speed, VRAM and
-longer shots. `0` uses the preset verbatim. Full explanation and a size table:
-[Resolution and megapixels](#resolution-and-megapixels).
+**3. `resolution` + `megapixels`** — the dropdown picks the **shape**, the number
+picks the **size**. They are independent: changing aspect ratio does not change
+cost. `1.0` = 1024×1024 worth of pixels (ComfyUI's own convention), and at 1.00
+every ratio lands on H3's native size. Step down for speed, VRAM and longer shots.
 
 **4. `shot_seconds`** — a **ceiling**, not the length of every shot. Leave it at 0
 to let the VRAM budget decide.
@@ -166,24 +165,25 @@ count stay put when you change shape.
 
 ### Start at 1.00, then step down
 
-At **1.00MP** every native preset reproduces its own dimensions, so it is the
-natural starting point. Lower budgets buy speed, VRAM headroom and longer shots
-(the shot-length budget is resolution-aware and rescales automatically).
+At **1.00MP** every ratio reproduces H3's native dimensions, so it is the natural
+starting point. Lower budgets buy speed, VRAM headroom and longer shots — the
+shot-length budget is resolution-aware and rescales automatically.
 
-| preset | 1.20MP | 1.00MP | 0.83MP | 0.65MP | 0.52MP | 0.36MP |
-|---|---|---|---|---|---|---|
-| `16:9 - 1344x768` | 1472×832 | 1344×768 | 1248×704 | 1088×640 | 992×544 | 800×480 |
-| `9:16 - 768x1344` | 832×1472 | 768×1344 | 704×1248 | 640×1088 | 544×992 | 480×800 |
-| `4:3 - 1024x768` | 1280×960 | 1184×896 | 1088×800 | 960×704 | 864×640 | 704×544 |
-| `3:4 - 768x1024` | 960×1280 | 896×1184 | 800×1088 | 704×960 | 640×864 | 544×704 |
-| `1:1 - 768x768` | 1120×1120 | 1024×1024 | 928×928 | 832×832 | 736×736 | 608×608 |
-| `21:9 - 1536x672` | 1696×736 | 1536×672 | 1408×608 | 1248×544 | 1120×480 | 928×416 |
+| ratio | 0.44MP | 0.65MP | 1.00MP | 1.20MP |
+|---|---|---|---|---|
+| `16:9` | 896×512 | 1088×640 | 1344×768 | 1472×832 |
+| `9:16` | 512×896 | 640×1088 | 768×1344 | 832×1472 |
+| `4:3` | 800×576 | 960×704 | 1184×896 | 1280×960 |
+| `3:4` | 576×800 | 704×960 | 896×1184 | 960×1280 |
+| `1:1` | 672×672 | 832×832 | 1024×1024 | 1120×1120 |
+| `21:9` | 1024×448 | 1248×544 | 1536×672 | 1696×736 |
+| `9:21` | 448×1024 | 544×1248 | 672×1536 | 736×1696 |
 
-On 16:9 those budgets walk the short edge down 832 → 768 → 704 → 640 → 544 → 480.
-The `balanced` and `fast` presets remain available and behave the same way — they
-simply start from a smaller shape.
+Those columns are roughly the old `fast` / `balanced` / `native` tiers, which were
+only ever three points on this axis. `megapixels` has no off-switch — a bare ratio
+has no size to fall back to — and its floor is 0.10.
 
-### The preset names are approximations
+### The ratio names are approximations
 
 Worth knowing, because it explains why scaling works the way it does:
 
@@ -192,8 +192,8 @@ Worth knowing, because it explains why scaling works the way it does:
 1536 / 672  = 2.286  ->  16:7   NOT 21:9, which is 2.333
 ```
 
-Scaling runs from the preset's **own dimensions**, not from the nominal ratio in
-its name. That is precisely what makes 1.00MP land exactly on 1344×768 rather than
+Scaling runs from each ratio's **reference dimensions**, not from the nominal
+ratio in its name. That is precisely what makes 1.00MP land exactly on 1344×768 rather than
 on 1376×768, which is where a true 16:9 at the same budget would put you.
 
 ### What gets reported

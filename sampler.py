@@ -124,6 +124,7 @@ NATIVE_RES = {
     "3:4":  (768, 1024),
     "1:1":  (768, 768),
     "21:9": (1536, 672),
+    "9:21": (672, 1536),
 }
 # 512-short-edge "fast" tier: ~4x fewer pixels than native, for the generate-low-
 # then-upscale (LTX 2.3) workflow. Best for close/medium shots -- H3 distorts faces
@@ -164,28 +165,39 @@ FRAMES_BASELINE_GB = 10.91
 
 
 def resolution_options():
-    """All-preset, all-multiple-of-32 resolution list -- three short-edge tiers per
-    ratio: native 768 (best detail), balanced 640, and fast 512 (generate-then-
-    upscale). No custom entry: every option is a valid H3 size, so nothing to snap
-    or mis-type. The length budget is resolution-aware, so lower tiers unlock
-    longer shots.
+    """ASPECT RATIOS only. `megapixels` decides the size.
 
-    Sizing by a PIXEL BUDGET instead lives in its own node, H3 Megapixel Size
-    (mp_size.py). It stays out of this list deliberately: a combo stores its value
-    in a saved workflow as the label STRING, so adding or re-wording entries here
-    is a compatibility event, and a separate node costs nobody anything."""
-    opts  = [f"{r} - {w}x{h} (native)" for r, (w, h) in NATIVE_RES.items()]
-    opts += [f"{r} - {w}x{h} (balanced)" for r, (w, h) in MID_RES.items()]
-    opts += [f"{r} - {w}x{h} (fast, upscale later)" for r, (w, h) in FAST_RES.items()]
-    return opts
+    Shape and size are independent, and the widgets now say so. This list used to
+    carry three short-edge tiers per ratio (native 768 / balanced 640 / fast 512),
+    which baked a SIZE into every label -- and once megapixels existed those labels
+    lied whenever it was on. Nothing is lost: the tiers were three points on the
+    megapixel axis (~0.98 / ~0.70 / ~0.44MP), and a continuous control reaches them
+    and everything between. MID_RES and FAST_RES are kept only as the reference
+    anchors documented on them.
+
+    NATIVE_RES still supplies each ratio's exact shape, which is what makes 1.00MP
+    reproduce H3's own sizes: the ratio NAMES are approximations -- 1344x768 is
+    1.750, i.e. 7:4, NOT 16:9 (1.778) -- so scaling runs from the real dimensions
+    rather than the nominal ratio."""
+    return list(NATIVE_RES)
 
 
 def parse_resolution(choice):
-    """Read WxH from a preset label. All presets are valid multiples of 32, so
-    there's no custom path to snap. Falls back to 16:9 native if unrecognized."""
-    m = re.search(r"(\d+)\s*x\s*(\d+)", choice or "")
+    """The chosen ratio's reference dimensions, which `megapixels` then scales.
+
+    Accepts a bare ratio ("16:9") and ALSO the old "16:9 - 1344x768 (native)" form,
+    so a workflow saved before this list was simplified still resolves to the right
+    shape instead of silently falling back to the first entry. Unrecognized input
+    gives 16:9."""
+    text = (choice or "").strip()
+    if text in NATIVE_RES:
+        return NATIVE_RES[text]
+    m = re.search(r"(\d+)\s*x\s*(\d+)", text)          # legacy label carried its size
     if m:
         return int(m.group(1)), int(m.group(2))
+    for r in NATIVE_RES:                                # legacy label led with the ratio
+        if text.startswith(r):
+            return NATIVE_RES[r]
     return NATIVE_RES["16:9"]
 
 
@@ -3994,12 +4006,13 @@ class H3LongVideos:
                                "can be changed/removed mid-chain. Each later paragraph = one scene beat. "
                                "Put dialogue and 'lips closed' beats in the beat bodies."}),
                 "resolution": (resolution_options(), {
-                    "tooltip": "Preset, all multiples of 32. Three short-edge tiers per ratio: native 768 "
-                               "(best detail), balanced 640, fast 512 (generate-then-upscale). Lower tiers "
-                               "render faster, free VRAM, and unlock longer shots (budget is res-aware). "
-                               "When `megapixels` is above 0 this preset supplies the ASPECT RATIO only -- "
-                               "the budget decides the size."}),
-                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 8.0, "step": 0.01,
+                    "tooltip": "ASPECT RATIO only -- `megapixels` decides the size. The two are "
+                               "independent, so changing shape does not change cost. Each ratio uses "
+                               "H3's own dimensions as its reference, which is why 1.00MP reproduces "
+                               "the model's native sizes exactly (16:9 -> 1344x768, 21:9 -> 1536x672)."}),
+                # No off-switch any more: `resolution` is a bare ratio, so there are no
+                # preset dimensions to fall back to. The floor keeps every result legal.
+                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.10, "max": 4.0, "step": 0.01,
                     "tooltip": "Pixel BUDGET, applied to the preset's aspect ratio. 1.00 = 1024x1024 "
                                "worth of pixels, the same convention as ComfyUI's Scale Image to Total "
                                "Pixels. START at 1.00: every NATIVE preset reproduces its own size there "
