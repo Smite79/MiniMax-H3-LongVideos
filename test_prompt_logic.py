@@ -2802,18 +2802,22 @@ def check_auto_shift():
           S.auto_shift_for(4, chain(TURBO), "9", 6.0, 3.0) == (6.0, 3.0, ""))
     check("a hand-set shift_audio is never overridden",
           S.auto_shift_for(4, chain(TURBO), "9", 12.0, 1.5) == (12.0, 1.5, ""))
-    # No distill, nothing to match.
-    check("no LoRA leaves the defaults", S.auto_shift_for(4, chain(), "9", 12.0, 3.0)
-          == (12.0, 3.0, ""))
+    # No distill, nothing to match. The VALUES must stay put -- but not silently.
+    # Reporting nothing here is what made a working feature look broken: no widget
+    # movement, no console line, no note, nothing to tell the two states apart.
+    check("no LoRA leaves the defaults",
+          S.auto_shift_for(4, chain(), "9", 12.0, 3.0)[:2] == (12.0, 3.0))
+    check("...and explains why it did nothing",
+          "no distill/turbo LoRA" in S.auto_shift_for(4, chain(), "9", 12.0, 3.0)[2])
     check("a LoRA with no step count in its name leaves them",
-          S.auto_shift_for(4, chain("vagassist_e40.safetensors"), "9", 12.0, 3.0)
-          == (12.0, 3.0, ""))
+          S.auto_shift_for(4, chain("vagassist_e40.safetensors"), "9", 12.0, 3.0)[:2]
+          == (12.0, 3.0))
     # Already correct -> say nothing rather than announce a no-op.
     sv, sa, note = S.auto_shift_for(20, chain(TURBO), "9", 12.0, 3.0)
     check("at 20 steps the defaults are already right, and it stays silent",
           (sv, sa, note) == (12.0, 3.0, ""))
     check("a missing graph is handled",
-          S.auto_shift_for(4, None, None, 12.0, 3.0) == (12.0, 3.0, ""))
+          S.auto_shift_for(4, None, None, 12.0, 3.0)[:2] == (12.0, 3.0))
 
     # It must be applied BEFORE anything reads the shifts -- especially the model
     # sampling patch, which is what actually sets the schedule.
@@ -2868,9 +2872,39 @@ def check_auto_shift():
     check("run 1 derives from the defaults", abs(sv1 - 1.89) < 0.05)
     sv2, _, _ = S.auto_shift_for(4, chain(TURBO), "9", sv1, sa1)
     check("run 2 recognises its own value rather than stopping", abs(sv2 - sv1) < 1e-6)
+
     sv3, _, _ = S.auto_shift_for(8, chain(TURBO), "9", sv1, sa1)
     check("changing steps RE-DERIVES rather than keeping the old shift",
           abs(sv3 - 4.42) < 0.05)
+
+    # A distill LoRA whose filename carries no INFERENCE step count. In both of
+    # these 600 is a training checkpoint, so _LORA_STEPS rightly refuses it -- but
+    # the derived shift comes from the `steps` widget and the parsed count is only
+    # ever a gate, so rejecting these meant no shift AND no explanation.
+    for _name in ("minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro.safetensors",
+                  "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+                  "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors"):
+        S._AUTO_SHIFT_SET.clear()
+        _sv, _sa, _n = S.auto_shift_for(6, chain(_name), "9", 12.0, 3.0)
+        check(f"a distill LoRA fires without an inference step count: {_name[:34]}",
+              abs(_sv - 12.0) > 0.05 and abs(_sa - 3.0) > 0.05 and bool(_n))
+    check("600 is still not read as a step count",
+          S._LORA_STEPS.search("minimax_h3_turbo_v4_step600_ema_pruned") is None)
+
+    # Not firing must never be SILENT -- silence is indistinguishable from the
+    # feature being broken, which is exactly how it read.
+    S._AUTO_SHIFT_SET.clear()
+    _sv, _sa, _n = S.auto_shift_for(6, chain("vagassist_e40.safetensors"), "9", 12.0, 3.0)
+    check("a non-distill LoRA leaves the shifts alone", (_sv, _sa) == (12.0, 3.0))
+    check("...but says so, and names what it saw",
+          "no distill/turbo LoRA" in _n and "vagassist" in _n)
+    check("a missing graph is reported rather than passed over",
+          "graph was not available" in S.auto_shift_for(6, None, "9", 12.0, 3.0)[2])
+    check("the write-back is gated on the VALUES changing, not on a note existing",
+          "shift_changed = (abs(float(shift_video)" in src
+          and "bool(shift_note))" not in src)
+    check("the note also reaches the ComfyUI console",
+          'logging.info("[H3 Long Videos] %s.", shift_note)' in src)
     check("a value the user typed still stops it",
           S.auto_shift_for(8, chain(TURBO), "9", 5.0, 1.25) == (5.0, 1.25, ""))
     S._AUTO_SHIFT_SET.clear()

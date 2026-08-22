@@ -39,6 +39,7 @@ ldm/minimax/model.py, text_encoders/minimax.py, sd.py).
 """
 
 import gc
+import logging
 import math
 import os
 import re
@@ -3702,13 +3703,29 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
               f"The value came from the checkpoint's own config or an upstream "
               f"ModelSamplingMiniMaxH3 node. Set shift_video by hand to override either")
     names = upstream_lora_names(graph, node_id)
-    trained = None
+    trained, distill = None, False
     for raw in names:
-        m = _LORA_STEPS.search(os.path.basename(str(raw)))
+        base = os.path.basename(str(raw))
+        m = _LORA_STEPS.search(base)
         if m:
             trained = int(m.group(1))
-    if not trained:
-        return shift_video, shift_audio, ""
+        if m or _LORA_DISTILL.search(base):
+            distill = True
+    if not distill:
+        # SAY why nothing happened. Silence here is indistinguishable from the
+        # feature being broken, which is exactly how it read: no widget movement,
+        # no console line, no note. Name what was actually seen on the chain.
+        if graph is None or node_id is None:
+            return shift_video, shift_audio, (
+                "auto_shift is on but the workflow graph was not available, so the "
+                "LoRA chain could not be read. Set shift_video/shift_audio by hand")
+        seen = ", ".join(os.path.basename(str(n)) for n in names[-3:])
+        return shift_video, shift_audio, (
+            "auto_shift is on but no distill/turbo LoRA was found on the model chain, "
+            f"so the shifts were left at {shift_video:g}/{shift_audio:g}. "
+            + (f"LoRAs seen: {seen}" if seen else
+               "No LoRA loader was found feeding this node's model input")
+            + ". Only the model input is followed, so a LoRA wired elsewhere is ignored")
     sv = balanced_shift(int(steps))
     if not sv:
         return shift_video, shift_audio, ""
@@ -3719,8 +3736,9 @@ def auto_shift_for(steps, graph, node_id, shift_video, shift_audio, model=None):
     # being fixed. Quoting the new shift's share just restates the target.
     was = flow_step_shares(12.0, int(steps))
     _AUTO_SHIFT_SET[str(node_id)] = (sv, sa)
+    what = f"a {trained}-step distill LoRA" if trained else "a distill/turbo LoRA"
     return sv, sa, (
-        f"a {trained}-step distill LoRA is loaded and steps={int(steps)}, so shift_video "
+        f"{what} is loaded and steps={int(steps)}, so shift_video "
         f"{sv:g} / shift_audio {sa:g} were set automatically. The 12/3 defaults are for the "
         f"~20 steps H3 ships for; at {int(steps)} steps they put "
         f"{max(was) * 100:.0f}% of the denoising into a single step, which renders soft. "
@@ -4268,6 +4286,16 @@ def sla_pairing(model, graph, node_id):
 # Nothing here overrides a widget: a render must stay reproducible from what the
 # graph shows.
 _LORA_STEPS = re.compile(r"(?:^|[^a-z0-9])(\d{1,2})[ _-]?step", re.I)
+
+# A distill LoRA whose name does NOT carry an inference step count. Both of the
+# step600 builds are like this -- 600 is a TRAINING checkpoint, not a step count,
+# and _LORA_STEPS rightly refuses it. Gating auto_shift on the step count was
+# still wrong: the derived shift comes from the `steps` WIDGET, and the parsed
+# count is only ever a gate, so a distill LoRA that does not advertise its steps
+# got no shift and no explanation. Match the family instead.
+_LORA_DISTILL = re.compile(
+    r"turbo|distill|lightx2v|lightning|light_?x2v|lcm|hyper[ _-]?sd|dmd2?|"
+    r"(?:^|[^a-z0-9])(?:\d{1,2})[ _-]?step", re.I)
 _LORA_RES = re.compile(r"(?:^|[^a-z0-9])(\d{3,4})p(?:[^a-z0-9]|$)", re.I)
 
 
@@ -5043,10 +5071,20 @@ class H3LongVideos:
         # Match the shifts to the step count when a distill LoRA is loaded. Done
         # before every consumer -- the schedule warning, the audio-ratio guard and
         # apply_h3_model_sampling all have to see the values actually used.
-        shift_note = ""
+        shift_note, shift_changed = "", False
         if auto_shift:
+            _was = (float(shift_video), float(shift_audio))
             shift_video, shift_audio, shift_note = auto_shift_for(
                 steps, graph, node_id, shift_video, shift_audio, model)
+            # Gate the widget write-back on the VALUES changing, not on there being
+            # a note -- a note now also reports that nothing fired, and that must not
+            # trigger a graph-dirtying write of identical numbers.
+            shift_changed = (abs(float(shift_video) - _was[0]) > 1e-9
+                             or abs(float(shift_audio) - _was[1]) > 1e-9)
+            if shift_note:
+                # To the ComfyUI console as well. This lived only in the `plan` text
+                # output, so anyone not wiring that output up saw nothing at all.
+                logging.info("[H3 Long Videos] %s.", shift_note)
 
         # Patch the dual video/audio schedule onto the model here, so a missing
         # upstream ModelSamplingMiniMaxH3 can't silently produce gibberish audio.
@@ -5289,7 +5327,7 @@ class H3LongVideos:
                 (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
                  sum(plan_lens), shots, total, float(fps), int(fps),
                  _empty_av_latent(w, h, 5, fps)[0]),
-                shift_video, shift_audio, bool(shift_note))
+                shift_video, shift_audio, shift_changed)
 
         spk = speech_flags(beats)          # which shots have real (quoted) dialogue
         vram_trace = []                    # free VRAM after each shot
@@ -5642,7 +5680,7 @@ class H3LongVideos:
             (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
              max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
              float(fps), int(fps), latent_out),
-            shift_video, shift_audio, bool(shift_note))
+            shift_video, shift_audio, shift_changed)
 
 
 # REF2VA registers under its OWN key. The FL2VA pack one directory up keeps
