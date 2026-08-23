@@ -79,8 +79,8 @@ picks the **size**. They are independent: changing aspect ratio does not change
 cost. `1.0` = 1024×1024 worth of pixels (ComfyUI's own convention), and at 1.00
 every ratio lands on H3's native size. Step down for speed, VRAM and longer shots.
 
-**4. `shot_seconds`** — a **ceiling**, not the length of every shot. Leave it at 0
-to let the VRAM budget decide.
+**4. `shot_seconds`** — a **ceiling**, not the length of every shot. Wire
+**H3 Shot Length** into it, or leave it unconnected to let the VRAM budget decide.
 
 Set `plan_only` to preview the shot split, lengths and every warning **without
 rendering**. Do that first; it is near-instant.
