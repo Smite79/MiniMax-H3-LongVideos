@@ -2662,6 +2662,66 @@ def check_restraints_stay_on():
                                            lock_restraints=False)))
 
 
+def check_bare_state_persists():
+    """A bared zone stays bared when the body turns.
+
+    The marker in the item list says the zone IS bare. Nothing said it STAYS bare
+    once the body presents a surface the shot has not shown yet -- and a turn is
+    exactly that: new geometry, no evidence, and the model's default for an
+    undescribed body is a clothed one. So the garment came back mid-shot.
+
+    Worse at a strip boundary: the shot that performs a removal deliberately loses
+    its handoff (its last frame shows the removal in progress), so the shot after it
+    renders from the PROMPT ALONE with no picture of the bared state to continue
+    from. That is the shot a turn usually lands in."""
+    print("\n=== a bared zone stays bared through a turn ===")
+    ANCHOR = "A quiet studio, north light."
+    CM = "Mara = she, 30, red hair, grey coat, denim shorts"
+    BEATS = ["Mara stands by the window.", "Mara takes off her denim shorts.",
+             "Mara turns away from the camera.", "Mara walks to the door."]
+
+    def run(**kw):
+        return S.distribute_generations(ANCHOR, BEATS, "", "", CM, **kw)
+
+    PERSIST = "uncovered there and stays that way"
+    on = run(exposed_terms="she = lower", prevent_nudity=True)
+    check("the clause appears in the shot that bares the zone", PERSIST in on[1])
+    check("...and in the TURN that follows it", PERSIST in on[2])
+    check("...and keeps holding on later shots", PERSIST in on[3])
+    check("not before anything came off", PERSIST not in on[0])
+    check("it says the state holds from every side",
+          "the same from the front, the side and behind" in on[2])
+
+    # It must not weaken any existing gate: the marker's authority is the clause's.
+    off = run(exposed_terms="", prevent_nudity=True)
+    check("prevent_nudity still suppresses it with no exposed_terms",
+          all(PERSIST not in g for g in off))
+    free = run(exposed_terms="", prevent_nudity=False)
+    check("...and with the guard off it comes back", PERSIST in free[2])
+
+    # Naming the garment is what brings the garment back -- the clause must not.
+    check("no garment is named in the clause",
+          not any(w in S._BARE_PERSIST["lower"] + S._BARE_PERSIST["upper"]
+                  for w in ("shorts", "underwear", "thong", "jacket", "clothes")))
+    check("...and it states a positive, not a negation",
+          not re.search(r"\b(?:not|never|no|without)\b",
+                        S._BARE_PERSIST["lower"], re.I))
+
+    # Same presence gate as every other per-shot state.
+    check("someone not in the shot is not described as uncovered",
+          S.bare_persist_clause({"Dom": ["lower"]},
+                                {"Mara": [], "Dom": []}, "Mara looks out.") == "")
+    check("an empty zone list says nothing",
+          S.bare_persist_clause({"Mara": []}, {"Mara": []}, "Mara turns.") == "")
+
+    # The strip boundary is why this matters most.
+    strip = []
+    run(exposed_terms="she = lower", prevent_nudity=True, strip_out=strip)
+    check("the removal shot costs the NEXT shot its handoff", strip == [2])
+    check("...so the turn renders from the prompt alone, and the prompt now says it",
+          PERSIST in on[2])
+
+
 def check_solidity_guard():
     """Bodies stop at objects instead of passing through them.
 
@@ -3561,6 +3621,7 @@ def main():
     check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()
+    check_bare_state_persists()
     check_solidity_guard()
     check_anatomy_guard()
     check_latent_output()

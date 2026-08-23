@@ -812,6 +812,47 @@ def restraint_regions(items):
     return out
 
 
+# What a bared zone keeps doing while the body moves. The marker in the item list
+# says the zone IS bare; this says it STAYS bare through a change of view, which is
+# the moment the clothed prior gets its chance -- a turn presents a surface the model
+# has no evidence for, and its default for an undescribed body is a dressed one.
+#
+# Names no garment. Saying which garment is off puts that garment in the prompt, and
+# a mention is a presence cue -- the same reason removed items are scrubbed from the
+# anchor rather than negated in it.
+_BARE_PERSIST = {
+    "lower": "the hips and lower body stay bare skin as they turn, the same from the "
+             "front, the side and behind",
+    "upper": "the chest stays bare skin as they turn, the same from the front, the "
+             "side and behind",
+}
+
+
+def bare_persist_clause(bare_zones, active, body):
+    """State that an already-bared zone stays bare through a change of angle.
+
+    Only for people actually in the shot, on the same presence gate as the restraint
+    and mouth states: describing an uncovered body in a shot that person is not in
+    would summon them into it.
+
+    Gated upstream by whatever allowed the marker in the first place -- this reads
+    the markers that are already on the person, so prevent_nudity, exposed_terms and
+    a sheet declaration all keep exactly the authority they had."""
+    bits = []
+    for name, zones in (bare_zones or {}).items():
+        if not zones:
+            continue
+        if name and not person_in_shot(body, name, active):
+            continue
+        subj = _subject_term(name, active) if name else "the subject"
+        effects = "; ".join(_BARE_PERSIST[z] for z in zones if z in _BARE_PERSIST)
+        if effects:
+            bits.append(f"{subj} is uncovered there and stays that way -- {effects}")
+    if not bits:
+        return ""
+    return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+
+
 def solid_things_in(text):
     """Solid objects named in this text, in order of appearance.
 
@@ -2771,6 +2812,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 stripped.setdefault(nm, set()).update(zones)
                 for tok in tokens:
                     active[nm].remove(tok)
+        bare_now = {}
         for nm in list(active):
             marks = {z: exposed_mark(z, nm, active.get(nm, []), exposed)
                      for z in ("lower", "upper")}
@@ -2802,6 +2844,13 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                     strip_out.append(gi)
             for mark in drop:
                 active[nm].remove(mark)
+            # Which zones are marked bare AFTER this shot's adds and drops. Read off
+            # the markers themselves, so every gate that governs them -- prevent_nudity,
+            # exposed_terms, a sheet declaration -- governs this too, with no second
+            # decision to keep in step.
+            zones_bare = [z for z, mk in marks.items() if mk in active[nm]]
+            if zones_bare:
+                bare_now[nm] = zones_bare
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
                                         speaking=has_speech(body), front_load=front_load)
         # State the DIRECTION of the change, in the shot that performs it. Only for
@@ -2864,6 +2913,14 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             rc = restraint_clause(active, body, lock_restraints)
             if rc:
                 persistent = persistent.rstrip(". ") + "." + rc
+        # A bared zone stays bared through a turn. The marker in the item list says
+        # the zone IS bare; without this nothing says it stays bare once the body
+        # presents a surface the shot has not shown yet, and the model's default for
+        # an undescribed body is a clothed one -- so the garment comes back mid-shot.
+        if people_here:
+            bp = bare_persist_clause(bare_now, active, body)
+            if bp:
+                persistent = persistent.rstrip(". ") + "." + bp
         # Solidity, on the same presence gate: a body can only pass through a table
         # if there is a body. Reads BOTH the beat and the persistent identity block,
         # because the anchor is where the set usually gets described ("a workshop
