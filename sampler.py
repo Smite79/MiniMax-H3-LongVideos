@@ -4626,8 +4626,29 @@ class H3LongVideos:
                                "ratio toward 1.0 breaks the audio branch -- babble or silence -- so "
                                "if you lower shift_video, lower this by the same factor. Only used "
                                "when apply_model_sampling is on."}),
-                "trim_seam": ("BOOLEAN", {"default": True}),
-                "vary_seed_per_shot": ("BOOLEAN", {"default": True}),
+                "trim_seam": ("BOOLEAN", {"default": True,
+                    "tooltip": "Drop the FIRST frame of every shot after the first.\n\n"
+                               "That frame is the model's own reproduction of the handoff -- the "
+                               "last frame of the previous shot, which it was anchored to. Keeping "
+                               "it shows the same moment twice and reads as a stutter.\n\n"
+                               "So at a working seam the last frame of one shot and the first of "
+                               "the next are NOT identical: they are one frame of normal motion "
+                               "apart, which is what continuous footage looks like. Turn this off "
+                               "only to inspect how closely the anchor was reproduced."}),
+                "vary_seed_per_shot": ("BOOLEAN", {"default": False,
+                    "tooltip": "Give each shot its own seed (seed+1, seed+2, ...) instead of one "
+                               "seed for the whole chain.\n\n"
+                               "OFF by default, because this node builds a CONTINUOUS TAKE. The "
+                               "seed sets the noise field every shot is sampled from, and that "
+                               "field is what fixes the stochastic detail -- grain, micro-texture, "
+                               "the exact rendering of surfaces the prompt never names. Change it "
+                               "between shots and all of that resets at the boundary, which reads "
+                               "as a cut even when the keyframe anchors the frame and the location "
+                               "is unchanged: the same room, rendered afresh.\n\n"
+                               "Shots still differ with one seed -- each has its own beat text and "
+                               "its own handoff keyframe. Turn this ON only when you WANT the "
+                               "beats to look separately shot, or when repeated beats are coming "
+                               "out too alike."}),
                 "handoff_offset": ("INT", {"default": 0, "min": 0, "max": 12, "step": 1,
                     "tooltip": "End each shot this many frames early and hand THAT frame to the next "
                                "shot instead of the literal last frame. Set 2-4 if chained shots open "
@@ -4960,7 +4981,7 @@ class H3LongVideos:
             megapixels=1.0,
             first_frame=None, fps=24, plan_only=False,
             global_soundscape="", non_diegetic_music="", apply_model_sampling=True,
-            shift_video=12.0, shift_audio=3.0, trim_seam=True, vary_seed_per_shot=True,
+            shift_video=12.0, shift_audio=3.0, trim_seam=True, vary_seed_per_shot=False,
             handoff_offset=0, vram_headroom_gb=1.5, allow_res_backoff=True,
             decode_tile_frames=0, decode_tile_size=0,
             cleanup_between_shots=True,
@@ -5204,6 +5225,16 @@ class H3LongVideos:
         # looking at the sequence -- which is why chains lose their cast in the
         # middle rather than degrading steadily.
         cohesion_notes = continuity_warnings(gens)
+        # A per-shot seed resets the noise field -- and with it the grain, the
+        # micro-texture and every surface detail the prompt never names -- at each
+        # boundary. That reads as a cut even when the keyframe anchors the frame and
+        # the location is unchanged, and nothing else reported it.
+        if vary_seed_per_shot and len(gens) > 1:
+            cohesion_notes.append(
+                f"vary_seed_per_shot is ON, so the {len(gens)} shots sample from seeds "
+                f"{seed}..{seed + len(gens) - 1} rather than one field. Stochastic detail "
+                f"resets at every boundary, which looks like a cut in a continuous take. "
+                f"Turn it off unless the beats are meant to look separately shot")
         preflight = [("SLA", sla_note),
                      ("LORA HINTS", "; ".join(hint_notes)),
                      ("", mp_note),

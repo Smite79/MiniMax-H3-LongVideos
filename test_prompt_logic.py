@@ -2221,6 +2221,23 @@ def check_ref_modes():
               "            hand_img" in src)
     check("the keyframe-only path still passes images= (no ref items there)",
           "clip.tokenize(prompt, images=images)" in src)
+
+    # The seed is the last thing that jumps at a boundary. `seed + i` gives every
+    # shot its own noise field, and that field fixes the stochastic detail -- grain,
+    # micro-texture, every surface the prompt never names. Changing it per shot
+    # resets all of that at the seam, which reads as a cut even with the keyframe
+    # anchoring the frame and the location unchanged. Wrong default for a node whose
+    # whole purpose is one continuous take, and it carried no tooltip at all.
+    check("vary_seed_per_shot defaults to OFF",
+          '"vary_seed_per_shot": ("BOOLEAN", {"default": False' in src)
+    check("...and the run() default agrees", "vary_seed_per_shot=False" in src)
+    check("...and it now explains the trade-off",
+          "CONTINUOUS TAKE" in src and "stochastic detail" in src)
+    check("the seed still varies when explicitly asked for",
+          "seed + i if vary_seed_per_shot else seed" in src)
+    check("...and turning it on is REPORTED as a continuity hazard",
+          "vary_seed_per_shot is ON" in src and "looks like a cut" in src)
+    check("the hazard note only fires on a real chain", "len(gens) > 1" in src)
     # sizing: 'match' must never exceed the generation area by more than the 32px snap,
     # and neither mode may ever upscale a small reference
     big = S.ref_image_canvas(4096, 2160, 1344, 768, "match")
