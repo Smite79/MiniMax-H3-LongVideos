@@ -126,6 +126,13 @@ rendering**. Do that first; it is near-instant.
   only a silence, and a video model's default is a clothed person, so silence puts
   the clothes back on a shot or two later.
 
+  It also states that a bared zone **stays** bared as the body turns — the same from
+  the front, the side and behind. The marker says the zone *is* bare; nothing said it
+  held once the body presented a surface the shot had not shown yet, and an
+  undescribed surface defaults to a clothed one, so the garment came back mid-shot on
+  a turn. That clause names no garment and no person: naming the garment puts it back
+  in the prompt, and naming the person a second time renders them twice.
+
   `exposed_terms` is where you choose the wording, per character. Same syntax as
   the sheet: a pronoun sets it for everyone who declares that pronoun, a name
   overrides one person, and a trailing `upper` targets that zone instead of the
@@ -194,6 +201,35 @@ rendering**. Do that first; it is near-instant.
   anchor. `on` states it every shot. Only ever applied to a shot with someone in
   it — you need a body before it can pass through anything. Genuinely passable
   things (a curtain, smoke) are deliberately not claimed to be solid.
+- **Motion continuity.** `motion_guard` stops a pose being reached without the
+  frames in between — a head arriving at a new angle with no path to it, the "neck
+  snap". A snap is not a *wrong* pose; it is a right pose with nothing joining it to
+  the last one, so the **path** is what gets stated: movement travels through every
+  position on the way, at one steady speed, the neck following the shoulders and the
+  shoulders following the hips. `auto` fires on a beat that actually moves someone
+  (turns, looks, walks, leans, reaches); a beat where nobody changes orientation has
+  no path to describe. A snap immediately *after* a cut is a different thing — that
+  is the model leaving the keyframe pose, and `handoff_offset` is the lever there.
+- **Two bodies in contact.** `contact_guard` keeps an arrangement correctly aligned
+  — any arrangement. It names none: the model already knows more position names than
+  a list could hold, and what it gets wrong is the geometry. So the geometry is
+  stated, and it holds for every case:
+
+  | | |
+  |---|---|
+  | **ownership** | each person keeps their own head, two arms and two legs, each joined to the body it belongs to — overlapping bodies is exactly when a limb gets reassigned to the wrong torso |
+  | **separation** | they meet at the surface of the skin, each keeping its own volume, rather than passing into one another |
+  | **stable roles** | above stays above, below stays below, behind stays behind, for the whole shot and from every camera angle |
+  | **support** | weight rests on whatever is holding it, and the two stay in proportion |
+
+  Needs **two people in the shot** — one body cannot be misaligned against another,
+  and saying otherwise in a one-person shot would invite the second in. `auto` fires
+  on a contact cue in the beat; `on` states it whenever two or more are present.
+
+  This holds a *stated* arrangement together; it cannot infer one you did not state.
+  Describe the arrangement in **relative** terms — who is above, behind, facing
+  whom, what carries the weight — rather than by a position name alone, and the
+  guard keeps it held.
 - **Soundscape from the scene.** `auto_soundscape` builds the ambient bed from your
   prompt instead of you typing one. It reads the **anchor** — the soundscape is
   global, stamped on every shot, so it must describe the *place*, not one beat's
@@ -219,11 +255,27 @@ rendering**. Do that first; it is near-instant.
      taken 3 frames (~125 ms) earlier at exactly that boundary, automatically.
   3. **Audio** — H3 is a *joint* model: the mouth follows the audio branch. On a
      shot with no line that branch is otherwise unconditioned, invents a voice, and
-     the picture lip-syncs to it. The keyframe's audio channel is anchored to
-     encoded silence instead.
+     the picture lip-syncs to it. The shot's audio channel is anchored to encoded
+     silence instead. That applies to **every** silent shot — including the first
+     one, which has no handoff, and reference-conditioned shots, which take an
+     audio-only keyframe to carry it. A shot with a `ref_image` wired is not exempt.
 
   `mute_nonspeech_audio` is a fourth, weaker thing: it zeroes the waveform *after*
   generation, so it silences the track but cannot close a mouth.
+- **One noise field for the whole chain.** `vary_seed_per_shot` is **off** by
+  default. The seed picks the noise field a shot is sampled from, and that field
+  fixes the stochastic detail — grain, micro-texture, the exact rendering of every
+  surface the prompt never names. Reseed each shot and all of it resets at the
+  boundary, which reads as a cut even when the keyframe anchors the frame and the
+  location is unchanged. Shots still differ under one seed: each has its own beat
+  text and its own handoff keyframe. Turn it on only when you *want* the beats to
+  look separately shot. `info` warns when it is on.
+- **Seams.** `trim_seam` (on by default) drops the first frame of each shot after
+  the first, because that frame is the model's own reproduction of the handoff — the
+  last frame of the previous shot. Keeping it plays the same moment twice. So at a
+  working seam the two frames are **not** identical: they are one frame of normal
+  motion apart. Turn it off for one run if you want to check how faithfully the
+  anchor was reproduced.
 - **Overlays.** Optional PIL watermark and intro title, composited after any
   upscale, never asked of the model.
 
@@ -320,10 +372,21 @@ tagged`) they land on the shot whose text names them:
 Dom, <Picture 1>, drives a van down the driveway.
 ```
 
-Only that shot is reference-conditioned; every other shot keeps its handoff. A
-tagged shot **also carries the previous frame as a real keyframe**, so a tag
-anchors rather than cuts — the keyframe fixes the opening frame, the references
-supply identity.
+Only that shot is reference-conditioned; every other shot keeps its handoff.
+
+**Every reference-conditioned shot also carries the previous frame as a real
+keyframe**, so references never cost you continuity — the keyframe fixes the
+opening frame, the references supply identity. That is true in all modes, not just
+for tagged shots: `every shot` used to mean every boundary was a hard cut, and
+`first shot` used to ignore your `start_image` outright, because ComfyUI 0.30 could
+not carry both channels at once. 0.31+ can, and the node now does.
+
+The previous frame is also shown to the **text encoder**, not just to the DiT. A
+keyframe pins the opening frame without *describing* it, so a shot that only got
+the latent anchor rebuilt the scene from the prompt — same location, freshly
+imagined scenery, which reads as a cut. It now rides in as one more picture,
+appended after your references so the `<Picture N>` numbers your tags use are
+untouched.
 
 If a reference gets reproduced in the opening frames, lower `ref_noise_aug` (0.95,
 then 0.90). Note the trade: `visual_cond_noise_aug` is a single value covering
@@ -423,8 +486,15 @@ Note the sparse paths are **approximate** — A/B a shot before adopting them.
 
 ## Full reference
 
-Every field, every warning and the reasoning behind each behaviour:
-**[REFERENCE.md](REFERENCE.md)**
+**[REFERENCE.md](REFERENCE.md)** — the long-form field-by-field notes.
+
+> **It is out of date.** It still documents a `total_seconds` input that no longer
+> exists, and 17 of the node's 69 fields are missing from it — including
+> `megapixels`, `sampler_name`, `trim_seam`, `vary_seed_per_shot`, `prevent_nudity`,
+> `exposed_terms`, `lock_restraints`, `auto_soundscape` and all four guards
+> (`anatomy_guard`, `solidity_guard`, `motion_guard`, `contact_guard`). This README
+> and the in-node tooltips are current; REFERENCE.md is not. Read it for background,
+> not for behaviour.
 
 ## Disclaimer
 
