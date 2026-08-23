@@ -2746,6 +2746,70 @@ def check_bare_state_persists():
           PERSIST in on[2])
 
 
+def check_contact_guard():
+    """Two bodies in contact stay correctly aligned, in ANY arrangement.
+
+    Position-agnostic on purpose: a dictionary of named positions would be endless,
+    and the model knows more names than a list could hold. What it gets wrong is the
+    geometry, so the geometry is stated -- limb ownership, no interpenetration, fixed
+    above/below/behind roles, weight on something real. Those hold for every
+    arrangement, which is why nothing here names one."""
+    print("\n=== two bodies in contact ===")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    CM = "Mara = she, 30, red hair\nDom = he, 35, tall"
+
+    check("a contact cue is detected",
+          bool(S._CONTACT_CUE.search("Dom holds Mara against the wall")))
+    check("...including a purely positional one",
+          bool(S._CONTACT_CUE.search("Dom kneels behind Mara")))
+    check("...and a mutual orientation",
+          bool(S._CONTACT_CUE.search("they stand facing each other")))
+    check("an ordinary beat is not a contact cue",
+          not S._CONTACT_CUE.search("Mara walks to the window"))
+
+    # TWO people, or nothing. One body cannot be misaligned against another, and
+    # describing a two-body arrangement in a one-person shot invites the second in --
+    # the presence-cue failure every per-shot state here is gated against.
+    check("one person gets nothing even with a contact cue",
+          S.contact_clause("Dom holds her against the wall", 1, "auto") == "")
+    check("two people and a cue fires",
+          bool(S.contact_clause("Dom holds Mara", 2, "auto")))
+    check("'on' fires for two people without a cue",
+          bool(S.contact_clause("they talk", 2, "on")))
+    check("'on' still needs two people", S.contact_clause("she talks", 1, "on") == "")
+    check("'off' says nothing", S.contact_clause("Dom holds Mara", 2, "off") == "")
+
+    # The four invariants, which are the whole point.
+    _c = S.CONTACT_STATE
+    check("OWNERSHIP: limbs belong to the body they are joined to",
+          "joined to the body it belongs to" in _c)
+    check("SEPARATION: they meet at the skin, each keeping its volume",
+          "surface of the skin" in _c and "own solid volume" in _c)
+    check("STABLE ROLES: above/below/behind hold for the whole shot",
+          "stays above" in _c and "stays below" in _c and "stays behind" in _c)
+    check("...and read the same from every camera angle", "every angle" in _c)
+    check("SUPPORT: weight rests on something real", "weight rests on" in _c)
+    check("no negation -- the negative is never evaluated at cfg 1",
+          not re.search(r"\b(?:not|never|no|without|avoid)\b", _c, re.I))
+    check("it names no specific position, so every arrangement is covered",
+          not re.search(r"\b(?:missionary|doggy|cowgirl|spooning|69)\b", _c, re.I))
+
+    # Wired through, and gated on who is actually in the shot.
+    gens = S.distribute_generations("A quiet studio.",
+                                    ["Mara and Dom stand facing each other.",
+                                     "Mara walks to the window.",
+                                     "The room is quiet."], "", "", CM)
+    check("a two-person contact shot gets it", "ONE fixed arrangement" in gens[0])
+    check("a one-person shot does not", "ONE fixed arrangement" not in gens[1])
+    check("a shot with nobody does not", "ONE fixed arrangement" not in gens[2])
+    off = S.distribute_generations("A quiet studio.", ["Mara and Dom embrace."],
+                                   "", "", CM, contact_guard="off")
+    check("'off' reaches the per-shot text", "ONE fixed arrangement" not in off[0])
+    check("the widget is appended, so saved workflows keep their order",
+          "contact_guard" in S.ADDED_WIDGETS)
+    check("...and run() passes it through", "contact_guard=contact_guard" in src)
+
+
 def check_motion_guard():
     """A pose is reached by travelling to it.
 
@@ -3697,6 +3761,7 @@ def main():
     check_continuity_warning()
     check_restraints_stay_on()
     check_bare_state_persists()
+    check_contact_guard()
     check_motion_guard()
     check_solidity_guard()
     check_anatomy_guard()

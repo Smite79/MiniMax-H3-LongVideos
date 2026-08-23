@@ -259,7 +259,7 @@ ADDED_WIDGETS = (
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
-    "motion_guard",
+    "motion_guard", "contact_guard",
     "auto_soundscape",
 )
 
@@ -862,6 +862,23 @@ def bare_persist_clause(bare_zones, active, body):
     # the state said once. Saying it per person would reintroduce the extra subject
     # references this is written to avoid.
     return " " + " ".join(_BARE_PERSIST[z] for z in zones)
+
+
+def contact_clause(body, n_present, mode="auto"):
+    """Geometry for two bodies in contact: whose limbs, no interpenetration, fixed roles.
+
+    Needs TWO people. One body cannot be misaligned against another, and stating a
+    two-body arrangement in a one-person shot would invite the second person in --
+    the same presence-cue failure every other per-shot state is gated against.
+
+    'auto' fires on a contact cue in the beat. 'on' states it whenever two or more
+    people are in the shot, which is worth having if bodies drift apart or merge in
+    beats that do not name the contact explicitly."""
+    if mode == "off" or n_present < 2:
+        return ""
+    if mode != "on" and not _CONTACT_CUE.search(body or ""):
+        return ""
+    return CONTACT_STATE
 
 
 def motion_clause(body, mode="auto"):
@@ -1843,6 +1860,42 @@ MOUTH_SETTLE_FRAMES = 3
 ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers each, "
                  "and two legs, in correct human proportion.")
 
+# Two bodies in physical contact. Position-AGNOSTIC on purpose: a dictionary of named
+# positions would be endless, and the model already knows more names than any list
+# would hold. What it gets wrong is not the name, it is the geometry -- so what gets
+# stated is the geometry, and these invariants hold for every arrangement:
+#
+#   ownership     limbs belong to the person they are attached to. Two overlapping
+#                 bodies is exactly when an arm gets reassigned to the wrong torso,
+#                 or grown a second time.
+#   separation    they meet AT the skin. Bodies passing into each other is the
+#                 solidity failure again, between two bodies rather than a body and
+#                 a table, and the same positive phrasing is the only lever.
+#   stable roles  whoever is above stays above. Positions morph mid-shot because
+#                 nothing says the arrangement is fixed.
+#   support       weight rests somewhere real, which is what stops a body floating in
+#                 a pose that nothing is holding up.
+_CONTACT_CUE = re.compile(
+    r"\b(?:straddl\w+|astride|mount\w+|on top of|underneath|beneath|"
+    r"embrac\w+|entwin\w+|intertwin\w+|wrapped around|arms around|legs around|"
+    r"holds?|holding|grips?|gripping|clutch\w+|press\w+ against|pinned|"
+    r"lies? on|lying on|lies? under|lying under|lies? beside|lying beside|"
+    r"kneels? (?:behind|before|between|in front of)|sits? on|sitting on|"
+    r"behind her|behind him|behind them|face to face|facing each other|"
+    r"against (?:her|him|them)|body to body|skin to skin|"
+    r"in (?:her|his|their) lap|carries|carrying|lifts?|lifting|"
+    r"leans? (?:on|against|over)|bent over|"
+    r"sex|intercourse|making love|coupling|position)\b", re.I)
+
+CONTACT_STATE = (
+    " Two bodies in contact form ONE fixed arrangement. Each person keeps their own head, "
+    "two arms and two legs, each limb joined to the body it belongs to and moving with that "
+    "person. The bodies meet at the surface of the skin and rest against each other there, "
+    "each keeping its own solid volume. Whoever is above stays above, whoever is below stays "
+    "below, and whoever is behind stays behind, the same arrangement held for the whole shot "
+    "and read the same from every angle the camera takes. The weight rests on whatever is "
+    "supporting it, and both bodies stay in proportion to each other.")
+
 # Beats where a body changes orientation or position -- the moments a pose can be
 # reached without the frames in between. A head that arrives at a new angle without
 # passing through the intermediate ones is the "neck snap": not a wrong pose, a
@@ -2722,7 +2775,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                            notes_out=None, auto_props=True, prevent_nudity=True,
                            exposed_terms="", strip_out=None, anatomy_guard=False,
                            lock_restraints=True, solidity_guard="auto",
-                           motion_guard="auto"):
+                           motion_guard="auto", contact_guard="auto"):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2977,6 +3030,17 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             bp = bare_persist_clause(bare_now, active, body)
             if bp:
                 persistent = persistent.rstrip(". ") + "." + bp
+        # Two bodies in contact. Placed BEFORE the motion state so the arrangement is
+        # established and then told to hold together while it moves, and counted from
+        # who is actually in the shot rather than who is in the cast.
+        if people_here:
+            n_in_shot = sum(1 for n in present_names
+                            if person_in_shot(body, n, active, departed))
+            if active.get(""):
+                n_in_shot = max(n_in_shot, 1)
+            cc = contact_clause(body, n_in_shot, contact_guard)
+            if cc:
+                persistent = persistent.rstrip(". ") + "." + cc
         # Motion continuity, on the same presence gate. Placed after the limb count so
         # the body is established before how it moves, and read off the BEAT only --
         # the anchor describes a set, and a set does not turn its head.
@@ -5028,6 +5092,31 @@ class H3LongVideos:
                                "'chain', 'collar', 'strap' and 'belt' are NOT treated as restraints; "
                                "they are jewellery, a shirt part, a dress part and a garment at least "
                                "as often."}),
+                "contact_guard": (["off", "auto", "on"], {"default": "auto",
+                    "tooltip": "Keep two bodies in contact correctly aligned -- any position, "
+                               "not a list of named ones.\n\n"
+                               "Position-agnostic on purpose. The model already knows more "
+                               "position names than a dictionary could hold; what it gets wrong "
+                               "is the GEOMETRY, so the geometry is what gets stated, and these "
+                               "hold for every arrangement:\n"
+                               "  - OWNERSHIP: each person keeps their own head, two arms and two "
+                               "legs, each joined to the body it belongs to. Overlapping bodies "
+                               "is exactly when an arm gets reassigned to the wrong torso.\n"
+                               "  - SEPARATION: they meet at the surface of the skin, each keeping "
+                               "its own volume, rather than passing into one another.\n"
+                               "  - STABLE ROLES: whoever is above stays above, below stays below, "
+                               "behind stays behind, for the whole shot and from every camera "
+                               "angle. Positions morph mid-shot because nothing fixes them.\n"
+                               "  - SUPPORT: weight rests on whatever is holding it, and the two "
+                               "bodies stay in proportion.\n\n"
+                               "Needs TWO people in the shot -- one body cannot be misaligned "
+                               "against another, and saying otherwise would invite a second person "
+                               "in. 'auto' fires on a contact cue in the beat; 'on' states it "
+                               "whenever two or more people are present.\n\n"
+                               "Describe the arrangement in the beat itself in RELATIVE terms "
+                               "(who is above, behind, facing whom) rather than by a position "
+                               "name alone -- this guard holds a stated arrangement together, it "
+                               "cannot infer one you did not state."}),
                 "motion_guard": (["off", "auto", "on"], {"default": "auto",
                     "tooltip": "Stop poses being reached without the frames in between -- the "
                                "head arriving at a new angle with no path to it (a 'neck snap'), "
@@ -5221,7 +5310,7 @@ class H3LongVideos:
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
-            solidity_guard="auto", motion_guard="auto",
+            solidity_guard="auto", motion_guard="auto", contact_guard="auto",
             auto_soundscape="fill if blank",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
@@ -5453,7 +5542,8 @@ class H3LongVideos:
                                       anatomy_guard=anatomy_on,
                                       lock_restraints=lock_restraints,
                                       solidity_guard=solidity_guard,
-                                      motion_guard=motion_guard)
+                                      motion_guard=motion_guard,
+                                      contact_guard=contact_guard)
 
         # A scenery beat mid-chain hands the next shot a frame with no people in
         # it. Both prompts are individually correct, so this is invisible without
