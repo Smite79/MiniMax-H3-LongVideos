@@ -2042,8 +2042,10 @@ def _emphasis_quotes(body):
 # mid-word, and where no amount of lips-closed text can outvote it.
 MOUTH_SETTLE_FRAMES = 3
 
-ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers each, "
-                 "and two legs, in correct human proportion.")
+ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers on each hand, "
+                 "and two legs with two feet. Each arm joins the body at one shoulder and each leg "
+                 "at one hip, and every limb moves only with the person it belongs to. Between "
+                 "the legs there is one groin.")
 
 # Two bodies in physical contact. Position-AGNOSTIC on purpose: a dictionary of named
 # positions would be endless, and the model already knows more names than any list
@@ -2966,7 +2968,8 @@ def speech_flags(beats):
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
                            notes_out=None, auto_props=True, prevent_nudity=True,
-                           exposed_terms="", strip_out=None, anatomy_guard=False,
+                            exposed_terms="", strip_out=None, anatomy_guard=False,
+                           anatomy_auto=False,
                            lock_restraints=True, solidity_guard="auto",
                            motion_guard="auto", contact_guard="auto", count_auto=False):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
@@ -3232,8 +3235,12 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             states = [
                 # the mouth, before anything describes the body it is in
                 (no_speech, lambda: LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL),
-                # the limb COUNT, before anything constrains those limbs
-                (anatomy_guard, lambda: ANATOMY_STATE),
+                # the limb COUNT, before anything constrains those limbs. 'auto'
+                # also fires wherever TWO or more bodies share the frame: spare
+                # limbs are grown where bodies meet or move together, whatever
+                # the resolution.
+                (anatomy_guard or (anatomy_auto and n_in_shot >= 2),
+                 lambda: ANATOMY_STATE),
                 # what the restraints DO -- limits on limbs already established
                 (lock_restraints, lambda: restraint_clause(active, body, lock_restraints)),
                 # a bared zone stays bared once the body turns to a surface the shot
@@ -5361,16 +5368,17 @@ class H3LongVideos:
                                "described in the anchor. 'on' states it every shot. Only ever "
                                "applied to a shot with someone in it -- a body is needed before one "
                                "can pass through anything."}),
-                "anatomy_guard": (["off", "auto", "on"], {"default": "auto",
-                    "tooltip": "State each person's limb COUNT positively, to stop spare arms and "
-                               "duplicated hands. H3 is CFG-free at cfg 1, so a NEGATIVE prompt is "
-                               "never evaluated -- 'extra limbs' in a negative does nothing. Naming "
-                               "a number gives the model a target instead; negating one only puts "
-                               "the word in the prompt. Added per-shot and only where people are "
-                               "actually present, never in the anchor (anchor body words are what "
-                               "burn a face into every opening frame). 'auto' = on below 768 short "
-                               "edge OR when a LoRA is applied -- the conditions where anatomy "
-                               "breaks down. Costs ~18 tokens on shots with people."}),
+                 "anatomy_guard": (["off", "auto", "on"], {"default": "auto",
+                     "tooltip": "State each person's limb COUNT positively, to stop spare arms, "
+                                "duplicated hands and the third leg. H3 is CFG-free at cfg 1, so a "
+                                "NEGATIVE prompt is never evaluated -- 'extra limbs' in a negative does "
+                                "nothing. Naming a number gives the model a target instead; negating one "
+                                "only puts the word in the prompt. Added per-shot and only where people "
+                                "are actually present, never in the anchor (anchor body words are what "
+                                "burn a face into every opening frame). 'auto' = on below 768 short edge "
+                                "OR when a LoRA is applied, and also on ANY shot holding two or more "
+                                "people -- spare limbs are grown where bodies meet and move together. "
+                                "Costs ~45 tokens on shots with people."}),
                 "exposed_terms": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "What a stripped body zone is CALLED, per character, so it persists "
                                "automatically instead of being typed into every beat. Same syntax as "
@@ -5710,6 +5718,9 @@ class H3LongVideos:
         # count has to be stated even at native size.
         anatomy_on = (anatomy_guard == "on" or
                       (anatomy_guard == "auto" and (min(w, h) < 768 or lora_on)))
+        # 'auto' additionally states the limb count on any multi-person shot,
+        # whatever the resolution -- the same reasoning as count_auto above.
+        anatomy_auto = (anatomy_guard == "auto")
         count_subjects = (subject_count_guard == "on" or
                           (subject_count_guard == "auto" and (min(w, h) < 768 or lora_on)))
         # `ln` is the CEILING (VRAM budget, or a forced shot_seconds). Each beat gets
@@ -5753,6 +5764,7 @@ class H3LongVideos:
                                       prevent_nudity=prevent_nudity,
                                       exposed_terms=exposed_terms, strip_out=strip_shots,
                                       anatomy_guard=anatomy_on,
+                                      anatomy_auto=anatomy_auto,
                                       lock_restraints=lock_restraints,
                                       solidity_guard=solidity_guard,
                                       motion_guard=motion_guard,

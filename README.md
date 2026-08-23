@@ -187,13 +187,16 @@ rendering**. Do that first; it is near-instant.
   it toward 1.0 breaks the audio branch. `info` still warns if the ratio drifts.
 
 - **Anatomy.** `anatomy_guard` states each person's limb *count* — one head, two
-  arms, two hands with five fingers, two legs — on shots that have people in them.
-  A **negative prompt cannot do this**: H3 is CFG-free at `cfg 1`, so the negative
-  is never evaluated and "extra limbs" there does nothing. Naming the number gives
-  the model a target; negating one only puts the word in the prompt. Never added to
-  the anchor, and never to a shot with nobody in it — describing a body in an empty
-  frame is what burned faces into opening frames before. `auto` = on below a 768
-  short edge or when a LoRA is applied.
+  arms, two hands with five fingers, two legs with two feet — and pins every limb
+  to its body: each arm at one shoulder, each leg at one hip, moving only with the
+  person it belongs to, and one groin between the legs. A **negative prompt cannot do
+  this**: H3 is CFG-free at `cfg 1`, so the negative is never evaluated and "extra
+  limbs" there does nothing. Naming the number gives the model a target; negating one
+  only puts the word in the prompt. Never added to the anchor, and never to a shot
+  with nobody in it — describing a body in an empty frame is what burned faces into
+  opening frames before. `auto` = on below a 768 short edge, when a LoRA is applied,
+  or on any shot holding two or more people — spare limbs are grown where bodies meet
+  and move together, whatever the resolution.
 - **Solidity.** `solidity_guard` stops bodies passing through objects. Same
   constraint as the anatomy guard, and the same solution: the negative is never
   evaluated, and *"does not walk through the wall"* can't go in the positive either —

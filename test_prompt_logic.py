@@ -2956,9 +2956,40 @@ def check_anatomy_guard():
         check(f"the clause never negates ({bad.strip()})", bad not in txt)
     for good in ("one head", "two arms", "two hands", "five fingers", "two legs"):
         check(f"the clause states {good}", good in txt)
+    # Where a spare limb is GROWN decides the wording: attachment points, feet,
+    # and exactly one groin between the legs -- 'three-leg syndrome' is a groin
+    # rendered as a limb, so the count has to be stated where it happens.
+    for good in ("two feet", "at one shoulder", "at one hip", "moves only with "
+                 "the person it belongs to", "one groin"):
+        check(f"the clause pins limbs ({good})", good in txt)
 
     # The widget must be APPENDED, or saved workflows shift.
     check("anatomy_guard is an appended widget", "anatomy_guard" in S.ADDED_WIDGETS)
+
+
+def check_anatomy_auto_multi_person():
+    """'auto' now states the limb count on ANY multi-person shot.
+
+    It used to fire only below a 768 short edge or with a LoRA -- so at native
+    resolution, which is how most chains run, NOTHING said how many legs a body
+    has, and that is exactly where two moving bodies grow a third one between
+    them."""
+    print("\n=== anatomy auto-fires on multi-person shots ===")
+    cm = "Mara = she, 30, blonde\nJon = he, 35, bald"
+    g = S.distribute_generations("A room.", ["Mara and Jon walk in."], "", "", cm,
+                                 anatomy_guard=False, anatomy_auto=True)
+    check("two people -> the limb count is stated even at native size",
+          any("two arms" in x for x in g))
+    solo = S.distribute_generations("A room.", ["Mara waves."], "", "", cm,
+                                    anatomy_guard=False, anatomy_auto=True)
+    check("one person -> nothing added under auto",
+          not any("two arms" in x for x in solo))
+    on = S.distribute_generations("A room.", ["Mara waves."], "", "", cm,
+                                  anatomy_guard=True)
+    check("'on' still covers the solo shot", "two arms" in on[0])
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("run() derives anatomy_auto from the widget",
+          'anatomy_auto = (anatomy_guard == "auto")' in src)
 
 
 def check_latent_output():
@@ -4042,6 +4073,7 @@ def main():
     check_anchor_mirror_warning()
     check_listeners_stay_silent()
     check_emphasis_quote_reported()
+    check_anatomy_auto_multi_person()
 
     print()
     if _fails:
