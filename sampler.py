@@ -259,6 +259,7 @@ ADDED_WIDGETS = (
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
+    "motion_guard",
     "auto_soundscape",
 )
 
@@ -861,6 +862,22 @@ def bare_persist_clause(bare_zones, active, body):
     # the state said once. Saying it per person would reintroduce the extra subject
     # references this is written to avoid.
     return " " + " ".join(_BARE_PERSIST[z] for z in zones)
+
+
+def motion_clause(body, mode="auto"):
+    """State that a pose is reached by travelling to it.
+
+    'auto' speaks only on a beat that actually moves someone, which is where a snap
+    can happen -- a beat where nobody changes orientation has no path to describe and
+    would just be paying for a sentence.
+
+    Impersonal, like the solidity and bare-persistence states: it names no one, so it
+    adds no second reference to anybody already in the shot."""
+    if mode == "off":
+        return ""
+    if mode != "on" and not _MOTION_CUE.search(body or ""):
+        return ""
+    return MOTION_STATE
 
 
 def solid_things_in(text):
@@ -1826,6 +1843,30 @@ MOUTH_SETTLE_FRAMES = 3
 ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers each, "
                  "and two legs, in correct human proportion.")
 
+# Beats where a body changes orientation or position -- the moments a pose can be
+# reached without the frames in between. A head that arrives at a new angle without
+# passing through the intermediate ones is the "neck snap": not a wrong pose, a
+# missing path between two right ones.
+_MOTION_CUE = re.compile(
+    r"\b(?:turn|turns|turning|turned|spin|spins|spinning|pivot|pivots|"
+    r"look|looks|looking|looked|glance|glances|glancing|face|faces|facing|"
+    r"nod|nods|nodding|shake|shakes|shaking|tilt|tilts|tilting|"
+    r"lean|leans|leaning|bend|bends|bending|swing|swings|swinging|"
+    r"walk|walks|walking|run|runs|running|step|steps|stepping|"
+    r"rise|rises|rising|stand|stands|standing|sit|sits|sitting|"
+    r"reach|reaches|reaching|raise|raises|raising|lower|lowers|"
+    r"kneel|kneels|climb|climbs|climbing|follow|follows|following|"
+    r"approach|approaches|enter|enters|exit|exits|leave|leaves)\b", re.I)
+
+# Positive throughout, for the same reason as the solidity state: the negative is
+# never evaluated at cfg 1, and "the head does not snap round" names a head snapping
+# round. What is missing in a snap is the PATH, so the path is what gets stated.
+MOTION_STATE = (" Movement is continuous and carries its own weight: the head and body turn "
+                "through every position on the way, at one steady speed, the neck following "
+                "the shoulders and the shoulders following the hips, so each pose is reached "
+                "by travelling to it.")
+
+
 # Things a body has to stop at. Deliberately excludes anything genuinely passable --
 # a curtain, a beaded screen, smoke -- because asserting those are solid would be
 # wrong, and excludes vague ones ("edge", "side") that would fire on prose.
@@ -2680,7 +2721,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
                            notes_out=None, auto_props=True, prevent_nudity=True,
                            exposed_terms="", strip_out=None, anatomy_guard=False,
-                           lock_restraints=True, solidity_guard="auto"):
+                           lock_restraints=True, solidity_guard="auto",
+                           motion_guard="auto"):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2935,6 +2977,13 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             bp = bare_persist_clause(bare_now, active, body)
             if bp:
                 persistent = persistent.rstrip(". ") + "." + bp
+        # Motion continuity, on the same presence gate. Placed after the limb count so
+        # the body is established before how it moves, and read off the BEAT only --
+        # the anchor describes a set, and a set does not turn its head.
+        if people_here:
+            mc = motion_clause(body, motion_guard)
+            if mc:
+                persistent = persistent.rstrip(". ") + "." + mc
         # Solidity, on the same presence gate: a body can only pass through a table
         # if there is a body. Reads BOTH the beat and the persistent identity block,
         # because the anchor is where the set usually gets described ("a workshop
@@ -4979,6 +5028,24 @@ class H3LongVideos:
                                "'chain', 'collar', 'strap' and 'belt' are NOT treated as restraints; "
                                "they are jewellery, a shirt part, a dress part and a garment at least "
                                "as often."}),
+                "motion_guard": (["off", "auto", "on"], {"default": "auto",
+                    "tooltip": "Stop poses being reached without the frames in between -- the "
+                               "head arriving at a new angle with no path to it (a 'neck snap'), "
+                               "a body teleporting between two positions.\n\n"
+                               "What is missing in a snap is the PATH, not the pose, so the path "
+                               "is what gets stated: movement travels through every position on "
+                               "the way, at one steady speed, the neck following the shoulders "
+                               "and the shoulders following the hips. Positive, because at cfg 1 "
+                               "H3 is CFG-free and the negative is never evaluated -- and 'the "
+                               "head does not snap round' in the positive names a head snapping "
+                               "round.\n\n"
+                               "'auto' speaks only on a beat that actually moves someone (turns, "
+                               "looks, walks, leans, reaches...), since a beat where nobody "
+                               "changes orientation has no path to describe. 'on' states it every "
+                               "shot. Names nobody, so it adds no second reference to anyone "
+                               "already in frame.\n\n"
+                               "A snap right after a cut is a different thing: that is the model "
+                               "leaving the keyframe pose. handoff_offset helps there."}),
                 "solidity_guard": (["off", "auto", "on"], {"default": "auto",
                     "tooltip": "Keep bodies from passing through objects. States that the solid "
                                "things in the shot occupy space and that bodies stop at surfaces.\n\n"
@@ -5154,7 +5221,7 @@ class H3LongVideos:
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
-            solidity_guard="auto",
+            solidity_guard="auto", motion_guard="auto",
             auto_soundscape="fill if blank",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
@@ -5385,7 +5452,8 @@ class H3LongVideos:
                                       exposed_terms=exposed_terms, strip_out=strip_shots,
                                       anatomy_guard=anatomy_on,
                                       lock_restraints=lock_restraints,
-                                      solidity_guard=solidity_guard)
+                                      solidity_guard=solidity_guard,
+                                      motion_guard=motion_guard)
 
         # A scenery beat mid-chain hands the next shot a frame with no people in
         # it. Both prompts are individually correct, so this is invisible without

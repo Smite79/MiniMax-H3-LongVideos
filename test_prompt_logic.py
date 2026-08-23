@@ -414,8 +414,14 @@ def check_anchor_not_rewritten():
     cm_ = "Maya = she, silver hair, red jacket\nJon = he, bald, cap"
     sh = D(a, ["She and he walk in.", "He removes his cap.", "She waves.", "He nods."],
            "", "", cm_)
-    anchors = {x.split("not talking. ")[1].split(" She")[0].split(" He")[0] for x in sh}
-    check("anchor identical across every shot", len(anchors) == 1)
+    # Check the anchor DIRECTLY rather than by slicing on a neighbouring clause. The
+    # old form split on "not talking. " and took what followed, so it silently
+    # measured whichever per-shot guard happened to sit there -- and broke when one
+    # more was added, while the invariant it names was still holding.
+    opens = [re.sub(r"^\[Generation \d+\]\s*", "", x.split("\n")[0]) for x in sh]
+    check("anchor identical across every shot", all(o.startswith(a) for o in opens))
+    check("...and it is the FIRST thing in every shot, not buried",
+          all(o.index(a) == 0 for o in opens))
     check("anchor keeps the user's exact wording", "hangar and airfield" in sh[3])
     check("the removal still applies", not worn(sh[3], "cap"))
 
@@ -2740,6 +2746,57 @@ def check_bare_state_persists():
           PERSIST in on[2])
 
 
+def check_motion_guard():
+    """A pose is reached by travelling to it.
+
+    A neck snap is not a wrong pose -- it is a right pose with no path to it, the
+    head arriving at a new angle without the frames in between. So the PATH is what
+    gets stated. Positive, because H3 is CFG-free at cfg 1 (the negative is never
+    evaluated) and "the head does not snap round" in the positive names a head
+    snapping round."""
+    print("\n=== motion continuity ===")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+
+    check("a beat that turns someone is a motion cue",
+          bool(S._MOTION_CUE.search("Mara turns away from the camera")))
+    check("...as is looking, walking, reaching",
+          all(S._MOTION_CUE.search(t) for t in
+              ("she looks up", "he walks out", "she reaches for the door")))
+    check("a beat with no orientation change is not",
+          not S._MOTION_CUE.search("Mara smiles faintly"))
+    check("...nor is scenery", not S._MOTION_CUE.search("the light fades"))
+
+    _m = S.motion_clause("Mara turns away", "auto")
+    check("'auto' speaks on a moving beat", bool(_m))
+    check("'auto' is silent otherwise", S.motion_clause("Mara smiles", "auto") == "")
+    check("'on' speaks regardless", bool(S.motion_clause("Mara smiles", "on")))
+    check("'off' says nothing", S.motion_clause("Mara turns away", "off") == "")
+
+    check("it states the PATH, not the pose",
+          "through every position on the way" in _m and "steady speed" in _m)
+    check("...and the chain of joints, which is where a neck snap shows",
+          "neck following the shoulders" in _m)
+    check("no negation -- the negative is never evaluated at cfg 1",
+          not re.search(r"\b(?:not|never|no|without|avoid)\b", _m, re.I))
+    check("it names nobody, so it adds no second reference to anyone in frame",
+          not re.search(r"\b(?:she|he|her|his|they|Mara|Dom|subject)\b", _m, re.I))
+
+    # Same presence gate as every other per-shot state.
+    CM = "Mara = she, 30, red hair, coat"
+    gens = S.distribute_generations("A quiet studio.",
+                                    ["Mara turns away from the camera.",
+                                     "The window rattles."], "", "", CM)
+    check("a shot with someone turning gets it", "Movement is continuous" in gens[0])
+    check("a scenery shot does not -- nothing there has a neck",
+          "Movement is continuous" not in gens[1])
+    off = S.distribute_generations("A quiet studio.", ["Mara turns away."], "", "", CM,
+                                   motion_guard="off")
+    check("'off' reaches the per-shot text", "Movement is continuous" not in off[0])
+    check("the widget is appended, so saved workflows keep their order",
+          "motion_guard" in S.ADDED_WIDGETS)
+    check("...and run() passes it through", "motion_guard=motion_guard" in src)
+
+
 def check_solidity_guard():
     """Bodies stop at objects instead of passing through them.
 
@@ -3640,6 +3697,7 @@ def main():
     check_continuity_warning()
     check_restraints_stay_on()
     check_bare_state_persists()
+    check_motion_guard()
     check_solidity_guard()
     check_anatomy_guard()
     check_latent_output()
