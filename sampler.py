@@ -5328,7 +5328,7 @@ class H3LongVideos:
             subject_count_guard="auto",
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
-            mute_nonspeech_audio=False, mute_fade_ms=40,
+            mute_nonspeech_audio=True, mute_fade_ms=40,
             watermark_text="", watermark_position="bottom-right", watermark_size=4.0,
             watermark_opacity=0.75, watermark_margin=3.0,
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
