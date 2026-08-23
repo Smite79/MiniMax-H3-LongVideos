@@ -163,6 +163,20 @@ rendering**. Do that first; it is near-instant.
   the anchor, and never to a shot with nobody in it — describing a body in an empty
   frame is what burned faces into opening frames before. `auto` = on below a 768
   short edge or when a LoRA is applied.
+- **Solidity.** `solidity_guard` stops bodies passing through objects. Same
+  constraint as the anatomy guard, and the same solution: the negative is never
+  evaluated, and *"does not walk through the wall"* can't go in the positive either —
+  it names walking through a wall, and a mention is a presence cue. So it states
+  what bodies **do**: stop at the surface, rest on the floor, press against what
+  they touch, walk *around* the furniture. Then it names the solid things this shot
+  established — up to three, the beat's own first, so *"Mara climbs the stairs"*
+  leads with the stairs rather than with set dressing from the anchor.
+
+  `auto` (default) speaks only when the shot actually names something solid, reading
+  both the beat and the identity block, since the set is usually described in the
+  anchor. `on` states it every shot. Only ever applied to a shot with someone in
+  it — you need a body before it can pass through anything. Genuinely passable
+  things (a curtain, smoke) are deliberately not claimed to be solid.
 - **Soundscape from the scene.** `auto_soundscape` builds the ambient bed from your
   prompt instead of you typing one. It reads the **anchor** — the soundscape is
   global, stamped on every shot, so it must describe the *place*, not one beat's

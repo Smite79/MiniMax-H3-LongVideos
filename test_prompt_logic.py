@@ -2662,6 +2662,72 @@ def check_restraints_stay_on():
                                            lock_restraints=False)))
 
 
+def check_solidity_guard():
+    """Bodies stop at objects instead of passing through them.
+
+    Same constraint as the anatomy guard and for the same reason: H3 is CFG-free at
+    cfg 1, so a negative prompt is never evaluated. And "does not walk through the
+    wall" cannot go in the POSITIVE either -- it names walking through a wall, and a
+    mention is a presence cue. Only a positive statement of what bodies do is
+    available."""
+    print("\n=== solidity guard ===")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    ANCHOR = "A workshop with a roller door, a workbench and a van."
+
+    check("solid objects are found in a beat",
+          S.solid_things_in("Mara walks past the van") == ["van"])
+    check("...and deduplicated by head noun",
+          S.solid_things_in("a table and more tables") == ["table"])
+    check("...keeping the form as written, so 'stairs' is not 'stair'",
+          S.solid_things_in("she climbs the stairs") == ["stairs"])
+    check("the beat's own objects come FIRST, not the set dressing",
+          S.solid_things_in("Mara climbs the stairs.")[0] == "stairs"
+          and S.solidity_clause("Mara climbs the stairs.", ANCHOR, "auto")
+              .index("the stairs") < S.solidity_clause(
+                  "Mara climbs the stairs.", ANCHOR, "auto").index("the roller door"))
+    _many = S.solidity_clause("a table, a chair, a bed, a couch and a desk", "", "auto")
+    check("at most three are named, so it does not read as an inventory",
+          _many.split("occupying real space here: ")[1].count("the ") == 3)
+
+    # It has to be stated positively -- the whole point.
+    _c = S.solidity_clause("Mara walks past the van", ANCHOR, "auto")
+    check("the clause never says 'through'", "through" not in _c.lower())
+    check("...and carries no negation of the failure",
+          not re.search(r"\b(?:not|never|no|doesn't|does not|cannot)\b", _c, re.I))
+    check("...it says what bodies DO instead",
+          "stops where it meets a surface" in _c and "walks around" in _c)
+
+    # Modes.
+    check("'off' says nothing", S.solidity_clause("she walks past the table", "", "off") == "")
+    check("'auto' is silent when nothing solid is named",
+          S.solidity_clause("she smiles at him", "", "auto") == "")
+    check("'auto' speaks when something solid IS named",
+          bool(S.solidity_clause("she leans on the workbench", "", "auto")))
+    check("'on' speaks regardless", bool(S.solidity_clause("she smiles", "", "on")))
+    check("a genuinely passable thing is not called solid",
+          S.solid_things_in("a curtain of rain and a puff of smoke") == [])
+    check("vague prose nouns do not fire",
+          S.solid_things_in("an edge to her voice, the side of the story") == [])
+
+    # Gated on a body being present, like every other per-shot state.
+    CM = "Mara = she, 30, red hair"
+    gens = S.distribute_generations(ANCHOR, ["Mara walks past the van.",
+                                             "The roller door rattles open."],
+                                    "", "", CM, solidity_guard="auto")
+    check("a shot with someone in it gets the clause",
+          "Solid things stay solid" in gens[0])
+    check("a scenery shot with nobody in it does not -- no body, nothing to pass through",
+          "Solid things stay solid" not in gens[1])
+    off = S.distribute_generations(ANCHOR, ["Mara walks past the van."],
+                                   "", "", CM, solidity_guard="off")
+    check("'off' reaches the per-shot text", "Solid things stay solid" not in off[0])
+
+    check("the widget is appended, so saved workflows keep their order",
+          "solidity_guard" in S.ADDED_WIDGETS)
+    check("...and run() passes it through",
+          "solidity_guard=solidity_guard" in src)
+
+
 def check_anatomy_guard():
     """Limb counts stated POSITIVELY, because a negative cannot work here.
 
@@ -3495,6 +3561,7 @@ def main():
     check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()
+    check_solidity_guard()
     check_anatomy_guard()
     check_latent_output()
     check_preflight_note_assembly()

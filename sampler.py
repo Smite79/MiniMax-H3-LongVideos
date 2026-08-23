@@ -258,7 +258,7 @@ ADDED_WIDGETS = (
     "watermark_margin", "intro_text", "intro_position", "intro_seconds",
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms", "anatomy_guard", "lock_restraints",
+    "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
     "auto_soundscape",
 )
 
@@ -809,6 +809,54 @@ def restraint_regions(items):
         else:
             if "body" not in out:
                 out.append("body")
+    return out
+
+
+def solid_things_in(text):
+    """Solid objects named in this text, in order of appearance.
+
+    Deduplicated by head noun so "table" and "tables" are not said twice, but the
+    surface form is what comes back: "stairs" singularises to "stair", which is not
+    what anyone calls them, and inherently-plural nouns are common here (stairs,
+    steps, shelves, rocks)."""
+    out, seen = [], set()
+    for m in _SOLID_NOUNS.finditer(text or ""):
+        w = m.group(0).lower()
+        head = w[:-1] if w.endswith("s") and not w.endswith("ss") else w
+        if head not in seen:
+            seen.add(head)
+            out.append(w)
+    return out
+
+
+def solidity_clause(body, persistent="", mode="auto"):
+    """Assert that the objects in this shot occupy space and stop bodies.
+
+    'auto' only speaks when the shot actually names something solid, so a beat with
+    nothing to collide with pays nothing. 'on' always states it.
+
+    The named list matters more than the general sentence: the failure is a body
+    passing through one PARTICULAR thing the shot established, and naming it again
+    is what keeps it in the frame as an obstacle rather than as scenery."""
+    if mode == "off":
+        return ""
+    # BEAT first, then the identity block. The list is trimmed to three, and the
+    # object that matters is the one this shot's action involves -- scanning the
+    # anchor first filled the quota with set dressing and cut the stairs the
+    # character is actually climbing.
+    found = solid_things_in(body)
+    for w in solid_things_in(persistent):
+        if w not in found:
+            found.append(w)
+    if not found and mode != "on":
+        return ""
+    out = SOLIDITY_STATE
+    if found:
+        # A bare list, so no verb has to agree with a noun that may be plural
+        # ("the stairs is solid"). Three at most -- past that it reads as an
+        # inventory and starts competing with the beat for attention.
+        out += (" Solid, and occupying real space here: "
+                + ", ".join("the " + n for n in found[:3]) + ".")
     return out
 
 
@@ -1727,6 +1775,29 @@ MOUTH_SETTLE_FRAMES = 3
 ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers each, "
                  "and two legs, in correct human proportion.")
 
+# Things a body has to stop at. Deliberately excludes anything genuinely passable --
+# a curtain, a beaded screen, smoke -- because asserting those are solid would be
+# wrong, and excludes vague ones ("edge", "side") that would fire on prose.
+_SOLID_NOUNS = re.compile(
+    r"\b(?:wall|walls|door|doors|doorway|gate|fence|railing|rail|banister|"
+    r"table|tables|desk|desks|counter|countertop|bench|workbench|"
+    r"chair|chairs|stool|couch|sofa|armchair|bed|beds|bunk|"
+    r"crate|crates|box|boxes|barrel|chest|trunk|cabinet|dresser|wardrobe|"
+    r"shelf|shelves|bookcase|pillar|column|post|beam|"
+    r"stair|stairs|staircase|step|steps|ladder|"
+    r"window|windowpane|pane|windshield|"
+    r"van|car|truck|bike|motorcycle|trailer|"
+    r"floor|ground|ceiling|"
+    r"rock|rocks|boulder|tree|trees|"
+    r"barrier|partition|roller door|shutter)\b", re.I)
+
+# Positive throughout. "Does not walk through the wall" names walking through a wall,
+# and a mention is a presence cue -- the same reason a removed garment came back when
+# the prompt said it was gone. Say what the bodies DO instead.
+SOLIDITY_STATE = (" Solid things stay solid: a body stops where it meets a surface, feet rest on "
+                  "the floor, hands press against what they touch, and anyone crossing the space "
+                  "walks around the furniture rather than across it.")
+
 LIPS_CLOSED_STATE = (" Everyone in this shot is silent with their mouth closed and lips together, "
                      "jaw still, not talking.")
 LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement."
@@ -2554,7 +2625,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                            auto_silence_nonspeech=True, count_subjects=False, front_load=False,
                            notes_out=None, auto_props=True, prevent_nudity=True,
                            exposed_terms="", strip_out=None, anatomy_guard=False,
-                           lock_restraints=True):
+                           lock_restraints=True, solidity_guard="auto"):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2793,6 +2864,14 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             rc = restraint_clause(active, body, lock_restraints)
             if rc:
                 persistent = persistent.rstrip(". ") + "." + rc
+        # Solidity, on the same presence gate: a body can only pass through a table
+        # if there is a body. Reads BOTH the beat and the persistent identity block,
+        # because the anchor is where the set usually gets described ("a workshop
+        # with a roller door") while the beat only says what happens in it.
+        if people_here:
+            sc = solidity_clause(body, persistent, solidity_guard)
+            if sc:
+                persistent = persistent.rstrip(". ") + "." + sc
         silent_shot = no_speech
         block = f"[Generation {gi}] {persistent}".strip()
         # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is
@@ -4829,6 +4908,21 @@ class H3LongVideos:
                                "'chain', 'collar', 'strap' and 'belt' are NOT treated as restraints; "
                                "they are jewellery, a shirt part, a dress part and a garment at least "
                                "as often."}),
+                "solidity_guard": (["off", "auto", "on"], {"default": "auto",
+                    "tooltip": "Keep bodies from passing through objects. States that the solid "
+                               "things in the shot occupy space and that bodies stop at surfaces.\n\n"
+                               "Stated POSITIVELY, and it has to be: H3 is CFG-free at cfg 1, so a "
+                               "negative prompt is never evaluated, and 'does not walk through the "
+                               "wall' in the positive names walking through a wall -- a mention is a "
+                               "presence cue. It says what bodies DO instead: stop at the surface, "
+                               "rest on the floor, press against what they touch, go around the "
+                               "furniture.\n\n"
+                               "'auto' speaks only when the shot actually names something solid "
+                               "(walls, doors, tables, stairs, vehicles, crates, trees...), reading "
+                               "BOTH the beat and the identity block, since the set is usually "
+                               "described in the anchor. 'on' states it every shot. Only ever "
+                               "applied to a shot with someone in it -- a body is needed before one "
+                               "can pass through anything."}),
                 "anatomy_guard": (["off", "auto", "on"], {"default": "auto",
                     "tooltip": "State each person's limb COUNT positively, to stop spare arms and "
                                "duplicated hands. H3 is CFG-free at cfg 1, so a NEGATIVE prompt is "
@@ -4989,6 +5083,7 @@ class H3LongVideos:
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
+            solidity_guard="auto",
             auto_soundscape="fill if blank",
             auto_silence_nonspeech=True,
             subject_count_guard="auto",
@@ -5218,7 +5313,8 @@ class H3LongVideos:
                                       prevent_nudity=prevent_nudity,
                                       exposed_terms=exposed_terms, strip_out=strip_shots,
                                       anatomy_guard=anatomy_on,
-                                      lock_restraints=lock_restraints)
+                                      lock_restraints=lock_restraints,
+                                      solidity_guard=solidity_guard)
 
         # A scenery beat mid-chain hands the next shot a frame with no people in
         # it. Both prompts are individually correct, so this is invisible without
