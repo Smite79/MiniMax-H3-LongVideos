@@ -120,6 +120,13 @@ rendering**. Do that first; it is near-instant.
   which reads as it having broken. The clause names the bound region positively
   (`the wrists stay bound close together, the arms moving as one`), only for people
   actually in the shot, and it disappears the moment the restraint is removed.
+  The wording follows **how** the restraint holds: a character cuffed to a
+  headboard gets `the cuffs stay locked closed around the wrists and fastened to
+  the headboard, the chain between them taut` instead of the bound-together text —
+  two contradictory sentences about one pair of wrists is exactly how the cuffs end
+  up rendered broken. Poses are covered too (behind the back, above the head), and
+  every variant adds that the hardware itself stays whole: an open cuff or a
+  snapped link mid-struggle was otherwise free to happen.
 - **Uncovered zones.** The node tracks two body zones, `lower` and `upper`. When a
   removal leaves one with nothing on it, it keeps that state **stated** in every
   later shot until something covers the zone again — because deleting a garment is
@@ -207,7 +214,9 @@ rendering**. Do that first; it is near-instant.
   the last one, so the **path** is what gets stated: movement travels through every
   position on the way, at one steady speed, the neck following the shoulders and the
   shoulders following the hips. `auto` fires on a beat that actually moves someone
-  (turns, looks, walks, leans, reaches); a beat where nobody changes orientation has
+  (turns, looks, walks, leans, reaches — and the high-jerk ones: struggles, pulls,
+  twists, writhes, where a limb most often arrives without its path); a beat where
+  nobody changes orientation has
   no path to describe. A snap immediately *after* a cut is a different thing — that
   is the model leaving the keyframe pose, and `handoff_offset` is the lever there.
 - **Two bodies in contact.** `contact_guard` keeps an arrangement correctly aligned

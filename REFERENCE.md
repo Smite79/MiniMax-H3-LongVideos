@@ -479,12 +479,19 @@ and then reinforces that choice rather than revising it. That is why turbo LoRAs
 duplicate subjects even at native resolution with a clean prompt. On LoRA runs the
 count clause is also moved to the **front** of the prompt, ahead of scene and
 style, so it binds before composition settles. Both stock-loader LoRAs (weight
-patches) and bypass LoRAs (injections) are detected. `on` always; `off` never.
+patches) and bypass LoRAs (injections) are detected. `auto` also fires on ANY shot
+that binds two or more people — multi-figure frames tile and merge even at native
+size, and the count clause is the cheapest thing that holds the number down.
+`on` always; `off` never.
 Scenery beats with no characters never get the clause.
 
 If duplication persists at native resolution, that's the model rather than the
 prompt — keep subjects visually distinct, add spatial cues ("Kristy at the left
-wing"), and avoid having two characters overlap in frame.
+wing"), and avoid having two characters overlap in frame. A mirror or other
+reflective surface in the anchor is a common hidden cause: H3 renders the
+reflection as a second figure standing in the room, and since the anchor repeats
+on every shot, the doubling happens on every shot — the anchor-hazards report now
+flags it before the render.
 
 
 **Write attributes, not noun phrases.** In `character_memory`, describe people as

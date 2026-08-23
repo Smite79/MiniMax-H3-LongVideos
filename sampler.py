@@ -790,6 +790,65 @@ _RESTRAINT_REGION = (
                           r"manacles|thumb|arm|arms)\b", re.I)),
 )
 
+# HOW a wrist restraint holds changes what the body can do, and the default effect
+# text only covers ONE of those ways. "the wrists stay bound close together, the
+# arms moving as one" is true of wrist-to-wrist cuffs and false of everything else:
+# a character chained to a headboard has arms held APART at fixed anchor points,
+# hands cuffed behind the back have arms folded behind, cuffed above the head has
+# arms raised. Telling the model two contradictory things about the same wrists --
+# scene says spread, guard says together -- is exactly how the cuffs end up
+# rendered broken: neither sentence holds, and the hardware loses.
+#
+# A tether needs a FASTENING verb before it trusts a target noun ("walks to the
+# table" must not read as chained to the table); resistance verbs qualify only with
+# "against", which is how pushing on an anchor point reads.
+_RESTRAINT_TETHER = re.compile(
+    r"\b(?:(?:cuff(?:ed|s)?|chain(?:ed|s)?|ti(?:ed|es)|lock(?:ed|s)?|shackle(?:d|s)?|"
+    r"fasten(?:ed|s)?|strap(?:ped|s)?|bolt(?:ed|s)?|secur(?:ed|es)|hitch(?:ed)?|"
+    r"bind(?:s|ing)?|bound)\b[^.]{0,40}?\bto\s+(?:the|a|an|her|his|their|its)?\s*"
+    r"|(?:strain\w*|pull\w*|tug\w*|yank\w*)\b[^.]{0,30}?\bagainst\s+the\s+)"
+    r"(bed|headboard|wall|post|pole|frame|ring|hook|ceiling|rack|table|bench|chair|"
+    r"doorframe|beam|pipe|floor|tree|cross|stainless steel bar)\b", re.I)
+_RESTRAINT_POSE = (
+    ("behind", re.compile(r"\bbehind\s+(?:her|his|their|the)?\s*back\b", re.I)),
+    ("overhead",
+     re.compile(r"\b(?:above|over)\s+(?:her|his|their|the)?\s*head\b|\boverhead\b", re.I)),
+)
+
+
+def _restraint_effect_text(region, text):
+    """The effect sentence for one bound region, adapted to HOW the restraint holds.
+
+    `text` is the person's own wardrobe entries plus this shot's beat -- both are
+    places the user states the attachment ("wrist cuffs to the bed frame") or the
+    pose ("hands cuffed behind her back"). Unrecognized setups keep the default
+    wording, which stays correct for plain wrist-to-wrist cuffs."""
+    base = _RESTRAINT_EFFECT[region]
+    if region != "wrists":
+        return base
+    t = text or ""
+    m = _RESTRAINT_TETHER.search(t)
+    if m:
+        return ("the cuffs stay locked closed around the wrists and fastened to the "
+                f"{m.group(1).lower()}, the chain between them taut, the arms held where "
+                "they are secured")
+    for pose, rx in _RESTRAINT_POSE:
+        if rx.search(t):
+            if pose == "behind":
+                return ("the wrists stay bound close together behind the back, the arms "
+                        "held there and moving as one")
+            return ("the wrists stay bound close together above the head, the arms held "
+                    "up and moving as one")
+    return base
+
+
+# The failure mode where the HARDWARE itself gives up: H3 renders an open cuff, a
+# snapped link, or a strap turned to ribbon mid-struggle. Nothing in the per-region
+# effects says the equipment keeps its state, so state it once, positively -- at cfg
+# 1 a negation ("does not break") would only name the breaking.
+_RESTRAINT_HARDWARE = (" Every restraint stays whole and closed, holding with its full "
+                       "tension exactly as it was put on.")
+
 
 def restraint_regions(items):
     """Body regions currently bound, for everything this person is wearing.
@@ -969,12 +1028,16 @@ def restraint_clause(active, body, lock_restraints=True):
             continue
         subj = _subject_term(name, active) if name else "the subject"
         # `their` rather than a repeated name: naming someone twice in a shot is
-        # what renders them twice.
-        effects = "; ".join(_RESTRAINT_EFFECT[r] for r in regions)
+        # what renders them twice. The attachment/pose scan reads BOTH the person's
+        # own wardrobe entries and this shot's prose -- either is where "cuffed to
+        # the headboard" gets stated.
+        effects = "; ".join(_restraint_effect_text(r, " ".join(items) + " " + (body or ""))
+                            for r in regions)
         bits.append(f"{subj} is physically restrained -- {effects}")
     if not bits:
         return ""
-    return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+    return (" " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+            + _RESTRAINT_HARDWARE)
 
 
 def auto_wardrobe_removals(active, body, lock_restraints=True):
@@ -1280,7 +1343,8 @@ def dedupe_person_mentions(body, active):
 
 
 def compose_persistent(body, active, anchor_id, removed=None, departed=None,
-                       count_subjects=False, speaking=False, front_load=False):
+                       count_subjects=False, speaking=False, front_load=False,
+                       count_auto=False):
     """Assemble one shot's text WITHOUT duplicating subjects.
 
     Each present person's description is injected as a parenthetical at the FIRST
@@ -1369,7 +1433,12 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
             # pushes the sample away from the training distribution and the figure
             # gets tiled. Stating the count (and "no other people") gives the model
             # a hard target instead of leaving the number implicit.
-            if count_subjects:
+            #
+            # 'auto' also fires whenever THIS shot binds two or more people, whatever
+            # the resolution: two figures in frame is where tiling and merging
+            # happen even at native size, and the clause is the cheapest thing that
+            # holds the count down.
+            if count_subjects or (count_auto and len(refs) >= 2):
                 n_people = len(refs)
                 word = {1: "one", 2: "two", 3: "three", 4: "four",
                         5: "five", 6: "six"}.get(n_people, str(n_people))
@@ -1425,6 +1494,12 @@ _ANCHOR_APPARATUS = re.compile(
 _ANCHOR_FRAMING = re.compile(
     r"\b(medium shot|close-?ups?|wide shot|long shot|full shot|two shot|"
     r"over the shoulder|low angle|high angle|aerial|overhead shot|establishing shot)\b", re.I)
+# A reflective surface shows whoever is in frame, and H3 renders that reflection as
+# a SECOND figure standing in the room -- the same duplicated-subject failure a
+# sub-native render produces, but caused by the scene text itself. Because it lives
+# in the anchor, the mirror is present and doubling people on EVERY shot.
+_ANCHOR_MIRROR = re.compile(
+    r"\b(mirrors?|mirrored|reflections?|reflexions?|reflective|reflecting)\b", re.I)
 
 
 # Scene words -> the ambience they imply. Read from the ANCHOR, because the
@@ -1555,6 +1630,12 @@ def anchor_warnings(anchor):
     if f:
         out.append(f"framing in the anchor ({', '.join(f)}) -- this pins every shot to that size; "
                    f"put framing in the beats so it can change shot to shot")
+    mr = found(_ANCHOR_MIRROR)
+    if mr:
+        out.append(f"mirror/reflection words in the anchor ({', '.join(mr)}) -- H3 renders a "
+                   f"reflection as a SECOND figure standing in the room, so this duplicates "
+                   f"whoever is on screen on EVERY shot; drop it from the anchor, or make each "
+                   f"shot that shows one say what is in the mirror and why")
     garments = sorted({w.lower() for w in re.findall(r"[A-Za-z][\w\-]*", a)
                        if garment_zones(w)})
     if garments:
@@ -1916,7 +1997,15 @@ _MOTION_CUE = re.compile(
     r"rise|rises|rising|stand|stands|standing|sit|sits|sitting|"
     r"reach|reaches|reaching|raise|raises|raising|lower|lowers|"
     r"kneel|kneels|climb|climbs|climbing|follow|follows|following|"
-    r"approach|approaches|enter|enters|exit|exits|leave|leaves)\b", re.I)
+    r"approach|approaches|enter|enters|exit|exits|leave|leaves|"
+    # High-jerk motion -- struggling, pulling, twisting. These are exactly the
+    # beats where a limb arrives without its path or spasm-renders, and 'auto'
+    # used to stay silent through all of them because a struggle is not an
+    # orientation change. A restrained character's beats are almost entirely
+    # made of these, which is where cuffs visibly tear.
+    r"struggl\w*|pull\w*|yank\w*|jerk\w*|tug\w*|twist\w*|writh\w*|thrash\w*|"
+    r"flail\w*|squirm\w*|strain\w*|crawl\w*|danc\w*|push\w*|stagger\w*|"
+    r"stumbl\w*|sway\w*|trembl\w*|kick\w*|lung(e|es|ing))\b", re.I)
 
 # Positive throughout, for the same reason as the solidity state: the negative is
 # never evaluated at cfg 1, and "the head does not snap round" names a head snapping
@@ -2782,7 +2871,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                            notes_out=None, auto_props=True, prevent_nudity=True,
                            exposed_terms="", strip_out=None, anatomy_guard=False,
                            lock_restraints=True, solidity_guard="auto",
-                           motion_guard="auto", contact_guard="auto"):
+                           motion_guard="auto", contact_guard="auto", count_auto=False):
     """One beat = one shot. Stamp the permanent identity into each beat. Total
     video length is (number of shots) x (per-shot length), computed by the
     caller -- never divided out of a total, so beat count always equals shot count.
@@ -2968,7 +3057,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             if zones_bare:
                 bare_now[nm] = zones_bare
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
-                                        speaking=has_speech(body), front_load=front_load)
+                                        speaking=has_speech(body), front_load=front_load,
+                                        count_auto=count_auto)
         # State the DIRECTION of the change, in the shot that performs it. Only for
         # people actually in this shot; an anchor-prose garment is stated
         # impersonally, so it summons nobody.
@@ -5141,10 +5231,11 @@ class H3LongVideos:
                                "head does not snap round' in the positive names a head snapping "
                                "round.\n\n"
                                "'auto' speaks only on a beat that actually moves someone (turns, "
-                               "looks, walks, leans, reaches...), since a beat where nobody "
-                               "changes orientation has no path to describe. 'on' states it every "
-                               "shot. Names nobody, so it adds no second reference to anyone "
-                               "already in frame.\n\n"
+                               "looks, walks, leans, reaches... and the high-jerk ones -- struggles, "
+                               "pulls, twists, writhes -- where a limb most often arrives without its "
+                               "path), since a beat where nobody changes orientation has no path to "
+                               "describe. 'on' states it every shot. Names nobody, so it adds no "
+                               "second reference to anyone already in frame.\n\n"
                                "A snap right after a cut is a different thing: that is the model "
                                "leaving the keyframe pose. handoff_offset helps there."}),
                 "solidity_guard": (["off", "auto", "on"], {"default": "auto",
@@ -5220,7 +5311,9 @@ class H3LongVideos:
                                "distilled LoRA fixes composition (including how many people are in frame) "
                                "in its first step or two, so it duplicates even at native size -- there the "
                                "count is moved to the FRONT of the prompt so it binds before the scene. "
-                               "'auto' = on when the short edge is under 768 OR a LoRA is applied; "
+                               "'auto' = on when the short edge is under 768 OR a LoRA is applied, and also "
+                               "on ANY shot holding two or more people -- multi-figure frames are where "
+                               "duplication happens even at native size; "
                                "'on' always; 'off' never."}),
                 "auto_silence_nonspeech": ("BOOLEAN", {"default": True,
                     "tooltip": "Stop mouths moving / gibberish audio on shots with no dialogue. Any beat "
@@ -5555,7 +5648,8 @@ class H3LongVideos:
                                       lock_restraints=lock_restraints,
                                       solidity_guard=solidity_guard,
                                       motion_guard=motion_guard,
-                                      contact_guard=contact_guard)
+                                      contact_guard=contact_guard,
+                                      count_auto=(subject_count_guard == "auto"))
 
         # A scenery beat mid-chain hands the next shot a frame with no people in
         # it. Both prompts are individually correct, so this is invisible without

@@ -3493,6 +3493,127 @@ def check_vram_budget():
           R(15.0, 24, 15.9, 11.7, 1.5, True, NAT)[0] == 362)
 
 
+def check_high_jerk_motion_cues():
+    """Struggling is motion: 'auto' must speak on the beats that jerk hardest.
+
+    A struggle beat used to get NO path text at all -- 'struggle'/'pull'/'twist'
+    are not orientation changes, so _MOTION_CUE missed them -- and those are
+    exactly the shots where a limb arrives without its path or spasm-renders.
+    A restrained character's beats are almost entirely made of these."""
+    print("\n=== high-jerk motion speaks ===")
+    fired = ["She struggles against the handcuffs.",
+             "She pulls at the chain.",
+             "He twists against the ropes.",
+             "She writhes on the bed.",
+             "He staggers backward.",
+             "She crawls across the floor.",
+             "They dance slowly.",
+             "She yanks her wrist upward."]
+    check("struggle-family beats are motion cues",
+          all(S._MOTION_CUE.search(t) for t in fired))
+    check("calm beats stay silent",
+          all(not S._MOTION_CUE.search(t) for t in
+              ("Mara smiles faintly", "The light fades", "The room is warm")))
+    m = S.motion_clause("She struggles against the handcuffs.", "auto")
+    check("'auto' speaks on a struggle beat", bool(m))
+    check("...with the same path text", "through every position on the way" in m)
+
+
+def check_restraint_attachment_and_hardware():
+    """A restraint clause must match HOW the restraint holds.
+
+    The old wrist text said the arms stay bound close together -- true of
+    wrist-to-wrist cuffs, FALSE of a character chained to a headboard (arms held
+    apart) or cuffed behind the back (arms folded). Two contradictory sentences
+    about one pair of wrists is how the cuffs render broken. And nothing said the
+    HARDWARE keeps its state, so mid-struggle H3 rendered an open cuff or a
+    snapped link."""
+    print("\n=== restraints describe how they hold ===")
+    act = {"": ["handcuffs"]}
+    teth = S.restraint_clause(act, "She is cuffed to the headboard.", True)
+    check("a tether names what it is fastened to",
+          "headboard" in teth and "locked closed" in teth)
+    check("...and drops the bound-pair wording", "bound close together" not in teth)
+    wall = S.restraint_clause(act, "Her wrists are chained to the wall, arms spread.", True)
+    check("chained-to-a-wall reads as a tether too", "wall" in wall and "fastened" in wall)
+    behind = S.restraint_clause(act, "Her hands are cuffed behind her back.", True)
+    check("behind-the-back pose is stated", "behind the back" in behind)
+    over = S.restraint_clause(act, "Her wrists are cuffed above her head.", True)
+    check("overhead pose is stated", "above the head" in over)
+    plain = S.restraint_clause(act, "She stands very still.", True)
+    check("plain cuffs keep the bound-pair wording", "bound close together" in plain)
+    check("the hardware is stated to stay whole",
+          "stays whole" in plain and "full tension" in plain)
+    check("every variant carries it",
+          all("stays whole" in S.restraint_clause(act, b, True)
+              for b in ("She is cuffed to the headboard.",
+                        "Her hands are cuffed behind her back.",
+                        "She stands very still.")))
+    check("walking prose is not a tether",
+          "fastened to" not in S.restraint_clause(
+              {"": ["handcuffs"]}, "She walks to the table.", True))
+    check("a garment sheet gets no clause at all",
+          S.restraint_clause({"": ["red jacket"]}, "She stands.", True) == "")
+    check("lock_restraints=False says nothing",
+          S.restraint_clause(act, "She is cuffed to the wall.", False) == "")
+
+    # End to end: the user's exact scenario -- restrained, straining, multi-clause.
+    cm = "Jon = he, 30, dark hair, handcuffs"
+    g = S.distribute_generations("A bedroom.", [
+        "Jon strains against the headboard chain, pulling hard."], "", "", cm)
+    check("an end-to-end shot states the tether", "headboard" in g[0])
+    check("...and the hardware state", "stays whole" in g[0])
+    check("...and the movement path (struggle is motion)",
+          "Movement is continuous" in g[0])
+    # No negation anywhere new: cfg 1 never evaluates the negative.
+    eff = " ".join(S._RESTRAINT_EFFECT.values()).lower()
+    for bad in ("cannot", "can't", "unable", "no longer", "does not", "won't"):
+        check(f"new restraint text never negates ({bad})", bad not in eff)
+
+
+def check_count_auto_multi_person():
+    """'auto' now states the subject count whenever a shot binds 2+ people.
+
+    Duplication was treated as a sub-native-resolution / LoRA problem, but two
+    figures in ONE frame tile and merge even at native size. The count clause is
+    the cheapest thing that holds the number down, so auto fires there too --
+    per shot, from compose_persistent's own binding count."""
+    print("\n=== subject count auto-fires on multi-person shots ===")
+    act = {"Mara": ["she", "red hair"], "Jon": ["he", "dark hair"]}
+    body = "Mara waves at Jon."
+    both = S.compose_persistent(body, dict(act), "A garage.",
+                                count_subjects=False, count_auto=True)
+    check("two people -> the count is stated even at native size",
+          "Exactly two people" in both)
+    solo = S.compose_persistent("Mara waves.", {"Mara": ["she", "red hair"]}, "A garage.",
+                                count_subjects=False, count_auto=True)
+    check("one person -> nothing added", "Exactly" not in solo)
+    off = S.compose_persistent(body, dict(act), "A garage.",
+                               count_subjects=False, count_auto=False)
+    check("count_auto off leaves the old behaviour", "Exactly" not in off)
+    forced = S.compose_persistent(body, dict(act), "A garage.", count_subjects=True)
+    check("explicit on still works", "Exactly two people" in forced)
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("run() derives count_auto from the widget",
+          'count_auto=(subject_count_guard == "auto")' in src)
+
+
+def check_anchor_mirror_warning():
+    """A reflective surface in the anchor duplicates whoever is on screen.
+
+    H3 renders a mirror's reflection as a second figure standing in the room,
+    and because the anchor repeats on every shot, the doubling happens on every
+    shot. Warn before the render, like the other anchor hazards."""
+    print("\n=== reflective surfaces are a duplication hazard ===")
+    w = S.anchor_warnings("A bedroom with a large mirror. Warm lamplight.")
+    check("a mirror in the anchor warns", any("mirror" in x for x in w))
+    w2 = S.anchor_warnings("An open four bay car garage. Natural daylight.")
+    check("a clean anchor raises no reflection warning",
+          not any("mirror" in x or "reflection" in x for x in w2))
+    w3 = S.anchor_warnings("")
+    check("an empty anchor stays quiet", w3 == [])
+
+
 def main():
     p = SP(PROMPT, "##")
     anchor, beats = p[0], p[1:]
@@ -3838,6 +3959,10 @@ def main():
     check_exposed_terms_key_warning()
     check_bare_wording_follows_pronoun()
     check_plural_cast_binding()
+    check_high_jerk_motion_cues()
+    check_restraint_attachment_and_hardware()
+    check_count_auto_multi_person()
+    check_anchor_mirror_warning()
 
     print()
     if _fails:
