@@ -2200,6 +2200,27 @@ def check_ref_modes():
           S.keyframe_rides_with_refs(0.999) and S.keyframe_rides_with_refs(None))
     check("...and a softened reference sends it back to the ref channel",
           not S.keyframe_rides_with_refs(0.90))
+
+    # The handoff must reach the TEXT ENCODER too. comfy/text_encoders/minimax.py
+    # tokenize_with_weights is either/or: passing minimax_ref_items makes it ignore
+    # `images` outright. So a ref-conditioned shot showed the VLM its identity
+    # references and never the previous frame -- told the location in words, anchored
+    # at frame 0 by the latent, but with nothing describing where the shot left off.
+    # The result is the reported one: same location, re-imagined scenery.
+    check("the ref path hands the previous frame to the VLM",
+          'items = items + [{"type": "image", "data": hand_img}]' in src)
+    check("...appended AFTER the references, so <Picture N> tags still point right",
+          src.index("items, blocks = _build_ref_images")
+          < src.index('items = items + [{"type": "image"'))
+    check("...and the same tensor is reused as the keyframe latent, encoded once",
+          '"latent": vae.encode(hand_img)' in src
+          and src.count("_resize(handoff[:1], width, height") == 2)
+    check("...on the same aug gate as the keyframe itself",
+          "hand_img = _resize(handoff[:1], width, height" in src
+          and "if handoff is not None and keyframe_rides_with_refs(ref_noise_aug):\n"
+              "            hand_img" in src)
+    check("the keyframe-only path still passes images= (no ref items there)",
+          "clip.tokenize(prompt, images=images)" in src)
     # sizing: 'match' must never exceed the generation area by more than the 32px snap,
     # and neither mode may ever upscale a small reference
     big = S.ref_image_canvas(4096, 2160, 1344, 768, "match")

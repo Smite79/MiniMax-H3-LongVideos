@@ -3208,6 +3208,21 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         # Passing the handoff as a reference (the 0.30 workaround) asked the model to
         # look like the previous frame rather than to start from it.
         items, blocks = _build_ref_images(vae, refs, width, height, ref_image_size)
+        # The handoff has to reach the TEXT ENCODER as well as the DiT. minimax.py's
+        # tokenize_with_weights is EITHER/OR (:158-184): passing minimax_ref_items
+        # makes it ignore `images` entirely. So on this path the VLM saw only the
+        # identity references and never the previous frame -- it was told the location
+        # in words and given a latent anchor at frame 0, but nothing showed it where
+        # the shot left off, so it re-imagined the scenery. Same place, new scene:
+        # the keyframe alone anchors the first frame without describing it.
+        #
+        # The keyframe-only path has always shown it as `<Picture 1>` via images=, so
+        # this is the same convention. Appended AFTER the references, leaving their
+        # <Picture N> numbers -- which the prompt's tags refer to -- untouched.
+        hand_img = None
+        if handoff is not None and keyframe_rides_with_refs(ref_noise_aug):
+            hand_img = _resize(handoff[:1], width, height, "disabled")
+            items = items + [{"type": "image", "data": hand_img}]
         tokens = clip.tokenize(prompt, minimax_ref_items=items)
         cond = clip.encode_from_tokens_scheduled(tokens)
         vals = {}
@@ -3228,9 +3243,10 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         # softened reference would soften the anchor. Refusing at the source means no
         # caller can assemble that combination by accident.
         kfs = []
-        if handoff is not None and keyframe_rides_with_refs(ref_noise_aug):
-            kfs.append({"resolved_frame_index": 0,
-                        "latent": vae.encode(_resize(handoff[:1], width, height, "disabled"))})
+        if hand_img is not None:
+            # Same tensor the tokenizer was given, encoded once: the VLM is shown the
+            # frame and the DiT is anchored to it, which is what a seamless cut needs.
+            kfs.append({"resolved_frame_index": 0, "latent": vae.encode(hand_img)})
         # A reference-conditioned shot needs the silence anchor just as much as a
         # keyframe-conditioned one, and it used to get NOTHING: `silent` was only
         # honoured on the keyframe-only path below, so wiring any ref_image made the
