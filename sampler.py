@@ -5084,7 +5084,15 @@ class H3LongVideos:
                                "long reverb, distant metal ticks. Weather layers first: rain, wind, "
                                "snow, fog. NO human sounds are ever generated -- no chatter, crowd or "
                                "announcements -- because an ambient bed that implies voices is how H3 "
-                               "starts talking. 'fill if blank' leaves anything you typed alone."}),
+                               "starts talking.\n\n"
+                               "'fill if blank' derives one only when the global_soundscape input "
+                               "is unconnected or empty, so connecting your own text is enough to "
+                               "keep it. 'always' derives even when you HAVE connected one, "
+                               "overriding it -- deliberate, for comparing your bed against a "
+                               "derived one without unwiring. 'off' never derives.\n\n"
+                               "Whichever fires, the bed actually used comes out on the "
+                               "`soundscape` output, so you can read it and wire it back into the "
+                               "input to pin it."}),
                 "lock_restraints": ("BOOLEAN", {"default": True,
                     "tooltip": "Physical restraints stay ON until something explicitly removes them. "
                                "Handcuffs, shackles, manacles, fetters, irons, gags, blindfolds, "
