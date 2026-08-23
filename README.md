@@ -43,6 +43,13 @@ You write four things:
 **1. The prompt** — the first paragraph is the *anchor* (scene and style, kept on
 every shot); each later paragraph is one **beat**, and one beat is one shot.
 
+> **The text fields are input sockets, not boxes on the node.** `prompt`,
+> `character_memory`, `anchor_override`, `global_soundscape`, `non_diegetic_music`,
+> `exposed_terms` and `intro_text` all take a connected multiline text node, so the
+> same prose can feed several samplers and be edited in one place. `prompt` is
+> required: leave it unconnected and the graph errors rather than rendering blank.
+> The other six are optional and behave as empty when nothing is attached.
+
 ```
 Natural daylight, hard sun and deep shadow. Shallow depth of field, background
 falling soft. Fine grain, slight motion blur, neutral colour. A farm with a barn.

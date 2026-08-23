@@ -3332,6 +3332,27 @@ def check_megapixel_sizing():
         sys.modules["comfy.samplers"].KSampler = _KS
     for _n in ("samplers", "utils", "nested_tensor", "model_management"):
         setattr(sys.modules["comfy"], _n, sys.modules["comfy." + _n])
+    # --- every multiline text box is an input SOCKET, not a box on the node -------
+    # forceInput: "Forces the input to be an input slot rather than a widget even a
+    # widget is available for the input type" (comfy/comfy_types/node_typing.py:112).
+    # The text comes from a connected multiline node instead, so the same prose can
+    # feed several samplers and be edited in one place.
+    _schema = S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()
+    _all = {**_schema.get("required", {}), **_schema.get("optional", {})}
+    _text = [k for k, v in _all.items()
+             if len(v) > 1 and isinstance(v[1], dict) and v[1].get("multiline")]
+    check("all seven text fields are still declared", len(_text) == 7)
+    check("...and every one of them is a socket, not a box",
+          all(_all[k][1].get("forceInput") for k in _text))
+    check("prompt is among them", "prompt" in _text)
+    check("...and stays REQUIRED, so an unconnected one is an error not a blank render",
+          "prompt" in _schema["required"])
+    # The optional ones must survive being left unconnected: run() supplies "".
+    _sig = __import__("inspect").signature(
+        S.NODE_CLASS_MAPPINGS["H3LongVideos"].run).parameters
+    check("every optional text socket defaults to empty in run()",
+          all(_sig[k].default == "" for k in _text if k != "prompt"))
+
     req = list(S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["required"])
     check("megapixels is a required widget on the sampler", "megapixels" in req)
     check("...positioned immediately after resolution",

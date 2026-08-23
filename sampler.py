@@ -4791,7 +4791,7 @@ class H3LongVideos:
             "required": {
                 "model": ("MODEL",), "clip": ("CLIP",), "vae": ("VAE",),
                 "audio_vae": ("VAE",),
-                "prompt": ("STRING", {"multiline": True, "default":
+                "prompt": ("STRING", {"multiline": True, "forceInput": True, "default":
                     "A woman with short silver hair and a scar over her left eyebrow. Warm "
                     "late-afternoon light, cinematic, 2K.\n"
                     "wardrobe: weathered red flight jacket, grey cargo shorts, black boots\n\n"
@@ -4859,11 +4859,11 @@ class H3LongVideos:
                                "audio latent are both defined against 24, so this node computes every "
                                "duration at 24 regardless of what you set here. Set your video-save node "
                                "to 24 as well, or the clip plays at the wrong speed."}),
-                "global_soundscape": ("STRING", {"multiline": True, "default": "",
+                "global_soundscape": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "AMBIENT/environmental sound only (rain, room tone, footsteps, engines). "
                                "Appended to every shot as overall_soundscape. NOT for dialogue -- speech "
                                "and lip timing live in the prompt beats. Leave blank for no ambient bed."}),
-                "non_diegetic_music": ("STRING", {"multiline": True, "default": "",
+                "non_diegetic_music": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "Background SCORE only -- genre, mood, instrumentation, tempo -- music that "
                                "is NOT part of the scene. Music is OPT-IN: leave this BLANK and the node "
                                "emits 'non_diegetic_music: N/A' on every shot so H3 adds no score (fixes "
@@ -4985,7 +4985,7 @@ class H3LongVideos:
                                "watermark without burying the picture under it."}),
                 "watermark_margin": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 25.0, "step": 0.5,
                     "tooltip": "Inset from the frame edge, as a percentage of the SHORT edge."}),
-                "intro_text": ("STRING", {"multiline": True, "default": "",
+                "intro_text": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "Title composited over the OPENING frames -- white on transparent, so the "
                                "first shot plays underneath it rather than being replaced by a card. "
                                "Multi-line is centered as a block. Holds for intro_seconds, then fades "
@@ -5049,7 +5049,7 @@ class H3LongVideos:
                                "it was the only setting that could silently collapse beats, and a stored "
                                "value of it now reads as 'auto'.) Directive lines (wardrobe:, seconds:, exit:) "
                                "are never beats -- they attach to the beat that follows them."}),
-                "anchor_override": ("STRING", {"multiline": True, "default": "",
+                "anchor_override": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "Set the persistent look explicitly instead of using the first paragraph. "
                                "When this is filled in, EVERY paragraph of the prompt box is a beat/shot -- "
                                "nothing is consumed as the identity anchor. Put the permanent identity here "
@@ -5156,7 +5156,7 @@ class H3LongVideos:
                                "burn a face into every opening frame). 'auto' = on below 768 short "
                                "edge OR when a LoRA is applied -- the conditions where anatomy "
                                "breaks down. Costs ~18 tokens on shots with people."}),
-                "exposed_terms": ("STRING", {"multiline": True, "default": "",
+                "exposed_terms": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "What a stripped body zone is CALLED, per character, so it persists "
                                "automatically instead of being typed into every beat. Same syntax as "
                                "character_memory -- a PRONOUN covers everyone who declares it, a NAME "
@@ -5212,7 +5212,7 @@ class H3LongVideos:
                                "so H3 doesn't animate or vocalize a mouth before real dialogue. Beats with "
                                "quoted dialogue (\"...\") are left alone. To make someone speak, put the "
                                "words in double quotes. Turn OFF to manage lip state yourself."}),
-                "character_memory": ("STRING", {"multiline": True, "default": "",
+                "character_memory": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "Optional dedicated wardrobe channel (same role as a 'wardrobe:' line in "
                                "the first paragraph -- use whichever you prefer; this field wins if both "
                                "are set). Re-stamped into every shot so clothing holds even when the "
