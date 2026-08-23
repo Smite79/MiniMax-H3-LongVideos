@@ -3681,6 +3681,36 @@ def check_restraint_usage_persists():
     for bad in ("cannot", "can't", "unable", "no longer", "does not", "won't"):
         check(f"persisted wording never negates ({bad})", bad not in clause)
 
+    # One person's tether must not fasten a SECOND restrained person to the same
+    # anchor -- and with persistence, that mistake would now stick for good.
+    # (_subject_term renders each subject as a pronoun, so the bits are told
+    # apart by their wording: exactly one tethered bit, one default bit.)
+    two = {"Mara": ["she", "handcuffs"], "Jon": ["he", "handcuffs"]}
+    mixed = S.restraint_clause(
+        two, "Mara is cuffed to the headboard. Jon watches.", True)
+    check("a tether stated about one person stays theirs",
+          mixed.count("fastened to the headboard") == 1
+          and "bound close together" in mixed)
+    # A pronoun from the sheet keeps the sentence relevant to its owner.
+    pronoun = S.restraint_clause(
+        two, "Mara is cuffed to the headboard. She pulls against it; he watches.", True)
+    check("a pronoun sentence still reaches its owner",
+          pronoun.count("fastened to the headboard") == 1)
+    # Quoted dialogue describes, it does not attach.
+    spoken = S.restraint_clause(act, 'She says: "They kept me chained to the wall."', True)
+    check("dialogue never states an attachment", "fastened to the wall" not in spoken)
+
+    # What the shot says NOW replaces what an earlier shot remembered -- no
+    # blending a live pose with a stale tether.
+    g = S.distribute_generations("A bedroom.", [
+        "Mara is cuffed to the headboard.",
+        "Her hands are cuffed behind her back instead.",
+        "She shifts her weight."], "", "", cm)
+    check("a newly stated pose replaces a remembered tether",
+          "behind the back" in g[1] and "headboard" not in g[1])
+    check("the replacement persists on later shots",
+          "behind the back" in g[2] and "fastened to" not in g[2])
+
 
 def check_count_auto_multi_person():
     """'auto' now states the subject count whenever a shot binds 2+ people.

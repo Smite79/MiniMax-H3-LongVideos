@@ -850,8 +850,15 @@ def _restraint_effect_text(region, text, usage=None):
         return base
     found = _detect_restraint_usage(text)
     stored = usage or {}
-    anchor = found["tether"] or stored.get("tether")
-    pose = found["pose"] or stored.get("pose")
+    # What this shot SAYS replaces what an earlier shot established, wholesale --
+    # mixing a live pose with a remembered tether would blend two setups into the
+    # kind of contradiction this clause exists to prevent.
+    if found["tether"]:
+        anchor, pose = found["tether"], None
+    elif found["pose"]:
+        anchor, pose = None, found["pose"]
+    else:
+        anchor, pose = stored.get("tether"), stored.get("pose")
     if anchor:
         return ("the cuffs stay locked closed around the wrists and fastened to the "
                 f"{anchor}, the chain between them taut, the arms held where they are "
@@ -1037,6 +1044,28 @@ def solidity_clause(body, persistent="", mode="auto"):
     return out
 
 
+def _restraint_about(sentence, name, active):
+    """Is this prose sentence about THIS bound person, rather than someone else?
+
+    The beat is shared but the restraint wording is per person: 'Mara is cuffed
+    to the headboard. Jon watches.' must not fasten JON to anything -- and before
+    persistence that mistake washed out a shot later; now it would stick. A
+    sentence naming another tracked person is skipped unless it also names this
+    person or uses the pronoun their sheet declares. Unattributed sentences
+    ("the chain rattles") stay relevant to everyone."""
+    named_here = re.search(r"\b" + re.escape(name) + r"\b", sentence, re.I)
+    others = [n for n in active if n and n != name
+              and re.search(r"\b" + re.escape(n) + r"\b", sentence, re.I)]
+    if not others:
+        return True
+    if named_here:
+        return True
+    pronouns = [i.lower() for i in (active.get(name) or [])
+                if i.lower() in ("she", "he", "they")]
+    return any(re.search(r"\b" + re.escape(p) + r"\b", sentence, re.I)
+               for p in pronouns)
+
+
 def restraint_clause(active, body, lock_restraints=True, usage=None):
     """State what each restrained person's body cannot do, for the people in shot.
 
@@ -1064,9 +1093,15 @@ def restraint_clause(active, body, lock_restraints=True, usage=None):
         subj = _subject_term(name, active) if name else "the subject"
         # `their` rather than a repeated name: naming someone twice in a shot is
         # what renders them twice. The attachment/pose scan reads BOTH the person's
-        # own wardrobe entries and this shot's prose -- either is where "cuffed to
-        # the headboard" gets stated.
-        text = " ".join(items) + " " + (body or "")
+        # own wardrobe entries and this shot's prose -- but only the prose that is
+        # ABOUT them (one person's tether must not fasten a second restrained
+        # character to the same anchor), and never quoted dialogue: speech
+        # describes a restraint, it does not attach one.
+        masked, _qspans = _mask_quotes(body or "")
+        sentences = [s for s in re.split(r"(?<=[.!?])\s+", masked) if s.strip()]
+        if name:
+            sentences = [s for s in sentences if _restraint_about(s, name, active)]
+        text = " ".join(items) + " " + " ".join(sentences)
         found = _detect_restraint_usage(text)
         if usage is not None and (found["tether"] or found["pose"]):
             usage[name] = found
