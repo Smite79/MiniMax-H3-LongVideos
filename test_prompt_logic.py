@@ -3611,6 +3611,77 @@ def check_restraint_attachment_and_hardware():
         check(f"new restraint text never negates ({bad})", bad not in eff)
 
 
+def check_restraint_usage_persists():
+    """Restraint USE, stated once, must hold on every later shot.
+
+    'She strains.' after 'cuffed to the headboard' used to fall back to the
+    default bound-pair wording -- arms moving as one CONTRADICTS arms held apart,
+    and two contradictory sentences about one pair of wrists is how cuffs render
+    broken. Usage now persists per person until the restraint leaves the sheet."""
+    print("\n=== restraint use persists across shots ===")
+    cm = "Mara = she, red hair, handcuffs"
+    g = S.distribute_generations("A bedroom.", [
+        "Mara is cuffed to the headboard.",
+        "She strains against it.",
+        "She turns her face toward the door."], "", "", cm)
+    check("the shot that states the tether names the anchor",
+          "fastened to the headboard" in g[0])
+    check("a later silent shot keeps the tether",
+          "headboard" in g[1] and "bound close together" not in g[1])
+    check("...and a third shot keeps it too",
+          "headboard" in g[2] and "bound close together" not in g[2])
+
+    # A pose persists the same way.
+    g = S.distribute_generations("A garage.", [
+        "Mara stands with her hands cuffed behind her back.",
+        "She shifts her weight."], "", "", cm)
+    check("a pose stated once survives a plain follow-up shot",
+          "behind the back" in g[1])
+
+    # Restating updates; freeing clears; re-cuffing starts fresh.
+    g = S.distribute_generations("A bedroom.", [
+        "Mara is cuffed to the headboard.",
+        "Mara is cuffed to the wall instead.",
+        "Mara flexes her fingers."], "", "", cm)
+    check("a restated tether replaces the old anchor",
+          "fastened to the wall" in g[1] and "headboard" not in g[1])
+    check("the replacement carries into later shots too",
+          "wall" in g[2] and "headboard" not in g[2])
+    g = S.distribute_generations("A bedroom.", [
+        "Mara is cuffed to the headboard.",
+        "Mara is freed by a guard.\nwardrobe: Mara -= handcuffs",
+        "Mara stretches both arms wide."], "", "", cm)
+    check("freed of the cuffs, no clause speaks",
+          "physically restrained" not in g[2])
+    g = S.distribute_generations("A bedroom.", [
+        "Mara is cuffed to the headboard.",
+        "wardrobe: Mara -= handcuffs",
+        "wardrobe: Mara += handcuffs",
+        "Mara flexes her fingers."], "", "", cm)
+    check("re-cuffed fresh, the stale tether is gone",
+          "headboard" not in g[3] and "bound close together" in g[3])
+
+    # Wider phrasings prompts actually use.
+    act = {"": ["handcuffs"]}
+    around = S.restraint_clause(act, "Her wrists are chained around the bedpost.", True)
+    check("'chained around the bedpost' reads as a tether",
+          "fastened to the bedpost" in around)
+    spread = S.restraint_clause(act, "She lies spread eagle on the bed.", True)
+    check("spread-eagle states wrists held APART",
+          "bound apart" in spread and "held wide" in spread)
+    eff = S._restraint_effect_text(
+        "wrists", "She strains.", {"tether": "headboard", "pose": None})
+    check("stored usage reaches the effect text without live prose",
+          "fastened to the headboard" in eff)
+
+    # The persistence path stays positive-only.
+    act = {"": ["handcuffs"]}
+    clause = S.restraint_clause(act, "She strains hard against the chain.", True,
+                                usage={"": {"tether": "headboard", "pose": None}})
+    for bad in ("cannot", "can't", "unable", "no longer", "does not", "won't"):
+        check(f"persisted wording never negates ({bad})", bad not in clause)
+
+
 def check_count_auto_multi_person():
     """'auto' now states the subject count whenever a shot binds 2+ people.
 
@@ -4078,6 +4149,7 @@ def main():
     check_plural_cast_binding()
     check_high_jerk_motion_cues()
     check_restraint_attachment_and_hardware()
+    check_restraint_usage_persists()
     check_count_auto_multi_person()
     check_anchor_mirror_warning()
     check_listeners_stay_silent()

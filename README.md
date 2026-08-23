@@ -124,9 +124,16 @@ rendering**. Do that first; it is near-instant.
   headboard gets `the cuffs stay locked closed around the wrists and fastened to
   the headboard, the chain between them taut` instead of the bound-together text —
   two contradictory sentences about one pair of wrists is exactly how the cuffs end
-  up rendered broken. Poses are covered too (behind the back, above the head), and
-  every variant adds that the hardware itself stays whole: an open cuff or a
-  snapped link mid-struggle was otherwise free to happen.
+  up rendered broken. Poses are covered too (behind the back, above the head,
+  spread-eagle — wrists bound apart at fixed points), and every variant adds that
+  the hardware itself stays whole: an open cuff or a snapped link mid-struggle was
+  otherwise free to happen. And because a restraint is a plot state, **how it is
+  used persists**: state it once ("cuffed to the headboard") and every later shot
+  keeps that wording even when its own prose only says "she strains" — without this
+  those shots fell back to the bound-together text and contradicted the attachment
+  all over again. Restating updates it ("cuffed to the wall instead"), and freeing
+  the character (`wardrobe: Mara -= handcuffs`) forgets it, so re-cuffed later they
+  start fresh.
 - **Uncovered zones.** The node tracks two body zones, `lower` and `upper`. When a
   removal leaves one with nothing on it, it keeps that state **stated** in every
   later shot until something covers the zone again — because deleting a garment is

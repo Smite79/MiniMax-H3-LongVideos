@@ -805,40 +805,66 @@ _RESTRAINT_REGION = (
 _RESTRAINT_TETHER = re.compile(
     r"\b(?:(?:cuff(?:ed|s)?|chain(?:ed|s)?|ti(?:ed|es)|lock(?:ed|s)?|shackle(?:d|s)?|"
     r"fasten(?:ed|s)?|strap(?:ped|s)?|bolt(?:ed|s)?|secur(?:ed|es)|hitch(?:ed)?|"
-    r"bind(?:s|ing)?|bound)\b[^.]{0,40}?\bto\s+(?:the|a|an|her|his|their|its)?\s*"
+    r"bind(?:s|ing)?|bound)\b[^.]{0,40}?\b(?:to|around)\s+(?:the|a|an|her|his|their|its)?\s*"
     r"|(?:strain\w*|pull\w*|tug\w*|yank\w*)\b[^.]{0,30}?\bagainst\s+the\s+)"
-    r"(bed|headboard|wall|post|pole|frame|ring|hook|ceiling|rack|table|bench|chair|"
-    r"doorframe|beam|pipe|floor|tree|cross|stainless steel bar)\b", re.I)
+    r"(bed|bedpost|headboard|wall|post|pole|frame|ring|hook|ceiling|rack|table|bench|"
+    r"chair|doorframe|beam|pipe|rail|floor|tree|cross|stainless steel bar)\b", re.I)
 _RESTRAINT_POSE = (
     ("behind", re.compile(r"\bbehind\s+(?:her|his|their|the)?\s*back\b", re.I)),
     ("overhead",
      re.compile(r"\b(?:above|over)\s+(?:her|his|their|the)?\s*head\b|\boverhead\b", re.I)),
+    ("spread",
+     re.compile(r"\bspread[- ]?eagl\w*\b|\b(?:wrists|arms)\s+(?:held\s+)?spread\b", re.I)),
 )
 
 
-def _restraint_effect_text(region, text):
+def _detect_restraint_usage(text):
+    """Read HOW a restraint is being used out of one block of prose.
+
+    Returns {"tether": anchor noun or None, "pose": pose name or None}. A tether
+    outranks a pose (the current shot said the anchor explicitly); poses are read
+    in _RESTRAINT_POSE order so 'hands cuffed behind her back' wins over a stray
+    'legs spread'. Nothing found -> both None."""
+    t = text or ""
+    m = _RESTRAINT_TETHER.search(t)
+    if m:
+        return {"tether": m.group(1).lower(), "pose": None}
+    for pose, rx in _RESTRAINT_POSE:
+        if rx.search(t):
+            return {"tether": None, "pose": pose}
+    return {"tether": None, "pose": None}
+
+
+def _restraint_effect_text(region, text, usage=None):
     """The effect sentence for one bound region, adapted to HOW the restraint holds.
 
     `text` is the person's own wardrobe entries plus this shot's beat -- both are
     places the user states the attachment ("wrist cuffs to the bed frame") or the
-    pose ("hands cuffed behind her back"). Unrecognized setups keep the default
-    wording, which stays correct for plain wrist-to-wrist cuffs."""
+    pose ("hands cuffed behind her back"). When this shot says nothing, `usage`
+    carries what an EARLIER shot established for this person -- restraint use
+    persists until the prompt changes it, exactly like the wardrobe it belongs
+    to. Without either, the default wording stays correct for plain
+    wrist-to-wrist cuffs."""
     base = _RESTRAINT_EFFECT[region]
     if region != "wrists":
         return base
-    t = text or ""
-    m = _RESTRAINT_TETHER.search(t)
-    if m:
+    found = _detect_restraint_usage(text)
+    stored = usage or {}
+    anchor = found["tether"] or stored.get("tether")
+    pose = found["pose"] or stored.get("pose")
+    if anchor:
         return ("the cuffs stay locked closed around the wrists and fastened to the "
-                f"{m.group(1).lower()}, the chain between them taut, the arms held where "
-                "they are secured")
-    for pose, rx in _RESTRAINT_POSE:
-        if rx.search(t):
-            if pose == "behind":
-                return ("the wrists stay bound close together behind the back, the arms "
-                        "held there and moving as one")
-            return ("the wrists stay bound close together above the head, the arms held "
-                    "up and moving as one")
+                f"{anchor}, the chain between them taut, the arms held where they are "
+                "secured")
+    if pose == "behind":
+        return ("the wrists stay bound close together behind the back, the arms "
+                "held there and moving as one")
+    if pose == "overhead":
+        return ("the wrists stay bound close together above the head, the arms held "
+                "up and moving as one")
+    if pose == "spread":
+        return ("the wrists stay bound apart at two fixed points, the arms held wide "
+                "and never coming closer together")
     return base
 
 
@@ -1011,12 +1037,21 @@ def solidity_clause(body, persistent="", mode="auto"):
     return out
 
 
-def restraint_clause(active, body, lock_restraints=True):
+def restraint_clause(active, body, lock_restraints=True, usage=None):
     """State what each restrained person's body cannot do, for the people in shot.
 
     Only for someone actually referenced in the beat -- describing a bound body in
     a shot that person is not in would summon them into it, which is the same
-    failure the mouth state and the limb count are both gated against."""
+    failure the mouth state and the limb count are both gated against.
+
+    `usage` is an optional dict carried ACROSS shots by distribute_generations:
+    when a shot states how the restraints are used (a tether anchor or a pose) it
+    is remembered per person and reused on later shots that only say "she strains"
+    -- otherwise those shots would fall back to wording that CONTRADICTS the
+    established attachment, which is exactly how cuffs render broken. Entries are
+    pruned upstream in distribute_generations the moment the person's sheet no
+    longer carries a restraint (freed, uncuffed, item removed), so a re-bound
+    character starts fresh."""
     if not lock_restraints:
         return ""
     bits = []
@@ -1031,7 +1066,12 @@ def restraint_clause(active, body, lock_restraints=True):
         # what renders them twice. The attachment/pose scan reads BOTH the person's
         # own wardrobe entries and this shot's prose -- either is where "cuffed to
         # the headboard" gets stated.
-        effects = "; ".join(_restraint_effect_text(r, " ".join(items) + " " + (body or ""))
+        text = " ".join(items) + " " + (body or "")
+        found = _detect_restraint_usage(text)
+        if usage is not None and (found["tether"] or found["pose"]):
+            usage[name] = found
+        effects = "; ".join(_restraint_effect_text(r, text,
+                                                   usage.get(name) if usage else None)
                             for r in regions)
         bits.append(f"{subj} is physically restrained -- {effects}")
     if not bits:
@@ -3010,6 +3050,11 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     departed = set()                         # characters who left the scene -> never reappear
     props = {}                               # objects introduced so far -> their phrase
     stripped = {}                            # person -> body zones stripped so far
+    # person -> how their restraints are used (tether anchor / pose), as stated by
+    # whichever shot said it. A restraint is part of the wardrobe channel, and its
+    # USE persists with the wardrobe: shot 5 saying "she strains" must keep shot
+    # 2's "cuffed to the headboard", not fall back to wording that contradicts it.
+    restraint_usage = {}
     exposed = parse_exposed_terms(exposed_terms)
     # Every person key that existed at any point, so an entry naming someone who is
     # only introduced later by a 'wardrobe: Name = ...' directive is not called
@@ -3098,6 +3143,15 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             # it, or the same jacket is announced twice.
             if anchor_gone and not off_now:
                 off_now += [("", it) for it in anchor_gone]
+        # Restraint USE follows the wardrobe channel: the moment a sheet no longer
+        # carries the restraint, its recorded use is forgotten -- otherwise a freed
+        # and later RE-bound character would inherit an attachment nobody has
+        # restated. Pruned HERE rather than inside restraint_clause, because the
+        # clause only runs on shots with someone in them, while removals -- and
+        # therefore forgetting -- must happen whatever the shot shows.
+        for _nm in list(restraint_usage.keys()):
+            if not restraint_regions(active.get(_nm)):
+                del restraint_usage[_nm]
         # Record which zones this person has been stripped in, then keep the state
         # STATED in every later shot. Deleting the garment is only a silence, and a
         # video model's default is a clothed person -- so silence puts the clothes
@@ -3244,7 +3298,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 (anatomy_guard or (anatomy_auto and n_in_shot >= 2),
                  lambda: ANATOMY_STATE),
                 # what the restraints DO -- limits on limbs already established
-                (lock_restraints, lambda: restraint_clause(active, body, lock_restraints)),
+                (lock_restraints, lambda: restraint_clause(active, body, lock_restraints,
+                                                           usage=restraint_usage)),
                 # a bared zone stays bared once the body turns to a surface the shot
                 # has not shown; the model's default for undescribed skin is clothed
                 (True, lambda: bare_persist_clause(bare_now, active, body)),
