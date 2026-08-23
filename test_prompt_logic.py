@@ -2683,7 +2683,7 @@ def check_bare_state_persists():
     def run(**kw):
         return S.distribute_generations(ANCHOR, BEATS, "", "", CM, **kw)
 
-    PERSIST = "uncovered there and stays that way"
+    PERSIST = "stays bared as the body turns"
     on = run(exposed_terms="she = lower", prevent_nudity=True)
     check("the clause appears in the shot that bares the zone", PERSIST in on[1])
     check("...and in the TURN that follows it", PERSIST in on[2])
@@ -2706,6 +2706,24 @@ def check_bare_state_persists():
     check("...and it states a positive, not a negation",
           not re.search(r"\b(?:not|never|no|without)\b",
                         S._BARE_PERSIST["lower"], re.I))
+
+    # THE regression: an earlier version said "She is uncovered there and stays that
+    # way", which is a SECOND reference to someone the shot already introduced -- and
+    # a second mention renders a second figure. It went straight up against the
+    # subject-count guard. Measured on a 4-shot two-person chain, it added exactly one
+    # extra subject reference to every bared shot (5,3,1,3 against a 4,2,1,2 baseline).
+    _cl = S.bare_persist_clause({"Mara": ["lower", "upper"]},
+                                {"Mara": [], "Dom": []}, "Mara and Dom stand together.")
+    check("the clause names nobody",
+          not re.search(r"(?:Mara|Dom|she|her|he|him|his|subject)", _cl, re.I))
+    check("...and introduces no pronoun subject at all",
+          not re.search(r"(?:She|He|They|Her|His|Their)", _cl))
+    check("one sentence per bared ZONE, not per person",
+          _cl.count("stays bared as the body turns") == 2)
+    check("two people bared the same way say it once",
+          S.bare_persist_clause({"Mara": ["upper"], "Dom": ["upper"]},
+                                {"Mara": [], "Dom": []}, "Mara and Dom stand together."
+                                ).count("stays bare") == 1)
 
     # Same presence gate as every other per-shot state.
     check("someone not in the shot is not described as uncovered",

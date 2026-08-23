@@ -820,11 +820,21 @@ def restraint_regions(items):
 # Names no garment. Saying which garment is off puts that garment in the prompt, and
 # a mention is a presence cue -- the same reason removed items are scrubbed from the
 # anchor rather than negated in it.
+# IMPERSONAL -- no name, no pronoun, no subject at all. An earlier version said
+# "She is uncovered there and stays that way", which is a SECOND reference to someone
+# the shot has already introduced, and a second mention is what renders a second
+# figure. That put it straight up against the subject-count guard. The anchor-prose
+# garments are stated impersonally for the same reason: it summons nobody.
+#
+# The wording also has to avoid the MARKER phrases themselves ("bare below the waist",
+# "bare chest", "bare breasts"). Those strings are what identifies a marker in an item
+# list, and repeating one verbatim in the prose makes a test for "is the generic marker
+# still being used" -- or anyone reading the prompt -- unable to tell prose from state.
 _BARE_PERSIST = {
-    "lower": "the hips and lower body stay bare skin as they turn, the same from the "
-             "front, the side and behind",
-    "upper": "the chest stays bare skin as they turn, the same from the front, the "
-             "side and behind",
+    "lower": "Bared skin from the waist down stays bared as the body turns, the same "
+             "from the front, the side and behind.",
+    "upper": "Bared skin above the waist stays bared as the body turns, the same from "
+             "the front, the side and behind.",
 }
 
 
@@ -838,19 +848,19 @@ def bare_persist_clause(bare_zones, active, body):
     Gated upstream by whatever allowed the marker in the first place -- this reads
     the markers that are already on the person, so prevent_nudity, exposed_terms and
     a sheet declaration all keep exactly the authority they had."""
-    bits = []
-    for name, zones in (bare_zones or {}).items():
-        if not zones:
-            continue
+    zones = []
+    for name, zs in (bare_zones or {}).items():
         if name and not person_in_shot(body, name, active):
             continue
-        subj = _subject_term(name, active) if name else "the subject"
-        effects = "; ".join(_BARE_PERSIST[z] for z in zones if z in _BARE_PERSIST)
-        if effects:
-            bits.append(f"{subj} is uncovered there and stays that way -- {effects}")
-    if not bits:
+        for z in zs or ():
+            if z in _BARE_PERSIST and z not in zones:
+                zones.append(z)
+    if not zones:
         return ""
-    return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+    # One sentence per bared ZONE, not per person: two people bared the same way need
+    # the state said once. Saying it per person would reintroduce the extra subject
+    # references this is written to avoid.
+    return " " + " ".join(_BARE_PERSIST[z] for z in zones)
 
 
 def solid_things_in(text):
@@ -1823,7 +1833,11 @@ _SOLID_NOUNS = re.compile(
     r"\b(?:wall|walls|door|doors|doorway|gate|fence|railing|rail|banister|"
     r"table|tables|desk|desks|counter|countertop|bench|workbench|"
     r"chair|chairs|stool|couch|sofa|armchair|bed|beds|bunk|"
-    r"crate|crates|box|boxes|barrel|chest|trunk|cabinet|dresser|wardrobe|"
+    # No "chest" or "trunk": both are furniture AND body parts, and in a node that
+    # tracks bared zones the body reading is the likelier one -- "the chest is solid
+    # and occupies real space" was calling a person's chest a piece of furniture.
+    # "wardrobe" stays: the garment sense is a collection, never a thing in frame.
+    r"crate|crates|box|boxes|barrel|cabinet|dresser|wardrobe|"
     r"shelf|shelves|bookcase|pillar|column|post|beam|"
     r"stair|stairs|staircase|step|steps|ladder|"
     r"window|windowpane|pane|windshield|"
