@@ -49,6 +49,11 @@ every shot); each later paragraph is one **beat**, and one beat is one shot.
 > same prose can feed several samplers and be edited in one place. `prompt` is
 > required: leave it unconnected and the graph errors rather than rendering blank.
 > The other six are optional and behave as empty when nothing is attached.
+>
+> `shot_seconds` is a socket too — wire **H3 Shot Length** into it, which also
+> reports the matching frame count on the 17k+5 grid. Left unconnected it falls back
+> to auto (the largest shot that fits at the chosen size), exactly as a `0` in the
+> old widget did.
 
 ```
 Natural daylight, hard sun and deep shadow. Shallow depth of field, background

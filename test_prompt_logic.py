@@ -3353,6 +3353,18 @@ def check_megapixel_sizing():
     check("every optional text socket defaults to empty in run()",
           all(_sig[k].default == "" for k in _text if k != "prompt"))
 
+    # shot_seconds is wired too -- H3 Shot Length is the intended source, since it
+    # also reports the matching frame count on the 17k+5 grid. It is OPTIONAL and
+    # run() defaults it to 0.0, and 0.0 already meant "auto: largest that fits", so
+    # leaving it unconnected behaves exactly as the untouched widget did.
+    check("shot_seconds is a socket, not a box",
+          _all["shot_seconds"][1].get("forceInput") is True)
+    check("...and stays optional, so unconnected is legal",
+          "shot_seconds" in _schema["optional"])
+    check("...falling back to the auto behaviour a 0 widget gave",
+          _sig["shot_seconds"].default == 0.0
+          and _all["shot_seconds"][1]["default"] == 0.0)
+
     req = list(S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["required"])
     check("megapixels is a required widget on the sampler", "megapixels" in req)
     check("...positioned immediately after resolution",

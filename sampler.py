@@ -4914,8 +4914,14 @@ class H3LongVideos:
                                "with moving/talking mouths -- it avoids seeding the next shot with a "
                                "mid-word open-mouth pose. Trims the matching audio tail too. 0 = last frame."}),
                 "shot_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 15.1, "step": 0.5,
-                    "tooltip": "Length of EACH shot in seconds. 0 = auto (largest that fits at native res). "
-                               "One paragraph = one shot, so total video = (paragraph count) x this. Max ~15s."}),
+                    "forceInput": True,
+                    "tooltip": "Length of EACH shot in seconds, taken from a connected input -- "
+                               "H3 Shot Length is the intended source, since it also reports the "
+                               "matching frame count on the 17k+5 grid.\n\n"
+                               "Leave it UNCONNECTED for auto: the largest shot that fits at the "
+                               "chosen size, which is what a 0 in the old widget did. One "
+                               "paragraph = one shot, so total video = (paragraph count) x this. "
+                               "Max ~15s."}),
                 "allow_oversize_shots": ("BOOLEAN", {"default": False,
                     "tooltip": "OFF (default): a forced shot_seconds that won't fit VRAM is clamped DOWN to "
                                "what fits, and the clamp is reported in info. ON: honor the requested length "
