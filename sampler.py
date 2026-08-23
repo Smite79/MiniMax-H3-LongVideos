@@ -2043,9 +2043,11 @@ def _emphasis_quotes(body):
 MOUTH_SETTLE_FRAMES = 3
 
 ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers on each hand, "
-                 "and two legs with two feet. Each arm joins the body at one shoulder and each leg "
-                 "at one hip, and every limb moves only with the person it belongs to. Between "
-                 "the legs there is one groin.")
+                 "and two legs with two feet. Each arm joins the body at one shoulder and runs "
+                 "shoulder to elbow to wrist to hand; each leg joins at one hip and runs hip to "
+                 "knee to ankle to foot. The parts stack in order: head on the neck, neck on the "
+                 "shoulders, arms hanging along the sides of the torso, legs under the hips. Every "
+                 "limb moves only with the person it belongs to. Between the legs there is one groin.")
 
 # Two bodies in physical contact. Position-AGNOSTIC on purpose: a dictionary of named
 # positions would be endless, and the model already knows more names than any list
@@ -5378,7 +5380,7 @@ class H3LongVideos:
                                 "burn a face into every opening frame). 'auto' = on below 768 short edge "
                                 "OR when a LoRA is applied, and also on ANY shot holding two or more "
                                 "people -- spare limbs are grown where bodies meet and move together. "
-                                "Costs ~45 tokens on shots with people."}),
+                                "Costs ~90 tokens on shots with people."}),
                 "exposed_terms": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "What a stripped body zone is CALLED, per character, so it persists "
                                "automatically instead of being typed into every beat. Same syntax as "

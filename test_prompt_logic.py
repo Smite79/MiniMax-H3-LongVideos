@@ -2962,6 +2962,15 @@ def check_anatomy_guard():
     for good in ("two feet", "at one shoulder", "at one hip", "moves only with "
                  "the person it belongs to", "one groin"):
         check(f"the clause pins limbs ({good})", good in txt)
+    # A limb in the WRONG PLACE (arm out of the ribs, leg off the chest) needs the
+    # joint CHAIN and the stacking order stated too, so the skeleton has a layout
+    # to land on and not just a count.
+    for good in ("shoulder to elbow to wrist to hand",
+                 "hip to knee to ankle to foot",
+                 "head on the neck, neck on the shoulders",
+                 "arms hanging along the sides of the torso",
+                 "legs under the hips"):
+        check(f"the clause places joints ({good})", good in txt)
 
     # The widget must be APPENDED, or saved workflows shift.
     check("anatomy_guard is an appended widget", "anatomy_guard" in S.ADDED_WIDGETS)

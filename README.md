@@ -187,9 +187,12 @@ rendering**. Do that first; it is near-instant.
   it toward 1.0 breaks the audio branch. `info` still warns if the ratio drifts.
 
 - **Anatomy.** `anatomy_guard` states each person's limb *count* — one head, two
-  arms, two hands with five fingers, two legs with two feet — and pins every limb
-  to its body: each arm at one shoulder, each leg at one hip, moving only with the
-  person it belongs to, and one groin between the legs. A **negative prompt cannot do
+  arms, two hands with five fingers, two legs with two feet — then pins every limb
+  to its body and gives the skeleton a layout: each arm at one shoulder running
+  shoulder–elbow–wrist–hand, each leg at one hip running hip–knee–ankle–foot, the
+  parts stacked in order (head on the neck, neck on the shoulders, arms along the
+  sides of the torso, legs under the hips), every limb moving only with the person
+  it belongs to, and one groin between the legs. A **negative prompt cannot do
   this**: H3 is CFG-free at `cfg 1`, so the negative is never evaluated and "extra
   limbs" there does nothing. Naming the number gives the model a target; negating one
   only puts the word in the prompt. Never added to the anchor, and never to a shot
