@@ -223,6 +223,14 @@ Those shots are left alone; every other shot is silenced. Turn the toggle off to
 manage lip state yourself. Pair it with `handoff_offset` if a dialogue shot still
 hands a mid-word open mouth to the next shot.
 
+Inside a dialogue shot the silence is now **per person**: a spoken line is
+attributed to whoever introduced it (`Jon says: "…"`, or `…" said Jon`), and
+everyone ELSE bound in that shot gets the lips-closed state by pronoun. Before,
+one quoted line freed every mouth in frame, and non-speakers mouthed along.
+A quote with no attributable speaker frees nobody by guesswork, and a
+scare-quoted single word (she gave him a "look") — which still flips the shot to
+speaking — is reported in `info` so you can drop the quotes or attribute the line.
+
 Silencing now covers **both channels**. The lips-closed clause constrains the
 picture only; H3 builds audio from its own fields, and an **absent**
 `overall_soundscape:` leaves that branch unconditioned — which is exactly when it

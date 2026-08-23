@@ -271,6 +271,15 @@ rendering**. Do that first; it is near-instant.
 
   `mute_nonspeech_audio` is a fourth, weaker thing: it zeroes the waveform *after*
   generation, so it silences the track but cannot close a mouth.
+
+  Inside a dialogue shot the silence is **per person**: a quoted line used to free
+  every mouth in frame, so whoever else was on screen mouthed along with lines
+  they never say — characters visibly reciting text nobody gave them. Spoken lines
+  are now attributed to whoever introduced them (`Jon says: "..."`, or `"..." said
+  Jon`), and everyone else in the shot gets the lips-closed state by pronoun. A
+  quote that can't be attributed frees nobody by guesswork, and a scare-quoted
+  word like she gave him a "look" — which is emphasis, not dialogue — is reported
+  in `info`, since it still flips the whole shot to speaking.
 - **One noise field for the whole chain.** `vary_seed_per_shot` is **off** by
   default. The seed picks the noise field a shot is sampled from, and that field
   fixes the stochastic detail — grain, micro-texture, the exact rendering of every

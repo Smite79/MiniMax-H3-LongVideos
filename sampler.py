@@ -1344,7 +1344,7 @@ def dedupe_person_mentions(body, active):
 
 def compose_persistent(body, active, anchor_id, removed=None, departed=None,
                        count_subjects=False, speaking=False, front_load=False,
-                       count_auto=False):
+                       count_auto=False, silence_nonspeech=True):
     """Assemble one shot's text WITHOUT duplicating subjects.
 
     Each present person's description is injected as a parenthetical at the FIRST
@@ -1358,6 +1358,7 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
     resolve 'she'/'he' but are stripped from the shown description. Keep the
     anchor to scene/style with NO names."""
     count_prefix = ""          # set when the count clause is front-loaded (LoRA runs)
+    listeners = set()          # bound people keeping their mouths shut while another speaks
     departed = set(departed or ())
     # A character who has LEFT the scene is never described again -- not even if a
     # later pronoun could resolve to them. This is what stops an exited character
@@ -1406,11 +1407,30 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
         # the sentence. Prepending keeps the author's prose exactly as written --
         # 'they' can mean a subset, and expanding it in place would assert a cast
         # list the author did not write.
+        # Who is LISTENING here? Only decidable when every attributed speaker is one
+        # of this shot's bound people and at least one bound person is not speaking.
+        # An unattributed quote ('she says' with two people on screen) names nobody,
+        # so nothing is constrained -- guessing would gag the wrong mouth.
+        listeners = set()
+        if speaking and silence_nonspeech and len(names) >= 2 and not unnamed:
+            speakers = _speakers_in(body, names)
+            if speakers:
+                bound_names = set(refs) or (
+                    {n for n in names} if _PLURAL_CAST.search(body) else set())
+                if speakers & bound_names:
+                    listeners = bound_names - speakers
+
+        # The listener keeps their sheet's mouth-state items ("mouth closed", "lips
+        # together"): dropping them, as a speaking shot used to do for everyone,
+        # left the listening mouth with nothing holding it shut.
+        def _drop_mouth(n):
+            return speaking and n not in listeners
+
         roll_call = ""
         if not refs and len(names) > 1 and _PLURAL_CAST.search(body):
             bits = []
             for n in names:
-                desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=speaking))
+                desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=_drop_mouth(n)))
                 bits.append(f"{n} ({desc})" if desc else n)
             roll_call = ((", ".join(bits[:-1]) + " and " + bits[-1])
                          + (" are both in this shot." if len(bits) == 2
@@ -1421,7 +1441,7 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
             # inject from rightmost position first so earlier indices stay valid
             if not roll_call:
                 for n in sorted(refs, key=lambda k: refs[k], reverse=True):
-                    desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=speaking))
+                    desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=_drop_mouth(n)))
                     if desc:
                         pos = refs[n]
                         body = body[:pos] + f" ({desc})" + body[pos:]
@@ -1459,6 +1479,18 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
         # ("the hangar doors roll open"). Emit no people at all: the old grouped
         # 'Kristy: ... Jon: ...' prefix both re-introduced names (the duplication
         # pattern) and forced absent characters into shots they don't belong in.
+
+    if listeners:
+        # The listening side of a dialogue shot gets the same physical mouth state
+        # a silent shot gets -- stated per person, positively, because at cfg 1
+        # nothing suppresses; it can only be told what to do instead.
+        quiet = []
+        for n in sorted(listeners):
+            term = _subject_term(n, active)
+            quiet.append(f"{term[0].upper() + term[1:]} stays silent through the line, "
+                         "mouth closed, lips together, jaw still.")
+        body = body.rstrip(". ") + "." if body.strip() else body
+        body = body + " " + " ".join(quiet)
 
     prefix = " ".join(prefix_bits)
     out = (prefix + " " + body).strip() if prefix else body.strip()
@@ -1911,6 +1943,71 @@ def has_speech(body):
             continue                       # printed in the scene, nobody said it
         return True
     return False
+
+
+def _spoken_quotes(body):
+    """Each double-quoted span that IS speech, skipping printed text -- the same
+    nearest-cue rule has_speech uses, but returning the spans so each one can be
+    attributed to whoever introduced it."""
+    body = body or ""
+    out = []
+    for m in re.finditer(r'["\u201c\u201d](.+?)["\u201c\u201d]', body, re.S):
+        lead = body[max(0, m.start() - 60):m.start()].lower()
+        written = [x.end() for x in _WRITTEN_CUE.finditer(lead)]
+        spoken = [x.end() for x in _SPOKEN_CUE.finditer(lead)]
+        if written and (not spoken or written[-1] > spoken[-1]):
+            continue
+        out.append(m)
+    return out
+
+
+def _speakers_in(body, names):
+    """Which tracked names are ATTRIBUTED to a spoken line in this beat.
+
+    Attribution needs the name ADJACENT to a speech verb -- 'Jon says:' before
+    the quote, or 'said Jon' just after the close. Presence anywhere in a window
+    is not enough: in '"Open it." Mara steps back.' Mara sits right after the
+    quote and would be credited with saying it, and in 'Mara steps back. Jon
+    says: "..."' she sits inside any naive look-back window too -- so the lead
+    is cut at the last sentence boundary and the name must sit within a few
+    words of the verb on either side."""
+    found = set()
+    text = body or ""
+    for m in _spoken_quotes(text):
+        lead = re.split(r"[.!?\u2026\n;]",
+                        text[max(0, m.start() - 60):m.start()])[-1].lower()
+        tail = re.split(r"[.!?\u2026\n;]", text[m.end():m.end() + 45])[0].lower()
+        for frag in (lead, tail):
+            cues = list(_SPOKEN_CUE.finditer(frag))
+            if not cues:
+                continue
+            for n in names:
+                if not n:
+                    continue
+                esc = re.escape(n.lower())
+                for nm in re.finditer(rf"\b{esc}\b", frag):
+                    for c in cues:
+                        if nm.end() <= c.start() and c.start() - nm.end() <= 16:
+                            found.add(n)      # 'Jon says: '
+                        elif nm.start() >= c.end() and nm.start() - c.end() <= 4:
+                            found.add(n)      # 'said Jon'
+    return found
+
+
+def _emphasis_quotes(body):
+    """Quoted spans that LOOK like emphasis rather than dialogue: a single word,
+    no terminal punctuation inside the quotes, and no speech verb introducing
+    them. She gave him a "look" is prose; He whispers "now" is a real line --
+    the spoken cue keeps genuine single-word dialogue out of this list."""
+    out = []
+    for m in _spoken_quotes(body):
+        inner = m.group(1).strip()
+        words = inner.split()
+        if len(words) == 1 and not re.search(r"[.!?\u2026]\s*$", inner):
+            lead = (body or "")[max(0, m.start() - 60):m.start()].lower()
+            if not _SPOKEN_CUE.search(lead):
+                out.append(inner)
+    return out
 
 
 # Silence is stated as a described PHYSICAL STATE, which H3 follows far better than
@@ -3058,7 +3155,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 bare_now[nm] = zones_bare
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
                                         speaking=has_speech(body), front_load=front_load,
-                                        count_auto=count_auto)
+                                        count_auto=count_auto,
+                                        silence_nonspeech=bool(auto_silence_nonspeech))
         # State the DIRECTION of the change, in the shot that performs it. Only for
         # people actually in this shot; an anchor-prose garment is stated
         # impersonally, so it summons nobody.
@@ -3095,6 +3193,16 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         #                 there to have a mouth. On a scenery beat it describes
         #                 nobody and can only invite a face into an empty frame.
         no_speech = bool(auto_silence_nonspeech and not has_speech(body))
+        # A quoted single word with no speech verb is usually EMPHASIS, not a line --
+        # but it still flips the shot to "speaking": every mouth goes free and the
+        # audio stays unmuted, which is how a character ends up mouthing prompt
+        # fragments. Report it rather than guess; the fix is one edit either way.
+        if notes_out is not None and auto_silence_nonspeech and not no_speech:
+            for q in _emphasis_quotes(body):
+                notes_out.append(
+                    f'shot {gi}: "{q}" reads as emphasis, not dialogue -- this shot keeps every '
+                    f'mouth free because of it. If nobody says it aloud, drop the quotes; if '
+                    f'someone does, attribute the line (she says, "...") so only their mouth moves')
         # Must agree with compose_persistent()'s binding, including the PLURAL case.
         # It did not: person_referenced() resolves a pronoun to one person, so
         # 'they'/'both of them' answered False for everyone, and a beat that the

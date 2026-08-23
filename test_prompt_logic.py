@@ -3614,6 +3614,83 @@ def check_anchor_mirror_warning():
     check("an empty anchor stays quiet", w3 == [])
 
 
+def check_listeners_stay_silent():
+    """In a dialogue shot, only the SPEAKER's mouth goes free.
+
+    `speaking` was per-shot: one quoted line freed EVERY mouth in frame, so
+    whoever else was on screen mouthed along with lines they never say --
+    characters visibly reciting text nobody gave them. Spoken lines are now
+    attributed to whoever introduced them, and everyone else bound in the shot
+    gets the same physical mouth state a silent shot gets."""
+    print("\n=== the listener's mouth stays shut ===")
+    cm = ("Mara = she, red hair, green coat, lips together\n"
+          "Jon = he, dark hair, grey jacket")
+    g = S.distribute_generations(
+        "A garage.", ['Jon says: "Open it." Mara steps back.'], "", "", cm)
+    check("the spoken line survives", '"Open it."' in g[0])
+    check("the listener gets the mouth state",
+          "stays silent through the line" in g[0])
+    check("...by pronoun, not a second name", "She stays silent" in g[0])
+    check("the generic everyone-silent clause is absent -- someone IS talking",
+          "Everyone in this shot is silent" not in g[0])
+    check("the listener keeps her sheet's lips item",
+          "(red hair, green coat, lips together)" in g[0])
+
+    g2 = S.distribute_generations(
+        "A garage.", ['Jon says: "Open it." Mara answers: "Never."'], "", "", cm)
+    check("two speakers -> nobody is silenced",
+          "stays silent through the line" not in g2[0])
+
+    g3 = S.distribute_generations(
+        "A garage.", ['"Open it," Jon said, and Mara stepped back.'], "", "", cm)
+    check("a quote attributed AFTER the close still speaks Jon",
+          "stays silent through the line" in g3[0] and '"Open it,"' in g3[0])
+
+    g4 = S.distribute_generations(
+        "A garage.", ['She says: "Open it." He steps back.'], "", "", cm)
+    check("an unattributed quote frees nobody by guesswork",
+          "stays silent through the line" not in g4[0])
+
+    solo = S.distribute_generations(
+        "A garage.", ['Mara says: "Open it."'], "", "",
+        "Mara = she, red hair, green coat")
+    check("a lone speaker is untouched", "stays silent through the line" not in solo[0])
+
+    off = S.distribute_generations(
+        "A garage.", ['Jon says: "Open it." Mara steps back.'], "", "", cm,
+        auto_silence_nonspeech=False)
+    check("auto_silence_nonspeech=False opts out entirely",
+          "stays silent through the line" not in off[0])
+
+    written = S.distribute_generations(
+        "A garage.", ['Mara reads the sign marked "EXIT". Jon watches her.'], "", "", cm)
+    check("a written-text beat keeps the WHOLE-CAST silence",
+          "Everyone in this shot is silent" in written[0])
+
+
+def check_emphasis_quote_reported():
+    """A scare-quoted word silently flips the whole shot to 'speaking'.
+
+    She gave him a "look" has no speech verb and no punctuation inside the
+    quotes -- but has_speech saw A QUOTE and freed every mouth and left the
+    audio unmuted. That is how a character ends up mouthing prompt fragments.
+    Reported, not guessed: the fix is one edit either way."""
+    print("\n=== emphasis quotes are reported ===")
+    notes = []
+    S.distribute_generations("A garage.", ['She gave him a "look" and turned away.'],
+                             "", "", "Mara = she, red hair", notes_out=notes)
+    check('a scare-quoted word is reported',
+          any('"look"' in n and "emphasis" in n for n in notes))
+    notes2 = []
+    S.distribute_generations("A garage.", ['He whispers "now" and pulls the lever.'],
+                             "", "", "Jon = he, dark hair", notes_out=notes2)
+    check("a genuine single-word line with a speech verb is not", not notes2)
+    notes3 = []
+    S.distribute_generations("A garage.", ['Mara says: "Ready."'],
+                             "", "", "Mara = she, red hair", notes_out=notes3)
+    check("punctuated dialogue is not", not notes3)
+
+
 def main():
     p = SP(PROMPT, "##")
     anchor, beats = p[0], p[1:]
@@ -3963,6 +4040,8 @@ def main():
     check_restraint_attachment_and_hardware()
     check_count_auto_multi_person()
     check_anchor_mirror_warning()
+    check_listeners_stay_silent()
+    check_emphasis_quote_reported()
 
     print()
     if _fails:
