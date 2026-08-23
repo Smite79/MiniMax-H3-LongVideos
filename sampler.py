@@ -864,6 +864,17 @@ def bare_persist_clause(bare_zones, active, body):
     return " " + " ".join(_BARE_PERSIST[z] for z in zones)
 
 
+def _guard_fires(mode, cued):
+    """Shared off/auto/on gate for the per-shot guards.
+
+    'off' never speaks, 'on' always does, 'auto' only when the shot gave it
+    something to talk about -- a cue in the beat, or a list of objects it found.
+    Three guards had this same three-line shape written out separately."""
+    if mode == "off":
+        return False
+    return mode == "on" or bool(cued)
+
+
 def contact_clause(body, n_present, mode="auto"):
     """Geometry for two bodies in contact: whose limbs, no interpenetration, fixed roles.
 
@@ -874,9 +885,7 @@ def contact_clause(body, n_present, mode="auto"):
     'auto' fires on a contact cue in the beat. 'on' states it whenever two or more
     people are in the shot, which is worth having if bodies drift apart or merge in
     beats that do not name the contact explicitly."""
-    if mode == "off" or n_present < 2:
-        return ""
-    if mode != "on" and not _CONTACT_CUE.search(body or ""):
+    if n_present < 2 or not _guard_fires(mode, _CONTACT_CUE.search(body or "")):
         return ""
     return CONTACT_STATE
 
@@ -890,9 +899,7 @@ def motion_clause(body, mode="auto"):
 
     Impersonal, like the solidity and bare-persistence states: it names no one, so it
     adds no second reference to anybody already in the shot."""
-    if mode == "off":
-        return ""
-    if mode != "on" and not _MOTION_CUE.search(body or ""):
+    if not _guard_fires(mode, _MOTION_CUE.search(body or "")):
         return ""
     return MOTION_STATE
 
@@ -933,7 +940,7 @@ def solidity_clause(body, persistent="", mode="auto"):
     for w in solid_things_in(persistent):
         if w not in found:
             found.append(w)
-    if not found and mode != "on":
+    if not _guard_fires(mode, found):
         return ""
     out = SOLIDITY_STATE
     if found:
@@ -3009,53 +3016,42 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         people_here = (bool(active.get(""))
                        or any(person_in_shot(body, n, active, departed)
                               for n in present_names))
-        if no_speech and people_here:
-            persistent = persistent.rstrip(". ") + "." + LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL
-        # Same gate as the mouth state, and for the same reason: describing a body
-        # in a frame that has none can only invite one in.
-        if anatomy_guard and people_here:
-            persistent = persistent.rstrip(". ") + "." + ANATOMY_STATE
-        # What the restraints DO. Placed after the anatomy state so the limb count
-        # is established before the limits on it, and gated on the same presence
-        # test -- a bound body described in a shot with nobody in it invites one.
-        if lock_restraints and people_here:
-            rc = restraint_clause(active, body, lock_restraints)
-            if rc:
-                persistent = persistent.rstrip(". ") + "." + rc
-        # A bared zone stays bared through a turn. The marker in the item list says
-        # the zone IS bare; without this nothing says it stays bare once the body
-        # presents a surface the shot has not shown yet, and the model's default for
-        # an undescribed body is a clothed one -- so the garment comes back mid-shot.
+        # EVERY per-shot state below is gated on someone being in the shot, for one
+        # reason: describing a body in a frame that has none can only invite one in.
+        # That gate used to be written out six times, along with the same
+        # rstrip-and-append; the ORDER is the only thing that differed, so the order
+        # is data here and the mechanics happen once.
+        #
+        # The order is deliberate, and each entry says why it sits where it does.
+        # `ident` is the identity block BEFORE any of these were appended: the
+        # solidity scan reads it for set dressing, and passing the growing text would
+        # let one guard's wording become another guard's input.
         if people_here:
-            bp = bare_persist_clause(bare_now, active, body)
-            if bp:
-                persistent = persistent.rstrip(". ") + "." + bp
-        # Two bodies in contact. Placed BEFORE the motion state so the arrangement is
-        # established and then told to hold together while it moves, and counted from
-        # who is actually in the shot rather than who is in the cast.
-        if people_here:
-            n_in_shot = sum(1 for n in present_names
-                            if person_in_shot(body, n, active, departed))
-            if active.get(""):
-                n_in_shot = max(n_in_shot, 1)
-            cc = contact_clause(body, n_in_shot, contact_guard)
-            if cc:
-                persistent = persistent.rstrip(". ") + "." + cc
-        # Motion continuity, on the same presence gate. Placed after the limb count so
-        # the body is established before how it moves, and read off the BEAT only --
-        # the anchor describes a set, and a set does not turn its head.
-        if people_here:
-            mc = motion_clause(body, motion_guard)
-            if mc:
-                persistent = persistent.rstrip(". ") + "." + mc
-        # Solidity, on the same presence gate: a body can only pass through a table
-        # if there is a body. Reads BOTH the beat and the persistent identity block,
-        # because the anchor is where the set usually gets described ("a workshop
-        # with a roller door") while the beat only says what happens in it.
-        if people_here:
-            sc = solidity_clause(body, persistent, solidity_guard)
-            if sc:
-                persistent = persistent.rstrip(". ") + "." + sc
+            ident = persistent
+            n_in_shot = max(sum(1 for n in present_names
+                                if person_in_shot(body, n, active, departed)),
+                            1 if active.get("") else 0)
+            states = [
+                # the mouth, before anything describes the body it is in
+                (no_speech, lambda: LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL),
+                # the limb COUNT, before anything constrains those limbs
+                (anatomy_guard, lambda: ANATOMY_STATE),
+                # what the restraints DO -- limits on limbs already established
+                (lock_restraints, lambda: restraint_clause(active, body, lock_restraints)),
+                # a bared zone stays bared once the body turns to a surface the shot
+                # has not shown; the model's default for undescribed skin is clothed
+                (True, lambda: bare_persist_clause(bare_now, active, body)),
+                # two bodies arranged, BEFORE being told to hold together while moving
+                (True, lambda: contact_clause(body, n_in_shot, contact_guard)),
+                # then how that body moves
+                (True, lambda: motion_clause(body, motion_guard)),
+                # and last, what it cannot move through
+                (True, lambda: solidity_clause(body, ident, solidity_guard)),
+            ]
+            for want, produce in states:
+                clause = produce() if want else ""
+                if clause:
+                    persistent = persistent.rstrip(". ") + "." + clause
         silent_shot = no_speech
         block = f"[Generation {gi}] {persistent}".strip()
         # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is
@@ -5610,7 +5606,7 @@ class H3LongVideos:
                     + (" EXPOSURE -- " + "; ".join(wardrobe_notes) + "."
                        if wardrobe_notes else "")
                     + (f"{plan_ref}." if plan_ref else "")
-                + (f" {fps_note}." if fps_note else "")
+                    + (f" {fps_note}." if fps_note else "")
                     + (f" {ln_note}." if ln_note else ""))
             ph_img = torch.zeros((1, 64, 64, 3))
             ph_audio = {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}
