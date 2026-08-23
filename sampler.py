@@ -4760,11 +4760,13 @@ class H3LongVideos:
     # LATENT is APPENDED, never inserted: ComfyUI stores a link by output SLOT
     # INDEX, so adding at the end leaves every existing wire pointing at the same
     # output. Inserting mid-list would silently re-target them.
+    # APPEND to these, never insert. A workflow stores an output link by SLOT INDEX,
+    # so a new type in the middle silently re-points every link after it.
     RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "INT", "INT", "INT", "FLOAT", "FLOAT", "INT",
-                    "LATENT")
+                    "LATENT", "STRING")
     RETURN_NAMES = ("images", "audio", "info", "script", "frames_per_shot", "total_frames",
                     "shots", "video_seconds", "fps", "fps_int",
-                    "latent")
+                    "latent", "soundscape")
 
     @classmethod
     def IS_CHANGED(cls, plan_only=False, **kwargs):
@@ -5622,7 +5624,7 @@ class H3LongVideos:
             # a real run.
             return (ph_img, ph_audio, plan, "\n---\n".join(gens), max(plan_lens),
                     sum(plan_lens), shots, total, float(fps), int(fps),
-                    _empty_av_latent(w, h, 5, fps)[0])
+                    _empty_av_latent(w, h, 5, fps)[0], global_soundscape)
 
         spk = speech_flags(beats)          # which shots have real (quoted) dialogue
         vram_trace = []                    # free VRAM after each shot
@@ -5999,9 +6001,13 @@ class H3LongVideos:
                 + (f" Adjusted: {'; '.join(backoff)}." if backoff else ""))
         # frames_per_shot is a single INT for a now-variable series: report the LONGEST
         # shot, which is what a downstream consumer must be able to hold.
+        # `global_soundscape` is the soundscape ACTUALLY used: the derivation above
+        # reassigns it, so this is the derived bed when auto_soundscape fired and
+        # your own text when it did not. Emitting it means you can read what was
+        # generated, and feed it straight back into the widget-input to pin it.
         return (all_frames, {"waveform": all_audio, "sample_rate": sr}, info, script,
                 max(shot_lens), all_frames.shape[0], len(gens), round(actual, 2),
-                float(fps), int(fps), latent_out)
+                float(fps), int(fps), latent_out, global_soundscape)
 
 
 # REF2VA registers under its OWN key. The FL2VA pack one directory up keeps

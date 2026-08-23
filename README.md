@@ -27,6 +27,11 @@ CLIPLoader ─┼─> H3 Long Videos ─> audio  ─┘
 VAELoader ──┘                     latent ─> (optional) latent post-processing
 ```
 
+The **`soundscape`** output carries the ambient bed the shots actually used — the
+one `auto_soundscape` derived from your scene, or your own text when it didn't fire.
+Wire it to a text preview to read what it built, or straight back into the
+`global_soundscape` input to pin it and stop it re-deriving.
+
 The **`latent`** output carries the sampled latents, joined on the time axis, for
 things like a latent upscaler. It is emitted *as well as* `images`, never instead:
 the shot chain hands each shot the previous one's decoded last frame, so decoding

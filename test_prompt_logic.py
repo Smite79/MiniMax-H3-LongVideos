@@ -2976,7 +2976,10 @@ def check_latent_output():
     check("...named 'latent'", "latent" in cls.RETURN_NAMES)
     # APPENDED, not inserted: ComfyUI stores a link by output SLOT INDEX, so
     # inserting mid-list would silently re-target every existing wire.
-    check("it is the LAST output", cls.RETURN_NAMES[-1] == "latent")
+    # `latent` must keep the SLOT it was appended at, whatever gets added after it.
+    check("latent keeps its slot", cls.RETURN_NAMES.index("latent") == 10)
+    check("...and anything newer is appended after it, never inserted before",
+          cls.RETURN_NAMES.index("latent") < len(cls.RETURN_NAMES))
     check("images is still slot 0", cls.RETURN_NAMES[0] == "images")
     check("audio is still slot 1", cls.RETURN_NAMES[1] == "audio")
     check("info is still slot 2", cls.RETURN_NAMES[2] == "info")
@@ -2989,13 +2992,37 @@ def check_latent_output():
     # frontend could write auto-derived shifts into the widgets, and auto_shift is gone.
     check("the plan_only path returns a latent too",
           "float(fps), int(fps),\n                    _empty_av_latent(" in src)
-    check("the render path returns latent_out", "float(fps), int(fps), latent_out)" in src)
+    check("the render path returns latent_out",
+          "float(fps), int(fps), latent_out, global_soundscape)" in src)
     check("no ui wrapper is left on either return", "_with_shift_ui" not in src)
     # It must never be None -- a downstream LATENT input cannot take that.
     check("plan_only emits a real empty latent, not None",
-          "_empty_av_latent(w, h, 5, fps)[0])" in src)
+          "_empty_av_latent(w, h, 5, fps)[0], global_soundscape)" in src)
     check("the render path seeds a real empty latent before assembly",
           'latent_out = {"samples": _empty_av_latent(' in src)
+
+    # --- the soundscape output ---------------------------------------------------
+    # auto_soundscape builds an ambient bed from the scene, and until now the only
+    # way to see what it built was to read `info`. It is emitted so you can read it
+    # and feed it straight back into the soundscape input to pin it.
+    check("a soundscape output exists", "soundscape" in cls.RETURN_NAMES)
+    check("...appended LAST, so no existing wire is re-targeted",
+          cls.RETURN_NAMES[-1] == "soundscape" and cls.RETURN_TYPES[-1] == "STRING")
+    check("...and every earlier slot is where it was",
+          list(cls.RETURN_NAMES[:11]) == ["images", "audio", "info", "script",
+                                          "frames_per_shot", "total_frames", "shots",
+                                          "video_seconds", "fps", "fps_int", "latent"])
+    check("both return paths carry it",
+          src.count(", global_soundscape)") == 2)
+    # It is the soundscape ACTUALLY used: the derivation reassigns global_soundscape,
+    # so this is the derived bed when auto fired and the user's own text when it did
+    # not -- never a second, separately-computed value that could disagree.
+    _i = src.index("if auto_soundscape != \"off\":")
+    check("the derived value is what the variable holds",
+          "global_soundscape = derived" in src[_i:_i + 900])
+    check("...assigned before the plan_only return",
+          src.index("global_soundscape = derived")
+          < src.index("_empty_av_latent(w, h, 5, fps)[0], global_soundscape)"))
     # And the caveat has to be stated, because the latent is NOT the latent form of
     # `images` on a multi-shot chain.
     check("the pre-trim caveat is reported", "PRE-trim" in src)
