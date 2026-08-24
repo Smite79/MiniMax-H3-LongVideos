@@ -2585,6 +2585,12 @@ def check_restraints_stay_on():
                  "ball gag", "blindfold", "leg irons", "zip-tie", "chain restraint",
                  "manacles", "thumb cuffs", "padlocked collar", "fetters", "wrist ties"]:
         check(f"{item!r} is a restraint", S.is_restraint(item))
+    # The hardware line states the equipment's state POSITIVELY and without strain
+    # words: "holding with its full tension" read as a struggle cue and the model
+    # rendered maximum-pull escapes to match it.
+    hw = D("A room.", ["Mara waits."], "", "", "Mara = she, steel handcuffs")[0]
+    check("hardware line present without strain wording",
+          "stays whole and closed" in hw and "full tension" not in hw)
     # The false positives that matter: a word may not qualify ITSELF, and a material
     # is not a qualifier. Both bugs were live in the first version of this.
     for item in ["chain", "gold chain", "collar", "shirt collar", "black belt",
@@ -3616,6 +3622,15 @@ def check_high_jerk_motion_cues():
     m = S.motion_clause("She struggles against the handcuffs.", "auto")
     check("'auto' speaks on a struggle beat", bool(m))
     check("...with the same path text", "through every position on the way" in m)
+    # The free-travel sentence is for FREE bodies only. On a bound one it is an
+    # instruction the restraints forbid, and H3 settles the contradiction by
+    # rendering the cuffs failing -- the "breaking out in every scene" report.
+    blk = D("A room.", ["She turns toward the door."], "", "",
+            "Mara = she, steel handcuffs")[0]
+    check("a bound body gets no free-travel motion text",
+          "through every position" not in blk and "physically restrained" in blk)
+    free = D("A room.", ["She turns toward the door."], "", "", "Mara = she")[0]
+    check("an unbound body still gets it", "through every position" in free)
 
 
 def check_restraint_attachment_and_hardware():
@@ -3642,7 +3657,7 @@ def check_restraint_attachment_and_hardware():
     plain = S.restraint_clause(act, "She stands very still.", True)
     check("plain cuffs keep the bound-pair wording", "bound close together" in plain)
     check("the hardware is stated to stay whole",
-          "stays whole" in plain and "full tension" in plain)
+          "stays whole" in plain and "fastened exactly as it was put on" in plain)
     check("every variant carries it",
           all("stays whole" in S.restraint_clause(act, b, True)
               for b in ("She is cuffed to the headboard.",
@@ -3662,8 +3677,12 @@ def check_restraint_attachment_and_hardware():
         "Jon strains against the headboard chain, pulling hard."], "", "", cm)
     check("an end-to-end shot states the tether", "headboard" in g[0])
     check("...and the hardware state", "stays whole" in g[0])
-    check("...and the movement path (struggle is motion)",
-          "Movement is continuous" in g[0])
+    # The free-travel motion path is deliberately WITHHELD from bound bodies now:
+    # "turns through every position" contradicts the binding, and H3 settled that
+    # fight by rendering the restraints failing. The bound limbs carry their own
+    # continuity sentence instead.
+    check("...but no free-travel motion on a bound body",
+          "Movement is continuous" not in g[0])
     # No negation anywhere new: cfg 1 never evaluates the negative.
     eff = " ".join(S._RESTRAINT_EFFECT.values()).lower()
     for bad in ("cannot", "can't", "unable", "no longer", "does not", "won't"):

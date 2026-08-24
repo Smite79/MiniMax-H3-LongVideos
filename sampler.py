@@ -905,9 +905,11 @@ def _restraint_effect_text(region, text, usage=None):
 # The failure mode where the HARDWARE itself gives up: H3 renders an open cuff, a
 # snapped link, or a strap turned to ribbon mid-struggle. Nothing in the per-region
 # effects says the equipment keeps its state, so state it once, positively -- at cfg
-# 1 a negation ("does not break") would only name the breaking.
-_RESTRAINT_HARDWARE = (" Every restraint stays whole and closed, holding with its full "
-                       "tension exactly as it was put on.")
+# 1 a negation ("does not break") would only name the breaking. "Full tension" was
+# tried here and read as strain: the model rendered maximum-pull struggle to match
+# the words, which is the exact failure this sentence exists to stop.
+_RESTRAINT_HARDWARE = (" Every restraint stays whole and closed, fastened exactly "
+                       "as it was put on.")
 
 
 def restraint_regions(items):
@@ -1021,6 +1023,19 @@ def motion_clause(body, mode="auto"):
     if not _guard_fires(mode, _MOTION_CUE.search(body or "")):
         return ""
     return MOTION_STATE
+
+
+def _restrained_present(active, body):
+    """True when anyone PRESENT in this shot is currently carrying a restraint.
+
+    Holds the generic free-travel motion clause back from bound bodies: that
+    sentence tells a figure to turn through every position on the way, which a
+    cuffed body cannot obey -- and the model settles the contradiction by letting
+    the restraints fail so it can. The bound parts carry their own continuity
+    instead ('the arms moving as one'), which is all a restrained figure should
+    promise."""
+    return any(restraint_regions(active.get(nm)) and person_in_shot(body, nm, active)
+               for nm in active)
 
 
 def solid_things_in(text):
@@ -3381,8 +3396,11 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 (True, lambda: bare_persist_clause(bare_now, active, body)),
                 # two bodies arranged, BEFORE being told to hold together while moving
                 (True, lambda: contact_clause(body, n_in_shot, contact_guard)),
-                # then how that body moves
-                (True, lambda: motion_clause(body, motion_guard)),
+                # then how that body moves -- unless someone in the frame is bound:
+                # the free-travel sentence outvotes the binding, and H3 settles
+                # that fight by rendering the restraints giving up.
+                (True, lambda: ("" if _restrained_present(active, body)
+                                else motion_clause(body, motion_guard))),
                 # and last, what it cannot move through
                 (True, lambda: solidity_clause(body, ident, solidity_guard)),
             ]
