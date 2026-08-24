@@ -1078,7 +1078,7 @@ def check_lora_duplication_guard():
 
     cm_ = "Teresa = woman, skinny, blonde hair\nDan = man, brown hair"
     a = "A garage, warm light, cinematic."
-    with_lora = D(a, ["Teresa talks to Dan."], "", "", cm_, True, True, True, True)[0]
+    with_lora = D(a, ["Teresa talks to Dan."], "", "", cm_, True, True, allow_nonspeech_vocals=False, count_subjects=True, front_load=True)[0]
     # FIRST means first in the whole prompt -- ahead of the scene, and ahead of the
     # lips-closed lead. A distilled LoRA settles composition in its first step or
     # two, which is the entire reason the count is front-loaded; the silence lead
@@ -1092,14 +1092,14 @@ def check_lora_duplication_guard():
     check("clause forbids extra bodies explicitly",
           "no extra bodies" in prompt and "no repeated figures" in prompt)
     # a SPEAKING shot has no lips-closed lead, so front-loading must still hold
-    talky = D(a, ['Teresa asks Dan: "Ready?"'], "", "", cm_, True, True, True, True)[0]
+    talky = D(a, ['Teresa asks Dan: "Ready?"'], "", "", cm_, True, True, allow_nonspeech_vocals=False, count_subjects=True, front_load=True)[0]
     check("front-loading holds on a dialogue shot too",
           talky.split("] ", 1)[-1].strip().startswith("Exactly two people"))
-    solo = D(a, ["Teresa checks the crate."], "", "", cm_, True, True, True, True)[0]
+    solo = D(a, ["Teresa checks the crate."], "", "", cm_, True, True, allow_nonspeech_vocals=False, count_subjects=True, front_load=True)[0]
     check("solo shot counts one", "Exactly one person" in solo)
-    scenery = D(a, ["The garage door rolls open."], "", "", cm_, True, True, True, True)[0]
+    scenery = D(a, ["The garage door rolls open."], "", "", cm_, True, True, allow_nonspeech_vocals=False, count_subjects=True, front_load=True)[0]
     check("scenery shot gets no count clause", "Exactly" not in scenery)
-    no_lora = D(a, ["Teresa talks to Dan."], "", "", cm_, True, True, True, False)[0]
+    no_lora = D(a, ["Teresa talks to Dan."], "", "", cm_, True, True, allow_nonspeech_vocals=False, count_subjects=True, front_load=False)[0]
     check("without a LoRA the clause follows the anchor",
           "Exactly two people" in no_lora
           and not no_lora.split("not talking. ")[-1].strip().startswith("Exactly"))
@@ -1109,10 +1109,10 @@ def check_subject_count_guard():
     """Explicit subject counts (anti-duplication at sub-native resolutions)."""
     print("\n=== subject-count guard ===")
     cm = "Kristy = she, silver hair, red jacket\nJon = he, bald, navy overalls"
-    one = D("A hangar.", ["She checks the engine."], "", "", cm, True, True, True)[0]
-    two = D("A hangar.", ["She hands him a wrench."], "", "", cm, True, True, True)[0]
-    sc = D("A hangar.", ["The hangar doors roll open."], "", "", cm, True, True, True)[0]
-    off = D("A hangar.", ["She hands him a wrench."], "", "", cm, True, True, False)[0]
+    one = D("A hangar.", ["She checks the engine."], "", "", cm, count_subjects=True, allow_nonspeech_vocals=False)[0]
+    two = D("A hangar.", ["She hands him a wrench."], "", "", cm, count_subjects=True, allow_nonspeech_vocals=False)[0]
+    sc = D("A hangar.", ["The hangar doors roll open."], "", "", cm, count_subjects=True, allow_nonspeech_vocals=False)[0]
+    off = D("A hangar.", ["She hands him a wrench."], "", "", cm, count_subjects=False, allow_nonspeech_vocals=False)[0]
     check("solo shot states exactly one person", "Exactly one person" in one)
     check("two-person shot states exactly two people", "Exactly two people" in two)
     check("scenery shot gets no count clause", "Exactly" not in sc)
