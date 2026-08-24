@@ -802,6 +802,15 @@ def check_props_survive_the_shot_boundary():
           "the" not in S.introduced_props("a lantern hangs over the bench"))
     check("real objects still tracked either way",
           S.introduced_props("Mara lights a brass lantern.") == {"lantern": "brass lantern"})
+    # Sentences OPEN with a capitalized article; a case-sensitive article scan
+    # silently tracked nothing for a prop introduced that way, and its later
+    # "the van" bound to nothing.
+    check("capitalized articles are captured too",
+          S.introduced_props("A white van sits by the hangar.") == {"van": "white van"})
+    check("...and the captured prop still binds later",
+          "the same white van" in S.bind_props(
+              "She walks back to the van.",
+              S.introduced_props("A white van sits by the hangar."))[0])
     # binding
     body, bound = S.bind_props("He opens the van and the barn.", {"van": "white van"})
     check("only tracked nouns bind", bound == ["van"] and "the barn" in body)

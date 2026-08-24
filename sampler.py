@@ -1863,7 +1863,10 @@ def introduced_props(text):
     body = _PICTURE_TAG.sub(" ", text or "")
     # Scan from each article WITHOUT consuming what follows it: a greedy match over
     # "a van and a truck" would swallow the truck's own article and lose it.
-    for m in re.finditer(r"\b(?:a|an)\s+", body):
+    # Case-insensitive, because beats routinely OPEN with the object -- "A white van
+    # sits outside." -- and a case-sensitive scan silently tracked nothing there,
+    # while bind_props/dedupe_prop_mentions/repeated_props below are all re.I.
+    for m in re.finditer(r"\b(?:a|an)\s+", body, re.I):
         ahead = body[m.end():]
         ahead = re.split(r"[,.;:!?]", ahead)[0]
         words_ahead = re.findall(r"[A-Za-z][\w\-]*", ahead)[:4]
@@ -5143,9 +5146,9 @@ class H3LongVideos:
                 # those tags in the prompt if you want a reference bound to a named
                 # character ("Kristy, <Picture 1>, walks in").
                 "ref_image_1": ("IMAGE", {"tooltip": "Reference image <Picture 1> -- identity/appearance "
-                    "carried into the shots. ref2va conditioning REPLACES the keyframe handoff on any "
-                    "shot it applies to (the model can carry one or the other, never both), so which "
-                    "shots get it is set by ref_mode."}),
+                    "carried into the shots. Which shots receive it is set by ref_mode (or <Picture N> "
+                    "tags in the beats); a referenced shot ALSO carries the previous frame as its "
+                    "keyframe, so taking a reference never costs continuity."}),
                 "ref_image_2": ("IMAGE", {"tooltip": "Reference image <Picture 2>."}),
                 "ref_image_3": ("IMAGE", {"tooltip": "Reference image <Picture 3>."}),
                 "ref_image_4": ("IMAGE", {"tooltip": "Reference image <Picture 4>."}),
@@ -5283,8 +5286,8 @@ class H3LongVideos:
                                         "top-right", "top-left", "top-center", "center"],
                     {"default": "bottom-right"}),
                 "watermark_size": ("FLOAT", {"default": 4.0, "min": 0.5, "max": 40.0, "step": 0.5,
-                    "tooltip": "Cap height as a percentage of FRAME HEIGHT, so the mark keeps its "
-                               "relative size at any resolution or upscale factor."}),
+                    "tooltip": "Cap height as a percentage of the frame's SHORT edge, so the mark keeps "
+                               "its apparent size across portrait and landscape presets alike."}),
                 "watermark_opacity": ("FLOAT", {"default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05,
                     "tooltip": "Multiplies the white text alpha. 1.0 = solid white; 0.75 reads as a "
                                "watermark without burying the picture under it."}),
@@ -5302,7 +5305,7 @@ class H3LongVideos:
                 "intro_fade": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 10.0, "step": 0.1,
                     "tooltip": "Linear fade-out length after the hold. 0 = hard cut."}),
                 "intro_size": ("FLOAT", {"default": 9.0, "min": 0.5, "max": 40.0, "step": 0.5,
-                    "tooltip": "Title cap height as a percentage of frame height."}),
+                    "tooltip": "Title cap height as a percentage of the frame's SHORT edge."}),
                 "overlay_font": ("STRING", {"default": "arial.ttf",
                     "tooltip": "TrueType font for BOTH overlays: a bare name resolved against the system "
                                "font folder (arial.ttf, arialbd.ttf, segoeui.ttf) or a full path to a "
@@ -5911,11 +5914,22 @@ class H3LongVideos:
                           if r is not None])
             plan_ref = ""
             if n_refs:
-                on = [n + 1 for n in range(shots)
-                      if shot_references([1] * n_refs, ref_mode, n, 1 if n else None)]
+                # Mirror the render's placement exactly: 'where tagged' reads the
+                # prompts and falls back to first shot when nothing is tagged --
+                # reporting by ref_mode alone described shots the render never gave
+                # references to.
+                if ref_mode == "where tagged" and any(picture_tags(g) for g in gens):
+                    on = [n + 1 for n, g in enumerate(gens) if picture_tags(g)]
+                    how = "placed by <Picture N> tags"
+                else:
+                    mode_eff = "first shot" if ref_mode == "where tagged" else ref_mode
+                    on = [n + 1 for n in range(shots)
+                          if shot_references([1] * n_refs, mode_eff, n, 1 if n else None)]
+                    how = (f"ref_mode '{mode_eff}'"
+                           + (" -- no tags found anywhere" if ref_mode == "where tagged" else ""))
                 plan_ref = (f" ref2va: {n_refs} reference image(s) at '{ref_image_size}' on shot(s) "
-                            f"{','.join(str(n) for n in on) or 'none'} (ref_mode '{ref_mode}') -> "
-                            f"those shots drop the last-frame handoff")
+                            f"{','.join(str(n) for n in on) or 'none'} ({how}) -> those shots keep "
+                            f"the previous frame as their keyframe too, unless ref_noise_aug was lowered")
             plan = ((anchor_note + " ") if anchor_note else "") + \
                    preflight_txt + \
                    (("DIALOGUE MAY BE CUT OFF -- " + "; ".join(fit_warnings) + ". ") if fit_warnings else "") + \

@@ -14,6 +14,275 @@ all aliases onto the same class, so every workflow saved under any previous name
 keeps loading with nothing to re-wire. REF2VA was briefly a separate, duplicated
 sampler; it is now folded in.*
 
+<!-- AUTOGEN:FIELDS BEGIN -- edit gen_reference.py, not this block -->
+
+There are **71** inputs and **12** outputs. Required inputs are marked **R**; everything else is optional and has a working default.
+
+### Wiring
+
+| field | | type | constraints |
+|---|---|---|---|
+| `model` | **R** | MODEL | — |
+| `clip` | **R** | CLIP | — |
+| `vae` | **R** | VAE | — |
+| `audio_vae` | **R** | VAE | — |
+| `first_frame` |  | IMAGE | — |
+| `ref_image_1` |  | IMAGE | — |
+| `ref_image_2` |  | IMAGE | — |
+| `ref_image_3` |  | IMAGE | — |
+| `ref_image_4` |  | IMAGE | — |
+
+**`ref_image_1`** — Reference image <Picture 1> -- identity/appearance carried into the shots. Which shots receive it is set by ref_mode (or <Picture N> tags in the beats); a referenced shot ALSO carries the previous frame as its keyframe, so taking a reference never costs continuity.
+
+**`ref_image_2`** — Reference image <Picture 2>.
+
+**`ref_image_3`** — Reference image <Picture 3>.
+
+**`ref_image_4`** — Reference image <Picture 4>.
+
+### The scene
+
+| field | | type | constraints |
+|---|---|---|---|
+| `prompt` | **R** | STRING | **input socket**, multiline |
+| `character_memory` |  | STRING | **input socket**, multiline |
+| `anchor_override` |  | STRING | **input socket**, multiline |
+| `beat_split` |  | choice | `auto`, `each line` |
+| `per_beat_length` |  | BOOLEAN | default `True` |
+
+**`prompt`** — This IS the integrated_multimodal_description (the visual/action timeline). First paragraph = PERMANENT IDENTITY kept across the whole video (hair, face, build) -- put NO clothing in this prose, or it can't be changed later. Put clothing on a 'wardrobe:' line (in the first paragraph and/or the character_memory field); it's the only channel that can be changed/removed mid-chain. Each later paragraph = one scene beat. Put dialogue and 'lips closed' beats in the beat bodies.
+
+**`character_memory`** — Optional dedicated wardrobe channel (same role as a 'wardrobe:' line in the first paragraph -- use whichever you prefer; this field wins if both are set). Re-stamped into every shot so clothing holds even when the camera crops it out. IMPORTANT: this is the ONLY place clothing should live -- keep it out of the anchor prose, or a removal won't stick because the immutable anchor keeps re-adding it. To change/remove an item mid-chain, put 'wardrobe: <new full sheet>' inside the beat where it changes; omit the removed item from the new sheet and it stays gone. WRITE ATTRIBUTES, NOT NOUN PHRASES: 'silver hair, 27, red jacket' -- NOT 'a woman with silver hair'. A noun phrase renders as 'She (a woman with...)', i.e. two subjects in one clause, which causes character duplication. The node strips them automatically, but writing attributes directly is cleaner. ONE-TOKEN EDITS (no restating the outfit): 'wardrobe: -= jacket' removes the jacket, 'wardrobe: += sunglasses' adds one. TWO+ PEOPLE: name them -- 'Maya = grey shorts, red jacket; Jon = navy overalls', then edit one at a time: 'wardrobe: Maya -= jacket' leaves Jon untouched.
+
+**`anchor_override`** — Set the persistent look explicitly instead of using the first paragraph. When this is filled in, EVERY paragraph of the prompt box is a beat/shot -- nothing is consumed as the identity anchor. Put the permanent identity here (hair, face, build, age) and the clothing in character_memory.
+
+**`beat_split`** — How the prompt box becomes beats. Beats are meant to be separated by a BLANK line (or a '##' line) -- but six beats typed on six consecutive lines are ONE paragraph, so they would render as one shot with six actions crammed into it, which looks like everyone is moving at triple speed. auto (default): blank lines first, then any paragraph still holding several lines is split one beat per LINE, and the info output says so. 'each line': every line is its own beat -- same result, stated explicitly. Neither can lose a beat. (The old strict 'blank line' option was REMOVED: it was the only setting that could silently collapse beats, and a stored value of it now reads as 'auto'.) Directive lines (wardrobe:, seconds:, exit:) are never beats -- they attach to the beat that follows them.
+
+**`per_beat_length`** — PACING. Size each shot from what its beat actually stages, instead of giving every shot the same length. ON (default): a beat's time is ~2s of setup plus ~2.5s per action clause, or its spoken line, whichever is longer -- so 'she takes off her jacket and drops it on the bench' gets ~7s and a three-part beat gets more. OFF: every shot gets the full ceiling. WHY IT MATTERS: a 3s action in a 12s shot leaves 9 seconds the model was told nothing about, and it fills them by repeating or REVERSING the action -- which is why clothing comes off and goes back on. The estimate leans SHORT on purpose: an unfinished action is continued by the next shot from the handoff frame, while an overlong one is unrecoverable. Never exceeds the ceiling (shot_seconds or the VRAM budget) and always lands on the 17n+5 grid. Override any single beat with 'seconds: 8' on its own line inside that paragraph -- that wins over everything, including this toggle.
+
+### Size and length
+
+| field | | type | constraints |
+|---|---|---|---|
+| `resolution` | **R** | choice | `16:9`, `9:16`, `4:3`, `3:4`, `1:1`, `21:9`, `9:21` |
+| `megapixels` | **R** | FLOAT | default `1.0`, range `0.1`–`4.0` |
+| `shot_seconds` |  | FLOAT | **input socket**, range `0.0`–`15.1` |
+| `allow_oversize_shots` |  | BOOLEAN | default `False` |
+| `allow_res_backoff` |  | BOOLEAN | default `True` |
+| `fps` |  | INT | default `24`, range `1`–`60` |
+
+**`resolution`** — ASPECT RATIO only -- `megapixels` decides the size. The two are independent, so changing shape does not change cost. Each ratio uses H3's own dimensions as its reference, which is why 1.00MP reproduces the model's native sizes exactly (16:9 -> 1344x768, 21:9 -> 1536x672).
+
+**`megapixels`** — Pixel BUDGET, applied to the preset's aspect ratio. 1.00 = 1024x1024 worth of pixels, the same convention as ComfyUI's Scale Image to Total Pixels. START at 1.00: every NATIVE preset reproduces its own size there (1344x768, 1536x672, ...), then step down -- 0.83 gives a 704 short edge, 0.65 gives 640 -- for speed, VRAM and longer shots. Cost and training fit track TOTAL PIXELS, not the short edge: 1:1 768x768 reads as native by short edge but is only 0.56MP, while 21:9 1536x672 reads as sub-native at a full 0.98MP. Snapped to multiples of 32; `info` reports the size and MP actually produced. Set 0 to use the preset's own dimensions instead.
+
+**`shot_seconds`** — Length of EACH shot in seconds, taken from a connected input -- H3 Shot Length is the intended source, since it also reports the matching frame count on the 17k+5 grid. Leave it UNCONNECTED for auto: the largest shot that fits at the chosen size, which is what a 0 in the old widget did. One paragraph = one shot, so total video = (paragraph count) x this. Max ~15s.
+
+**`allow_oversize_shots`** — OFF (default): a forced shot_seconds that won't fit VRAM is clamped DOWN to what fits, and the clamp is reported in info. ON: honor the requested length even if it exceeds the budget -- the render may spill into system RAM (slow) or OOM. Only affects forced shot_seconds, not auto.
+
+**`allow_res_backoff`** — If VRAM is tight, step resolution down instead of failing.
+
+**`fps`** — DISPLAY ONLY -- H3 always renders 24 fps. The model's frame grid and its audio latent are both defined against 24, so this node computes every duration at 24 regardless of what you set here. Set your video-save node to 24 as well, or the clip plays at the wrong speed.
+
+### Sampling
+
+| field | | type | constraints |
+|---|---|---|---|
+| `steps` | **R** | INT | default `20`, range `1`–`200` |
+| `cfg` | **R** | FLOAT | default `1.0`, range `0.0`–`30.0` |
+| `sampler_name` | **R** | choice | `euler`, `euler_cfg_pp`, `euler_ancestral`, `euler_ancestral_cfg_pp`, `heun`, `heunpp2`, `exp_heun_2_x0`, `exp_heun_2_x0_sde`, `dpm_2`, `dpm_2_ancestral`, `lms`, `dpm_fast`, `dpm_adaptive`, `dpmpp_2s_ancestral`, `dpmpp_2s_ancestral_cfg_pp`, `dpmpp_sde`, `dpmpp_sde_gpu`, `dpmpp_2m`, `dpmpp_2m_cfg_pp`, `dpmpp_2m_sde`, `dpmpp_2m_sde_gpu`, `dpmpp_2m_sde_heun`, `dpmpp_2m_sde_heun_gpu`, `dpmpp_3m_sde`, `dpmpp_3m_sde_gpu`, `ddpm`, `lcm`, `ipndm`, `ipndm_v`, `deis`, `res_multistep`, `res_multistep_cfg_pp`, `res_multistep_ancestral`, `res_multistep_ancestral_cfg_pp`, `gradient_estimation`, `gradient_estimation_cfg_pp`, `er_sde`, `seeds_2`, `seeds_3`, `sa_solver`, `sa_solver_pece`, `ddim`, `uni_pc`, `uni_pc_bh2` |
+| `scheduler` | **R** | choice | `simple`, `sgm_uniform`, `karras`, `exponential`, `ddim_uniform`, `beta`, `normal`, `linear_quadratic`, `kl_optimal` |
+| `seed` | **R** | INT | default `0`, range `0`–`18446744073709551615` |
+| `vary_seed_per_shot` |  | BOOLEAN | default `False` |
+| `apply_model_sampling` |  | BOOLEAN | default `True` |
+| `shift_video` |  | FLOAT | default `12.0`, range `1.0`–`32.0` |
+| `shift_audio` |  | FLOAT | default `3.0`, range `0.25`–`16.0` |
+
+**`steps`** — Base H3 wants ~20 (res_multistep + simple). Drop to 6-8 ONLY with a working distill/turbo LoRA or a low-step MXFP8 checkpoint -- on the bare base model, low steps are the #1 cause of soft output.
+
+**`vary_seed_per_shot`** — Give each shot its own seed (seed+1, seed+2, ...) instead of one seed for the whole chain. OFF by default, because this node builds a CONTINUOUS TAKE. The seed sets the noise field every shot is sampled from, and that field is what fixes the stochastic detail -- grain, micro-texture, the exact rendering of surfaces the prompt never names. Change it between shots and all of that resets at the boundary, which reads as a cut even when the keyframe anchors the frame and the location is unchanged: the same room, rendered afresh. Shots still differ with one seed -- each has its own beat text and its own handoff keyframe. Turn this ON only when you WANT the beats to look separately shot, or when repeated beats are coming out too alike.
+
+**`apply_model_sampling`** — Patch ModelSamplingMiniMaxH3 (the dual video/audio schedule) inside the node so you don't have to wire it upstream. Without it, H3's audio comes out as gibberish. Turn OFF only if you patch it yourself upstream.
+
+**`shift_video`** — Video flow shift. 12 = base H3 (correct default). A low-step MXFP8 checkpoint wants ~8. Only used when apply_model_sampling is on.
+
+**`shift_audio`** — Audio flow shift. 3 = base H3. COUPLED to shift_video on ComfyUI 0.31+: the audio latent rides the video schedule scaled by audio_scale = shift_video / shift_audio (12/3 = 4). Flattening that ratio toward 1.0 breaks the audio branch -- babble or silence -- so if you lower shift_video, lower this by the same factor. Only used when apply_model_sampling is on.
+
+### Chaining shots
+
+| field | | type | constraints |
+|---|---|---|---|
+| `trim_seam` |  | BOOLEAN | default `True` |
+| `handoff_offset` |  | INT | default `0`, range `0`–`12` |
+| `cleanup_between_shots` |  | BOOLEAN | default `True` |
+| `vram_headroom_gb` |  | FLOAT | default `1.5`, range `0.0`–`32.0` |
+
+**`trim_seam`** — Drop the FIRST frame of every shot after the first. That frame is the model's own reproduction of the handoff -- the last frame of the previous shot, which it was anchored to. Keeping it shows the same moment twice and reads as a stutter. So at a working seam the last frame of one shot and the first of the next are NOT identical: they are one frame of normal motion apart, which is what continuous footage looks like. Turn this off only to inspect how closely the anchor was reproduced.
+
+**`handoff_offset`** — End each shot this many frames early and hand THAT frame to the next shot instead of the literal last frame. Set 2-4 if chained shots open with moving/talking mouths -- it avoids seeding the next shot with a mid-word open-mouth pose. Trims the matching audio tail too. 0 = last frame.
+
+**`cleanup_between_shots`** — Between beats, move each shot's decoded video+audio to system RAM and run a full VRAM+RAM purge (GC + CUDA cache), so a long chain doesn't accumulate on the GPU and OOM. Recommended on 16GB. Turn off only on a big card where you want to skip the per-shot cleanup cost.
+
+### Audio
+
+| field | | type | constraints |
+|---|---|---|---|
+| `global_soundscape` |  | STRING | **input socket**, multiline |
+| `non_diegetic_music` |  | STRING | **input socket**, multiline |
+| `auto_soundscape` |  | choice | `off`, `fill if blank`, `always` |
+| `auto_silence_nonspeech` |  | BOOLEAN | default `True` |
+| `mute_nonspeech_audio` |  | BOOLEAN | default `True` |
+| `mute_fade_ms` |  | INT | default `40`, range `0`–`500` |
+
+**`global_soundscape`** — AMBIENT/environmental sound only (rain, room tone, footsteps, engines). Appended to every shot as overall_soundscape. NOT for dialogue -- speech and lip timing live in the prompt beats. Leave blank for no ambient bed.
+
+**`non_diegetic_music`** — Background SCORE only -- genre, mood, instrumentation, tempo -- music that is NOT part of the scene. Music is OPT-IN: leave this BLANK and the node emits 'non_diegetic_music: N/A' on every shot so H3 adds no score (fixes unwanted music). Fill it in to request a specific score. Not for music a character plays/hears (that's diegetic; put it in the beat).
+
+**`auto_soundscape`** — Build the ambient bed from the scene instead of typing one. Reads the ANCHOR (the soundscape is global, so it must describe the PLACE, not one beat's action), falling back to the beats when the anchor is pure camera language. 'A disused aircraft hangar' -> cavernous interior, long reverb, distant metal ticks. Weather layers first: rain, wind, snow, fog. NO human sounds are ever generated -- no chatter, crowd or announcements -- because an ambient bed that implies voices is how H3 starts talking. 'fill if blank' derives one only when the global_soundscape input is unconnected or empty, so connecting your own text is enough to keep it. 'always' derives even when you HAVE connected one, overriding it -- deliberate, for comparing your bed against a derived one without unwiring. 'off' never derives. Whichever fires, the bed actually used comes out on the `soundscape` output, so you can read it and wire it back into the input to pin it.
+
+**`auto_silence_nonspeech`** — Stop mouths moving / gibberish audio on shots with no dialogue. Any beat with no scripted speech gets an explicit 'lips closed, no dialogue' clause, so H3 doesn't animate or vocalize a mouth before real dialogue. Beats with quoted dialogue ("...") are left alone. To make someone speak, put the words in double quotes. Turn OFF to manage lip state yourself.
+
+**`mute_nonspeech_audio`** — DETERMINISTIC gibberish fix: FULLY silence the audio of any shot that has no scripted dialogue (no double-quoted line). Prompt-level silencing asks H3 not to babble; this guarantees it. TRADE-OFF: it also removes that shot's generated ambience/SFX, so lay a continuous ambient bed under the video in post. Shots WITH quoted dialogue keep their audio untouched.
+
+**`mute_fade_ms`** — Fade applied to the AUDIBLE shots that border a silenced one, so audio doesn't cut to digital silence with a click. The silenced shots keep NO original audio at all -- fading the muted shot itself would leave this many ms of the gibberish audible at each end of every muted shot.
+
+### Consistency guards
+
+| field | | type | constraints |
+|---|---|---|---|
+| `subject_count_guard` |  | choice | `auto`, `on`, `off` |
+| `anatomy_guard` |  | choice | `off`, `auto`, `on` |
+| `solidity_guard` |  | choice | `off`, `auto`, `on` |
+| `motion_guard` |  | choice | `off`, `auto`, `on` |
+| `contact_guard` |  | choice | `off`, `auto`, `on` |
+| `lock_restraints` |  | BOOLEAN | default `True` |
+| `auto_wardrobe` |  | BOOLEAN | default `True` |
+| `auto_props` |  | BOOLEAN | default `True` |
+| `prevent_nudity` |  | BOOLEAN | default `True` |
+| `exposed_terms` |  | STRING | **input socket**, multiline |
+
+**`subject_count_guard`** — Anti-duplication: prepend an explicit subject count to each shot ("Exactly two people in this shot, no duplicates, no other people in frame"). Character duplication gets much more likely BELOW the model's native 768 short edge -- fewer pixels per subject pushes the sample out of the training distribution and the figure gets tiled. A LoRA causes it too: a distilled LoRA fixes composition (including how many people are in frame) in its first step or two, so it duplicates even at native size -- there the count is moved to the FRONT of the prompt so it binds before the scene. 'auto' = on when the short edge is under 768 OR a LoRA is applied, and also on ANY shot holding two or more people -- multi-figure frames are where duplication happens even at native size; 'on' always; 'off' never.
+
+**`anatomy_guard`** — State each person's limb COUNT positively, to stop spare arms, duplicated hands and the third leg. H3 is CFG-free at cfg 1, so a NEGATIVE prompt is never evaluated -- 'extra limbs' in a negative does nothing. Naming a number gives the model a target instead; negating one only puts the word in the prompt. Added per-shot and only where people are actually present, never in the anchor (anchor body words are what burn a face into every opening frame). 'auto' = on below 768 short edge OR when a LoRA is applied, and also on ANY shot holding two or more people -- spare limbs are grown where bodies meet and move together. Costs ~90 tokens on shots with people.
+
+**`solidity_guard`** — Keep bodies from passing through objects. States that the solid things in the shot occupy space and that bodies stop at surfaces. Stated POSITIVELY, and it has to be: H3 is CFG-free at cfg 1, so a negative prompt is never evaluated, and 'does not walk through the wall' in the positive names walking through a wall -- a mention is a presence cue. It says what bodies DO instead: stop at the surface, rest on the floor, press against what they touch, go around the furniture. 'auto' speaks only when the shot actually names something solid (walls, doors, tables, stairs, vehicles, crates, trees...), reading BOTH the beat and the identity block, since the set is usually described in the anchor. 'on' states it every shot. Only ever applied to a shot with someone in it -- a body is needed before one can pass through anything.
+
+**`motion_guard`** — Stop poses being reached without the frames in between -- the head arriving at a new angle with no path to it (a 'neck snap'), a body teleporting between two positions. What is missing in a snap is the PATH, not the pose, so the path is what gets stated: movement travels through every position on the way, at one steady speed, the neck following the shoulders and the shoulders following the hips. Positive, because at cfg 1 H3 is CFG-free and the negative is never evaluated -- and 'the head does not snap round' in the positive names a head snapping round. 'auto' speaks only on a beat that actually moves someone (turns, looks, walks, leans, reaches... and the high-jerk ones -- struggles, pulls, twists, writhes -- where a limb most often arrives without its path), since a beat where nobody changes orientation has no path to describe. 'on' states it every shot. Names nobody, so it adds no second reference to anyone already in frame. A snap right after a cut is a different thing: that is the model leaving the keyframe pose. handoff_offset helps there.
+
+**`contact_guard`** — Keep two bodies in contact correctly aligned -- any position, not a list of named ones. Position-agnostic on purpose. The model already knows more position names than a dictionary could hold; what it gets wrong is the GEOMETRY, so the geometry is what gets stated, and these hold for every arrangement: - OWNERSHIP: each person keeps their own head, two arms and two legs, each joined to the body it belongs to. Overlapping bodies is exactly when an arm gets reassigned to the wrong torso. - SEPARATION: they meet at the surface of the skin, each keeping its own volume, rather than passing into one another. - STABLE ROLES: whoever is above stays above, below stays below, behind stays behind, for the whole shot and from every camera angle. Positions morph mid-shot because nothing fixes them. - SUPPORT: weight rests on whatever is holding it, and the two bodies stay in proportion. Needs TWO people in the shot -- one body cannot be misaligned against another, and saying otherwise would invite a second person in. 'auto' fires on a contact cue in the beat; 'on' states it whenever two or more people are present. Describe the arrangement in the beat itself in RELATIVE terms (who is above, behind, facing whom) rather than by a position name alone -- this guard holds a stated arrangement together, it cannot infer one you did not state.
+
+**`lock_restraints`** — Physical restraints stay ON until something explicitly removes them. Handcuffs, shackles, manacles, fetters, irons, gags, blindfolds, harnesses, leashes, plus qualified forms like 'ankle chain' or 'leather wrist straps'. Without this they come off like any garment, and often by ACCIDENT -- 'steps out of her jacket and the chain falls away' removed the ankle chain as a side effect of a jacket beat. To take one off, say so directly: 'wardrobe: Mara -= handcuffs'. Bare 'chain', 'collar', 'strap' and 'belt' are NOT treated as restraints; they are jewellery, a shirt part, a dress part and a garment at least as often.
+
+**`auto_wardrobe`** — Read clothing REMOVALS straight from your beat prose -- 'she takes off her jacket' drops the jacket with no 'wardrobe:' line needed. Safe: only fires on items the character is already wearing, so 'the plane takes off' does nothing. Additions/swaps still use 'wardrobe: += ...' (which overrides). Turn OFF to control wardrobe only via explicit 'wardrobe:' lines.
+
+**`auto_props`** — Carry OBJECTS across shots. Each shot is a separate generation, so 'the van' in shot 2 has no antecedent -- nothing in that prompt describes a van, and the model invents one, which is how a second van appears while the first is still in frame. With this on, an object introduced indefinitely ('a white van') is bound on its first definite reference in any later beat ('the van' -> 'the same white van') and a short clause pins it to the previous shot: one van only, no second van. Only the FIRST mention per shot is expanded, quoted dialogue is never rewritten, worn garments are excluded (they have the wardrobe channel), and frame/body nouns (the ground, the light, the hand) are never carried.
+
+**`prevent_nudity`** — Never let the prompt ASSERT that a body is bare. A removal still happens either way -- this gates the sentence, not the garment. Deleting the last item covering a zone only leaves it undescribed, and a video model's default is a clothed person, so it covers what nobody described. With this OFF the node states the state outright ('bare below the waist') and keeps stating it until something covers that zone again, which is what makes a strip actually stick. ON is the safe default; turn it OFF only when nudity is intended. Either way info reports which zone a removal left uncovered.
+
+**`exposed_terms`** — What a stripped body zone is CALLED, per character, so it persists automatically instead of being typed into every beat. Same syntax as character_memory -- a PRONOUN covers everyone who declares it, a NAME overrides it, and a trailing 'upper' targets the chest. For example -- 'she = visible vulva, mvagina' / 'he = visible penis, mpenis' / 'Mara upper = bare breasts'. Once a removal empties that zone the phrase is stamped into every later shot that person is in, and clears by itself when something covers the zone again. Put LoRA trigger words here too. Requires prevent_nudity OFF; empty falls back to 'bare below the waist'.
+
+### Reference images
+
+| field | | type | constraints |
+|---|---|---|---|
+| `ref_mode` |  | choice | `where tagged`, `first shot`, `every shot`, `every shot + handoff ref` |
+| `ref_image_size` |  | choice | `match`, `max` |
+| `ref_noise_aug` |  | FLOAT | default `0.999`, range `0.5`–`1.0` |
+
+**`ref_mode`** — Which shots the ref_image inputs condition. A shot carries EITHER references or the last-frame handoff, never both. 'where tagged' (default): write <Picture 1> in the beat where that character appears and ONLY that shot gets the reference -- every other shot keeps its handoff. This is the precise option: the other modes go by shot NUMBER and are blind to who is actually in the shot, so a character who first appears in shot 2 gets nothing while an empty establishing shot 1 gets a portrait pushed into it. Tags are renumbered per shot, so <Picture 2> alone still resolves. With refs connected but no tags anywhere, falls back to first shot rather than silently doing nothing. 'first shot' / 'every shot' / 'every shot + handoff ref' go purely by position. Ignored when no ref_image is connected.
+
+**`ref_image_size`** — How large each reference is encoded. 'match' scales it down to the generation's pixel area -- a reference then costs about one frame per step. 'max' uses the reference pipeline's 2048 short edge for the best identity fidelity, but reference rows are re-attended EVERY step of EVERY ref-conditioned shot, so on a long chain it is several times slower. Neither ever upscales a small reference.
+
+**`ref_noise_aug`** — How CLEAN each reference is presented to the model. 0.999 (H3's own default) hands it a finished, noise-free image -- which invites the model to REPRODUCE the reference in the opening frames instead of just taking an identity from it. Lower values blend the condition with noise and label it as approximate, so it informs the face without being copied: try 0.95, then 0.90. Too low (below ~0.8) and the reference stops holding identity at all. Applies ONLY to ref-conditioned shots -- the last-frame handoff is never weakened, or continuity would break.
+
+### Decode and upscale
+
+| field | | type | constraints |
+|---|---|---|---|
+| `decode_tile_frames` |  | INT | default `0`, range `0`–`128` |
+| `decode_tile_size` |  | INT | default `0`, range `0`–`1024` |
+| `upscale` |  | choice | `off`, `rtx`, `model`, `lanczos` |
+| `upscale_model` |  | choice | `none`, `GFPGANv1.4.pth`, `RealESRGAN_x2.pth`, `RealESRGAN_x4plus.pth` |
+| `upscale_target_short_edge` |  | INT | default `0`, range `0`–`4096` |
+| `upscale_batch` |  | INT | default `4`, range `1`–`64` |
+
+**`decode_tile_frames`** — Temporal tiling for the VAE decode (tile_t). 0 = ComfyUI default, which expands the WHOLE clip at once -- the single largest allocation in a run, and the usual point where a big checkpoint tips into shared memory. Try 8-16 if you spill during decode rather than sampling. Lower = less peak VRAM, slightly slower.
+
+**`decode_tile_size`** — Spatial tile size for the VAE decode (tile_x/tile_y). 0 = ComfyUI default. Try 256 on a tight card at 1344x768.
+
+**`upscale`** — Optional post-pass on the finished frames. 'rtx' = NVIDIA RTX Video Super Resolution (Tensor Cores -- fastest and best for video; needs the Nvidia_RTX_Nodes_ComfyUI pack, falls back automatically if absent). 'model' = a Real-ESRGAN/UltraSharp upscale model from upscale_model. 'lanczos' = plain resize. All of these ENHANCE/ENLARGE; for true detail reconstruction from a low-res render, use a separate LTX 2.3 upscale pass.
+
+**`upscale_model`** — Upscale model from models/upscale_models (used when upscale = model).
+
+**`upscale_target_short_edge`** — Fit the result's short edge to this many px (0 = keep the model's native factor / no resize). E.g. generate 512 fast, set 768 to land at native size.
+
+**`upscale_batch`** — Frames per chunk for the model upscale (lower = less VRAM, slower).
+
+### Overlays
+
+| field | | type | constraints |
+|---|---|---|---|
+| `watermark_text` |  | STRING | default `''` |
+| `watermark_position` |  | choice | `bottom-right`, `bottom-left`, `bottom-center`, `top-right`, `top-left`, `top-center`, `center` |
+| `watermark_size` |  | FLOAT | default `4.0`, range `0.5`–`40.0` |
+| `watermark_opacity` |  | FLOAT | default `0.75`, range `0.0`–`1.0` |
+| `watermark_margin` |  | FLOAT | default `3.0`, range `0.0`–`25.0` |
+| `intro_text` |  | STRING | **input socket**, multiline |
+| `intro_position` |  | choice | `center`, `lower-third`, `top-center`, `bottom-center` |
+| `intro_seconds` |  | FLOAT | default `3.0`, range `0.0`–`30.0` |
+| `intro_fade` |  | FLOAT | default `0.6`, range `0.0`–`10.0` |
+| `intro_size` |  | FLOAT | default `9.0`, range `0.5`–`40.0` |
+| `overlay_font` |  | STRING | default `'arial.ttf'` |
+| `overlay_stroke` |  | INT | default `0`, range `0`–`20` |
+
+**`watermark_text`** — Composited with PIL onto every finished frame -- NOT rendered by the model and NOT added to the prompt. White glyphs on a transparent layer, alpha-blended over the video, so only the letters land on the picture. Applied AFTER any upscale, so the text is crisp at final resolution. Leave empty for none.
+
+**`watermark_size`** — Cap height as a percentage of the frame's SHORT edge, so the mark keeps its apparent size across portrait and landscape presets alike.
+
+**`watermark_opacity`** — Multiplies the white text alpha. 1.0 = solid white; 0.75 reads as a watermark without burying the picture under it.
+
+**`watermark_margin`** — Inset from the frame edge, as a percentage of the SHORT edge.
+
+**`intro_text`** — Title composited over the OPENING frames -- white on transparent, so the first shot plays underneath it rather than being replaced by a card. Multi-line is centered as a block. Holds for intro_seconds, then fades out over intro_fade. Also PIL, never the model.
+
+**`intro_seconds`** — How long the title stays at full opacity before the fade starts.
+
+**`intro_fade`** — Linear fade-out length after the hold. 0 = hard cut.
+
+**`intro_size`** — Title cap height as a percentage of the frame's SHORT edge.
+
+**`overlay_font`** — TrueType font for BOTH overlays: a bare name resolved against the system font folder (arial.ttf, arialbd.ttf, segoeui.ttf) or a full path to a .ttf/.otf file. Falls back to the first font that loads if this one fails.
+
+**`overlay_stroke`** — Black outline thickness in pixels around the white text. 0 keeps it pure white as asked; 2-3 makes it survive a bright sky or a white wall.
+
+### Preview
+
+| field | | type | constraints |
+|---|---|---|---|
+| `plan_only` |  | BOOLEAN | default `False` |
+
+**`plan_only`** — Preview the shot split WITHOUT rendering. Uses THIS node's own settings (no second node, no duplicate entry): returns the plan in 'info' and the shots/frames/seconds outputs near-instantly. Turn off to render for real.
+
+### Outputs
+
+| slot | name | type |
+|---|---|---|
+| 0 | `images` | IMAGE |
+| 1 | `audio` | AUDIO |
+| 2 | `info` | STRING |
+| 3 | `script` | STRING |
+| 4 | `frames_per_shot` | INT |
+| 5 | `total_frames` | INT |
+| 6 | `shots` | INT |
+| 7 | `video_seconds` | FLOAT |
+| 8 | `fps` | FLOAT |
+| 9 | `fps_int` | INT |
+| 10 | `latent` | LATENT |
+| 11 | `soundscape` | STRING |
+
+Outputs are only ever **appended**. A workflow stores an output link by slot index, so inserting one would silently re-target every wire after it.
+
+<!-- AUTOGEN:FIELDS END -->
+
 One node. You set just two things:
 
 1. **prompt** — this is the `integrated_multimodal_description` (the visual +

@@ -1,4 +1,4 @@
-"""Regenerate the field tables in REFERENCE.md from the node's own schema.
+r"""Regenerate the field tables in REFERENCE.md from the node's own schema.
 
 REFERENCE.md went stale because it was hand-maintained alongside a 69-field node:
 it documented a `total_seconds` input that had been gone for months and was missing
