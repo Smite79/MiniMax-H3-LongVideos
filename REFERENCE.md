@@ -130,6 +130,7 @@ There are **71** inputs and **12** outputs. Required inputs are marked **R**; ev
 | `non_diegetic_music` |  | STRING | **input socket**, multiline |
 | `auto_soundscape` |  | choice | `off`, `fill if blank`, `always` |
 | `auto_silence_nonspeech` |  | BOOLEAN | default `True` |
+| `allow_nonspeech_vocals` |  | BOOLEAN | default `False` |
 | `mute_nonspeech_audio` |  | BOOLEAN | default `True` |
 | `mute_fade_ms` |  | INT | default `40`, range `0`–`500` |
 
@@ -142,6 +143,8 @@ There are **71** inputs and **12** outputs. Required inputs are marked **R**; ev
 **`auto_silence_nonspeech`** — Stop mouths moving / gibberish audio on shots with no dialogue. Any beat with no scripted speech gets an explicit 'lips closed, no dialogue' clause, so H3 doesn't animate or vocalize a mouth before real dialogue. Beats with quoted dialogue ("...") are left alone. To make someone speak, put the words in double quotes. Turn OFF to manage lip state yourself.
 
 **`mute_nonspeech_audio`** — DETERMINISTIC gibberish fix: FULLY silence the audio of any shot that has no scripted dialogue (no double-quoted line). Prompt-level silencing asks H3 not to babble; this guarantees it. TRADE-OFF: it also removes that shot's generated ambience/SFX, so lay a continuous ambient bed under the video in post. Shots WITH quoted dialogue keep their audio untouched.
+
+**`allow_nonspeech_vocals`** — Allow non-speech vocal sounds (screams, sobs, gasps, moans) on shots with no dialogue. When ON, the node skips the lips-closed clause and softens the no-voice soundscape so it bans speech, dialogue and singing but permits screams, sobs, gasps and other distress vocalizations. The audio branch is also left unmuted on those shots. Speech is still suppressed — only double-quoted lines count as speaking — so H3 does not invent chatter. Turn this ON when your scene contains distress sounds that H3 would otherwise suppress. Keep `auto_silence_nonspeech` ON for shots that should be truly silent.
 
 **`mute_fade_ms`** — Fade applied to the AUDIBLE shots that border a silenced one, so audio doesn't cut to digital silence with a click. The silenced shots keep NO original audio at all -- fading the muted shot itself would leave this many ms of the gibberish audible at each end of every muted shot.
 

@@ -260,7 +260,7 @@ ADDED_WIDGETS = (
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
     "motion_guard", "contact_guard",
-    "auto_soundscape",
+    "auto_soundscape", "allow_nonspeech_vocals",
 )
 
 NL = "\n"
@@ -2274,8 +2274,11 @@ LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement.
 # -- which is exactly when it invents speech-like babble under a silent shot. So a
 # silenced shot always gets a soundscape line, and it says no voices outright.
 NO_VOICE_SOUNDSCAPE = ("ambient background sound and room tone only, no voices, no speech, "
-                       "no talking, no whispering, no singing, no vocal sounds")
+                        "no talking, no whispering, no singing, no vocal sounds")
 NO_VOICE_CLAUSE = ", no voices, no speech, no talking, no vocal sounds"
+NO_VOICE_SPEECH_SOUNDSCAPE = ("ambient background sound and room tone only, no speech, no dialogue, "
+                               "no talking, no singing, no whispering, no spoken words")
+NO_VOICE_SPEECH_CLAUSE = ", no speech, no dialogue, no talking, no singing, no whispering, no spoken words"
 
 
 # A beat that refers to the cast only in the PLURAL ("they face each other") used
@@ -3089,7 +3092,7 @@ def speech_flags(beats):
 
 
 def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_wardrobe=True,
-                           auto_silence_nonspeech=True, count_subjects=False, front_load=False,
+                           auto_silence_nonspeech=True, allow_nonspeech_vocals=False, count_subjects=False, front_load=False,
                            notes_out=None, auto_props=True, prevent_nudity=True,
                             exposed_terms="", strip_out=None, anatomy_guard=False,
                            anatomy_auto=False,
@@ -3343,6 +3346,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         #                 there to have a mouth. On a scenery beat it describes
         #                 nobody and can only invite a face into an empty frame.
         no_speech = bool(auto_silence_nonspeech and not has_speech(body))
+        allow_vocals = bool(allow_nonspeech_vocals and not has_speech(body))
         # A quoted single word with no speech verb is usually EMPHASIS, not a line --
         # but it still flips the shot to "speaking": every mouth goes free and the
         # audio stays unmuted, which is how a character ends up mouthing prompt
@@ -3381,7 +3385,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                             1 if active.get("") else 0)
             states = [
                 # the mouth, before anything describes the body it is in
-                (no_speech, lambda: LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL),
+                (no_speech and not allow_vocals, lambda: LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL),
                 # the limb COUNT, before anything constrains those limbs. 'auto'
                 # also fires wherever TWO or more bodies share the frame: spare
                 # limbs are grown where bodies meet or move together, whatever
@@ -3408,7 +3412,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 clause = produce() if want else ""
                 if clause:
                     persistent = persistent.rstrip(". ") + "." + clause
-        silent_shot = no_speech
+        silent_shot = no_speech and not allow_vocals
         block = f"[Generation {gi}] {persistent}".strip()
         # A silenced shot ALWAYS gets a soundscape line. Leaving the field out is
         # what let H3 improvise a voice track under a shot whose picture was already
@@ -3416,9 +3420,16 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # reach, because it only constrains the frames.
         if "soundscape:" not in block.lower():
             if gs:
-                block += f"\noverall_soundscape: {gs}{NO_VOICE_CLAUSE if silent_shot else ''}"
+                if silent_shot:
+                    block += f"\noverall_soundscape: {gs}{NO_VOICE_CLAUSE}"
+                elif no_speech:
+                    block += f"\noverall_soundscape: {gs}{NO_VOICE_SPEECH_CLAUSE}"
+                else:
+                    block += f"\noverall_soundscape: {gs}"
             elif silent_shot:
                 block += f"\noverall_soundscape: {NO_VOICE_SOUNDSCAPE}"
+            elif no_speech:
+                block += f"\noverall_soundscape: {NO_VOICE_SPEECH_SOUNDSCAPE}"
         # Music is OPT-IN: a blank field emits the spec's silence token N/A on every
         # shot, so H3 doesn't improvise a score. (Soundscape is NOT forced to N/A --
         # per the spec it takes N/A only when total silence is explicitly wanted, so a
@@ -5582,12 +5593,21 @@ class H3LongVideos:
                                "on ANY shot holding two or more people -- multi-figure frames are where "
                                "duplication happens even at native size; "
                                "'on' always; 'off' never."}),
-                "auto_silence_nonspeech": ("BOOLEAN", {"default": True,
-                    "tooltip": "Stop mouths moving / gibberish audio on shots with no dialogue. Any beat "
-                               "with no scripted speech gets an explicit 'lips closed, no dialogue' clause, "
-                               "so H3 doesn't animate or vocalize a mouth before real dialogue. Beats with "
-                               "quoted dialogue (\"...\") are left alone. To make someone speak, put the "
-                               "words in double quotes. Turn OFF to manage lip state yourself."}),
+                 "auto_silence_nonspeech": ("BOOLEAN", {"default": True,
+                     "tooltip": "Stop mouths moving / gibberish audio on shots with no dialogue. Any beat "
+                                "with no scripted speech gets an explicit 'lips closed, no dialogue' clause, "
+                                "so H3 doesn't animate or vocalize a mouth before real dialogue. Beats with "
+                                "quoted dialogue (\"...\") are left alone. To make someone speak, put the "
+                                "words in double quotes. Turn OFF to manage lip state yourself."}),
+                 "allow_nonspeech_vocals": ("BOOLEAN", {"default": False,
+                     "tooltip": "Allow non-speech vocal sounds (screams, sobs, gasps, moans) on "
+                                "shots with no dialogue. When ON, the node skips the lips-closed "
+                                "clause and softens the no-voice soundscape to ban only speech, "
+                                "dialogue and singing -- not screams, sobs, or other distress "
+                                "vocalizations. Audio is also left unmuted on those shots. Turn ON "
+                                "when your scene contains distress sounds that H3 would otherwise "
+                                "suppress. Keep auto_silence_nonspeech ON for shots that should be "
+                                "truly silent."}),
                 "character_memory": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "Optional dedicated wardrobe channel (same role as a 'wardrobe:' line in "
                                "the first paragraph -- use whichever you prefer; this field wins if both "
@@ -5683,9 +5703,9 @@ class H3LongVideos:
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
             solidity_guard="auto", motion_guard="auto", contact_guard="auto",
-            auto_soundscape="fill if blank",
-            auto_silence_nonspeech=True,
-            subject_count_guard="auto",
+             auto_soundscape="fill if blank",
+             auto_silence_nonspeech=True, allow_nonspeech_vocals=False,
+             subject_count_guard="auto",
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
             mute_nonspeech_audio=True, mute_fade_ms=40,
@@ -5910,7 +5930,7 @@ class H3LongVideos:
         strip_shots = []      # shots that newly bared a zone -> the NEXT shot starts fresh
         gens = distribute_generations(anchor, beats, global_soundscape.strip(),
                                       non_diegetic_music.strip(), character_memory.strip(),
-                                      auto_wardrobe, auto_silence_nonspeech, count_subjects,
+                                       auto_wardrobe, auto_silence_nonspeech, allow_nonspeech_vocals, count_subjects,
                                       lora_on, notes_out=wardrobe_notes, auto_props=auto_props,
                                       prevent_nudity=prevent_nudity,
                                       exposed_terms=exposed_terms, strip_out=strip_shots,
@@ -5961,9 +5981,15 @@ class H3LongVideos:
             # Same dialogue/audio accounting the render reports, so the plan says up
             # front which shots will come back silent instead of surprising you after.
             n_silent = sum(1 for f in speech_flags(beats) if not f)
-            plan_audio = (f" {n_silent} of {shots} shot(s) have no quoted dialogue -> "
-                          + ("AUDIO-MUTED (ambience goes too)" if mute_nonspeech_audio
-                             else "prompt/soundscape silencing only")) if n_silent else ""
+            plan_audio = ""
+            if n_silent:
+                if allow_nonspeech_vocals:
+                    plan_audio = (f" {n_silent} of {shots} shot(s) have no quoted dialogue -> "
+                                  f"non-speech vocals allowed (speech still suppressed)")
+                else:
+                    plan_audio = (f" {n_silent} of {shots} shot(s) have no quoted dialogue -> "
+                                  + ("AUDIO-MUTED (ambience goes too)" if mute_nonspeech_audio
+                                     else "prompt/soundscape silencing only"))
             # Same reference accounting the render reports: which shots lose the
             # handoff is a composition decision, so it belongs in the preview.
             n_refs = len([r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
@@ -6093,7 +6119,7 @@ class H3LongVideos:
             # text every time. Costs a cut exactly where the state changes, which is
             # where a cut belongs anyway.
             # No scripted line -> anchor this shot's audio branch to silence.
-            shot_silent = bool(auto_silence_nonspeech and i < len(spk) and not spk[i])
+            shot_silent = bool(auto_silence_nonspeech and not allow_nonspeech_vocals and i < len(spk) and not spk[i])
             after_strip = i in strip_shots          # strip_shots is 1-based, i is 0-based
             shot_handoff = (None if after_strip
                             else handoff if (carry_keyframe or not shot_refs) else None)
@@ -6158,7 +6184,7 @@ class H3LongVideos:
             # silence. Silence -> silence needs nothing, and silence -> speech wants
             # the literal last frame so the mouth is already in place.
             shot_hoff = hoff
-            auto_settle = (not hoff and auto_silence_nonspeech
+            auto_settle = (not hoff and auto_silence_nonspeech and not allow_nonspeech_vocals
                            and i < len(gens) - 1 and i < len(spk) - 1
                            and spk[i] and not spk[i + 1])
             if auto_settle:
@@ -6189,7 +6215,7 @@ class H3LongVideos:
             # very gibberish the setting exists to remove. The fade belongs on the
             # NEIGHBOURING audible shots instead (applied after the loop), not on the
             # silent one, so nothing of the muted shot survives.
-            muted_this_shot = bool(mute_nonspeech_audio and i < len(spk) and not spk[i])
+            muted_this_shot = bool(mute_nonspeech_audio and not allow_nonspeech_vocals and i < len(spk) and not spk[i])
             if muted_this_shot:
                 wav = torch.zeros_like(wav)
             muted_flags.append(muted_this_shot)

@@ -293,6 +293,13 @@ rendering**. Do that first; it is near-instant.
   quote that can't be attributed frees nobody by guesswork, and a scare-quoted
   word like she gave him a "look" — which is emphasis, not dialogue — is reported
   in `info`, since it still flips the whole shot to speaking.
+- **Non-speech vocals (screams, sobs, gasps).** `allow_nonspeech_vocals` lets beats
+  with no quoted dialogue carry distress sounds. When it is on, the node skips the
+  lips-closed clause and softens the no-voice soundscape so it bans speech, dialogue
+  and singing but permits screams, sobs, gasps and moans. The audio branch is also
+  left unmuted on those shots. Speech is still suppressed — only double-quoted lines
+  count as speaking — so H3 does not invent chatter. Turn this on when your scene
+  contains distress sounds the default silence would remove.
 - **One noise field for the whole chain.** `vary_seed_per_shot` is **off** by
   default. The seed picks the noise field a shot is sampled from, and that field
   fixes the stochastic detail — grain, micro-texture, the exact rendering of every
