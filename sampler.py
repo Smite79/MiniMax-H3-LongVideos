@@ -742,22 +742,49 @@ _RESTRAINT_QUALIFIER = re.compile(
 _RESTRAINT_NOUN = re.compile(
     r"\b(?:chain|chains|rope|ropes|cord|cords|tie|ties|strap|straps|collar|collars|"
     r"band|bands|belt|belts|cuff|cuffs)\b", re.I)
+# Two shapes the head-noun/qualifier rules above both miss:
+#   * compounds whose HEAD noun is innocent -- "spreader bar" resolves to `bar`,
+#     which is furniture far more often than hardware, so only the word SPREADER
+#     identifies it;
+#   * a binding participle fastened straight onto a body part -- "bound wrists",
+#     "shackled ankles", "tied hands" -- where there is no equipment noun at all.
+# Only the STRONG participles qualify here, never a bare body part: the qualifier
+# list already carries ankle/wrist/etc. for the equipment route, and letting a
+# body part qualify itself would make "waist tie" on a dress unremovable.
+_RESTRAINT_SPREADER = re.compile(r"\bspreaders?\b", re.I)
+_RESTRAINT_PARTICIPLE = re.compile(
+    r"\b(?:chained|shackled|cuffed|bound|tied|locked|padlocked)\b", re.I)
+_BODY_PART_TOKEN = re.compile(
+    r"\b(?:ankles?|wrists?|legs?|arms?|thumbs?|knees?|elbows?|hands?|feet|foot|"
+    r"fingers?|neck|waist)\b", re.I)
 
 
 def is_restraint(item):
     """True when this wardrobe item is a physical restraint rather than clothing.
 
-    Either an unambiguous restraint noun on its own ("handcuffs", "shackles"), or
-    an ambiguous one carrying a restraint qualifier ("ankle chain", "leather wrist
-    straps"). A bare "chain" or "collar" is NOT a restraint -- it is jewellery or a
-    shirt part far more often, and a false positive here means a garment that can
-    never be taken off."""
+    Either an unambiguous restraint noun on its own ("handcuffs", "shackles"), an
+    ambiguous one carrying a restraint qualifier ("ankle chain", "leather wrist
+    straps"), a compound named by its modifier ("spreader bar" -- the head noun
+    `bar` says nothing), or a binding participle on a body part ("bound wrists").
+    A bare "chain" or "collar" is NOT a restraint -- it is jewellery or a shirt
+    part far more often, and a false positive here means a garment that can never
+    be taken off."""
     name = _item_name(item or "").lower()
     if not name:
         return False
     if _item_head(item) in _RESTRAINT_HEADS:
         return True
-    return bool(_RESTRAINT_NOUN.search(name) and _RESTRAINT_QUALIFIER.search(name))
+    if _RESTRAINT_NOUN.search(name) and _RESTRAINT_QUALIFIER.search(name):
+        # ...unless the phrase resolves to an actual BODY-COVERING GARMENT --
+        # "waist tie dress", "tie-front blouse with a neck strap" -- where the
+        # equipment word is a feature of the clothing rather than hardware.
+        # Clothing wins here, or the garment can never come off; genuine
+        # restraints ("ankle chain", "wrist cuffs") cover no zone at all.
+        if not garment_zones(item):
+            return True
+    if _RESTRAINT_SPREADER.search(name):
+        return True
+    return bool(_RESTRAINT_PARTICIPLE.search(name) and _BODY_PART_TOKEN.search(name))
 
 
 # What a restraint DOES, once it is on. Keeping the item in the wardrobe list only
@@ -1150,6 +1177,7 @@ def auto_wardrobe_removals(active, body, lock_restraints=True):
         r"throws?|threw|tosses|tossed|hangs?|hung|drops?|dropped|sets?|set|puts?|put|"
         # ...and the ones you get OUT OF rather than take off
         r"steps?|stepped|stepping|wriggles?|wriggled|wiggles?|wiggled|squirms?|squirmed|"
+        r"struggles?|struggled|struggling|"
         r"slides?|slid|sliding|climbs?|climbed|works?|worked|eases?|eased|shakes?|shook)\b"
         r"[\w\s\']{0,20}?\b(?:off|out of|aside|away|down)\b"
         # the garment itself is the subject: "her dress falls to the ground",
@@ -3231,6 +3259,16 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             if prevent_nudity and not exposed and nm not in declared:
                 add = []
             stripped_here = any(n == nm for n, _ in off_now)
+            # The handoff reset is recorded INDEPENDENTLY of the nudity gate above:
+            # that gate decides whether the bare state gets STATED, but whether or
+            # not it is stated, this shot's last frame shows the removal in
+            # progress -- and letting the next shot continue from that frame is how
+            # the garment reappears. Recording lived inside the `add` loop, so with
+            # prevent_nudity at its default the reset silently never fired and
+            # every removal was followed by a stale frame.
+            if (stripped_here and stripped.get(nm)
+                    and strip_out is not None and gi not in strip_out):
+                strip_out.append(gi)
             for mark in add:
                 active[nm].append(mark)
                 # This shot newly bared a zone by REMOVING something. The NEXT shot

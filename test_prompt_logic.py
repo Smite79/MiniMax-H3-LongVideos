@@ -637,6 +637,16 @@ def check_exposed_terms():
       exposed_terms=TERMS, strip_out=none)
     check("a chain with no strip reports none", none == [])
 
+    # ...and the reset must fire under DEFAULT settings too: prevent_nudity only
+    # suppresses the bare-state SENTENCE, not the bookkeeping. Recording used to
+    # live inside the gated `add` loop, so with no exposed_terms configured no
+    # shot ever dropped its handoff -- every removal was followed by a stale
+    # frame still showing the garment, which is how removals visibly "undid"
+    # themselves.
+    plain_strips = []
+    D("A bedroom.", B, "", "", cm_, strip_out=plain_strips)
+    check("the handoff reset fires with prevent_nudity alone", plain_strips == [2, 4])
+
 
 def check_stripped_state_persists():
     """A stripped zone must keep saying it is stripped, until something covers it.
@@ -2582,6 +2592,20 @@ def check_restraints_stay_on():
                  "rope", "silver necklace", "steel watch strap", "blue jeans", "corset"]:
         check(f"{item!r} stays an ordinary garment", not S.is_restraint(item))
 
+    # Two shapes the head-noun/qualifier rules both missed, and prose could strip
+    # like any garment: a compound whose HEAD noun is innocent ("spreader bar"
+    # resolves to `bar`), and a binding participle fastened straight onto a body
+    # part ("bound wrists"), where no equipment noun exists at all.
+    for item in ["spreader bar", "doorway spreader bar", "bound wrists",
+                 "shackled ankles", "tied hands", "wrists bound in rope",
+                 "ankles locked in steel"]:
+        check(f"{item!r} is a restraint too", S.is_restraint(item))
+    # ...and the participle route must not swallow fashion wording: the body part
+    # alone never qualifies, and neither does an ordinary participle without one.
+    for item in ["waist tie dress", "tie-front blouse", "wrap skirt", "ankle boots",
+                 "wrist-length sleeves", "high-neck top"]:
+        check(f"{item!r} still comes off normally", not S.is_restraint(item))
+
     act = {"Mara": ["she", "steel handcuffs", "ankle chain", "red jacket"]}
 
     def after(beat, lock=True):
@@ -2596,6 +2620,23 @@ def check_restraints_stay_on():
     # The accident this exists to stop.
     check("a jacket beat no longer drags the chain off with it",
           after("Mara steps out of her jacket and the chain falls away.") == ["red jacket"])
+    # 'struggles out of' was absent from the cue vocabulary entirely -- the verb
+    # sat next to wriggles/squirms in intent but never made the list, so a garment
+    # removed that way silently stayed ON the sheet.
+    check("'struggles out of' is a removal cue too",
+          after("Mara struggles out of the red jacket.") == ["red jacket"])
+    check("...and cannot drag a restraint with it either",
+          after("She struggles out of her jacket and the cuffs fall away.") == ["red jacket"])
+    # Same accident through the newly recognized shapes.
+    spread = S.auto_wardrobe_removals(
+        {"Mara": ["she", "spreader bar", "red jacket"]},
+        "She steps out of her jacket and the spreader bar falls away.", True)
+    check("a jacket beat cannot drop a spreader bar either",
+          spread["Mara"] == ["she", "spreader bar"])
+    bound = S.auto_wardrobe_removals(
+        {"Mara": ["she", "bound wrists", "red gloves"]},
+        "Her bound wrists shake as she peels off her red gloves.", True)
+    check("...nor bound wrists", bound["Mara"] == ["she", "bound wrists"])
     # ...and the escape hatch still works.
     freed = S.apply_wardrobe_change({k: list(v) for k, v in act.items()},
                                     "Mara -= handcuffs")
@@ -2605,6 +2646,15 @@ def check_restraints_stay_on():
     # Off means off.
     check("lock_restraints=False restores the old behaviour",
           after("Mara slips out of the handcuffs.", lock=False) == ["steel handcuffs"])
+
+    # End to end: the newly recognized shapes state their hold on every shot the
+    # person is in, exactly like the equipment-noun restraints do.
+    blk = D("A cellar.", ["Mara strains against the spreader bar."], "", "",
+            "Mara = she, spreader bar")[0]
+    check("a spreader bar is stated and held every shot",
+          "physically restrained" in blk and "spreader bar" in blk)
+    blk2 = D("A cellar.", ["Mara waits."], "", "", "Mara = she, shackled ankles")[0]
+    check("shackled ankles map to the ankle region", "ankles stay bound" in blk2)
 
     # End to end, with the person referenced in every beat so she is always bound.
     cm = "Mara = she, 30, blonde, steel handcuffs, ankle chain, red jacket"
