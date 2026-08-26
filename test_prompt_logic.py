@@ -2778,6 +2778,37 @@ def check_nappy_vocabulary():
     check("...and that holds through the turn",
           "stays bared as the body turns" in gens[1])
 
+    # THE reported failure: under the DEFAULT guard the removal happens but the zone
+    # is left undescribed, and an undescribed body renders clothed -- so the garment
+    # comes straight back. The note used to promise "H3 will render bare skin there"
+    # unconditionally, which is the opposite of what happens here, so it sent anyone
+    # reading it after the wrong problem.
+    def notes_for(**kw):
+        out = []
+        S.distribute_generations("A quiet room.",
+                                 ["Mara takes off her diaper.", "Mara stands."],
+                                 "", "", CM, notes_out=out, **kw)
+        return " ".join(out)
+
+    _default = notes_for()
+    check("with the guard ON the note says the garment will come BACK",
+          "renders CLOTHED" in _default and "expect the garment back" in _default)
+    check("...and does NOT promise bare skin", "renders bare skin" not in _default)
+    check("...and names both ways out",
+          "exposed_terms" in _default and "prevent_nudity off" in _default)
+    for _kw in (dict(prevent_nudity=False), dict(exposed_terms="she = bare")):
+        _n = notes_for(**_kw)
+        check(f"with the state stated ({list(_kw)[0]}) it warns about bare skin",
+              "the prompt SAYS SO" in _n and "renders bare skin" in _n)
+    # A sheet-declared bare character is as explicit as exposed_terms.
+    _decl = []
+    S.distribute_generations("A quiet room.",
+                             ["Mara takes off her diaper.", "Mara stands."], "", "",
+                             "Mara = she, 30, red hair, t-shirt, diaper, bottomless",
+                             notes_out=_decl)
+    check("a sheet declaration counts as stating it too",
+          not _decl or "renders CLOTHED" not in " ".join(_decl))
+
 
 def check_bare_state_persists():
     """A bared zone stays bared when the body turns.

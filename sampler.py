@@ -3338,10 +3338,29 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 zones = garment_zones(it)
                 if zones and not remaining_cover(active.get(nm, []), zones):
                     who = nm or "the character"
-                    notes_out.append(
-                        f"shot {gi}: removing the {_item_name(it)} leaves {who} with nothing on the "
-                        f"{'/'.join(sorted(zones))} body -- H3 will render bare skin there. Add an "
-                        f"under-layer to character_memory (e.g. 'grey shorts') if that is not intended")
+                    where = "/".join(sorted(zones))
+                    # WHICH way it goes depends on whether the bare state is allowed to
+                    # be STATED. This note used to promise bare skin unconditionally,
+                    # which is the opposite of what happens under the default guard:
+                    # there the zone is simply left undescribed, and an undescribed body
+                    # renders clothed -- so the garment comes back and the warning had
+                    # pointed at the wrong problem entirely.
+                    stated = bool(exposed) or nm in declared or not prevent_nudity
+                    if stated:
+                        notes_out.append(
+                            f"shot {gi}: removing the {_item_name(it)} leaves {who} with nothing on "
+                            f"the {where} body, and the prompt SAYS SO, so H3 renders bare skin "
+                            f"there. Add an under-layer to character_memory (e.g. 'grey shorts') if "
+                            f"that is not intended")
+                    else:
+                        notes_out.append(
+                            f"shot {gi}: removing the {_item_name(it)} leaves {who} with nothing on "
+                            f"the {where} body, but prevent_nudity is ON so the prompt does not say "
+                            f"the zone is uncovered -- it says nothing about it at all. An "
+                            f"undescribed body renders CLOTHED, so expect the garment back within a "
+                            f"shot or two. To make the removal stick, either fill exposed_terms for "
+                            f"{who} or turn prevent_nudity off; to keep them covered, name an "
+                            f"under-layer in character_memory instead")
         if off_clause:
             persistent = persistent.rstrip(". ") + ". " + off_clause
         if prop_clause:
