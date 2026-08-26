@@ -329,6 +329,14 @@ rendering**. Do that first; it is near-instant.
   whose channel count doesn't match. Spatial only, so the frame count and the audio
   are untouched, and tiled decode is forced on because decode memory grows with the
   square of the scale.
+
+  **The chain does not inherit the upscaler.** Each shot hands the next one its last
+  frame, so taking that frame from the upscaled decode would put a neural
+  approximation *and* a downscale back to the sampling size into every boundary —
+  compounding along the chain until the cast drifts. The handoff is decoded from the
+  **pre-upscale** latent instead (a short tail, so it is cheap); only the shot's own
+  output frames are upscaled. If that decode fails, the upscaled frames are used and
+  the render carries on.
 - **Overlays.** Optional PIL watermark and intro title, composited after any
   upscale, never asked of the model.
 

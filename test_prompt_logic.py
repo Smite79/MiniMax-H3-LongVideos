@@ -2801,6 +2801,34 @@ def check_latent_upscale():
     check("what it did is reported in info",
           'LATENT UPSCALE -- ' in src)
 
+    # --- the CHAIN must not inherit the upscaler ---------------------------------
+    # Every shot hands the next its last frame. Taking that frame from the upscaled
+    # decode put a neural approximation AND a downscale back to the sampling size
+    # into every boundary, compounding across the chain -- which is what made the
+    # cast drift as soon as latent_upscale was switched on. The handoff is decoded
+    # from the PRE-upscale latent instead; the shot's own output stays upscaled.
+    check("the pre-upscale latent is kept when upscaling happens",
+          "pre_up = parts2[0]" in src)
+    check("...and a short tail of it is decoded for the handoff",
+          "pre_up[:, :, -n:]" in src and "handoff_out.append(tail)" in src)
+    check("the tail is bounded, not the whole shot",
+          "min(int(pre_up.shape[2]), HANDOFF_LATENT_TAIL)" in src)
+    check("the handoff comes from that tail, not the output frames",
+          "handoff = hsrc[-1:]" in src and "handoff = frames[-1:]" not in src)
+    check("...and the same handoff_offset trim is applied to it",
+          "hsrc = hsrc[:-shot_hoff]" in src)
+    check("a tail too short to survive the trim is not used",
+          "handoff_src[-1].shape[0] > shot_hoff + 1" in src)
+    check("no tail (upscale off, or decode failed) falls back to the output frames",
+          "hsrc = frames" in src)
+    check("the tail decode can never fail the render",
+          "except Exception:\n                pass                       # fall back"
+          in src)
+    # The tail has to be long enough for the largest trim the node can ask for.
+    _max_trim = 12                       # handoff_offset's own maximum
+    check("the tail covers the largest handoff_offset with room to spare",
+          S.HANDOFF_LATENT_TAIL * 3 > _max_trim + S.MOUTH_SETTLE_FRAMES)
+
 
 def check_nappy_vocabulary():
     """Nappies are tracked, removable, and stay off — like any other garment.

@@ -2164,6 +2164,12 @@ def _emphasis_quotes(body):
 # mid-word, and where no amount of lips-closed text can outvote it.
 MOUTH_SETTLE_FRAMES = 3
 
+# How many LATENT frames to decode from the pre-upscale latent for the handoff.
+# H3 packs 17k+5 pixel frames into k latent steps, so ~3.5 pixel frames per latent
+# one; 8 gives ~28 pixel frames, comfortably more than handoff_offset's max of 12
+# plus MOUTH_SETTLE_FRAMES, with room to spare for the trim to land inside.
+HANDOFF_LATENT_TAIL = 8
+
 ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers on each hand, "
                  "and two legs with two feet. Each arm joins the body at one shoulder and runs "
                  "shoulder to elbow to wrist to hand; each leg joins at one hip and runs hip to "
@@ -5777,7 +5783,8 @@ class H3LongVideos:
     def _render(self, model, clip, vae, audio_vae, negative, prompt, w, h, ln, fps, tiled, sa,
                 handoff, decode_tile_frames=0, decode_tile_size=0,
                 refs=None, ref_image_size="match", ref_noise_aug=None, silent=False,
-                latent_upscale="off", latent_upscale_scale=2.0, up_notes=None):
+                latent_upscale="off", latent_upscale_scale=2.0, up_notes=None,
+                handoff_out=None):
         positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff,
                                                     ref_images=refs, ref_image_size=ref_image_size,
                                                     ref_noise_aug=ref_noise_aug,
@@ -5821,6 +5828,7 @@ class H3LongVideos:
         # spatial only, so the frame count the rest of the chain has committed to
         # does not move.
         up_note = ""
+        pre_up = None                      # the sampled video latent, before upscaling
         if latent_upscale and latent_upscale != "off":
             raw2 = out.get("samples") if isinstance(out, dict) else None
             parts2 = raw2.unbind() if (raw2 is not None and hasattr(raw2, "unbind")) else None
@@ -5828,6 +5836,7 @@ class H3LongVideos:
                 vid_up, up_note = upscale_video_latent(parts2[0], latent_upscale,
                                                        latent_upscale_scale)
                 if vid_up is not parts2[0]:
+                    pre_up = parts2[0]
                     out["samples"] = comfy.nested_tensor.NestedTensor((vid_up, parts2[1]))
                     # Decoding a 2x latent is ~4x the decode memory. Forcing tiles here
                     # rather than waiting for the OOM: the retry path cannot help a
@@ -5841,6 +5850,26 @@ class H3LongVideos:
             up_notes.append(up_note)
         video = _decode_video(vae, out, tiled, free_first=model,
                               tile_t=decode_tile_frames, tile_xy=decode_tile_size)
+        # The CHAIN must not inherit the upscaler's reinterpretation. Every shot hands
+        # the next one its last frame, so taking that frame from the upscaled decode
+        # put a neural approximation AND a downscale back to the sampling size into
+        # every boundary -- compounding across the chain, which is what made the cast
+        # drift once latent_upscale was switched on.
+        #
+        # So the handoff is decoded from the PRE-upscale latent instead: a short tail
+        # only, which is cheap, and the shot's own OUTPUT frames stay upscaled. Any
+        # failure falls back to the upscaled frames, i.e. to the previous behaviour.
+        if pre_up is not None and handoff_out is not None:
+            try:
+                n = min(int(pre_up.shape[2]), HANDOFF_LATENT_TAIL)
+                tail = _decode_video(vae, {"samples": pre_up[:, :, -n:].contiguous()},
+                                     True, tile_t=decode_tile_frames,
+                                     tile_xy=decode_tile_size)
+                if tail is not None and tail.shape[0] > 0:
+                    handoff_out.append(tail)
+            except Exception:
+                pass                       # fall back to the upscaled frames
+        del pre_up
         audio = _decode_audio(audio_vae, out)
         del out, positive, latent
         _deep_cleanup()
@@ -6279,6 +6308,7 @@ class H3LongVideos:
             # where a cut belongs anyway.
             # No scripted line -> anchor this shot's audio branch to silence.
             shot_silent = bool(auto_silence_nonspeech and not allow_nonspeech_vocals and i < len(spk) and not spk[i])
+            handoff_src = []           # pre-upscale tail frames, when upscaling is on
             after_strip = i in strip_shots          # strip_shots is 1-based, i is 0-based
             shot_handoff = (None if after_strip
                             else handoff if (carry_keyframe or not shot_refs) else None)
@@ -6290,7 +6320,7 @@ class H3LongVideos:
                         frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
-                                                     up_notes)
+                                                     up_notes, handoff_src)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -6308,7 +6338,7 @@ class H3LongVideos:
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
-                                                     up_notes)
+                                                     up_notes, handoff_src)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if _is_oom(e) and getattr(e, "_h3_stage", "") == "sampling":
                         # Retrying with tiles would re-run the whole sampling pass and
@@ -6323,7 +6353,7 @@ class H3LongVideos:
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
-                                                     up_notes)
+                                                     up_notes, handoff_src)
 
             if shot_latent is not None:
                 latent_chunks.append(shot_latent)
@@ -6362,13 +6392,26 @@ class H3LongVideos:
                 if cut:
                     wav = wav[..., :max(0, wav.shape[-1] - cut)]
 
+            # Which frames the NEXT shot continues from. Normally this shot's own
+            # output, but under latent_upscale that has been through the upscaler and
+            # a downscale back; `handoff_src` holds a short tail decoded from the
+            # pre-upscale latent instead, so the chain continues from what was
+            # actually sampled. Empty (or too short to survive the trim) means the
+            # decode did not happen and the output frames are used, as before.
+            hsrc = frames
+            if handoff_src and handoff_src[-1].shape[0] > shot_hoff + 1:
+                hsrc = handoff_src[-1]
+                if shot_hoff and i < len(gens) - 1:
+                    hsrc = hsrc[:-shot_hoff]
+
             # Keep only a CPU copy of the handoff keyframe (re-encoded next shot),
             # and move this shot's decoded video+audio to CPU/RAM immediately so
             # they DON'T pile up in VRAM across the chain -- the main long-run OOM.
             if cleanup_between_shots:
-                handoff = frames[-1:].detach().contiguous().to("cpu", copy=True)
+                handoff = hsrc[-1:].detach().contiguous().to("cpu", copy=True)
             else:
-                handoff = frames[-1:].clone()
+                handoff = hsrc[-1:].clone()
+            del hsrc
             if trim_seam and i > 0:
                 frames = frames[1:]; wav = wav[..., max(0, round(sr / fps)):]
 
