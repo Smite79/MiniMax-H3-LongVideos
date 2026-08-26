@@ -4839,8 +4839,10 @@ def sla_pairing(model, graph, node_id):
     if sla and not sparse:
         note = (f"SLA LoRA '{os.path.basename(str(sla))}' is loaded but NO sparse-attention patch "
                 f"is active -- it was fine-tuned WITH sparse attention, so on dense attention you "
-                f"pay its quality cost and get none of its speed. Add the Sol-Attn patch node "
-                f"between the loader and this node, or load the non-SLA turbo LoRA instead")
+                f"pay its quality cost and get none of its speed. Add an 'H3 SLA Attention' node "
+                f"(PlagueKind/model_patches/minimax) between the loader and this node -- it is the "
+                f"block-sparse kernel this LoRA was distilled against, which is the half ComfyUI "
+                f"does not ship. Otherwise load the non-SLA turbo LoRA instead")
     elif sparse and loras and not sla:
         note = (f"sparse attention is ON but the LoRA on this chain "
                 f"({os.path.basename(str(loras[-1]))}) is not an SLA build -- the model was never "
