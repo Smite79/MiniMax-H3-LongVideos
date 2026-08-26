@@ -2733,6 +2733,52 @@ def check_restraints_stay_on():
                                            lock_restraints=False)))
 
 
+def check_nappy_vocabulary():
+    """Nappies are tracked, removable, and stay off — like any other garment.
+
+    Nothing special is needed for them; the point of these checks is that the
+    generic machinery already reaches them, including the two places it has
+    historically leaked: a conjoined sheet entry hiding the second item, and a
+    qualified name whose head noun stops being recognised."""
+    print("\n=== nappies as ordinary clothing ===")
+    for it in ("diaper", "diapers", "nappy", "nappies", "pull-up", "pullups",
+               "white diaper", "thick padded diaper", "wet diaper", "cloth nappy"):
+        check(f"{it!r} covers the lower zone", S.garment_zones(it) == {"lower"})
+    check("a nappy is NOT a restraint, so it can come off",
+          not any(S.is_restraint(i) for i in ("diaper", "nappy", "pull-up")))
+
+    # "cover" cannot go in the zone list on its own, so the compound is matched
+    # whole -- and the things that are CARRIED must not become body covering, or
+    # they would suppress the exposure warning exactly when it is needed.
+    check("'diaper cover' is body covering", S.garment_zones("diaper cover") == {"lower"})
+    check("'nappy wrap' too", S.garment_zones("nappy wrap") == {"lower"})
+    check("'diaper bag' is NOT -- it is carried",
+          S.garment_zones("diaper bag") == set())
+    check("'changing mat' is NOT either", S.garment_zones("changing mat") == set())
+    check("a bare 'cover' stays unmapped", S.garment_zones("seat cover") == set())
+
+    # The conjoined-entry bug that once hid a thong.
+    check("a conjoined sheet entry splits", S._split_conjoined("t-shirt and diaper")
+          == ["t-shirt", "diaper"])
+
+    CM = "Mara = she, 30, red hair, t-shirt, diaper"
+    for beat in ("Mara takes off her diaper.", "Mara pulls off the diaper.",
+                 "Mara removes her diaper.", "Mara unfastens the diaper and drops it."):
+        gens = S.distribute_generations("A quiet room.",
+                                        [beat, "Mara stands still.", "Mara turns around."],
+                                        "", "", CM, prevent_nudity=False)
+        check(f"removal fires: {beat[:30]!r}", "diaper" not in gens[1])
+        check("...and it stays off through a later shot", "diaper" not in gens[2])
+
+    gens = S.distribute_generations("A quiet room.",
+                                    ["Mara takes off her diaper.", "Mara turns around."],
+                                    "", "", CM, prevent_nudity=False)
+    check("removing it states the zone as bare",
+          "bare below the waist" in gens[0])
+    check("...and that holds through the turn",
+          "stays bared as the body turns" in gens[1])
+
+
 def check_bare_state_persists():
     """A bared zone stays bared when the body turns.
 
@@ -4237,6 +4283,7 @@ def main():
     check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()
+    check_nappy_vocabulary()
     check_bare_state_persists()
     check_contact_guard()
     check_motion_guard()

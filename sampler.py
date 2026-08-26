@@ -2404,11 +2404,23 @@ _ZONE_BOTH = {
 }
 
 
+# Compounds whose HEAD noun is generic but which are unmistakably body covering.
+# "cover" cannot go in _ZONE_LOWER on its own -- a seat cover and a book cover are
+# not clothing -- and the head-noun lookup only ever sees "cover". Matched against
+# the whole name, so "diaper bag" and "changing mat" still map to no zone: those are
+# carried, not worn, and a prop that counted as cover would suppress the exposure
+# warning exactly when it is needed.
+_ZONE_LOWER_PHRASES = ("diaper cover", "nappy cover", "diaper wrap", "nappy wrap")
+
+
 def garment_zones(item):
     """The body zones a garment covers: {'lower'}, {'upper'}, both, or empty.
 
     Empty means it is not body covering at all (hat, boots, a scar, hair colour), so
     removing it can never expose anything."""
+    whole = " ".join(str(_item_name(item) or "").lower().split())
+    if any(whole == p or whole.endswith(" " + p) for p in _ZONE_LOWER_PHRASES):
+        return {"lower"}
     head = _item_head(item)
     for form in (head, head.rstrip("s"), head + "s"):
         if form in _ZONE_BOTH:
