@@ -4586,7 +4586,14 @@ def _latent_upscale_model_list():
     return ["off"] + names
 
 
-# The upscaler is a SEPARATE pack (Comfyui_Minimax_h3_latent_Upscaler). This node is
+# The MiniMax-H3 Latent Upscaler is the work of LBH-123-AI:
+#     https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler
+# A 345M-parameter 3D-convolution network trained on ~80,000 paired samples,
+# purpose-built for H3's latent space -- its first conv takes 24 input channels,
+# which is H3's latents_dim exactly. ALL credit for the model and for the upscaler
+# nodes belongs there; everything below only calls them.
+#
+# It ships as a SEPARATE pack (Comfyui_Minimax_h3_latent_Upscaler). This node is
 # otherwise self-contained, so it is reached the same way the pixel upscalers are --
 # by looking for a registered node -- and its absence is not an error. The setting
 # stays visible, the render proceeds unscaled, and `info` says why.
@@ -5615,7 +5622,8 @@ class H3LongVideos:
                                "Wiring the `latent` output to the same upscaler externally cannot "
                                "do this -- by then the decode has already happened at the sampled "
                                "size.\n\n"
-                               "Needs the separate 'Minimax H3 Latent Upscaler' pack "
+                               "Model and nodes by LBH-123-AI. Needs the separate "
+                               "'Minimax H3 Latent Upscaler' pack "
                                "(Comfyui_Minimax_h3_latent_Upscaler) and its weights in "
                                "models/latent_upscale_models. OPTIONAL: without the pack this "
                                "setting does nothing, the render proceeds at the sampled size, and "

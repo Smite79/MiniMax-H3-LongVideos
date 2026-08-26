@@ -1129,6 +1129,15 @@ The fix is length, not silencing: leave `per_beat_length` on so the shot is size
 from its line, or put `seconds:` on that beat. (`dialogue_fit_warnings` covers the
 opposite error — a line too long for its shot, which gets truncated.)
 
+## Credits
+
+The **MiniMax-H3 Latent Upscaler** driven by the `latent_upscale` setting is the
+work of **[LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)**
+— a 345M-parameter 3D-convolution network trained on ~80,000 paired samples for
+H3's latent space, distributed with its own ComfyUI nodes
+(`Comfyui_Minimax_h3_latent_Upscaler`). All credit for the model and those nodes
+goes there; this node only calls them, and works without them.
+
 ## Requirements
 - ComfyUI 0.30+ with native MiniMax-H3 support.
 - The node applies **ModelSamplingMiniMaxH3** (the video/audio flow schedule)
