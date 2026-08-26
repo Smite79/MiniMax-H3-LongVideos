@@ -323,7 +323,8 @@ rendering**. Do that first; it is near-instant.
   the decode has already happened at the sampled size.
 
   Needs the separate **Comfyui_Minimax_h3_latent_Upscaler** pack and its weights in
-  `models/latent_upscale_models`. **It is not a dependency**: without the pack the
+  `models/latent_upscale_models` — model and nodes both by
+  **[LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)**. **It is not a dependency**: without the pack the
   setting does nothing, the render proceeds at the sampled size, and `info` says so.
   Nothing errors. Only H3 builds are listed — the same folder holds LTX upscalers,
   whose channel count doesn't match. Spatial only, so the frame count and the audio
@@ -491,6 +492,25 @@ place the information exists: an SLA LoRA carries no marker in its tensor names 
 its metadata and is byte-shape-identical to any un-resized rank-128 turbo LoRA. Any
 LoRA with `sla` as a delimited token in its name counts (`..._768p_sla_...`);
 `slack`, `translate` and `SLAYER` do not.
+
+## Resolution: latent upscale (optional, third-party)
+
+The `latent_upscale` setting drives the **MiniMax-H3 Latent Upscaler by
+[LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)** — a
+345M-parameter 3D-convolution network trained on ~80,000 paired samples (70,000
+video, 8,000 image), purpose-built for H3's latent space. Its first convolution
+takes 24 input channels, which is H3's `latents_dim` exactly, and it works at H3's
+16× downsample. **All credit for the model and the upscaler nodes goes to
+LBH-123-AI**; this node only calls them.
+
+You need two things, neither of which ships here:
+
+- the weights, from [LBH-123-AI/Minimax_h3_latent_Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)
+  (`bf16`/`fp16` ≈ 691 MB, `fp32` ≈ 1.38 GB) in `models/latent_upscale_models`
+- the node pack that runs them, `Comfyui_Minimax_h3_latent_Upscaler`
+
+Without either, `latent_upscale` does nothing, the render proceeds at the sampled
+size, and `info` says so. It is **not** a dependency of this node.
 
 ## What the node reads off a LoRA
 
