@@ -2733,6 +2733,75 @@ def check_restraints_stay_on():
                                            lock_restraints=False)))
 
 
+def check_latent_upscale():
+    """Latent upscaling between sampling and decode, from an OPTIONAL third-party pack.
+
+    The point is to sample small and decode large: cost scales with latent cells and
+    attention is quadratic in them, so this is the one lever that buys resolution
+    rather than trading it. Wiring the `latent` output to the same upscaler
+    externally cannot do it -- by then the decode has already happened.
+
+    The pack is not a dependency. Without it the setting does nothing, the render
+    proceeds at the sampled size, and info says so. Nothing errors."""
+    print("\n=== latent upscale (optional pack) ===")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+
+    check("'off' is a no-op",
+          S.upscale_video_latent("LATENT", "off", 2.0) == ("LATENT", ""))
+    check("scale 1.0 is a no-op too -- nothing to do",
+          S.upscale_video_latent("LATENT", "some_model.pth", 1.0) == ("LATENT", ""))
+    check("an empty model name is a no-op",
+          S.upscale_video_latent("LATENT", "", 2.0) == ("LATENT", ""))
+
+    # Pack absent: the input comes back UNCHANGED and identical, never a copy or None.
+    _real = S._find_node
+    S._find_node = lambda *_a, **_k: None
+    try:
+        _out, _note = S.upscale_video_latent("LATENT", "minimax_h3_x.pth", 2.0)
+        check("with the pack absent the latent is returned untouched", _out == "LATENT")
+        check("...and it says so rather than failing", "not installed" in _note)
+        check("...naming the pack to install", "Comfyui_Minimax_h3_latent_Upscaler" in _note)
+    finally:
+        S._find_node = _real
+
+    # A pack that raises must not take the render with it.
+    class _Boom:
+        __module__ = "nope"
+        def execute(self, **kw):
+            raise RuntimeError("kaboom")
+    S._find_node = lambda *_a, **_k: _Boom
+    try:
+        _out, _note = S.upscale_video_latent("LATENT", "minimax_h3_x.pth", 2.0)
+        check("a failing upscaler degrades instead of raising", _out == "LATENT")
+        check("...and reports the failure", "failed" in _note)
+    finally:
+        S._find_node = _real
+
+    check("only H3 builds are offered, never the LTX ones in the same folder",
+          '"minimax" in f.lower() or "h3" in f.lower()' in src)
+    check("'off' is always the first option",
+          S._latent_upscale_model_list()[0] == "off")
+    check("the widget exists even with no pack installed -- widget positions are "
+          "positional and must not depend on another pack",
+          "_latent_upscale_model_list()" in src)
+    check("both widgets are appended, so saved workflows keep their order",
+          "latent_upscale" in S.ADDED_WIDGETS
+          and "latent_upscale_scale" in S.ADDED_WIDGETS)
+
+    # It sits between sampling and decode, on the VIDEO half only.
+    check("it runs before the decode, not after",
+          src.index("upscale_video_latent(parts2[0]")
+          < src.index("video = _decode_video(vae, out, tiled"))
+    check("only the video half is touched; the audio latent is re-nested as-is",
+          "NestedTensor((vid_up, parts2[1]))" in src)
+    check("a temporal change is refused -- it would desync audio and frame count",
+          "up.shape[2] != video.shape[2]" in src)
+    check("tiled decode is forced on, since decode memory goes as the square",
+          "tiled = True" in src.split("upscale_video_latent(parts2[0]")[1][:900])
+    check("what it did is reported in info",
+          'LATENT UPSCALE -- ' in src)
+
+
 def check_nappy_vocabulary():
     """Nappies are tracked, removable, and stay off — like any other garment.
 
@@ -4314,6 +4383,7 @@ def main():
     check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()
+    check_latent_upscale()
     check_nappy_vocabulary()
     check_bare_state_persists()
     check_contact_guard()

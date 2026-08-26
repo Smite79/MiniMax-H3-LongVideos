@@ -44,6 +44,7 @@ import logging
 import math
 import os
 import re
+import sys
 import torch
 
 import nodes
@@ -259,7 +260,7 @@ ADDED_WIDGETS = (
     "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
-    "motion_guard", "contact_guard",
+    "motion_guard", "contact_guard", "latent_upscale", "latent_upscale_scale",
     "auto_soundscape", "allow_nonspeech_vocals",
 )
 
@@ -4558,6 +4559,76 @@ def _upscale_model_list():
         return ["none"]
 
 
+def _latent_upscale_model_list():
+    """H3 latent-upscaler weights in models/latent_upscale_models, plus 'off'.
+
+    Filtered to H3 builds: that folder also holds LTX spatial/temporal upscalers,
+    and offering one here would let it be picked for a model it cannot take -- the
+    first conv is [512, 24, 3, 3, 3] and 24 is H3's latents_dim specifically.
+
+    Listed whether or not the node pack that RUNS them is installed. The widget has
+    to exist unconditionally or a saved workflow would lose its widget positions the
+    moment the pack was uninstalled; being unable to run is handled at render time."""
+    try:
+        import folder_paths
+        d = os.path.join(folder_paths.models_dir, "latent_upscale_models")
+        names = [f for f in sorted(os.listdir(d))
+                 if f.lower().endswith((".pth", ".safetensors"))
+                 and ("minimax" in f.lower() or "h3" in f.lower())]
+    except Exception:
+        names = []
+    return ["off"] + names
+
+
+# The upscaler is a SEPARATE pack (Comfyui_Minimax_h3_latent_Upscaler). This node is
+# otherwise self-contained, so it is reached the same way the pixel upscalers are --
+# by looking for a registered node -- and its absence is not an error. The setting
+# stays visible, the render proceeds unscaled, and `info` says why.
+def latent_upscaler_node():
+    return _find_node(["minimaxh3latentupscaler", "3d"]) or _find_node(["minimaxh3latentupscaler"])
+
+
+def upscale_video_latent(video, model_name, scale):
+    """(upscaled_video_latent, note). Never raises -- a failure returns the input.
+
+    Spatial only: the temporal length comes back unchanged, which is what lets this
+    sit between sampling and decode without touching the audio half or the frame
+    count the rest of the chain has already committed to."""
+    if not model_name or model_name == "off" or float(scale) <= 1.0:
+        return video, ""
+    cls = latent_upscaler_node()
+    if cls is None:
+        return video, ("latent_upscale is set but the 'Minimax H3 Latent Upscaler' node pack is "
+                       "not installed, so the shots were rendered at their sampled size. Install "
+                       "Comfyui_Minimax_h3_latent_Upscaler, or set latent_upscale to 'off'")
+    try:
+        before = tuple(video.shape)
+        # Its UpscaleMode is a str-Enum, so the literal VALUE compares equal without
+        # importing the pack. Read the enum off the class when it is reachable, and
+        # fall back to the literal -- hardcoding a foreign string is the fragile part
+        # of this integration, so it is not the only path.
+        mode_val = "scale by multiplier"
+        try:
+            mode_val = sys.modules[cls.__module__].UpscaleMode.SCALE_BY
+        except Exception:
+            pass
+        out = _invoke_node(cls, latent={"samples": video},
+                           model_name=model_name,
+                           mode={"mode": mode_val, "scale": float(scale)},
+                           align=32, device="cuda", precision="fp16")
+        up = out["samples"] if isinstance(out, dict) else out
+        if up is None or up.dim() != video.dim() or up.shape[2] != video.shape[2]:
+            # A temporal change would desync the audio half and the frame count.
+            return video, ("the latent upscaler returned an unexpected shape, so the shot was "
+                           "left at its sampled size")
+        return up.to(video.dtype), (f"latent upscale {model_name} x{float(scale):g}: "
+                                    f"{before[-2]}x{before[-1]} -> {up.shape[-2]}x{up.shape[-1]} "
+                                    f"latent cells per frame, sampled small and decoded large")
+    except Exception as e:
+        return video, (f"latent upscale failed ({type(e).__name__}), so the shots were rendered "
+                       f"at their sampled size")
+
+
 def _invoke_node(cls, **kwargs):
     """Call a registered ComfyUI node (V1 FUNCTION or V3 execute) with kwargs and
     return its first output. Used to reuse ComfyUI's own upscale-model loader/apply
@@ -5529,6 +5600,30 @@ class H3LongVideos:
                                "(who is above, behind, facing whom) rather than by a position "
                                "name alone -- this guard holds a stated arrangement together, it "
                                "cannot infer one you did not state."}),
+                "latent_upscale": (_latent_upscale_model_list(), {"default": "off",
+                    "tooltip": "Upscale each shot in LATENT space, between sampling and decode, "
+                               "so the shot is SAMPLED small and only DECODED large.\n\n"
+                               "That is the whole point: cost scales with latent cells, and "
+                               "attention is quadratic in them, so sampling 512x512 and upscaling "
+                               "2x to 1024x1024 is ~6x cheaper than sampling 1024x1024 directly. "
+                               "Wiring the `latent` output to the same upscaler externally cannot "
+                               "do this -- by then the decode has already happened at the sampled "
+                               "size.\n\n"
+                               "Needs the separate 'Minimax H3 Latent Upscaler' pack "
+                               "(Comfyui_Minimax_h3_latent_Upscaler) and its weights in "
+                               "models/latent_upscale_models. OPTIONAL: without the pack this "
+                               "setting does nothing, the render proceeds at the sampled size, and "
+                               "info says so -- nothing errors.\n\n"
+                               "Only H3 builds are listed; the same folder holds LTX upscalers, "
+                               "whose channel count does not match. Spatial only, so the frame "
+                               "count and the audio are untouched. Decode memory goes up with the "
+                               "square of the scale, so tiled decode is forced on while this is "
+                               "active."}),
+                "latent_upscale_scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0,
+                    "step": 0.05, "round": 0.01,
+                    "tooltip": "Latent upscale factor, applied to both axes. 2.0 doubles each "
+                               "side (4x the pixels). 1.0 disables it as surely as 'off'. Ignored "
+                               "when latent_upscale is 'off'."}),
                 "motion_guard": (["off", "auto", "on"], {"default": "auto",
                     "tooltip": "Stop poses being reached without the frames in between -- the "
                                "head arriving at a new angle with no path to it (a 'neck snap'), "
@@ -5681,7 +5776,8 @@ class H3LongVideos:
 
     def _render(self, model, clip, vae, audio_vae, negative, prompt, w, h, ln, fps, tiled, sa,
                 handoff, decode_tile_frames=0, decode_tile_size=0,
-                refs=None, ref_image_size="match", ref_noise_aug=None, silent=False):
+                refs=None, ref_image_size="match", ref_noise_aug=None, silent=False,
+                latent_upscale="off", latent_upscale_scale=2.0, up_notes=None):
         positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff,
                                                     ref_images=refs, ref_image_size=ref_image_size,
                                                     ref_noise_aug=ref_noise_aug,
@@ -5715,6 +5811,34 @@ class H3LongVideos:
                                if parts else raw.detach().to("cpu", copy=True))
             except Exception:
                 shot_latent = None      # never fail a render for the sake of an output
+        # Upscale in LATENT space, between sampling and decode. This is the whole
+        # point of it: the shot is sampled at the small size (far fewer tokens, and
+        # attention is quadratic in them) and only the decode happens large. Wiring
+        # the `latent` output to the same upscaler externally cannot do this -- by
+        # then the decode has already happened at the sampled size.
+        #
+        # Only the VIDEO half. The audio latent is untouched, and the upscaler is
+        # spatial only, so the frame count the rest of the chain has committed to
+        # does not move.
+        up_note = ""
+        if latent_upscale and latent_upscale != "off":
+            raw2 = out.get("samples") if isinstance(out, dict) else None
+            parts2 = raw2.unbind() if (raw2 is not None and hasattr(raw2, "unbind")) else None
+            if parts2 and len(parts2) == 2:
+                vid_up, up_note = upscale_video_latent(parts2[0], latent_upscale,
+                                                       latent_upscale_scale)
+                if vid_up is not parts2[0]:
+                    out["samples"] = comfy.nested_tensor.NestedTensor((vid_up, parts2[1]))
+                    # Decoding a 2x latent is ~4x the decode memory. Forcing tiles here
+                    # rather than waiting for the OOM: the retry path cannot help a
+                    # decode that was always going to be too big.
+                    tiled = True
+                _deep_cleanup()
+            else:
+                up_note = ("latent_upscale is set but this shot's latent could not be split "
+                           "into video and audio, so it was left at its sampled size")
+        if up_note and up_notes is not None and up_note not in up_notes:
+            up_notes.append(up_note)
         video = _decode_video(vae, out, tiled, free_first=model,
                               tile_t=decode_tile_frames, tile_xy=decode_tile_size)
         audio = _decode_audio(audio_vae, out)
@@ -5736,6 +5860,7 @@ class H3LongVideos:
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", anatomy_guard="auto", lock_restraints=True,
             solidity_guard="auto", motion_guard="auto", contact_guard="auto",
+            latent_upscale="off", latent_upscale_scale=2.0,
              auto_soundscape="fill if blank",
              auto_silence_nonspeech=True, allow_nonspeech_vocals=False,
              subject_count_guard="auto",
@@ -6073,6 +6198,7 @@ class H3LongVideos:
         vram_trace = []                    # free VRAM after each shot
         muted_flags = []                   # which shots were audio-silenced
         hoff = max(0, int(handoff_offset))
+        up_notes = []                      # what the latent upscaler did, or could not do
         backoff, video_chunks, audio_chunks = [], [], []
         latent_chunks = []                 # per-shot sampled latents, pre-decode
         mouth_settled = []                 # shots seeded from a settled (closed) mouth
@@ -6162,7 +6288,9 @@ class H3LongVideos:
                 while True:
                     try:
                         frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent)
+                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent,
+                                                     latent_upscale, latent_upscale_scale,
+                                                     up_notes)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -6178,7 +6306,9 @@ class H3LongVideos:
             else:
                 try:
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent)
+                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent,
+                                                     latent_upscale, latent_upscale_scale,
+                                                     up_notes)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if _is_oom(e) and getattr(e, "_h3_stage", "") == "sampling":
                         # Retrying with tiles would re-run the whole sampling pass and
@@ -6191,7 +6321,9 @@ class H3LongVideos:
                         raise
                     mm.soft_empty_cache(True); tiled = True; backoff.append(f"shot {i+1}: tiled")
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
-                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent)
+                                                     shot_refs, ref_image_size, ref_noise_aug, shot_silent,
+                                                     latent_upscale, latent_upscale_scale,
+                                                     up_notes)
 
             if shot_latent is not None:
                 latent_chunks.append(shot_latent)
@@ -6440,6 +6572,10 @@ class H3LongVideos:
                 + (f" {ms_note}." if ms_note else "")
                 + (f" {ln_note}." if ln_note else "")
                 + (f" {up_note}." if up_note else "")
+                # Distinct from up_note above, which is the PIXEL upscaler. Reported
+                # even when it did nothing: a setting that silently no-ops because a
+                # pack is missing is the kind of thing you find out about hours later.
+                + (" LATENT UPSCALE -- " + "; ".join(up_notes) + "." if up_notes else "")
                 + (f" {ov_note}." if ov_note else "")
                 + (f" Adjusted: {'; '.join(backoff)}." if backoff else ""))
         # frames_per_shot is a single INT for a now-variable series: report the LONGEST

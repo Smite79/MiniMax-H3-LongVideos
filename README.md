@@ -314,6 +314,21 @@ rendering**. Do that first; it is near-instant.
   working seam the two frames are **not** identical: they are one frame of normal
   motion apart. Turn it off for one run if you want to check how faithfully the
   anchor was reproduced.
+- **Latent upscale (optional pack).** `latent_upscale` upscales each shot **between
+  sampling and decode**, so the shot is *sampled* small and only *decoded* large.
+  Cost scales with latent cells and attention is quadratic in them, so sampling
+  512×512 and upscaling 2× to 1024×1024 is roughly **6× cheaper** than sampling
+  1024×1024 outright — the one lever that buys resolution instead of trading it.
+  Wiring the `latent` output to the same upscaler externally can't do this; by then
+  the decode has already happened at the sampled size.
+
+  Needs the separate **Comfyui_Minimax_h3_latent_Upscaler** pack and its weights in
+  `models/latent_upscale_models`. **It is not a dependency**: without the pack the
+  setting does nothing, the render proceeds at the sampled size, and `info` says so.
+  Nothing errors. Only H3 builds are listed — the same folder holds LTX upscalers,
+  whose channel count doesn't match. Spatial only, so the frame count and the audio
+  are untouched, and tiled decode is forced on because decode memory grows with the
+  square of the scale.
 - **Overlays.** Optional PIL watermark and intro title, composited after any
   upscale, never asked of the model.
 
