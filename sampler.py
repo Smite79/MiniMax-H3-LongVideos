@@ -261,6 +261,7 @@ ADDED_WIDGETS = (
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
     "motion_guard", "contact_guard", "latent_upscale", "latent_upscale_scale",
+    "normalize_audio",
     "auto_soundscape", "allow_nonspeech_vocals",
 )
 
@@ -3790,6 +3791,95 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         return None                         # never fail a render for a nicety
 
 
+# Each shot's audio is generated independently, so its overall level is whatever it
+# happened to land on. Concatenated, that steps at every boundary -- and the step is
+# most audible in the AMBIENT BED, because a bed is continuous by nature and the ear
+# hears a room change where the picture says the room did not.
+#
+# So the thing to equalise is the quiet floor, not the peak. Matching peaks would
+# flatten the chain's dynamics: a shouted line and a whispered one are SUPPOSED to
+# differ, and pinning both to one peak makes the whisper shout. Matching the floor
+# leaves everything above it intact and only lines up the bed the shots share.
+AUDIO_BED_WINDOW_MS = 50        # short enough to sit inside a pause, long enough to be stable
+AUDIO_BED_PERCENTILE = 0.20     # the quiet fifth: bed, not speech
+AUDIO_GAIN_LIMIT = 4.0          # +/-12 dB. One anomalous shot must not be amplified to noise
+AUDIO_SEAM_BLEND_MS = 12        # in-place, so the join never changes length or desyncs video
+
+
+def shot_bed_level(wav, sr):
+    """The ambient floor of one shot: a low percentile of its short-window RMS.
+
+    None when there is nothing to measure -- a silenced shot, or one too short to
+    hold a window. Returning None rather than 0 keeps a muted shot out of the
+    statistics entirely instead of dragging the target toward silence."""
+    try:
+        if wav is None or sr is None or wav.numel() == 0:
+            return None
+        w = max(1, int(sr * AUDIO_BED_WINDOW_MS / 1000))
+        mono = wav.reshape(-1, wav.shape[-1]).float().mean(dim=0)
+        n = (mono.shape[-1] // w) * w
+        if n < w:
+            return None
+        frames = mono[:n].reshape(-1, w)
+        rms = frames.pow(2).mean(dim=1).sqrt()
+        rms = rms[rms > 1e-6]                      # digital silence is not a floor
+        if rms.numel() == 0:
+            return None
+        k = max(0, min(rms.numel() - 1, int(rms.numel() * AUDIO_BED_PERCENTILE)))
+        return float(rms.sort().values[k])
+    except Exception:
+        return None
+
+
+def shot_gains(levels, limit=AUDIO_GAIN_LIMIT):
+    """Per-shot gains that bring every measured bed to the MEDIAN bed.
+
+    The median, not the mean: one shot that generated a loud bed should be pulled
+    toward the others, not drag them all up with it. Shots with no measurable floor
+    (silenced, or too short) get a gain of 1.0 -- untouched."""
+    have = sorted(l for l in levels if l and l > 0)
+    if len(have) < 2:
+        return [1.0] * len(levels), None
+    target = have[len(have) // 2]
+    gains = []
+    for l in levels:
+        if not l or l <= 0:
+            gains.append(1.0)
+        else:
+            gains.append(max(1.0 / limit, min(limit, target / l)))
+    return gains, target
+
+
+def blend_audio_seam(a, b, sr):
+    """Close the sample discontinuity where two adjacent chunks meet. IN PLACE.
+
+    A click is a STEP in sample value, not a difference in content, so the fix is to
+    make the two sides meet at the same value: `a` is eased toward the midpoint of
+    the junction over the last few ms, `b` eased away from it over the first few.
+    After that a[-1] == b[0] and there is no edge for the ear to catch.
+
+    Length is never changed. The track is frame-locked to the video, so an
+    overlapping crossfade would slide every later shot out of sync -- which is also
+    why this is NOT a content crossfade: with no overlap to work in, swapping content
+    across the join just relocates the step instead of removing it.
+
+    Interiors are untouched: the ramp weight is zero at the far end of each side."""
+    try:
+        n = max(2, int(sr * AUDIO_SEAM_BLEND_MS / 1000))
+        if a.shape[-1] <= n or b.shape[-1] <= n:
+            return
+        mid = ((a[..., -1] + b[..., 0]) * 0.5).unsqueeze(-1)
+        w = torch.linspace(0.0, 1.0, n, device=a.device, dtype=a.dtype)
+        # Both ramps use the SAME w. `a` runs content -> midpoint across its tail
+        # (weight 0 at the far end, 1 at the join); `b` runs midpoint -> content
+        # across its head. Flipping one of them was the bug: it put b's own sample
+        # at the junction, so the step moved instead of closing.
+        a[..., -n:] = a[..., -n:] * (1.0 - w) + mid * w
+        b[..., :n] = b[..., :n] * w + mid * (1.0 - w)
+    except Exception:
+        pass
+
+
 def _decode_audio(audio_vae, out_latent):
     latent = out_latent["samples"]
     if latent.is_nested:
@@ -5427,6 +5517,24 @@ class H3LongVideos:
                                "not to babble; this guarantees it. TRADE-OFF: it also removes that shot's "
                                "generated ambience/SFX, so lay a continuous ambient bed under the video in "
                                "post. Shots WITH quoted dialogue keep their audio untouched."}),
+                "normalize_audio": (["off", "bed", "bed + seams"], {"default": "bed + seams",
+                    "tooltip": "Match the AMBIENT FLOOR across shots, so the sound bed does not "
+                               "step at every boundary.\n\n"
+                               "Each shot generates its audio independently, so its overall level "
+                               "is whatever it landed on. Joined, that steps -- and it is most "
+                               "audible in the bed, because a bed is continuous by nature and the "
+                               "ear hears the room change where the picture says it did not.\n\n"
+                               "The FLOOR is what gets matched, not the peak: a shouted line and a "
+                               "whispered one are supposed to differ, and pinning both to one peak "
+                               "makes the whisper shout. Every shot's quiet fifth is brought to the "
+                               "median shot's, leaving everything above it intact. Gain is capped "
+                               "at 12 dB either way so one odd shot cannot be amplified into noise, "
+                               "and the result is peak-scaled if that pushed anything over full "
+                               "scale.\n\n"
+                               "'bed + seams' also blends ~12 ms across each join, in place, to "
+                               "stop any residual difference reading as a click. It never changes "
+                               "length -- the track is frame-locked to the video. Muted shots are "
+                               "excluded from the measurement entirely."}),
                 "mute_fade_ms": ("INT", {"default": 40, "min": 0, "max": 500, "step": 10,
                     "tooltip": "Fade applied to the AUDIBLE shots that border a silenced one, so audio "
                                "doesn't cut to digital silence with a click. The silenced shots keep NO "
@@ -5903,7 +6011,7 @@ class H3LongVideos:
              subject_count_guard="auto",
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
-            mute_nonspeech_audio=True, mute_fade_ms=40,
+            mute_nonspeech_audio=True, mute_fade_ms=40, normalize_audio="bed + seams",
             watermark_text="", watermark_position="bottom-right", watermark_size=4.0,
             watermark_opacity=0.75, watermark_margin=3.0,
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
@@ -6475,6 +6583,39 @@ class H3LongVideos:
                     ramp = torch.linspace(1.0, 0.0, fade, device=chunk.device, dtype=chunk.dtype)
                     chunk[..., n_s - fade:] *= ramp
 
+        # Level-match the shots before joining them. Measured on the chunks as they
+        # will be heard -- after the mute fades above, so a faded edge is not read as
+        # this shot's ambient floor. A muted shot is skipped outright: its floor is
+        # zero by construction and would drag the target toward silence.
+        audio_note_level = ""
+        if normalize_audio != "off" and len(audio_chunks) > 1 and sr:
+            levels = [None if (i < len(muted_flags) and muted_flags[i])
+                      else shot_bed_level(c, sr) for i, c in enumerate(audio_chunks)]
+            gains, target = shot_gains(levels)
+            touched = [i for i, g in enumerate(gains) if abs(g - 1.0) > 0.02]
+            for i in touched:
+                audio_chunks[i] = audio_chunks[i] * gains[i]
+            if normalize_audio == "bed + seams":
+                for i in range(len(audio_chunks) - 1):
+                    blend_audio_seam(audio_chunks[i], audio_chunks[i + 1], sr)
+            # Gain can push a shot that was already near full scale over 1.0.
+            peak = max((float(c.abs().max()) for c in audio_chunks if c.numel()), default=0.0)
+            if peak > 1.0:
+                for i in range(len(audio_chunks)):
+                    audio_chunks[i] = audio_chunks[i] / peak
+            if touched:
+                spread = (max(l for l in levels if l) / min(l for l in levels if l)
+                          if len([l for l in levels if l]) > 1 else 1.0)
+                audio_note_level = (
+                    f"levelled {len(touched)} of {len(audio_chunks)} shot(s) onto a common "
+                    f"ambient floor (they spanned {spread:.1f}x, "
+                    f"gains {min(gains[i] for i in touched):.2f}-"
+                    f"{max(gains[i] for i in touched):.2f})"
+                    + (f", peak-scaled by {1 / peak:.2f} to stay under full scale"
+                       if peak > 1.0 else ""))
+            else:
+                audio_note_level = "shot levels already matched; nothing to normalise"
+
         all_frames = torch.cat(video_chunks, dim=0)
         all_audio = torch.cat(audio_chunks, dim=-1)
 
@@ -6627,6 +6768,7 @@ class H3LongVideos:
                 # even when it did nothing: a setting that silently no-ops because a
                 # pack is missing is the kind of thing you find out about hours later.
                 + (" LATENT UPSCALE -- " + "; ".join(up_notes) + "." if up_notes else "")
+                + (f" AUDIO LEVEL -- {audio_note_level}." if audio_note_level else "")
                 + (f" {ov_note}." if ov_note else "")
                 + (f" Adjusted: {'; '.join(backoff)}." if backoff else ""))
         # frames_per_shot is a single INT for a now-variable series: report the LONGEST
