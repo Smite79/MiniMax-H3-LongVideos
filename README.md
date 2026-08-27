@@ -338,8 +338,23 @@ rendering**. Do that first; it is near-instant.
   **pre-upscale** latent instead (a short tail, so it is cheap); only the shot's own
   output frames are upscaled. If that decode fails, the upscaled frames are used and
   the render carries on.
-- **One sound bed across the chain.** `normalize_audio` matches the **ambient
-  floor** between shots. Each shot generates its audio independently, so its level
+- **One sound bed across the chain.** Two separate things, because levelling alone
+  was not enough. `bed_continuity` (on) anchors each shot's audio on the **previous
+  shot's tail** — the audio half of what the keyframe already does for the picture,
+  so the bed continues instead of being invented afresh. Without it, identical
+  soundscape *text* still gives you a different room every shot, and no amount of
+  post can fix content. A short tail (~0.5 s) is used, positioned at the shot's first
+  frame, so it states the bed and leaves the rest free; the full length would pin the
+  shot to a loop of it. A **silent** shot still gets the silence anchor instead (that
+  is what keeps mouths shut), and a **muted** shot contributes no tail, so the bed
+  picks up across a silent gap rather than restarting after it.
+
+  Every beat also *states* a bed now. A speaking beat with no soundscape of its own
+  used to fall off the end of the emission chain and get no `overall_soundscape:`
+  field at all — unconditioned ambience sitting between shots that each stated one,
+  which is exactly where the room changed.
+
+  `normalize_audio` then matches the **ambient floor** between shots. Each shot generates its audio independently, so its level
   is whatever it landed on; joined, that steps at every boundary — most audibly in
   the bed, because a bed is continuous by nature and the ear hears the room change
   where the picture says it didn't.
