@@ -2436,9 +2436,9 @@ def check_mouth_stays_closed():
     S._silent_audio_latent = _real_sil
     check("both conditioning paths attach it", src.count("_attach_silence(") == 3)
     check("the ref path no longer ignores `silent`",
-          "kfs = _attach_silence(kfs, audio_vae, fc, fps, silent)" in src)
+          "kfs = _attach_silence(kfs, audio_vae, fc, fps, silent, audio_carry)" in src)
     check("...and it is not gated behind an existing keyframe",
-          "keyframes = _attach_silence(keyframes, audio_vae, fc, fps, silent)" in src)
+          "keyframes = _attach_silence(keyframes, audio_vae, fc, fps, silent, audio_carry)" in src)
     check("a zero-length shot degrades to None",
           S._silent_audio_latent(_Boom(), 0, 24) is None)
 
@@ -2731,6 +2731,56 @@ def check_restraints_stay_on():
           not any("physically restrained" in s for s in
                   S.distribute_generations("A room.", beats2, "", "", cm2,
                                            lock_restraints=False)))
+
+
+def check_bed_continuity():
+    """The ambient bed has to carry ACROSS shots, not just sit at one level.
+
+    normalize_audio lines up how LOUD each shot's bed is. It cannot make them the
+    same room: every shot generates its ambience independently, so identical
+    soundscape TEXT still yields different rain, different tone. The audio half of
+    the keyframe fixes that -- each shot is anchored on the previous shot's audio
+    tail, exactly as the picture is anchored on its last frame."""
+    print("\n=== bed continuity across shots ===")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+
+    # THE bug: a SPEAKING shot with no soundscape of its own fell off the end of the
+    # emission chain and got no `overall_soundscape:` field at all -- unconditioned
+    # ambience sitting between shots that each stated a bed.
+    ANCHOR = "A workshop with a roller door."
+    BEATS = ['Mara says: "Ready?"', "Mara walks to the van.", "Dom lifts a crate."]
+    CM = "Mara = she, 30, red hair\nDom = he, 35, tall"
+    for label, gs in (("stated", "steady rain, distant traffic"), ("blank", "")):
+        gens = S.distribute_generations(ANCHOR, BEATS, gs, "", CM)
+        missing = [i + 1 for i, g in enumerate(gens)
+                   if not re.search(r"^overall_soundscape:\s*\S", g, re.M)]
+        check(f"every beat states a bed ({label} soundscape)", missing == [])
+    # The dialogue beat must NOT be told there are no voices.
+    g0 = S.distribute_generations(ANCHOR, BEATS, "", "", CM)[0]
+    check("a speaking beat's bed carries no no-voice clause",
+          "no voices" not in g0.split("overall_soundscape:")[1])
+    check("...and a silent beat's still does",
+          "no speech" in S.distribute_generations(
+              ANCHOR, BEATS, "", "", CM)[1].split("overall_soundscape:")[1])
+
+    # The audio anchor: silence still wins on a silent shot, the carry is used
+    # otherwise, and the first shot has nothing to carry.
+    check("the anchor helper takes a carry", "def _attach_silence(keyframes, audio_vae, "
+          "fc, fps, silent, carry=None)" in src)
+    check("a silent shot still gets SILENCE, not the previous bed",
+          "if silent and audio_vae is not None:" in src
+          and "elif not silent and carry is not None:" in src)
+    check("the tail is short, not the whole track", "AUDIO_HANDOFF_TAIL" in src)
+    check("...about half a second at H3's ~40 audio latent frames/sec",
+          10 <= S.AUDIO_HANDOFF_TAIL <= 40)
+    check("the tail is taken from the SAMPLED latent, before any decode",
+          "audio_out.append(ap[1][..., -n:]" in src)
+    check("a muted shot contributes no tail",
+          "if bed_continuity and audio_tail and not muted_this_shot:" in src)
+    check("...so the bed picks up across a silent gap rather than restarting",
+          "audio_carry = (audio_bed[-1] if (bed_continuity and audio_bed) else None)" in src)
+    check("bed_continuity is an appended widget", "bed_continuity" in S.ADDED_WIDGETS)
+    check("...and defaults on", '"bed_continuity": ("BOOLEAN", {"default": True' in src)
 
 
 def check_audio_levels():
@@ -4501,6 +4551,7 @@ def main():
     check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()
+    check_bed_continuity()
     check_audio_levels()
     check_latent_upscale()
     check_nappy_vocabulary()
