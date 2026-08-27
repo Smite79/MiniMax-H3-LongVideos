@@ -2288,16 +2288,28 @@ LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement.
 # own fields, and an ABSENT `overall_soundscape:` leaves that branch unconditioned
 # -- which is exactly when it invents speech-like babble under a silent shot. So a
 # silenced shot always gets a soundscape line, and it says no voices outright.
-NO_VOICE_SOUNDSCAPE = ("ambient background sound and room tone only, no voices, no speech, "
-                        "no talking, no whispering, no singing, no vocal sounds")
-NO_VOICE_CLAUSE = ", no voices, no speech, no talking, no vocal sounds"
+# STATED POSITIVELY, and it has to be. These strings sit at the END of the prompt,
+# and a run of "no voices, no speech, no talking, no whispering, no singing, no vocal
+# sounds" is a comma-separated keyword pile-up in exactly the position a video model
+# imprints as on-screen text -- which is what was happening. H3's own shipped example
+# writes this field as flowing prose with no negations at all.
+#
+# It is also the rule the rest of this node already follows: at cfg 1 H3 is CFG-free
+# so a negative is never evaluated, and a negation in the POSITIVE names the thing it
+# forbids. "only"/"alone" carries the same exclusion without naming a voice.
+NO_VOICE_SOUNDSCAPE = "ambient background sound and room tone alone"
+NO_VOICE_CLAUSE = ", ambient sound alone"
 # The bed with NO voice constraint, for a speaking shot that has no soundscape of
 # its own. Every shot needs a bed stated or its ambience is unconditioned, and an
 # unconditioned shot sitting between two stated ones is where the room changes.
 AMBIENT_BED = "ambient background sound and room tone"
-NO_VOICE_SPEECH_SOUNDSCAPE = ("ambient background sound and room tone only, no speech, no dialogue, "
-                               "no talking, no singing, no whispering, no spoken words")
-NO_VOICE_SPEECH_CLAUSE = ", no speech, no dialogue, no talking, no singing, no whispering, no spoken words"
+# The vocals-allowed variant, for allow_nonspeech_vocals: wordless sound from a
+# person is wanted (a scream, a sob, a gasp) but words are not. "Wordless" states
+# that positively and names no speech to summon, where the old six-negation list
+# both named it and read as a caption.
+NO_VOICE_SPEECH_SOUNDSCAPE = ("ambient background sound and room tone, with wordless vocal "
+                              "sound alone -- breath, gasps, cries")
+NO_VOICE_SPEECH_CLAUSE = ", with wordless vocal sound alone -- breath, gasps, cries"
 
 
 # A beat that refers to the cast only in the PLURAL ("they face each other") used
