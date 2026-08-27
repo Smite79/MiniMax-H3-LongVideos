@@ -2733,6 +2733,96 @@ def check_restraints_stay_on():
                                            lock_restraints=False)))
 
 
+def check_audio_levels():
+    """The ambient bed has to hold across shots.
+
+    Each shot generates its audio independently, so its level is whatever it landed
+    on. Joined, that steps at every boundary -- most audibly in the BED, because a
+    bed is continuous by nature and the ear hears the room change where the picture
+    says it did not.
+
+    The FLOOR is matched, not the peak. Pinning peaks would flatten the chain's
+    dynamics: a shouted line and a whispered one are supposed to differ."""
+    print("\n=== audio levels across shots ===")
+    torch = __import__("torch")
+    if not hasattr(torch, "randn"):
+        print("  (torch is stubbed here; source checks only)")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+
+    check("the floor is measured, not the peak",
+          "AUDIO_BED_PERCENTILE" in src and "sort().values[k]" in src)
+    check("gain is capped so one odd shot is not amplified into noise",
+          "AUDIO_GAIN_LIMIT" in src and "max(1.0 / limit, min(limit," in src)
+    check("the target is the MEDIAN shot, not the mean",
+          "have[len(have) // 2]" in src)
+    check("a shot with no measurable floor is left alone",
+          "gains.append(1.0)" in src)
+    check("muted shots are excluded from the measurement",
+          "None if (i < len(muted_flags) and muted_flags[i])" in src)
+    check("the result is peak-scaled if gain pushed it over full scale",
+          "if peak > 1.0:" in src)
+    check("what it did is reported", "AUDIO LEVEL -- " in src)
+    check("the seam blend never changes length -- the track is frame-locked",
+          "Length is never changed" in src)
+    check("...and it closes the step rather than swapping content across it",
+          "b[..., :n] = b[..., :n] * w + mid * (1.0 - w)" in src)
+    check("normalize_audio is an appended widget", "normalize_audio" in S.ADDED_WIDGETS)
+    check("...and defaults to on", '"normalize_audio": (["off", "bed", "bed + seams"], '
+          '{"default": "bed + seams"' in src)
+
+    if not hasattr(torch, "randn"):
+        return
+    sr = 44100
+    torch.manual_seed(0)
+
+    def shot(bed, speech=0.0, secs=2.0):
+        n = int(sr * secs)
+        w = torch.randn(1, 2, n) * bed
+        if speech:
+            a, b = n // 3, 2 * n // 3
+            w[..., a:b] += torch.randn(1, 2, b - a) * speech
+        return w
+
+    chunks = [shot(0.010), shot(0.040, speech=0.30), shot(0.005), shot(0.020, speech=0.25)]
+    levels = [S.shot_bed_level(c, sr) for c in chunks]
+    check("every shot's floor is measurable", all(l and l > 0 for l in levels))
+    _spread_before = max(levels) / min(levels)
+    check("the shots really do differ before levelling", _spread_before > 3.0)
+
+    gains, target = S.shot_gains(levels)
+    out = [c * g for c, g in zip(chunks, gains)]
+    beds = [S.shot_bed_level(c, sr) for c in out]
+    check("...and their floors match afterwards", max(beds) / min(beds) < 1.15)
+    check("the target is one of the measured floors", target in levels)
+    check("no gain exceeds the cap",
+          all(1 / S.AUDIO_GAIN_LIMIT - 1e-6 <= g <= S.AUDIO_GAIN_LIMIT + 1e-6 for g in gains))
+
+    # Dynamics must survive: a shot with speech stays far above its own bed.
+    check("a spoken shot is still much louder than its own floor",
+          float(out[1].abs().max()) / beds[1] > 10)
+    check("a quiet shot is not pushed up to a loud one's peak",
+          float(out[2].abs().max()) < float(out[1].abs().max()))
+
+    # The seam.
+    a = torch.full((1, 2, sr), 0.5)
+    b = torch.full((1, 2, sr), -0.5)
+    la, lb = a.shape[-1], b.shape[-1]
+    S.blend_audio_seam(a, b, sr)
+    check("the seam blend leaves both lengths alone",
+          a.shape[-1] == la and b.shape[-1] == lb)
+    check("...closes the step at the join",
+          abs(float(a[..., -1].mean()) - float(b[..., 0].mean())) < 1e-4)
+    check("...and leaves the interiors untouched",
+          abs(float(a[..., 0].mean()) - 0.5) < 1e-4
+          and abs(float(b[..., -1].mean()) + 0.5) < 1e-4)
+    for _bad in (torch.zeros(1, 2, 3), torch.zeros(1, 2, 0)):
+        S.blend_audio_seam(_bad, _bad.clone(), sr)      # must not raise
+    check("a chunk too short to blend is skipped, not an error", True)
+    check("digital silence has no floor", S.shot_bed_level(torch.zeros(1, 2, sr), sr) is None)
+    check("fewer than two measured floors means no change",
+          S.shot_gains([None, 0.01])[0] == [1.0, 1.0])
+
+
 def check_latent_upscale():
     """Latent upscaling between sampling and decode, from an OPTIONAL third-party pack.
 
@@ -4411,6 +4501,7 @@ def main():
     check_presence_test_is_shared()
     check_continuity_warning()
     check_restraints_stay_on()
+    check_audio_levels()
     check_latent_upscale()
     check_nappy_vocabulary()
     check_bare_state_persists()

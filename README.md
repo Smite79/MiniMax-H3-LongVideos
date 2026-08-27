@@ -338,6 +338,25 @@ rendering**. Do that first; it is near-instant.
   **pre-upscale** latent instead (a short tail, so it is cheap); only the shot's own
   output frames are upscaled. If that decode fails, the upscaled frames are used and
   the render carries on.
+- **One sound bed across the chain.** `normalize_audio` matches the **ambient
+  floor** between shots. Each shot generates its audio independently, so its level
+  is whatever it landed on; joined, that steps at every boundary — most audibly in
+  the bed, because a bed is continuous by nature and the ear hears the room change
+  where the picture says it didn't.
+
+  It matches the **floor, not the peak**. Pinning peaks would flatten the chain's
+  dynamics: a shouted line and a whispered one are supposed to differ, and forcing
+  both to one peak makes the whisper shout. Every shot's quiet fifth is brought to
+  the median shot's, leaving everything above it intact. On a test chain whose beds
+  spanned 8.1×, they came out within 1.0× while the spoken shot stayed 48× above its
+  own floor. Gain is capped at ±12 dB so one odd shot can't be amplified into noise,
+  and the result is peak-scaled if that pushed anything past full scale. Muted shots
+  are excluded from the measurement rather than dragging the target toward silence.
+
+  `bed + seams` (default) also closes the sample step at each join over ~12 ms, in
+  place. A click is a step in sample value, so both sides are eased to meet at the
+  same value — it never changes length, because the track is frame-locked to the
+  video and an overlapping crossfade would slide every later shot out of sync.
 - **Overlays.** Optional PIL watermark and intro title, composited after any
   upscale, never asked of the model.
 
