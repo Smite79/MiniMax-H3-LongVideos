@@ -261,7 +261,7 @@ ADDED_WIDGETS = (
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
     "motion_guard", "contact_guard", "latent_upscale", "latent_upscale_scale",
-    "normalize_audio",
+    "normalize_audio", "bed_continuity",
     "auto_soundscape", "allow_nonspeech_vocals",
 )
 
@@ -2171,6 +2171,13 @@ MOUTH_SETTLE_FRAMES = 3
 # plus MOUTH_SETTLE_FRAMES, with room to spare for the trim to land inside.
 HANDOFF_LATENT_TAIL = 8
 
+# Audio latent frames carried into the next shot as its cond_audio anchor.
+# H3 packs audio at ~40 latent frames per second, so 20 is about half a second:
+# long enough to state the bed, short enough that the shot is not pinned to a
+# loop of it. PackedLayout positions cond_audio at the keyframe's frame index,
+# so this anchors the START and the rest of the track stays free.
+AUDIO_HANDOFF_TAIL = 20
+
 ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers on each hand, "
                  "and two legs with two feet. Each arm joins the body at one shoulder and runs "
                  "shoulder to elbow to wrist to hand; each leg joins at one hip and runs hip to "
@@ -2284,6 +2291,10 @@ LIPS_CLOSED_TAIL = " No speech, no dialogue, no lip movement, no mouth movement.
 NO_VOICE_SOUNDSCAPE = ("ambient background sound and room tone only, no voices, no speech, "
                         "no talking, no whispering, no singing, no vocal sounds")
 NO_VOICE_CLAUSE = ", no voices, no speech, no talking, no vocal sounds"
+# The bed with NO voice constraint, for a speaking shot that has no soundscape of
+# its own. Every shot needs a bed stated or its ambience is unconditioned, and an
+# unconditioned shot sitting between two stated ones is where the room changes.
+AMBIENT_BED = "ambient background sound and room tone"
 NO_VOICE_SPEECH_SOUNDSCAPE = ("ambient background sound and room tone only, no speech, no dialogue, "
                                "no talking, no singing, no whispering, no spoken words")
 NO_VOICE_SPEECH_CLAUSE = ", no speech, no dialogue, no talking, no singing, no whispering, no spoken words"
@@ -3469,6 +3480,14 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 block += f"\noverall_soundscape: {NO_VOICE_SOUNDSCAPE}"
             elif no_speech:
                 block += f"\noverall_soundscape: {NO_VOICE_SPEECH_SOUNDSCAPE}"
+            else:
+                # A SPEAKING shot with no soundscape of its own used to fall off the
+                # end of this chain and get no `overall_soundscape:` field at all --
+                # so its ambience was unconditioned while every silent shot around it
+                # had a stated bed. The bed then audibly changed on exactly the shots
+                # with dialogue. Name the bed here too, with no voice constraint,
+                # because speech is wanted on this one.
+                block += f"\noverall_soundscape: {AMBIENT_BED}"
         # Music is OPT-IN: a blank field emits the spec's silence token N/A on every
         # shot, so H3 doesn't improvise a score. (Soundscape is NOT forced to N/A --
         # per the spec it takes N/A only when total silence is explicitly wanted, so a
@@ -3938,7 +3957,7 @@ def _build_ref_images(vae, images, gen_w, gen_h, mode="match"):
 
 def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, handoff,
                              ref_images=None, ref_image_size="match", ref_noise_aug=None,
-                             audio_vae=None, silent=False):
+                             audio_vae=None, silent=False, audio_carry=None):
     latent, fc = _empty_av_latent(width, height, length, fps)
     refs = [r for r in (ref_images or []) if r is not None]
     if refs:
@@ -4011,7 +4030,7 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         # ref_audio rows for blocks of kind audio/video/video_audio (model.py:379-399)
         # -- an "image" ref gets none -- so the latent list and the row layout would
         # disagree and land as a shape error inside the DiT.
-        kfs = _attach_silence(kfs, audio_vae, fc, fps, silent)
+        kfs = _attach_silence(kfs, audio_vae, fc, fps, silent, audio_carry)
         if kfs:
             vals["minimax_keyframes"] = kfs
             vals["minimax_frame_count"] = fc
@@ -4031,13 +4050,13 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
     # Outside the `if keyframes:` it used to sit inside. A shot with no handoff --
     # the FIRST shot of every chain -- has no keyframe, so the silence anchor was
     # skipped there too, on exactly the shot that sets the tone for the rest.
-    keyframes = _attach_silence(keyframes, audio_vae, fc, fps, silent)
+    keyframes = _attach_silence(keyframes, audio_vae, fc, fps, silent, audio_carry)
     if keyframes:
         cond = node_helpers.conditioning_set_values(cond, {"minimax_keyframes": keyframes, "minimax_frame_count": fc})
     return cond, latent
 
 
-def _attach_silence(keyframes, audio_vae, fc, fps, silent):
+def _attach_silence(keyframes, audio_vae, fc, fps, silent, carry=None):
     """Anchor this shot's audio channel to real silence. Returns the keyframe list.
 
     H3 is JOINT -- the mouth follows the audio branch -- so an unconditioned audio
@@ -4053,15 +4072,26 @@ def _attach_silence(keyframes, audio_vae, fc, fps, silent):
     `latent` is absent, so a dict carrying only audio produces exactly one cond_audio
     segment and no video rows.
     """
-    if not silent or audio_vae is None:
-        return keyframes
-    sil = _silent_audio_latent(audio_vae, fc, fps)
-    if sil is None:
+    anchor = None
+    if silent and audio_vae is not None:
+        anchor = _silent_audio_latent(audio_vae, fc, fps)
+    elif not silent and carry is not None:
+        # BED CONTINUITY. A shot with dialogue gets the previous shot's audio TAIL as
+        # its cond_audio instead, which is the audio half of what the keyframe already
+        # does for the picture: the next shot starts from where the last one ended, so
+        # the ambient bed carries over rather than being invented afresh.
+        #
+        # A short tail, not the whole track: PackedLayout positions cond_audio at the
+        # keyframe's frame index, so this anchors the START and leaves the rest of the
+        # shot free to evolve. Conditioning the full length would freeze the audio
+        # into a loop of the previous shot's last half-second.
+        anchor = carry
+    if anchor is None:
         return keyframes
     if keyframes:
-        keyframes[0]["audio_latent"] = sil      # one bed, on the first carrier only
+        keyframes[0]["audio_latent"] = anchor   # one bed, on the first carrier only
     else:
-        keyframes = [{"resolved_frame_index": 0, "audio_latent": sil}]
+        keyframes = [{"resolved_frame_index": 0, "audio_latent": anchor}]
     return keyframes
 
 
@@ -5517,6 +5547,21 @@ class H3LongVideos:
                                "not to babble; this guarantees it. TRADE-OFF: it also removes that shot's "
                                "generated ambience/SFX, so lay a continuous ambient bed under the video in "
                                "post. Shots WITH quoted dialogue keep their audio untouched."}),
+                "bed_continuity": ("BOOLEAN", {"default": True,
+                    "tooltip": "Carry the ambient bed ACROSS shots by anchoring each shot's audio "
+                               "on the previous shot's tail.\n\nThis is the audio half of what the "
+                               "keyframe already does for the picture: the next shot starts from "
+                               "where the last one ended, so the bed continues instead of being "
+                               "invented afresh. Without it every shot generates its ambience "
+                               "independently -- same soundscape TEXT, different room -- and "
+                               "normalize_audio can only line up their loudness, not their "
+                               "content.\n\nA short tail (~0.5s) is used, positioned at the shot's "
+                               "first frame, so it states the bed and leaves the rest of the track "
+                               "free. Conditioning the full length would pin the shot to a loop of "
+                               "the previous half-second.\n\nA SILENT shot still gets the silence "
+                               "anchor instead -- that is what keeps mouths shut -- and a MUTED "
+                               "shot contributes no tail, so the bed picks up across a silent gap "
+                               "rather than restarting after it."}),
                 "normalize_audio": (["off", "bed", "bed + seams"], {"default": "bed + seams",
                     "tooltip": "Match the AMBIENT FLOOR across shots, so the sound bed does not "
                                "step at every boundary.\n\n"
@@ -5900,11 +5945,12 @@ class H3LongVideos:
                 handoff, decode_tile_frames=0, decode_tile_size=0,
                 refs=None, ref_image_size="match", ref_noise_aug=None, silent=False,
                 latent_upscale="off", latent_upscale_scale=2.0, up_notes=None,
-                handoff_out=None):
+                handoff_out=None, audio_carry=None, audio_out=None):
         positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff,
                                                     ref_images=refs, ref_image_size=ref_image_size,
                                                     ref_noise_aug=ref_noise_aug,
-                                                    audio_vae=audio_vae, silent=silent)
+                                                    audio_vae=audio_vae, silent=silent,
+                                                    audio_carry=audio_carry)
         seed, steps, cfg, sn, sch, denoise = sa
         # Conditioning is built, so the text encoder and VAEs are dead weight for the
         # whole sampling loop -- evict them and keep only the DiT on the card.
@@ -5926,6 +5972,18 @@ class H3LongVideos:
         # the whole chain is free. Detached and moved off the card immediately, for
         # the same reason the decoded frames are.
         raw = out.get("samples") if isinstance(out, dict) else None
+        # This shot's audio TAIL, for the next shot to continue its bed from. Taken
+        # from the sampled latent, before any decode, so it is the audio the model
+        # actually produced rather than a re-encoding of it.
+        if audio_out is not None and raw is not None:
+            try:
+                ap = raw.unbind() if hasattr(raw, "unbind") else None
+                if ap and len(ap) == 2 and ap[1] is not None:
+                    n = min(int(ap[1].shape[-1]), AUDIO_HANDOFF_TAIL)
+                    if n > 0:
+                        audio_out.append(ap[1][..., -n:].detach().clone())
+            except Exception:
+                pass
         shot_latent = None
         if raw is not None:
             try:
@@ -6012,6 +6070,7 @@ class H3LongVideos:
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
             mute_nonspeech_audio=True, mute_fade_ms=40, normalize_audio="bed + seams",
+            bed_continuity=True,
             watermark_text="", watermark_position="bottom-right", watermark_size=4.0,
             watermark_opacity=0.75, watermark_margin=3.0,
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
@@ -6344,6 +6403,7 @@ class H3LongVideos:
         muted_flags = []                   # which shots were audio-silenced
         hoff = max(0, int(handoff_offset))
         up_notes = []                      # what the latent upscaler did, or could not do
+        audio_bed = []                     # the running audio tail, one per shot
         backoff, video_chunks, audio_chunks = [], [], []
         latent_chunks = []                 # per-shot sampled latents, pre-decode
         mouth_settled = []                 # shots seeded from a settled (closed) mouth
@@ -6425,6 +6485,8 @@ class H3LongVideos:
             # No scripted line -> anchor this shot's audio branch to silence.
             shot_silent = bool(auto_silence_nonspeech and not allow_nonspeech_vocals and i < len(spk) and not spk[i])
             handoff_src = []           # pre-upscale tail frames, when upscaling is on
+            audio_tail = []            # this shot's audio tail, for the NEXT shot's bed
+            audio_carry = (audio_bed[-1] if (bed_continuity and audio_bed) else None)
             after_strip = i in strip_shots          # strip_shots is 1-based, i is 0-based
             shot_handoff = (None if after_strip
                             else handoff if (carry_keyframe or not shot_refs) else None)
@@ -6436,7 +6498,8 @@ class H3LongVideos:
                         frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
-                                                     up_notes, handoff_src)
+                                                     up_notes, handoff_src,
+                                                     audio_carry, audio_tail)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -6454,7 +6517,8 @@ class H3LongVideos:
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
-                                                     up_notes, handoff_src)
+                                                     up_notes, handoff_src,
+                                                     audio_carry, audio_tail)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if _is_oom(e) and getattr(e, "_h3_stage", "") == "sampling":
                         # Retrying with tiles would re-run the whole sampling pass and
@@ -6469,7 +6533,8 @@ class H3LongVideos:
                     frames, audio, shot_latent = self._render(model, clip, vae, audio_vae, negative, gen_prompt, w, h, ln_i, fps, tiled, sa, shot_handoff, decode_tile_frames, decode_tile_size,
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
-                                                     up_notes, handoff_src)
+                                                     up_notes, handoff_src,
+                                                     audio_carry, audio_tail)
 
             if shot_latent is not None:
                 latent_chunks.append(shot_latent)
@@ -6559,6 +6624,13 @@ class H3LongVideos:
             else:
                 video_chunks.append(frames); audio_chunks.append(wav)
                 mm.soft_empty_cache()
+            # Carry this shot's audio tail forward. A MUTED shot contributes nothing:
+            # its waveform is zeroed after generation, so continuing the bed from it
+            # would hand the next shot silence to grow from -- the opposite of what
+            # bed continuity is for. The last audible tail keeps being used instead,
+            # so the bed picks up across a silent gap rather than restarting after it.
+            if bed_continuity and audio_tail and not muted_this_shot:
+                audio_bed.append(audio_tail[-1])
             # trace free VRAM after each shot: a falling series means something is
             # still accumulating; a flat one means the chain is stable.
             vram_trace.append(round(vram_gb()[1], 2))
