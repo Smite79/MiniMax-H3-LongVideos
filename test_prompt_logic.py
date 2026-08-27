@@ -92,6 +92,20 @@ PROMPT = (
 )
 
 
+def _voice_free(text):
+    """Does this shot's soundscape say ambient-only?
+
+    Checked against the module constants rather than a literal, because the wording
+    moved from a run of negations ("no voices, no speech, no talking...") to the
+    positive form -- the negation pile-up sat at the end of the prompt and was being
+    imprinted into the frames as on-screen text."""
+    t = (text or "").lower()
+    return (S.NO_VOICE_CLAUSE.strip(" ,").lower() in t
+            or S.NO_VOICE_SOUNDSCAPE.lower() in t
+            or S.NO_VOICE_SPEECH_CLAUSE.strip(" ,").lower() in t
+            or S.NO_VOICE_SPEECH_SOUNDSCAPE.lower() in t)
+
+
 def check_no_second_subject_noun():
     """A description must never introduce a second subject noun.
 
@@ -311,23 +325,23 @@ def check_nonspeech_audio_6beat():
     check("a scenery beat gets no lips-closed clause at all",
           "mouth closed" not in scenery[0])
     check("...but still gets the no-voice soundscape (an empty room still babbles)",
-          "no voices" in scenery[0])
+          _voice_free(scenery[0]))
     check("a beat with a person still gets both",
-          "mouth closed" in scenery[1] and "no voices" in scenery[1])
+          "mouth closed" in scenery[1] and _voice_free(scenery[1]))
     check("silent shots carry a no-voices soundscape",
-          all("overall_soundscape:" in sh[i] and "no voices" in sh[i] for i in silent))
+          all("overall_soundscape:" in sh[i] and _voice_free(sh[i]) for i in silent))
     check("dialogue shots are left free to speak",
-          all("mouth closed and lips together" not in sh[i] and "no voices" not in sh[i]
+          all("mouth closed and lips together" not in sh[i] and not _voice_free(sh[i])
               for i in talking))
     # A user-supplied soundscape must survive, with the no-voice constraint appended
     gs = D(SIX_ANCHOR, SIX_BEATS, "distant traffic, garage hum", "", SIX_CM)
     check("a user soundscape is kept on silent shots",
-          all("distant traffic, garage hum" in gs[i] and "no voices" in gs[i] for i in silent))
+          all("distant traffic, garage hum" in gs[i] and _voice_free(gs[i]) for i in silent))
     check("a user soundscape on a dialogue shot is NOT constrained",
-          all("distant traffic, garage hum" in gs[i] and "no voices" not in gs[i]
+          all("distant traffic, garage hum" in gs[i] and not _voice_free(gs[i])
               for i in talking))
     check("silencing can still be turned off wholesale",
-          all("no voices" not in s for s in
+          all(not _voice_free(s) for s in
               D(SIX_ANCHOR, SIX_BEATS, "", "", SIX_CM, auto_silence_nonspeech=False)))
     # The deterministic backstop must be ON by default: prompt-side silencing only
     # ASKS, and babble under a silent shot was what survived the asking.
@@ -1760,7 +1774,7 @@ def check_written_text_is_not_speech():
     g = S.distribute_generations("A room.", ['Mara reads the sign marked "EXIT".'],
                                  "", "", "Mara = she, 30, blonde")[0]
     check("a written-text beat gets the mouth constraint", "mouth closed" in g.lower())
-    check("...and the no-voice soundscape", "no voices" in g.lower())
+    check("...and the no-voice soundscape", _voice_free(g))
 
 
 def check_declared_bare():
@@ -1977,7 +1991,7 @@ def check_plural_cast_binding():
     check("a PLURAL beat gets it too", lips[2] and lips[3])
     check("a scenery beat with nobody in it does NOT get a mouth constraint",
           not lips[4])
-    check("...but is still given a no-voice soundscape", "no voices" in sil[4].lower())
+    check("...but is still given a no-voice soundscape", _voice_free(sil[4]))
     check("a beat with real dialogue is not silenced", not lips[5])
 
     # Bare 'them'/'their' must not trigger it -- they are object-prone.
@@ -2474,7 +2488,7 @@ def check_mouth_stays_closed():
                                              'Mara says: "Ready?"'], "", "", cm)
     check("a silent named beat gets the mouth state", "mouth closed" in g[0])
     check("a silent PLURAL beat gets it too", "mouth closed" in g[1])
-    check("...and the no-voice soundscape", "no voices" in g[1].lower())
+    check("...and the no-voice soundscape", _voice_free(g[1]))
     check("a dialogue beat is left alone", "mouth closed" not in g[2])
 
 
@@ -2758,10 +2772,33 @@ def check_bed_continuity():
     # The dialogue beat must NOT be told there are no voices.
     g0 = S.distribute_generations(ANCHOR, BEATS, "", "", CM)[0]
     check("a speaking beat's bed carries no no-voice clause",
-          "no voices" not in g0.split("overall_soundscape:")[1])
+          not _voice_free(g0.split("overall_soundscape:")[1]))
     check("...and a silent beat's still does",
-          "no speech" in S.distribute_generations(
-              ANCHOR, BEATS, "", "", CM)[1].split("overall_soundscape:")[1])
+          _voice_free(S.distribute_generations(
+              ANCHOR, BEATS, "", "", CM)[1].split("overall_soundscape:")[1]))
+
+    # The soundscape line is the LAST thing in the prompt, which is where a video
+    # model imprints text into the frame. It used to end with a run of six
+    # negations -- "no voices, no speech, no talking, no whispering, no singing, no
+    # vocal sounds" -- a comma-separated keyword pile-up in exactly that position,
+    # and it was being rendered on screen. H3's own shipped example writes this
+    # field as flowing prose with no negations at all.
+    for _gs in ("steady rain on the roof", ""):
+        for _g in S.distribute_generations(ANCHOR, BEATS, _gs, "", CM):
+            _line = re.search(r"^overall_soundscape:\s*(.*)$", _g, re.M)
+            check(f"the soundscape line carries no negations ({_gs!r:26})",
+                  _line is not None
+                  and not re.search(r"\bno\b", _line.group(1), re.I))
+    check("the voice-free wording is positive",
+          "no " not in S.NO_VOICE_SOUNDSCAPE.lower()
+          and "no " not in S.NO_VOICE_CLAUSE.lower())
+    check("...and so is the vocals-allowed wording",
+          "no " not in S.NO_VOICE_SPEECH_SOUNDSCAPE.lower()
+          and "no " not in S.NO_VOICE_SPEECH_CLAUSE.lower())
+    check("the two still say different things",
+          S.NO_VOICE_SOUNDSCAPE != S.NO_VOICE_SPEECH_SOUNDSCAPE)
+    check("...and the vocals-allowed one permits wordless sound",
+          "wordless" in S.NO_VOICE_SPEECH_SOUNDSCAPE.lower())
 
     # The audio anchor: silence still wins on a silent shot, the carry is used
     # otherwise, and the first shot has nothing to carry.

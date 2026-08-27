@@ -354,6 +354,15 @@ rendering**. Do that first; it is near-instant.
   field at all — unconditioned ambience sitting between shots that each stated one,
   which is exactly where the room changed.
 
+  The soundscape line is **stated positively** — `ambient background sound and room
+  tone alone`, not a run of negations. It sits at the very end of the prompt, which
+  is where a video model imprints text into the frame, and the old wording ended with
+  six comma-separated negations (*"no voices, no speech, no talking, no whispering,
+  no singing, no vocal sounds"*) that were being rendered on screen. H3's own shipped
+  example writes this field as flowing prose with no negations at all. It's the same
+  rule the rest of the node follows: at `cfg 1` the negative is never evaluated, so a
+  negation in the positive only names the thing it forbids.
+
   `normalize_audio` then matches the **ambient floor** between shots. Each shot generates its audio independently, so its level
   is whatever it landed on; joined, that steps at every boundary — most audibly in
   the bed, because a bed is continuous by nature and the ear hears the room change
