@@ -536,6 +536,61 @@ its metadata and is byte-shape-identical to any un-resized rank-128 turbo LoRA. 
 LoRA with `sla` as a delimited token in its name counts (`..._768p_sla_...`);
 `slack`, `translate` and `SLAYER` do not.
 
+## Speed: PDD Acc LoRAs (optional, third-party)
+
+Alibaba PAI's [**MiniMax-H3-Acc-LoRAs**](https://huggingface.co/alibaba-pai/MiniMax-H3-Acc-LoRAs)
+are parallel-decoding distillations: joint video and synchronized audio in **8 steps
+at CFG 1.0**, in FL2VA and Ref2VA variants (1.37 GB each). They run through
+[**ComfyUI-MiniMax-H3-PDD-Acc**](https://github.com/Jalen-Brunson/ComfyUI-MiniMax-H3-PDD-Acc),
+a **separate pack** — not part of this one.
+
+Unlike sparse attention, PDD never prunes the attention map, so it does not carry
+the duplication failure described above. The trade is fidelity at 8 steps, not
+spatial coherence.
+
+**These are not ordinary LoRAs and a plain LoRA loader cannot run them.** Alongside
+the rank-64 trunk each file carries a bank of per-interval final-layer heads; a
+stock loader applies the trunk, silently drops the head bank, and you get a
+degraded render with no error. The files go in `models/pdd_acc/`, not
+`models/loras/` — the Apply node lists only that folder.
+
+### Wire the schedule, don't reproduce it
+
+Each head is trained for one interval of a **fixed** sigma grid, and an evaluation
+that lands between boundaries has no head to drive it. That grid is exactly flow
+shift **12.0** sampled at **8** uniform timesteps:
+
+| k | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|---|---|
+| σ | 1.0 | 0.988235 | 0.972973 | 0.952381 | 0.923077 | 0.878049 | 0.800000 | 0.631579 | 0.0 |
+
+So under PDD, shift 12.0/3.0 is **not** a tuning choice the way it is on base H3 at
+20 steps — it is the grid the heads were distilled on, and anything else throws.
+
+Connect the Apply node's `sigmas` output to this node's **`sigmas`** input:
+
+```
+UNETLoader ─> MiniMax H3 PDD Acc LoRA (Apply) ─┬─ model ──> H3 Long Videos
+                                               └─ sigmas ─> H3 Long Videos
+```
+
+With `sigmas` connected the schedule comes from the LoRA itself and the `steps` and
+`scheduler` widgets stop affecting sampling. Keep `sampler_name` on **`euler`**:
+multi-stage samplers (`er_sde`, `dpmpp_*`, `res_*`) evaluate off-grid whatever
+schedule you hand them.
+
+Leave `sigmas` unconnected and nothing changes — this node builds its own schedule
+from the widgets, which is right for base H3 and for ordinary turbo LoRAs.
+
+### What the node checks
+
+If a PDD LoRA is applied and `sigmas` is empty, `info` says so before anything is
+sampled — including under `plan_only` — and names every widget that would miss the
+grid at once, rather than losing one render per mistake. The schedule-balance
+warning is also suppressed under PDD: shift 12 at 8 steps spends 63% of the sigma
+range on the last step, which trips its threshold and would otherwise advise
+lowering the shift — advice that throws.
+
 ## Resolution: latent upscale (optional, third-party)
 
 The `latent_upscale` setting drives the **MiniMax-H3 Latent Upscaler by

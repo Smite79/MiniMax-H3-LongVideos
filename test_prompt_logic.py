@@ -15,9 +15,17 @@ any edit to the prompt-assembly code.
 import sys, types, os, re, importlib.util
 
 # --- stub heavy deps so sampler.py imports without ComfyUI / torch ------------
-for _name in ["torch", "nodes", "comfy", "comfy.utils", "comfy.samplers",
-              "comfy.nested_tensor", "comfy.model_management", "node_helpers"]:
+for _name in ["torch", "nodes", "comfy", "comfy.utils", "comfy.sample", "comfy.samplers",
+              "comfy.nested_tensor", "comfy.model_management", "comfy.patcher_extension",
+              "latent_preview", "node_helpers"]:
     sys.modules.setdefault(_name, types.ModuleType(_name))
+# pdd_acc_active reads WrappersMP.DIFFUSION_MODEL off the stub, so give it the real
+# constant rather than letting the lookup fall through to its string fallback -- the
+# fallback would pass the test while masking a rename in ComfyUI.
+if not hasattr(sys.modules["comfy.patcher_extension"], "WrappersMP"):
+    class _WrappersMP:
+        DIFFUSION_MODEL = "diffusion_model"
+    sys.modules["comfy.patcher_extension"].WrappersMP = _WrappersMP
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("h3_sampler", os.path.join(_HERE, "sampler.py"))
@@ -1689,6 +1697,78 @@ def _sla_graph(lora, sparse):
     g["9"] = {"class_type": "H3LongVideos",
               "inputs": {"model": [prev, 0], "clip": ["8", 0], "prompt": "a woman walks"}}
     return _FakeGraph(g)
+
+
+class _FakePDDModel:
+    """A model carrying the PDD Apply node's DIFFUSION_MODEL wrapper.
+
+    `where` picks which of the two places that wrapper can live: the patcher's own
+    `wrappers` (what add_wrapper_with_key writes) or the merged copy under
+    model_options, which is where it appears once a sampling pass has run."""
+    def __init__(self, where="patcher"):
+        self.model_options = {"transformer_options": {}}
+        self.wrappers = {}
+        entry = {"diffusion_model": {"minimax_h3_pdd_acc": [lambda *a: None]}}
+        if where == "patcher":
+            self.wrappers = entry
+        elif where == "model_options":
+            self.model_options["transformer_options"]["wrappers"] = entry
+
+
+def check_pdd_schedule():
+    """The PDD Acc heads accept only their nine trained sigma boundaries.
+
+    The boundaries are not a tuning choice -- they are flow shift 12.0 sampled at 8
+    uniform timesteps. This pins that identity, because the whole preflight is built
+    on it: if the grid the node pack ships ever stops being shift-12-at-8-steps, the
+    advice this node gives would be confidently wrong."""
+    print("\n=== PDD Acc schedule ===")
+    # Verbatim from ComfyUI-MiniMax-H3-PDD-Acc's own error message.
+    BOUNDS = [1.0, 0.988235, 0.972973, 0.952381, 0.923077, 0.878049, 0.800000, 0.631579, 0.0]
+    s = S.PDD_SHIFT_VIDEO
+    grid = [(s * (k / S.PDD_STEPS)) / (1 + (s - 1) * (k / S.PDD_STEPS))
+            for k in range(S.PDD_STEPS, -1, -1)]
+    check("the trained grid IS flow shift 12.0 at 8 uniform steps",
+          len(grid) == len(BOUNDS)
+          and all(abs(a - b) < 1e-6 for a, b in zip(grid, BOUNDS)))
+    check("shift constants match the node pack (pdd_acc_core VIDEO/AUDIO_SHIFT)",
+          (S.PDD_SHIFT_VIDEO, S.PDD_SHIFT_AUDIO) == (12.0, 3.0))
+
+    check("PDD detected via the patcher's own wrappers",
+          S.pdd_acc_active(_FakePDDModel("patcher")))
+    check("PDD detected via the merged model_options copy",
+          S.pdd_acc_active(_FakePDDModel("model_options")))
+    check("a plain model is not mistaken for PDD", not S.pdd_acc_active(_FakeModel(False)))
+    check("a model with neither attribute is not an error",
+          not S.pdd_acc_active(object()))
+
+    def note(sigmas=None, steps=8, sched="simple", samp="euler", sv=12.0, sa=3.0,
+             model=None, ams=True):
+        return S.pdd_schedule_note(model or _FakePDDModel(), sigmas, steps, sched,
+                                   samp, sv, sa, ams)
+
+    check("no PDD on the model means no note", note(model=_FakeModel(False)) == "")
+    check("a correct re-derived schedule passes with no note", note() == "")
+    check("a connected sigmas input silences the note entirely",
+          note(sigmas=[1.0, 0.5, 0.0], steps=20, sched="normal") == "")
+    check("an empty sigmas tensor is treated as unconnected", note(sigmas=[], steps=20) != "")
+
+    check("wrong step count is caught", "steps 20" in note(steps=20))
+    check("wrong scheduler is caught", "scheduler 'normal'" in note(sched="normal"))
+    check("a multi-stage sampler is caught", "sampler 'er_sde'" in note(samp="er_sde"))
+    check("wrong shift_video is caught", "shift_video 3" in note(sv=3.0))
+    check("wrong shift_audio is caught", "shift_audio 1" in note(sa=1.0))
+    # With the schedule patch off, this node is not setting the shift at all, so it
+    # cannot report on it -- the node pack's own wrapper raises on that instead.
+    check("shift is not reported when apply_model_sampling is off",
+          "shift_video" not in note(sv=3.0, ams=False))
+    check("the note points at the sigmas input as the fix",
+          "sigmas" in note(steps=20) and "Apply node" in note(steps=20))
+    # Every mismatch in one note: the render is lost to the FIRST one otherwise, and
+    # the user fixes them one failed render at a time.
+    many = note(steps=20, sched="normal", samp="dpmpp_2m", sv=3.0)
+    check("all mismatches are reported together",
+          all(k in many for k in ("steps 20", "normal", "dpmpp_2m", "shift_video 3")))
 
 
 def check_sla_pairing():
@@ -4582,6 +4662,7 @@ def main():
     check_tagged_references()
     check_ref_modes()
     check_sla_pairing()
+    check_pdd_schedule()
     check_lora_hints()
     check_kernel_backend_note()
     check_mouth_stays_closed()
