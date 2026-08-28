@@ -49,9 +49,12 @@ import torch
 
 import nodes
 import comfy.utils
+import comfy.sample
 import comfy.samplers
 import comfy.nested_tensor
 import comfy.model_management as mm
+import comfy.patcher_extension
+import latent_preview
 import node_helpers
 
 try:
@@ -263,6 +266,11 @@ ADDED_WIDGETS = (
     "motion_guard", "contact_guard", "latent_upscale", "latent_upscale_scale",
     "normalize_audio", "bed_continuity",
     "auto_soundscape", "allow_nonspeech_vocals",
+    # Not a widget -- a SIGMAS socket carries no widget value and so cannot shift
+    # widgets_values. Listed here anyway so the same append rule keeps it dead last
+    # in the schema, which is also the only position that leaves the INPUT SOCKET
+    # order of every previously saved workflow untouched.
+    "sigmas",
 )
 
 NL = "\n"
@@ -5103,6 +5111,122 @@ def sla_pairing(model, graph, node_id):
     return sla, sparse, note
 
 
+# --- PDD Acc (parallel-decoding distillation) --------------------------------
+# A PDD Acc LoRA is not an ordinary LoRA: alongside the rank-64 trunk it carries a
+# bank of per-interval final-layer heads, and each head is trained for ONE interval
+# of a fixed sigma grid. The heads are selected by the sigma the model is evaluated
+# at, so an evaluation that lands between boundaries has no head to drive it and
+# ComfyUI-MiniMax-H3-PDD-Acc raises rather than guess.
+#
+# That grid is exactly flow shift 12.0 sampled at 8 uniform timesteps --
+# sigma(t) = 12t / (1 + 11t) for t = k/8 -- which reproduces the node pack's
+# boundaries to every digit it prints:
+#
+#     k     8    7         6         5         4         3         2         1     0
+#     sigma 1.0  0.988235  0.972973  0.952381  0.923077  0.878049  0.800000  0.631579  0.0
+#
+# So shift 12.0/3.0 is NOT a taste setting under PDD the way it is on base H3 at 20
+# steps -- it is the grid the heads were distilled on, and anything else throws.
+_PDD_WRAPPER_KEY = "minimax_h3_pdd_acc"    # ComfyUI-MiniMax-H3-PDD-Acc nodes.py
+PDD_SHIFT_VIDEO, PDD_SHIFT_AUDIO = 12.0, 3.0
+PDD_STEPS = 8
+PDD_SCHEDULER, PDD_SAMPLER = "simple", "euler"
+
+
+def pdd_acc_active(model):
+    """True when a PDD Acc LoRA is patched onto `model`.
+
+    The Apply node registers a DIFFUSION_MODEL wrapper under its own key, which is
+    the only mark it leaves that survives onto the patcher we are handed. Checks
+    the patcher's own `wrappers` first (where add_wrapper_with_key puts it) and
+    model_options second, since a model that has already been through a sampling
+    pass carries the merged copy there instead."""
+    try:
+        wt = comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL
+    except Exception:
+        wt = "diffusion_model"
+    holders = []
+    own = getattr(model, "wrappers", None)          # {wrapper_type: {key: [fn]}}
+    if isinstance(own, dict):
+        holders.append(own)
+    tro = (getattr(model, "model_options", None) or {}).get("transformer_options") or {}
+    merged = tro.get("wrappers") if isinstance(tro, dict) else None
+    if isinstance(merged, dict):
+        holders.append(merged)
+    for holder in holders:
+        if _PDD_WRAPPER_KEY in (holder.get(wt) or {}):
+            return True
+    return False
+
+
+def pdd_schedule_note(model, sigmas, steps, scheduler, sampler_name,
+                      shift_video, shift_audio, apply_model_sampling):
+    """Warning when a PDD Acc LoRA is on the model but the schedule cannot feed it.
+
+    Worth a preflight rather than letting the node pack raise: it raises from
+    inside the FIRST off-grid model evaluation, which on a long shot is minutes of
+    conditioning and one sampled step thrown away, and the traceback lands in
+    ComfyUI's sampler rather than anywhere near the widget that caused it."""
+    if not pdd_acc_active(model):
+        return ""
+    if sigmas is not None and len(sigmas):
+        return ""     # the Apply node is driving the schedule; nothing to re-derive
+    wrong = []
+    if int(steps) != PDD_STEPS:
+        wrong.append(f"steps {int(steps)} (need {PDD_STEPS})")
+    if str(scheduler) != PDD_SCHEDULER:
+        wrong.append(f"scheduler '{scheduler}' (need '{PDD_SCHEDULER}')")
+    if str(sampler_name) != PDD_SAMPLER:
+        wrong.append(f"sampler '{sampler_name}' (need '{PDD_SAMPLER}' -- multi-stage "
+                     f"samplers evaluate off-grid by construction)")
+    if apply_model_sampling:
+        if not math.isclose(float(shift_video), PDD_SHIFT_VIDEO, abs_tol=1e-6):
+            wrong.append(f"shift_video {float(shift_video):g} (need {PDD_SHIFT_VIDEO:g})")
+        if not math.isclose(float(shift_audio), PDD_SHIFT_AUDIO, abs_tol=1e-6):
+            wrong.append(f"shift_audio {float(shift_audio):g} (need {PDD_SHIFT_AUDIO:g})")
+    if not wrong:
+        return ""
+    return ("a PDD Acc LoRA is applied but the `sigmas` input is empty, so this node "
+            "derives its own schedule -- and it will not land on the trained block "
+            "boundaries: " + "; ".join(wrong)
+            + ". Wire the Apply node's `sigmas` output into this node's `sigmas` input "
+              "(that is the schedule the heads were distilled on, and it makes the "
+              "widgets above irrelevant), or set every value listed here")
+
+
+def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent, sigmas):
+    """common_ksampler, driven by an EXTERNAL sigma schedule.
+
+    common_ksampler derives its sigmas from (sampler_name, scheduler, steps, denoise)
+    and takes no schedule argument, so a schedule computed anywhere else cannot
+    reach it. Under PDD that is fatal rather than merely inconvenient: the heads
+    accept only their nine trained boundaries, and re-deriving the grid from
+    widgets means hitting it by coincidence and losing it again the moment a step
+    count changes.
+
+    Mirrors nodes.common_ksampler's noise / mask / callback handling exactly -- the
+    only substitution is comfy.sample.sample_custom for comfy.sample.sample."""
+    latent_image = latent["samples"]
+    latent_image = comfy.sample.fix_empty_latent_channels(
+        model, latent_image,
+        latent.get("downscale_ratio_spacial", None),
+        latent.get("downscale_ratio_temporal", None))
+    noise = comfy.sample.prepare_noise(latent_image, seed, latent.get("batch_index"))
+    # `steps` here only sizes the progress bar -- the schedule is `sigmas`, whose
+    # step count is one less than its length (the trailing 0.0 is an endpoint).
+    callback = latent_preview.prepare_callback(model, max(len(sigmas) - 1, 1))
+    samples = comfy.sample.sample_custom(
+        model, noise, cfg, comfy.samplers.sampler_object(sampler_name), sigmas,
+        positive, negative, latent_image,
+        noise_mask=latent.get("noise_mask"), callback=callback,
+        disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=seed)
+    out = latent.copy()
+    out.pop("downscale_ratio_spacial", None)
+    out.pop("downscale_ratio_temporal", None)
+    out["samples"] = samples
+    return out
+
+
 # --- what a LoRA actually declares about itself ------------------------------
 # Verified against all six LoRAs in this install before any of it was written,
 # because most of what a "LoRA scanner" sounds like it should do is not in the
@@ -5932,6 +6056,19 @@ class H3LongVideos:
                                "the jacket, 'wardrobe: += sunglasses' adds one. TWO+ PEOPLE: name them -- "
                                "'Maya = grey shorts, red jacket; Jon = navy overalls', then edit one at a "
                                "time: 'wardrobe: Maya -= jacket' leaves Jon untouched."}),
+                "sigmas": ("SIGMAS", {"tooltip":
+                    "An external sigma schedule to sample every shot on. Leave it "
+                    "unconnected and this node builds its own from the steps / "
+                    "sampler / scheduler widgets, which is the right thing for base "
+                    "H3 and for ordinary turbo LoRAs.\n\n"
+                    "REQUIRED for the MiniMax-H3 PDD Acc LoRAs: their per-interval "
+                    "heads are trained on nine fixed sigma boundaries and refuse any "
+                    "evaluation that lands between them. Wire the PDD Apply node's "
+                    "`sigmas` output here. When it is connected the steps and "
+                    "scheduler widgets no longer affect sampling -- the schedule "
+                    "decides the step count -- and the sampler must stay on a "
+                    "single-stage one (euler); er_sde / dpmpp / res_* evaluate "
+                    "off-grid whatever schedule they are handed."}),
             },
             # Read-only graph access, for SLA-LoRA detection: a LoRA's filename is
             # the only thing that identifies an SLA build, and the graph is the only
@@ -5963,13 +6100,21 @@ class H3LongVideos:
                                                     ref_noise_aug=ref_noise_aug,
                                                     audio_vae=audio_vae, silent=silent,
                                                     audio_carry=audio_carry)
-        seed, steps, cfg, sn, sch, denoise = sa
+        seed, steps, cfg, sn, sch, denoise, sigmas = sa
         # Conditioning is built, so the text encoder and VAEs are dead weight for the
         # whole sampling loop -- evict them and keep only the DiT on the card.
         _evict_all_but(model)
         try:
-            (out,) = nodes.common_ksampler(model, seed, steps, cfg, sn, sch, positive, negative,
-                                           latent, denoise=denoise)
+            if sigmas is not None and len(sigmas):
+                # An external schedule (the PDD Apply node's, in practice). It has to
+                # drive the sampler directly: common_ksampler takes no sigmas argument,
+                # so re-deriving an equal grid from the widgets is the best it could do
+                # and PDD's heads reject anything that misses the grid exactly.
+                out = _sample_on_sigmas(model, seed, cfg, sn, positive, negative,
+                                        latent, sigmas)
+            else:
+                (out,) = nodes.common_ksampler(model, seed, steps, cfg, sn, sch, positive, negative,
+                                               latent, denoise=denoise)
         except Exception as e:
             # Mark WHERE this failed. `tiled` only affects the DECODE, so the caller's
             # OOM retry cannot help an OOM raised here -- it just re-runs the whole
@@ -6089,6 +6234,7 @@ class H3LongVideos:
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0,
             ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_image_4=None,
             ref_mode="where tagged", ref_image_size="match", ref_noise_aug=0.999,
+            sigmas=None,
             graph=None, node_id=None):
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
@@ -6245,8 +6391,20 @@ class H3LongVideos:
         # The flow shift is right for base H3 at ~20 steps and wrong for a distill
         # at 4-8, and it fails silently -- soft output, no error. Computed here so
         # plan_only reports it before anything is sampled.
+        # A PDD Acc LoRA rejects any sigma off its nine trained boundaries, and it
+        # rejects it from inside the first model evaluation -- minutes of conditioning
+        # and a sampled step gone, with the traceback landing in ComfyUI's sampler
+        # rather than near the widget at fault. Same reasoning as the SLA pairing
+        # above: catch the mismatch before anything is sampled.
+        pdd_on = pdd_acc_active(model)
+        pdd_note = pdd_schedule_note(model, sigmas, steps, scheduler, sampler_name,
+                                     shift_video, shift_audio, apply_model_sampling)
+        # Under PDD the balance warning is not just noise, it is WRONG: shift 12 at 8
+        # steps spends 63% of the sigma range on the last step, which trips the
+        # threshold and produces "lower shift_video" advice. Following it throws --
+        # 12.0/3.0 is the grid the heads were distilled on, not a tuning choice.
         sched_note = (schedule_balance_note(shift_video, steps, scheduler)
-                      if apply_model_sampling else "")
+                      if apply_model_sampling and not pdd_on else "")
         # The quantization kernels are ComfyUI's, not this node's -- but losing them
         # is silent, and the symptom (soft output) looks like a dozen other causes.
         kernel_note = kernel_backend_note(model)
@@ -6332,6 +6490,7 @@ class H3LongVideos:
                 f"resets at every boundary, which looks like a cut in a continuous take. "
                 f"Turn it off unless the beats are meant to look separately shot")
         preflight = [("SLA", sla_note),
+                     ("PDD", pdd_note),
                      ("LORA HINTS", "; ".join(hint_notes)),
                      ("", mp_note),
                      ("SCHEDULE", sched_note),
@@ -6438,7 +6597,8 @@ class H3LongVideos:
         shot_lens = (lens + [ln] * len(gens))[:len(gens)]
         for i, gen_prompt in enumerate(gens):
             # denoise is fixed at 1.0 (partial denoise desyncs the joint AV schedule).
-            sa = (seed + i if vary_seed_per_shot else seed, steps, cfg, sampler_name, scheduler, 1.0)
+            sa = (seed + i if vary_seed_per_shot else seed, steps, cfg, sampler_name, scheduler,
+                  1.0, sigmas)
             ln_i = shot_lens[i]        # this beat's own length (<= the VRAM ceiling)
             # Which conditioning channels this shot carries is decided here; see
             # _build_shot_conditioning for how they are packed. On ComfyUI 0.31+ a
