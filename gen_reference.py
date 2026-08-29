@@ -20,6 +20,11 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Fields kept OUT of the published reference. They are real settings and their full
+# reasoning lives in the in-node tooltips, where the person using them will see it;
+# the shipped docs stay general-purpose. Remove a name here to document it again.
+OMIT = {"prevent_nudity", "exposed_terms", "lock_restraints"}
+
 BEGIN = "<!-- AUTOGEN:FIELDS BEGIN -- edit gen_reference.py, not this block -->"
 END = "<!-- AUTOGEN:FIELDS END -->"
 
@@ -93,7 +98,7 @@ def tooltip_of(spec):
 def build(cls):
     it = cls.INPUT_TYPES()
     req, opt = it.get("required", {}), it.get("optional", {})
-    everything = {**req, **opt}
+    everything = {k: v for k, v in {**req, **opt}.items() if k not in OMIT}
     seen, out = set(), []
 
     out.append(f"There are **{len(everything)}** inputs and "

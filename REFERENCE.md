@@ -16,7 +16,7 @@ sampler; it is now folded in.*
 
 <!-- AUTOGEN:FIELDS BEGIN -- edit gen_reference.py, not this block -->
 
-There are **71** inputs and **12** outputs. Required inputs are marked **R**; everything else is optional and has a working default.
+There are **74** inputs and **12** outputs. Required inputs are marked **R**; everything else is optional and has a working default.
 
 ### Wiring
 
@@ -130,7 +130,6 @@ There are **71** inputs and **12** outputs. Required inputs are marked **R**; ev
 | `non_diegetic_music` |  | STRING | **input socket**, multiline |
 | `auto_soundscape` |  | choice | `off`, `fill if blank`, `always` |
 | `auto_silence_nonspeech` |  | BOOLEAN | default `True` |
-| `allow_nonspeech_vocals` |  | BOOLEAN | default `False` |
 | `mute_nonspeech_audio` |  | BOOLEAN | default `True` |
 | `mute_fade_ms` |  | INT | default `40`, range `0`–`500` |
 
@@ -144,8 +143,6 @@ There are **71** inputs and **12** outputs. Required inputs are marked **R**; ev
 
 **`mute_nonspeech_audio`** — DETERMINISTIC gibberish fix: FULLY silence the audio of any shot that has no scripted dialogue (no double-quoted line). Prompt-level silencing asks H3 not to babble; this guarantees it. TRADE-OFF: it also removes that shot's generated ambience/SFX, so lay a continuous ambient bed under the video in post. Shots WITH quoted dialogue keep their audio untouched.
 
-**`allow_nonspeech_vocals`** — Allow non-speech vocal sounds (screams, sobs, gasps, moans) on shots with no dialogue. When ON, the node skips the lips-closed clause and softens the no-voice soundscape so it bans speech, dialogue and singing but permits screams, sobs, gasps and other distress vocalizations. The audio branch is also left unmuted on those shots. Speech is still suppressed — only double-quoted lines count as speaking — so H3 does not invent chatter. Turn this ON when your scene contains distress sounds that H3 would otherwise suppress. Keep `auto_silence_nonspeech` ON for shots that should be truly silent.
-
 **`mute_fade_ms`** — Fade applied to the AUDIBLE shots that border a silenced one, so audio doesn't cut to digital silence with a click. The silenced shots keep NO original audio at all -- fading the muted shot itself would leave this many ms of the gibberish audible at each end of every muted shot.
 
 ### Consistency guards
@@ -157,11 +154,8 @@ There are **71** inputs and **12** outputs. Required inputs are marked **R**; ev
 | `solidity_guard` |  | choice | `off`, `auto`, `on` |
 | `motion_guard` |  | choice | `off`, `auto`, `on` |
 | `contact_guard` |  | choice | `off`, `auto`, `on` |
-| `lock_restraints` |  | BOOLEAN | default `True` |
 | `auto_wardrobe` |  | BOOLEAN | default `True` |
 | `auto_props` |  | BOOLEAN | default `True` |
-| `prevent_nudity` |  | BOOLEAN | default `True` |
-| `exposed_terms` |  | STRING | **input socket**, multiline |
 
 **`subject_count_guard`** — Anti-duplication: prepend an explicit subject count to each shot ("Exactly two people in this shot, no duplicates, no other people in frame"). Character duplication gets much more likely BELOW the model's native 768 short edge -- fewer pixels per subject pushes the sample out of the training distribution and the figure gets tiled. A LoRA causes it too: a distilled LoRA fixes composition (including how many people are in frame) in its first step or two, so it duplicates even at native size -- there the count is moved to the FRONT of the prompt so it binds before the scene. 'auto' = on when the short edge is under 768 OR a LoRA is applied, and also on ANY shot holding two or more people -- multi-figure frames are where duplication happens even at native size; 'on' always; 'off' never.
 
@@ -173,15 +167,9 @@ There are **71** inputs and **12** outputs. Required inputs are marked **R**; ev
 
 **`contact_guard`** — Keep two bodies in contact correctly aligned -- any position, not a list of named ones. Position-agnostic on purpose. The model already knows more position names than a dictionary could hold; what it gets wrong is the GEOMETRY, so the geometry is what gets stated, and these hold for every arrangement: - OWNERSHIP: each person keeps their own head, two arms and two legs, each joined to the body it belongs to. Overlapping bodies is exactly when an arm gets reassigned to the wrong torso. - SEPARATION: they meet at the surface of the skin, each keeping its own volume, rather than passing into one another. - STABLE ROLES: whoever is above stays above, below stays below, behind stays behind, for the whole shot and from every camera angle. Positions morph mid-shot because nothing fixes them. - SUPPORT: weight rests on whatever is holding it, and the two bodies stay in proportion. Needs TWO people in the shot -- one body cannot be misaligned against another, and saying otherwise would invite a second person in. 'auto' fires on a contact cue in the beat; 'on' states it whenever two or more people are present. Describe the arrangement in the beat itself in RELATIVE terms (who is above, behind, facing whom) rather than by a position name alone -- this guard holds a stated arrangement together, it cannot infer one you did not state.
 
-**`lock_restraints`** — Physical restraints stay ON until something explicitly removes them. Handcuffs, shackles, manacles, fetters, irons, gags, blindfolds, harnesses, leashes, plus qualified forms like 'ankle chain' or 'leather wrist straps'. Without this they come off like any garment, and often by ACCIDENT -- 'steps out of her jacket and the chain falls away' removed the ankle chain as a side effect of a jacket beat. To take one off, say so directly: 'wardrobe: Mara -= handcuffs'. Bare 'chain', 'collar', 'strap' and 'belt' are NOT treated as restraints; they are jewellery, a shirt part, a dress part and a garment at least as often.
-
 **`auto_wardrobe`** — Read clothing REMOVALS straight from your beat prose -- 'she takes off her jacket' drops the jacket with no 'wardrobe:' line needed. Safe: only fires on items the character is already wearing, so 'the plane takes off' does nothing. Additions/swaps still use 'wardrobe: += ...' (which overrides). Turn OFF to control wardrobe only via explicit 'wardrobe:' lines.
 
 **`auto_props`** — Carry OBJECTS across shots. Each shot is a separate generation, so 'the van' in shot 2 has no antecedent -- nothing in that prompt describes a van, and the model invents one, which is how a second van appears while the first is still in frame. With this on, an object introduced indefinitely ('a white van') is bound on its first definite reference in any later beat ('the van' -> 'the same white van') and a short clause pins it to the previous shot: one van only, no second van. Only the FIRST mention per shot is expanded, quoted dialogue is never rewritten, worn garments are excluded (they have the wardrobe channel), and frame/body nouns (the ground, the light, the hand) are never carried.
-
-**`prevent_nudity`** — Never let the prompt ASSERT that a body is bare. A removal still happens either way -- this gates the sentence, not the garment. Deleting the last item covering a zone only leaves it undescribed, and a video model's default is a clothed person, so it covers what nobody described. With this OFF the node states the state outright ('bare below the waist') and keeps stating it until something covers that zone again, which is what makes a strip actually stick. ON is the safe default; turn it OFF only when nudity is intended. Either way info reports which zone a removal left uncovered.
-
-**`exposed_terms`** — What a stripped body zone is CALLED, per character, so it persists automatically instead of being typed into every beat. Same syntax as character_memory -- a PRONOUN covers everyone who declares it, a NAME overrides it, and a trailing 'upper' targets the chest. For example -- 'she = visible vulva, mvagina' / 'he = visible penis, mpenis' / 'Mara upper = bare breasts'. Once a removal empties that zone the phrase is stamped into every later shot that person is in, and clears by itself when something covers the zone again. Put LoRA trigger words here too. Requires prevent_nudity OFF; empty falls back to 'bare below the waist'.
 
 ### Reference images
 
@@ -264,6 +252,29 @@ There are **71** inputs and **12** outputs. Required inputs are marked **R**; ev
 | `plan_only` |  | BOOLEAN | default `False` |
 
 **`plan_only`** — Preview the shot split WITHOUT rendering. Uses THIS node's own settings (no second node, no duplicate entry): returns the plan in 'info' and the shots/frames/seconds outputs near-instantly. Turn off to render for real.
+
+### Other
+
+| field | | type | constraints |
+|---|---|---|---|
+| `latent_upscale` |  | choice | `off`, `minimax_h3_latent_upscaler_3d_fp32.pth` |
+| `latent_upscale_scale` |  | FLOAT | default `2.0`, range `1.0`–`4.0` |
+| `normalize_audio` |  | choice | `off`, `bed`, `bed + seams` |
+| `bed_continuity` |  | BOOLEAN | default `True` |
+| `allow_nonspeech_vocals` |  | BOOLEAN | default `False` |
+| `sigmas` |  | SIGMAS | — |
+
+**`latent_upscale`** — Upscale each shot in LATENT space, between sampling and decode, so the shot is SAMPLED small and only DECODED large. That is the whole point: cost scales with latent cells, and attention is quadratic in them, so sampling 512x512 and upscaling 2x to 1024x1024 is ~6x cheaper than sampling 1024x1024 directly. Wiring the `latent` output to the same upscaler externally cannot do this -- by then the decode has already happened at the sampled size. Model and nodes by LBH-123-AI. Needs the separate 'Minimax H3 Latent Upscaler' pack (Comfyui_Minimax_h3_latent_Upscaler) and its weights in models/latent_upscale_models. OPTIONAL: without the pack this setting does nothing, the render proceeds at the sampled size, and info says so -- nothing errors. Only H3 builds are listed; the same folder holds LTX upscalers, whose channel count does not match. Spatial only, so the frame count and the audio are untouched. Decode memory goes up with the square of the scale, so tiled decode is forced on while this is active.
+
+**`latent_upscale_scale`** — Latent upscale factor, applied to both axes. 2.0 doubles each side (4x the pixels). 1.0 disables it as surely as 'off'. Ignored when latent_upscale is 'off'.
+
+**`normalize_audio`** — Match the AMBIENT FLOOR across shots, so the sound bed does not step at every boundary. Each shot generates its audio independently, so its overall level is whatever it landed on. Joined, that steps -- and it is most audible in the bed, because a bed is continuous by nature and the ear hears the room change where the picture says it did not. The FLOOR is what gets matched, not the peak: a shouted line and a whispered one are supposed to differ, and pinning both to one peak makes the whisper shout. Every shot's quiet fifth is brought to the median shot's, leaving everything above it intact. Gain is capped at 12 dB either way so one odd shot cannot be amplified into noise, and the result is peak-scaled if that pushed anything over full scale. 'bed + seams' also blends ~12 ms across each join, in place, to stop any residual difference reading as a click. It never changes length -- the track is frame-locked to the video. Muted shots are excluded from the measurement entirely.
+
+**`bed_continuity`** — Carry the ambient bed ACROSS shots by anchoring each shot's audio on the previous shot's tail. This is the audio half of what the keyframe already does for the picture: the next shot starts from where the last one ended, so the bed continues instead of being invented afresh. Without it every shot generates its ambience independently -- same soundscape TEXT, different room -- and normalize_audio can only line up their loudness, not their content. A short tail (~0.5s) is used, positioned at the shot's first frame, so it states the bed and leaves the rest of the track free. Conditioning the full length would pin the shot to a loop of the previous half-second. A SILENT shot still gets the silence anchor instead -- that is what keeps mouths shut -- and a MUTED shot contributes no tail, so the bed picks up across a silent gap rather than restarting after it. Only a shot with NO scripted line donates: a dialogue shot's last half-second is mid-word speech, and handing that to the next shot tells it to keep talking rather than continuing the bed.
+
+**`allow_nonspeech_vocals`** — Allow non-speech vocal sounds (screams, sobs, gasps, moans) on shots with no dialogue. When ON, the node skips the lips-closed clause and softens the no-voice soundscape to ban only speech, dialogue and singing -- not screams, sobs, or other distress vocalizations. Audio is also left unmuted on those shots. Turn ON when your scene contains distress sounds that H3 would otherwise suppress. Keep auto_silence_nonspeech ON for shots that should be truly silent.
+
+**`sigmas`** — An external sigma schedule to sample every shot on. Leave it unconnected and this node builds its own from the steps / sampler / scheduler widgets, which is the right thing for base H3 and for ordinary turbo LoRAs. REQUIRED for the MiniMax-H3 PDD Acc LoRAs: their per-interval heads are trained on nine fixed sigma boundaries and refuse any evaluation that lands between them. Wire the PDD Apply node's `sigmas` output here. When it is connected the steps and scheduler widgets no longer affect sampling -- the schedule decides the step count -- and the sampler must stay on a single-stage one (euler); er_sde / dpmpp / res_* evaluate off-grid whatever schedule they are handed.
 
 ### Outputs
 
@@ -982,9 +993,9 @@ Kristy = she, silver hair in a ponytail, scar over left eyebrow,
 - **Attach detail with `with`, never a comma.** `red leather jacket with a white
   chest patch` is ONE garment; `red leather jacket, white chest patch` is two, and
   only the first would come off.
-- **Include the under-layer** (`grey shorts`) whenever something is removed. That
-  is what keeps a removal from rendering as nudity; `info` warns when a removal
-  leaves a body zone bare.
+- **Include the under-layer** (`grey shorts`) whenever something is removed, so the
+  shot has something to render underneath. `info` warns when a removal leaves a
+  body zone with nothing named on it.
 - **4–7 items.** The sheet is re-stamped on every shot, so spend it on
   distinctive, renderable traits. `27` and `athletic build` mostly do not render;
   `scar over left eyebrow` does.
