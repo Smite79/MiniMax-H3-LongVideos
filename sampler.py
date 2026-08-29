@@ -5697,7 +5697,10 @@ class H3LongVideos:
                                "the previous half-second.\n\nA SILENT shot still gets the silence "
                                "anchor instead -- that is what keeps mouths shut -- and a MUTED "
                                "shot contributes no tail, so the bed picks up across a silent gap "
-                               "rather than restarting after it."}),
+                               "rather than restarting after it. Only a shot with NO scripted line "
+                               "donates: a dialogue shot's last half-second is mid-word speech, and "
+                               "handing that to the next shot tells it to keep talking rather than "
+                               "continuing the bed."}),
                 "normalize_audio": (["off", "bed", "bed + seams"], {"default": "bed + seams",
                     "tooltip": "Match the AMBIENT FLOOR across shots, so the sound bed does not "
                                "step at every boundary.\n\n"
@@ -6801,7 +6804,18 @@ class H3LongVideos:
             # would hand the next shot silence to grow from -- the opposite of what
             # bed continuity is for. The last audible tail keeps being used instead,
             # so the bed picks up across a silent gap rather than restarting after it.
-            if bed_continuity and audio_tail and not muted_this_shot:
+            # Only a shot with NO scripted line may donate its tail. A dialogue shot's
+            # last half-second is mid-word speech, and handing that to the next shot as
+            # its cond_audio does not continue the BED -- it tells the model to keep
+            # talking. That is a babble generator, and it is worse than leaving the
+            # audio branch unconditioned, which is what it replaced.
+            #
+            # Matters most with allow_nonspeech_vocals on: that clears shot_silent for
+            # every shot, so nothing takes the silence anchor and every shot would have
+            # taken the carry instead.
+            donates = (bed_continuity and audio_tail and not muted_this_shot
+                       and not (i < len(spk) and spk[i]))
+            if donates:
                 audio_bed.append(audio_tail[-1])
             # trace free VRAM after each shot: a falling series means something is
             # still accumulating; a flat one means the chain is stable.

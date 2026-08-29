@@ -2893,7 +2893,41 @@ def check_bed_continuity():
     check("the tail is taken from the SAMPLED latent, before any decode",
           "audio_out.append(ap[1][..., -n:]" in src)
     check("a muted shot contributes no tail",
-          "if bed_continuity and audio_tail and not muted_this_shot:" in src)
+          "and not muted_this_shot" in src)
+
+    # THE babble regression. The carry is meant to be the ambient BED, but the tail
+    # was taken raw -- and a dialogue shot's last half-second is mid-word SPEECH.
+    # Handing that to the next shot as its cond_audio does not continue the bed, it
+    # tells the model to keep talking, which is worse than the unconditioned branch
+    # it replaced. On a 5-beat chain with dialogue on 1/3/5 it fed shot 1's speech
+    # into shot 3 and shot 3's into shot 5 -- run-on babble on exactly the shots
+    # that are audible.
+    check("only a shot with NO scripted line may donate its tail",
+          "and not (i < len(spk) and spk[i])" in src)
+    check("...and that gate is what feeds audio_bed",
+          "if donates:" in src and "audio_bed.append(audio_tail[-1])" in src)
+
+    def _bed_after(spk, mute_nonspeech, gate=True):
+        """Replay the donation rule over a chain, returning each shot's cond_audio."""
+        bed, out = [], []
+        for i, s in enumerate(spk):
+            out.append("silence" if not s else (bed[-1] if bed else None))
+            muted = mute_nonspeech and not s
+            if (not muted) and not (gate and s):
+                bed.append(f"shot{i + 1}{'-SPEECH' if s else '-bed'}")
+        return out
+
+    _their = _bed_after([True, False, True, False, True], True)
+    check("no dialogue shot is conditioned on another shot's speech",
+          not any(c and "SPEECH" in c for c in _their))
+    _old = _bed_after([True, False, True, False, True], True, gate=False)
+    check("...which the ungated version did do", any(c and "SPEECH" in c for c in _old))
+    # A bed-only tail is still allowed to carry, which is the whole point.
+    _beds = _bed_after([False, False, True], False)
+    check("a non-speaking shot still donates its bed",
+          _beds[2] is not None and "bed" in _beds[2])
+    check("a silent shot still takes silence, never a carry",
+          all(c == "silence" for c, s in zip(_beds, [False, False, True]) if not s))
     check("...so the bed picks up across a silent gap rather than restarting",
           "audio_carry = (audio_bed[-1] if (bed_continuity and audio_bed) else None)" in src)
     check("bed_continuity is an appended widget", "bed_continuity" in S.ADDED_WIDGETS)
