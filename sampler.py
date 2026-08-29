@@ -1133,8 +1133,17 @@ def _restraint_about(sentence, name, active):
         return True
     if named_here:
         return True
-    pronouns = [i.lower() for i in (active.get(name) or [])
-                if i.lower() in ("she", "he", "they")]
+    # Every form of the declared pronoun, not just the subject one. A restraint is
+    # usually applied BY someone else TO this person -- "Dom handcuffs her wrists
+    # behind her back" names Dom and refers to Mara only as "her", so a subject-only
+    # check read the whole sentence as being about Dom and threw the pose away. The
+    # cuffs then rendered wherever the model liked, which is the reported "moved to
+    # the front".
+    forms = {"she": ("she", "her", "hers"),
+             "he": ("he", "him", "his"),
+             "they": ("they", "them", "their", "theirs")}
+    pronouns = [f for i in (active.get(name) or [])
+                if i.lower() in forms for f in forms[i.lower()]]
     return any(re.search(r"\b" + re.escape(p) + r"\b", sentence, re.I)
                for p in pronouns)
 
@@ -1213,6 +1222,10 @@ _RESTRAIN_VERB = re.compile(
 # holds the singular while prose writes the verb in the plural. Keyed on the stem so
 # the tense does not matter.
 _RESTRAIN_VERB_ITEM = {
+    # "cuff" as a VERB is unambiguous, unlike the noun (a shirt has cuffs). Without
+    # it "Dom cuffs Mara to the headboard" matched the verb, found no body region and
+    # no separate noun, and tracked nothing at all.
+    "cuff": "handcuffs",
     "handcuff": "handcuffs", "shackle": "shackles", "manacle": "manacles",
     "fetter": "fetters", "hobble": "hobble", "gag": "gag", "blindfold": "blindfold",
     "muzzle": "muzzle", "leash": "leash", "harness": "harness",
@@ -1303,8 +1316,14 @@ def auto_restraint_additions(active, body, lock_restraints=True):
                     # COLLAR around her neck" is a collar, not a generic binding. The
                     # region qualifies it, which is what makes a bare-ambiguous noun
                     # ("collar", "strap", "chain") read as equipment.
+                    # The REGION is kept either way. Storing a bare "bindings" lost
+                    # which limb was bound, so restraint_regions() matched nothing and
+                    # fell through to the generic `body` effect -- a second restraint
+                    # then described the whole body vaguely while the wrists clause
+                    # said something specific, and the two read as contradicting each
+                    # other, which is how the cuffs came out broken.
                     named = next((w for w in words if _RESTRAINT_NOUN.fullmatch(w)), None)
-                    item = f"{reg} {named}" if named else "bindings"
+                    item = f"{reg} {named or 'bindings'}"
         if item is None:
             continue
         who = None
