@@ -347,7 +347,10 @@ rendering**. Do that first; it is near-instant.
   frame, so it states the bed and leaves the rest free; the full length would pin the
   shot to a loop of it. A **silent** shot still gets the silence anchor instead (that
   is what keeps mouths shut), and a **muted** shot contributes no tail, so the bed
-  picks up across a silent gap rather than restarting after it.
+  picks up across a silent gap rather than restarting after it. **Only a shot with
+  no scripted line donates** — a dialogue shot's last half-second is mid-word
+  speech, and handing that to the next shot as its anchor tells the model to keep
+  talking rather than continuing the bed.
 
   Every beat also *states* a bed now. A speaking beat with no soundscape of its own
   used to fall off the end of the emission chain and get no `overall_soundscape:`
