@@ -1167,6 +1167,113 @@ def restraint_clause(active, body, lock_restraints=True, usage=None):
             + _RESTRAINT_HARDWARE)
 
 
+# Applying a restraint, as prose writes it. Removals have been inferred from beat
+# text since early on; additions never were, so a restraint that first appears in a
+# BEAT ("Dom handcuffs Mara's wrists") was never tracked -- and lock_restraints can
+# only protect what is tracked. It stayed in that one beat's own words and vanished
+# from every shot after it.
+#
+# Only restraints, not clothing. A garment appearing mid-scene is ordinary and the
+# explicit `wardrobe: +=` line covers it; a restraint is a plot state that the whole
+# chain then has to honour, which is the thing that was silently not happening.
+_RESTRAIN_VERB = re.compile(
+    r"\b(?:handcuffs?|handcuffed|handcuffing|cuffs?|cuffed|cuffing|"
+    r"shackles?|shackled|shackling|manacles?|manacled|"
+    r"binds?|bound|binding|ties?|tied|tying|straps?|strapped|strapping|"
+    r"chains?|chained|chaining|fetters?|fettered|hobbles?|hobbled|"
+    r"gags?|gagged|gagging|blindfolds?|blindfolded|blindfolding|"
+    r"muzzles?|muzzled|leashes|leashed|harnesses|harnessed|"
+    r"locks?|locked|padlocks?|padlocked|secures?|secured|fastens?|fastened)\b", re.I)
+
+# Verbs that ARE their own restraint: the item needs no separate noun, and demanding
+# one is why "gags him" and "blindfolds Mara" tracked nothing -- the head-noun set
+# holds the singular while prose writes the verb in the plural. Keyed on the stem so
+# the tense does not matter.
+_RESTRAIN_VERB_ITEM = {
+    "handcuff": "handcuffs", "shackle": "shackles", "manacle": "manacles",
+    "fetter": "fetters", "hobble": "hobble", "gag": "gag", "blindfold": "blindfold",
+    "muzzle": "muzzle", "leash": "leash", "harness": "harness",
+}
+# A bound body region is evidence on its own for an otherwise ambiguous verb:
+# "binds her wrists" restrains, "ties his laces" does not.
+_RESTRAINT_REGION_WORD = re.compile(
+    r"\b(?:wrists?|ankles?|arms?|legs?|hands?|feet|foot|mouth|jaw|eyes?|neck|throat|"
+    r"waist|thumbs?)\b", re.I)
+
+# "uncuffs", "unties", "frees" -- an application verb inside a REMOVAL must not add.
+_UNRESTRAIN_CUE = re.compile(
+    r"\b(?:un(?:cuffs?|cuffed|ties?|tied|binds?|bound|shackles?|shackled|"
+    r"locks?|locked|fastens?|fastened|gags?|gagged|straps?|strapped)|"
+    r"frees?|freed|freeing|releases?|released|releasing|removes?|removed|"
+    r"takes?\s+off|slips?\s+out\s+of|cuts?\s+(?:through|off))\b", re.I)
+
+
+def auto_restraint_additions(active, body, lock_restraints=True):
+    """Track a restraint that a BEAT applies, so later shots keep honouring it.
+
+    Attribution is by OBJECT, not subject: in "Dom handcuffs Mara" the restrained
+    person is Mara, which is the opposite of how a removal reads ("Mara takes off
+    her coat"). So the name or pronoun searched for is the one AFTER the verb, and
+    with a single-person cast it is simply that person.
+
+    Never fires from quoted speech -- "cuff her" is an instruction, and acting on it
+    a shot early is the same defect that once stripped a garment before it came off.
+    Never fires inside a removal, so "Dom uncuffs Mara" does not re-apply them."""
+    if not body or not lock_restraints:
+        return active
+    text = " " + _mask_quotes(body)[0] + " "
+    if _UNRESTRAIN_CUE.search(text):
+        return active
+    if not _RESTRAIN_VERB.search(text):
+        return active
+    active = {k: list(v) for k, v in active.items()}
+    names = [n for n in active if n]
+    pron_map = _pron_map(active)
+    single = len(names) == 1
+
+    for m in _RESTRAIN_VERB.finditer(text):
+        after = text[m.end():m.end() + 90]
+        verb = m.group(0).lower()
+        # Some verbs ARE the item: "gags her" needs no noun, and requiring one meant
+        # "blindfolds Mara" and "gags him" tracked nothing, because the head-noun set
+        # holds the singular and the verb is written plural.
+        item = _RESTRAIN_VERB_ITEM.get(verb.rstrip("sed") or verb)
+        if item is None:
+            for k, v in _RESTRAIN_VERB_ITEM.items():
+                if verb.startswith(k):
+                    item = v
+                    break
+        if item is None:
+            # An ambiguous verb (ties, binds, straps, locks) needs evidence. A named
+            # restraint counts, and so does a bound BODY REGION -- "binds her wrists"
+            # is a restraint however the cord is described, while "ties his laces" is
+            # not. Scans two-word windows as well, so qualified forms survive
+            # ("leather straps", "wrist straps").
+            words = re.findall(r"\b[a-z-]+\b", after.lower())
+            pairs = [f"{a} {b}" for a, b in zip(words, words[1:])]
+            for cand in pairs + words:
+                if is_restraint(cand):
+                    item = cand
+                    break
+            if item is None and _RESTRAINT_REGION_WORD.search(after):
+                item = "bindings"
+        if item is None:
+            continue
+        who = None
+        for w in re.findall(r"\b[A-Za-z]+\b", after):
+            r = _resolve_subject(w, names, pron_map, single)
+            if r:
+                who = r
+                break
+        if who is None and single:
+            who = names[0]
+        if who is None or who not in active:
+            continue
+        if not any(_item_head(i) == _item_head(item) for i in active[who]):
+            active[who].append(item)
+    return active
+
+
 def auto_wardrobe_removals(active, body, lock_restraints=True):
     """Infer clothing REMOVALS from a beat's own action text, so you don't have
     to write a 'wardrobe:' line at all -- "she takes off her jacket" drops the
@@ -3262,6 +3369,12 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # worn. So the keyframe carries the START state and the prompt carries the
         # END state, and the direction between them is stated outright below.
         if auto_wardrobe:
+            # Restraints APPLIED by this beat, before removals are considered. A
+            # restraint first named in beat prose was never tracked, so
+            # lock_restraints had nothing to protect and it vanished from the next
+            # shot -- the whole point of the setting, missed whenever the cuffs went
+            # on mid-scene rather than being listed in the sheet.
+            active = auto_restraint_additions(active, body, lock_restraints)
             before = {k: list(v) for k, v in active.items()}
             active = _drop(before, auto_wardrobe_removals(active, body, lock_restraints))
             # A garment that lives ONLY in the anchor prose (never in the wardrobe

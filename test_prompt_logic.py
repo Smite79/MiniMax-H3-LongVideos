@@ -2666,6 +2666,70 @@ def check_continuity_warning():
     check("the same beat renders identically at 6 and 9 beats", six == nine)
 
 
+def check_restraints_applied_in_a_beat():
+    """A restraint that a BEAT applies has to be tracked, or lock_restraints is moot.
+
+    Removals have been inferred from beat prose for a long time; additions never
+    were. So "Dom handcuffs Mara's wrists" lived in that one beat's own words and
+    vanished from every shot after it -- lock_restraints can only protect an item
+    that is in the wardrobe channel, and this one never got there. Listing the
+    cuffs in character_memory worked; putting them on mid-scene did not."""
+    print("\n=== a restraint applied mid-scene ===")
+    A = {"Mara": ["she", "grey coat"], "Dom": ["he", "white shirt"]}
+
+    def worn(body, act=None):
+        out = S.auto_restraint_additions(act or A, body)
+        return {k: [i for i in v if S.is_restraint(i)]
+                for k, v in out.items() if any(S.is_restraint(i) for i in v)}
+
+    # Attribution is by OBJECT: the person the verb acts ON is the restrained one,
+    # which is the opposite of a removal ("Mara takes off her coat").
+    check("the object of the verb is who gets restrained",
+          list(worn("Dom handcuffs Mara's wrists.")) == ["Mara"])
+    check("...and it reverses with the sentence",
+          list(worn("Mara handcuffs Dom.")) == ["Dom"])
+    check("an object-form pronoun resolves", list(worn("Dom shackles her ankles.")) == ["Mara"])
+    check("...both ways", list(worn("Mara gags him.")) == ["Dom"])
+
+    # A verb that IS its own item needs no noun. Requiring one meant "gags him" and
+    # "blindfolds Mara" tracked nothing: the head-noun set holds the singular while
+    # prose writes the verb plural.
+    for _b, _i in (("Mara gags him.", "gag"), ("Dom blindfolds Mara.", "blindfold"),
+                   ("Dom muzzles her.", "muzzle"), ("Dom shackles her ankles.", "shackles")):
+        _w = worn(_b)
+        check(f"the verb supplies the item: {_b[:28]!r}",
+              any(_i in v for v in _w.values()))
+
+    # An ambiguous verb needs evidence -- a named restraint, or a bound body region.
+    check("a bound body region is evidence enough",
+          bool(worn("Dom ties Mara's wrists to the chair.")))
+    check("...and a qualified restraint is too",
+          bool(worn("Dom binds her wrists with leather straps.")))
+    check("but the same verb on an object is not",
+          worn("Dom ties his laces.") == {} and worn("Dom straps the crate down.") == {})
+
+    # Never from a removal, never from speech.
+    check("a removal does not re-apply", worn("Dom uncuffs Mara.") == {})
+    check("...nor does freeing", worn("Dom frees her from the handcuffs.") == {})
+    check("a quoted instruction is not an action", worn('Dom says: "cuff her."') == {})
+    check("an unrelated lock is not a restraint", worn("Mara locks the door.") == {})
+    check("nothing fires with lock_restraints off",
+          S.auto_restraint_additions(A, "Dom handcuffs Mara.", lock_restraints=False) == A)
+
+    # End to end: it has to survive into later shots, which is the whole point.
+    gens = S.distribute_generations(
+        "A quiet room.",
+        ["Dom handcuffs Mara's wrists.", "Mara pulls against them.", "Mara stands still."],
+        "", "", "Mara = she, 30, red hair, grey coat\nDom = he, 35, tall",
+        lock_restraints=True)
+    check("the cuffs are worn in the beat that applies them", "handcuff" in gens[0])
+    check("...and in the shot after it", "handcuff" in gens[1])
+    check("...and the one after that", "handcuff" in gens[2])
+    check("the restraint clause fires on the later shots",
+          all(("physically restrained" in g or "stay locked" in g or "stay bound" in g)
+              for g in gens[1:]))
+
+
 def check_restraints_stay_on():
     """A restraint is a plot state, not a garment: prose never takes one off.
 
@@ -4702,6 +4766,7 @@ def main():
     check_mouth_stays_closed()
     check_presence_test_is_shared()
     check_continuity_warning()
+    check_restraints_applied_in_a_beat()
     check_restraints_stay_on()
     check_bed_continuity()
     check_audio_levels()

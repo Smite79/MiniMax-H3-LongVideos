@@ -112,7 +112,14 @@ rendering**. Do that first; it is near-instant.
   came off by *accident*: "steps out of her jacket and the chain falls away" would
   drop the ankle chain as a side effect of a beat about a jacket, because the
   removal window reaches any tracked item near the cue. To take one off, say so
-  directly: `wardrobe: Mara -= handcuffs`. Bare `chain`, `collar`, `strap` and
+  directly: `wardrobe: Mara -= handcuffs`. A restraint **applied by a beat** is
+  tracked from the prose — *"Dom handcuffs Mara's wrists"* puts them on and every
+  later shot honours them, with no `wardrobe:` line needed. Attribution is by the
+  OBJECT of the verb (the person it acts on, the reverse of a removal), the verb
+  supplies the item where it can (*gags*, *blindfolds*, *shackles*), and an
+  ambiguous verb needs evidence — a named restraint or a bound body region, so
+  *"ties her wrists"* counts and *"ties his laces"* does not. Never from quoted
+  speech, and never from a removal, so *"uncuffs her"* does not re-apply them. Bare `chain`, `collar`, `strap` and
   `belt` are **not** treated as restraints — they are jewellery, a shirt part, a
   dress part and a garment at least as often. It also states what the restraint
   **does**: a cuffed character otherwise walks with their arms swinging, because
