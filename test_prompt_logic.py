@@ -2826,6 +2826,35 @@ def check_restraints_applied_in_a_beat():
     check("nothing is claimed before the hardware has been seen",
           S.restraint_identity_clause(_A2, "Mara strains.", {}) == "")
 
+    # --- hardware PLACED rather than a body bound --------------------------------
+    # Two gaps. Several body regions were missing from both the region list and the
+    # qualifier list, so an item named for one of them was neither detected nor
+    # recognised afterwards. And placement verbs were absent, so whether a sentence
+    # worked depended on the restraint NOUN happening to also be in the verb list --
+    # the same sentence shape gave opposite results.
+    for _r in ("hips", "thighs", "groin", "crotch", "waist", "legs"):
+        check(f"{_r!r} is a body region", bool(S._RESTRAINT_REGION_WORD.search(f"her {_r}")))
+    for _i in ("hip chain", "thigh strap", "groin strap", "crotch chain"):
+        check(f"{_i!r} is recognised once qualified", S.is_restraint(_i))
+
+    # Placement needs the hardware NAMED. A bare region would make an embrace one.
+    for _b in ("Dom loops a chain around her hips.", "Dom fits a chain around her hips.",
+               "Dom places a strap around her thigh.", "Dom attaches a chain to her waist."):
+        check(f"placed hardware tracks: {_b[:34]!r}", bool(worn(_b)))
+    for _b in ("Dom wraps his arms around her.", "Dom puts his arm around her waist.",
+               "Mara runs to the van.", "Dom places his hand on her shoulder.",
+               "Mara wraps a blanket around her legs.", "Dom slips his hand into hers.",
+               "Dom threads the cable through the wall.", "Dom hooks the trailer to the van."):
+        check(f"placement without hardware stays clear: {_b[:32]!r}", worn(_b) == {})
+
+    _pl = S.distribute_generations(
+        "A quiet room.", ["Dom loops a chain around her hips.", "Mara walks to the window.",
+                          "Mara turns around."], "", "", _CM, lock_restraints=True)
+    check("placed hardware survives every later beat",
+          all("hip" in g for g in _pl[1:]))
+    check("...and is pinned to the previous shot's",
+          all("same ones as the previous shot" in g for g in _pl[1:]))
+
     # End to end: it has to survive into later shots, which is the whole point.
     gens = S.distribute_generations(
         "A quiet room.",
