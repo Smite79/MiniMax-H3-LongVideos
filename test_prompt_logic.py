@@ -2757,6 +2757,46 @@ def check_restraints_applied_in_a_beat():
     check("tape and collar both survive into later beats",
           all("tape" in g and "collar" in g for g in _g[1:]))
 
+    # --- the pose has to survive, and a second restraint must not contradict it ---
+    # A restraint is usually applied BY someone else TO this person, so the sentence
+    # names the other party and refers to this one only as "her". The relevance
+    # filter matched SUBJECT pronouns only, so it read that sentence as being about
+    # the person doing the cuffing and threw the pose away -- the cuffs then rendered
+    # wherever the model liked, reported as them "moving to the front".
+    _CM = "Mara = she, 30, red hair, coat\nDom = he, 35, tall"
+    _A = {"Mara": ["she", "coat", "handcuffs"], "Dom": ["he", "shirt"]}
+    check("an object-form pronoun keeps the sentence attributed",
+          S._restraint_about("Dom cuffs her wrists behind her back.", "Mara", _A))
+    check("...and a possessive one does too",
+          S._restraint_about("Dom tightens his grip on her cuffs.", "Mara", _A))
+    check("another person's tether still does not reach this one",
+          not S._restraint_about("Mara is cuffed to the headboard.", "Dom",
+                                 {"Mara": ["she", "handcuffs"], "Dom": ["he", "shackles"]}))
+
+    _p = S.distribute_generations(
+        "A room.", ["Dom cuffs her wrists behind her back.", "She strains.",
+                    "She goes still."], "", "", _CM, lock_restraints=True)
+    check("the pose is stated in the beat that sets it", "behind the back" in _p[0])
+    check("...and persists when later beats only say she strains",
+          all("behind the back" in g for g in _p[1:]))
+
+    # A second restraint used to store a region-less "bindings", so it matched no
+    # region and fell through to the vague whole-body effect -- which then read as
+    # contradicting the specific wrist wording. That is the cuffs "breaking".
+    _c = S.distribute_generations(
+        "A room.", ["Dom cuffs her wrists behind her back.", "Dom chains her ankles.",
+                    "She strains."], "", "", _CM, lock_restraints=True)
+    check("a second restraint maps to its own region", "ankles stay bound" in _c[2])
+    check("...not the vague whole-body effect", "the body stays held" not in _c[2])
+    check("...and the wrist pose survives alongside it", "behind the back" in _c[2])
+    check("'cuffs' as a verb tracks, with no body region in the sentence",
+          bool(worn("Dom cuffs Mara to the headboard.")))
+    _t = S.distribute_generations(
+        "A room.", ["Dom cuffs Mara to the headboard.", "She strains."],
+        "", "", _CM, lock_restraints=True)
+    check("a tether stated by the other person is picked up", "headboard" in _t[0])
+    check("...and persists", "headboard" in _t[1])
+
     # End to end: it has to survive into later shots, which is the whole point.
     gens = S.distribute_generations(
         "A quiet room.",
