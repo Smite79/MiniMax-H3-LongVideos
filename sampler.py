@@ -761,6 +761,23 @@ _RESTRAINT_NOUN = re.compile(
 # Only the STRONG participles qualify here, never a bare body part: the qualifier
 # list already carries ankle/wrist/etc. for the equipment route, and letting a
 # body part qualify itself would make "waist tie" on a dress unremovable.
+# Named restraints whose head noun is innocent on its own, so neither the head-noun
+# set nor the qualifier rule reaches them.
+#
+#   TAPE  -- tape round a crate is not a restraint and bare "tape" must stay out,
+#            but "duct tape" in a wardrobe channel is a gag. It only reaches that
+#            channel because a restraint verb applied it or someone listed it.
+#   COLLAR -- bare "collar" is a shirt part far more often, which is why it is not
+#            in the head-noun set. A collar that is BUCKLED, LOCKED, POSTURE, SLAVE
+#            or SHOCK is hardware, and so is one on a leash.
+_RESTRAINT_PHRASE = re.compile(
+    r"\b(?:duct|gaffer|gaffa|packing|electrical|masking)\s+tape\b"
+    r"|\btape\s+gag\b"
+    r"|\b(?:posture|slave|bondage|shock|locking|lockable|steel|metal|leather|"
+    r"buckled|padlocked)\s+collars?\b"
+    r"|\bcollar\s+and\s+leash\b|\bleash(?:ed)?\s+collar\b"
+    r"|\b(?:ball|bit|ring|cleave|panel|muzzle|stuff|cloth)\s+gags?\b", re.I)
+
 _RESTRAINT_SPREADER = re.compile(r"\bspreaders?\b", re.I)
 _RESTRAINT_PARTICIPLE = re.compile(
     r"\b(?:chained|shackled|cuffed|bound|tied|locked|padlocked)\b", re.I)
@@ -782,6 +799,10 @@ def is_restraint(item):
     name = _item_name(item or "").lower()
     if not name:
         return False
+    # Checked BEFORE the garment test below: "leather collar" would otherwise be read
+    # as clothing and stay removable, which is the thing being reported.
+    if _RESTRAINT_PHRASE.search(name):
+        return True
     if _item_head(item) in _RESTRAINT_HEADS:
         return True
     if _RESTRAINT_NOUN.search(name) and _RESTRAINT_QUALIFIER.search(name):
@@ -1183,6 +1204,8 @@ _RESTRAIN_VERB = re.compile(
     r"chains?|chained|chaining|fetters?|fettered|hobbles?|hobbled|"
     r"gags?|gagged|gagging|blindfolds?|blindfolded|blindfolding|"
     r"muzzles?|muzzled|leashes|leashed|harnesses|harnessed|"
+    r"tapes?|taped|taping|collars?|collared|collaring|"
+    r"buckles?|buckled|buckling|clips?|clipped|clipping|"
     r"locks?|locked|padlocks?|padlocked|secures?|secured|fastens?|fastened)\b", re.I)
 
 # Verbs that ARE their own restraint: the item needs no separate noun, and demanding
@@ -1193,6 +1216,12 @@ _RESTRAIN_VERB_ITEM = {
     "handcuff": "handcuffs", "shackle": "shackles", "manacle": "manacles",
     "fetter": "fetters", "hobble": "hobble", "gag": "gag", "blindfold": "blindfold",
     "muzzle": "muzzle", "leash": "leash", "harness": "harness",
+    # "collars her" names the hardware in the verb. A bare "collar" NOUN is still not
+    # a restraint -- a shirt has one -- but collaring someone is unambiguously the act.
+    # Stored region-qualified: a BARE "collar" is deliberately not a restraint
+    # (a shirt has one), so storing that word would add an item lock_restraints
+    # then refuses to protect. "neck collar" is the same object, recognised.
+    "collar": "neck collar",
 }
 # A bound body region is evidence on its own for an otherwise ambiguous verb:
 # "binds her wrists" restrains, "ties his laces" does not.
@@ -1252,11 +1281,30 @@ def auto_restraint_additions(active, body, lock_restraints=True):
             words = re.findall(r"\b[a-z-]+\b", after.lower())
             pairs = [f"{a} {b}" for a, b in zip(words, words[1:])]
             for cand in pairs + words:
+                if cand.split()[0] in ("a", "an", "the", "her", "his", "their"):
+                    continue          # "a leash" -- the article is not part of it
                 if is_restraint(cand):
                     item = cand
                     break
-            if item is None and _RESTRAINT_REGION_WORD.search(after):
-                item = "bindings"
+            region = _RESTRAINT_REGION_WORD.search(after)
+            if item is None and region:
+                reg = region.group(0).lower()
+                # Singular: the qualifier list carries "wrist", not "wrists", so a
+                # plural region built "wrists straps" -- which is not recognised, and
+                # the item then sat in the wardrobe unprotected.
+                if reg.endswith("s") and not reg.endswith("ss"):
+                    reg = reg[:-1]
+                # Tape over a mouth is a gag; "tape" alone must stay non-restraint,
+                # so store the form that IS one rather than a word that is not.
+                if verb.startswith("tape") and reg in ("mouth", "jaw", "lips"):
+                    item = "tape gag"
+                else:
+                    # Keep the actual hardware where the beat named it -- "buckles a
+                    # COLLAR around her neck" is a collar, not a generic binding. The
+                    # region qualifies it, which is what makes a bare-ambiguous noun
+                    # ("collar", "strap", "chain") read as equipment.
+                    named = next((w for w in words if _RESTRAINT_NOUN.fullmatch(w)), None)
+                    item = f"{reg} {named}" if named else "bindings"
         if item is None:
             continue
         who = None

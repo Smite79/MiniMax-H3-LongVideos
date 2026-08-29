@@ -2716,6 +2716,47 @@ def check_restraints_applied_in_a_beat():
     check("nothing fires with lock_restraints off",
           S.auto_restraint_additions(A, "Dom handcuffs Mara.", lock_restraints=False) == A)
 
+    # --- tape and collars --------------------------------------------------------
+    # Both have an innocent head noun, so neither the head-noun set nor the
+    # qualifier rule reached them: tape round a crate is not a restraint and a shirt
+    # has a collar, which is exactly why bare "tape" and bare "collar" are excluded.
+    # Named forms are hardware, and a collar that is USED is too.
+    for _i in ("duct tape", "gaffer tape", "packing tape", "tape gag",
+               "leather collar", "locking collar", "posture collar", "slave collar",
+               "ball gag", "ring gag"):
+        check(f"{_i!r} is a restraint", S.is_restraint(_i))
+    for _i in ("tape", "collar", "shirt collar", "collared shirt", "belt",
+               "leather belt", "waist tie dress"):
+        check(f"{_i!r} is NOT -- it is clothing or too generic", not S.is_restraint(_i))
+
+    check("taping a mouth stores a form that IS a restraint",
+          any("tape gag" in v for v in worn("Dom tapes her mouth shut.").values()))
+    check("...as does tape named outright",
+          bool(worn("Dom puts duct tape over her mouth.")))
+    check("collaring someone tracks region-qualified, since bare 'collar' is not",
+          any("collar" in i for v in worn("Dom collars her.").values() for i in v))
+    check("...and so does buckling one on",
+          bool(worn("Dom buckles a collar around her neck.")))
+    check("an article does not ride along into the item name",
+          all(not i.startswith(("a ", "the "))
+              for v in worn("Dom clips a leash to her collar.").values() for i in v))
+
+    # The same verbs on ordinary objects must stay clear, or a garment becomes
+    # unremovable -- the failure mode this whole vocabulary is gated against.
+    for _b in ("Dom tapes the box shut.", "Mara buckles her belt.",
+               "Dom clips the microphone to his shirt.", "Dom fastens his watch.",
+               "Mara adjusts her shirt collar.", "Dom locks the door.",
+               "Dom untapes her mouth."):
+        check(f"stays clear: {_b[:34]!r}", worn(_b) == {})
+
+    _g = S.distribute_generations(
+        "A quiet room.",
+        ["Dom tapes her mouth shut and buckles a collar around her neck.",
+         "Mara pulls against them.", "Mara stands still."],
+        "", "", "Mara = she, 30, red hair, coat\nDom = he, 35, tall", lock_restraints=True)
+    check("tape and collar both survive into later beats",
+          all("tape" in g and "collar" in g for g in _g[1:]))
+
     # End to end: it has to survive into later shots, which is the whole point.
     gens = S.distribute_generations(
         "A quiet room.",
