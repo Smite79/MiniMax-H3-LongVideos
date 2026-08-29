@@ -2797,6 +2797,35 @@ def check_restraints_applied_in_a_beat():
     check("a tether stated by the other person is picked up", "headboard" in _t[0])
     check("...and persists", "headboard" in _t[1])
 
+    # --- the hardware has to LOOK the same shot to shot ---------------------------
+    # Restating "handcuffs" does not make it the same handcuffs, any more than "a
+    # white van" twice is one van -- and hardware is worse, because a bare noun
+    # carries no appearance at all, so each shot invents the metal and the finish.
+    # Props have had an identity sentence for a long time; restraints did not.
+    _id = S.distribute_generations(
+        "A room.", ["Dom cuffs her wrists behind her back.", "Dom chains her ankles.",
+                    "She strains.", "She goes still."], "", "", _CM, lock_restraints=True)
+    check("the first shot claims no continuity -- nothing has been shown yet",
+          "same ones as the previous shot" not in _id[0])
+    check("the second pins the cuffs the first showed",
+          "handcuffs are the same ones" in _id[1])
+    check("...but not hardware introduced by that same beat",
+          "ankle bindings" not in _id[1].split("same ones")[0][-80:])
+    check("once shown, the ankle chain is pinned too",
+          "ankle bindings" in _id[2] and "same ones as the previous shot" in _id[2])
+    check("...and stays pinned", "same ones as the previous shot" in _id[3])
+    check("the clause names no alternative to summon",
+          not re.search(r"\bno\b|\bnot\b|\bdifferent\b", S._RESTRAINT_SAME, re.I))
+    check("...and reads as prose, not a keyword list",
+          " and " in S._join_list(["a", "b", "c"]))
+
+    _A2 = {"Mara": ["she", "handcuffs"], "Dom": ["he", "shirt"]}
+    check("nobody out of shot is given a restraint identity",
+          S.restraint_identity_clause(_A2, "Dom looks out of the window.",
+                                      {"Mara": {"handcuffs"}}) == "")
+    check("nothing is claimed before the hardware has been seen",
+          S.restraint_identity_clause(_A2, "Mara strains.", {}) == "")
+
     # End to end: it has to survive into later shots, which is the whole point.
     gens = S.distribute_generations(
         "A quiet room.",

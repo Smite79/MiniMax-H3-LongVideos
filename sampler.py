@@ -1148,6 +1148,54 @@ def _restraint_about(sentence, name, active):
                for p in pronouns)
 
 
+# Restating "handcuffs" every shot does not make it the SAME handcuffs. "A white van"
+# in shot 1 and "a white van" in shot 2 are two white vans -- the props machinery has
+# said so for a long time -- and hardware is worse, because a bare noun like
+# "handcuffs" carries no appearance at all, so each shot invents the metal, the
+# finish and the link shape afresh.
+#
+# So restraints get the identity sentence props already get. Positive, and it names
+# no alternative: saying "not different cuffs" would put different cuffs in the text,
+# which is the failure this whole file is written around.
+# "links" only fits a chain; this has to cover tape, a collar and a blindfold too.
+_RESTRAINT_SAME = (" The {items} are the same ones as the previous shot, unchanged in "
+                   "colour, material and fastening, and worn the same way.")
+
+
+def _join_list(items):
+    """'a', 'a and b', 'a, b and c' -- prose, not a comma-separated keyword list.
+
+    A trailing keyword list is what gets imprinted into the frame as on-screen
+    text; the soundscape line was rendered that way until it was reworded."""
+    items = [i for i in items if i]
+    if len(items) <= 1:
+        return items[0] if items else ""
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def restraint_identity_clause(active, body, seen):
+    """Pin this shot's restraints to the ones the previous shot showed.
+
+    `seen` is the set of restraint items each person was already wearing when the
+    last shot rendered, carried across by distribute_generations. An item that only
+    appears NOW is deliberately skipped: there is no previous shot to match it to,
+    and claiming continuity for hardware the chain has not shown yet would be a
+    presence cue for something that was never there."""
+    named = []
+    for name, items in (active or {}).items():
+        if name and not person_in_shot(body, name, active):
+            continue
+        for it in items or []:
+            if not is_restraint(it):
+                continue
+            nm = _item_name(it)
+            if nm in (seen or {}).get(name, ()) and nm not in named:
+                named.append(nm)
+    if not named:
+        return ""
+    return _RESTRAINT_SAME.format(items=_join_list(named[:3]))
+
+
 def restraint_clause(active, body, lock_restraints=True, usage=None):
     """State what each restrained person's body cannot do, for the people in shot.
 
@@ -3364,6 +3412,10 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     # USE persists with the wardrobe: shot 5 saying "she strains" must keep shot
     # 2's "cuffed to the headboard", not fall back to wording that contradicts it.
     restraint_usage = {}
+    # person -> restraint items they were ALREADY wearing when the last shot
+    # rendered. Only those can be pinned to "the same ones as the previous shot";
+    # hardware appearing for the first time has no previous shot to match.
+    restraint_seen = {}
     exposed = parse_exposed_terms(exposed_terms)
     # Every person key that existed at any point, so an entry naming someone who is
     # only introduced later by a 'wardrobe: Name = ...' directive is not called
@@ -3645,6 +3697,11 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 # what the restraints DO -- limits on limbs already established
                 (lock_restraints, lambda: restraint_clause(active, body, lock_restraints,
                                                            usage=restraint_usage)),
+                # ...and that it is the SAME hardware as last shot. Stating the item
+                # again does not make it the same item: "handcuffs" carries no
+                # appearance, so each shot invents the metal and the links afresh.
+                (lock_restraints,
+                 lambda: restraint_identity_clause(active, body, restraint_seen)),
                 # a bared zone stays bared once the body turns to a surface the shot
                 # has not shown; the model's default for undescribed skin is clothed
                 (True, lambda: bare_persist_clause(bare_now, active, body)),
@@ -3695,6 +3752,11 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if "non_diegetic_music:" not in block.lower():
             block += f"\nnon_diegetic_music: {music if music else 'N/A'}"
         blocks.append(block.strip())
+        # What this shot ACTUALLY showed, for the next shot to claim continuity with.
+        # Recorded after the block is built, so hardware introduced by this beat is
+        # not yet claimed to match a previous shot that never had it.
+        restraint_seen = {n: {_item_name(i) for i in (items or []) if is_restraint(i)}
+                          for n, items in active.items()}
         # Exits stay DEFERRED, unlike removals: a character has to be visible in the
         # shot that shows them leaving, and the frame they leave in is the shot's own
         # subject -- there is no reverse-motion trap, because "walks out" ending with

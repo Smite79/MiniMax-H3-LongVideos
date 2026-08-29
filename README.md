@@ -125,7 +125,18 @@ rendering**. Do that first; it is near-instant.
   tape`, `gaffer tape` and `tape gag`, and `leather` / `locking` / `posture` /
   `slave` / `shock` collars. Taping a mouth or collaring someone in a beat stores
   the recognised form rather than the bare word, so it is protected like any other
-  restraint. Bare `tape`, `chain`, `collar`, `strap` and
+  restraint.
+
+  **The hardware also has to look the same shot to shot.** Restating
+  *"handcuffs"* does not make it the *same* handcuffs — no more than *"a white
+  van"* twice is one van — and hardware is worse, because a bare noun carries no
+  appearance at all, so each shot invents the metal and the finish. Restraints
+  now get the identity sentence props have always had: *"the same ones as the
+  previous shot, unchanged in colour, material and fastening"*. Only for hardware
+  the chain has actually shown — something introduced by the current beat has no
+  previous shot to match.
+
+  Bare `tape`, `chain`, `collar`, `strap` and
   `belt` are **not** treated as restraints — they are jewellery, a shirt part, a
   dress part and a garment at least as often. It also states what the restraint
   **does**: a cuffed character otherwise walks with their arms swinging, because
