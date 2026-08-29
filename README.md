@@ -119,7 +119,13 @@ rendering**. Do that first; it is near-instant.
   supplies the item where it can (*gags*, *blindfolds*, *shackles*), and an
   ambiguous verb needs evidence — a named restraint or a bound body region, so
   *"ties her wrists"* counts and *"ties his laces"* does not. Never from quoted
-  speech, and never from a removal, so *"uncuffs her"* does not re-apply them. Bare `chain`, `collar`, `strap` and
+  speech, and never from a removal, so *"uncuffs her"* does not re-apply them.
+
+  **Tape gags and collars** are covered where the named form is hardware: `duct
+  tape`, `gaffer tape` and `tape gag`, and `leather` / `locking` / `posture` /
+  `slave` / `shock` collars. Taping a mouth or collaring someone in a beat stores
+  the recognised form rather than the bare word, so it is protected like any other
+  restraint. Bare `tape`, `chain`, `collar`, `strap` and
   `belt` are **not** treated as restraints — they are jewellery, a shirt part, a
   dress part and a garment at least as often. It also states what the restraint
   **does**: a cuffed character otherwise walks with their arms swinging, because
