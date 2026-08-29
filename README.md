@@ -1,68 +1,58 @@
 # H3-LongVideos
 
-Make long (up to ~120s) **MiniMax-H3 video + synchronised audio** from a single
-prompt, in ComfyUI. Self-contained — it uses only ComfyUI core's H3 support.
+Long **MiniMax-H3 video with synchronised audio** from a single prompt, in ComfyUI.
 
-H3 renders one shot at a time. This node turns a written scene into a **chain of
-shots**: it splits your prompt into beats, sizes each shot to what that beat
-actually stages, chains every shot from the previous one's last frame, and keeps
-your characters, their clothing and your props consistent from shot to shot —
-things that otherwise drift, duplicate or quietly reset at every shot boundary.
+H3 renders about 15 seconds at a time. This node turns a written scene into a
+**chain of shots**: it splits your prompt into beats, sizes each shot, chains every
+shot from the previous one's last frame, and keeps your characters, their clothing
+and your props consistent from shot to shot — the things that otherwise drift or
+reset at every shot boundary.
 
-One node covers both H3 conditioning tasks: **FL2VA** (a frame anchors the shot)
-and **REF2VA** (reference images say what a character looks like).
+One node covers both H3 conditioning tasks: **FL2VA** (a frame anchors the shot) and
+**REF2VA** (reference images say what a character looks like).
 
 ---
 
 ## Install
 
 Copy this folder into `ComfyUI/custom_nodes/` and restart the ComfyUI **server**
-(not just a browser refresh).
+(not just a browser refresh). No extra Python packages are needed — it uses only
+ComfyUI core's H3 support, plus Pillow (already shipped) for the text overlays.
+
+**Requires ComfyUI 0.31 or newer** with native MiniMax-H3 support. Tested on 0.33.
+
+## What you need loaded
+
+| | |
+|---|---|
+| **UNET** | a MiniMax-H3 diffusion model |
+| **CLIP** | H3's text encoder, loader type `minimax` |
+| **VAE** | the H3 **video** VAE |
+| **audio VAE** | the H3 **audio** VAE (a separate file) |
 
 ## Quick start
 
 ```
-UNETLoader ─┐                     images ─> Video Combine
+UNETLoader ─┐                     images ─> Video Combine / Save Video
 CLIPLoader ─┼─> H3 Long Videos ─> audio  ─┘
-VAELoader ──┘                     latent ─> (optional) latent post-processing
+VAELoader ──┘                     info   ─> Show Text
 ```
 
-The **`soundscape`** output carries the ambient bed the shots actually used — the
-one `auto_soundscape` derived from your scene, or your own text when it didn't fire.
-Wire it to a text preview to read what it built, or straight back into the
-`global_soundscape` input to pin it and stop it re-deriving.
+The text fields are **input sockets, not boxes on the node** — wire a multiline text
+node into them. `prompt` is required; leave it unconnected and the graph errors
+rather than rendering blank.
 
-The **`latent`** output carries the sampled latents, joined on the time axis, for
-things like a latent upscaler. It is emitted *as well as* `images`, never instead:
-the shot chain hands each shot the previous one's decoded last frame, so decoding
-cannot be deferred.
+Set **`plan_only`** first. It previews the shot split, the lengths and every warning
+in seconds, without rendering anything.
 
-It is **not** the latent form of `images` on a multi-shot run. `trim_seam` and
-`handoff_offset` cut decoded frames, and H3 compresses time — one pixel frame is
-not one latent step — so those cuts have no exact latent equivalent and the seam
-frames are still present. On a **single-shot** run nothing trims and it matches
-exactly. `info` says which you got.
+## The prompt
 
-You write four things:
-
-**1. The prompt** — the first paragraph is the *anchor* (scene and style, kept on
-every shot); each later paragraph is one **beat**, and one beat is one shot.
-
-> **The text fields are input sockets, not boxes on the node.** `prompt`,
-> `character_memory`, `anchor_override`, `global_soundscape`, `non_diegetic_music`,
-> `exposed_terms` and `intro_text` all take a connected multiline text node, so the
-> same prose can feed several samplers and be edited in one place. `prompt` is
-> required: leave it unconnected and the graph errors rather than rendering blank.
-> The other six are optional and behave as empty when nothing is attached.
->
-> `shot_seconds` is a socket too — wire **H3 Shot Length** into it, which also
-> reports the matching frame count on the 17k+5 grid. Left unconnected it falls back
-> to auto (the largest shot that fits at the chosen size), exactly as a `0` in the
-> old widget did.
+**One paragraph = one shot.** The first paragraph is the *anchor* — scene and style,
+repeated on every shot. Each paragraph after it is one **beat**.
 
 ```
-Natural daylight, hard sun and deep shadow. Shallow depth of field, background
-falling soft. Fine grain, slight motion blur, neutral colour. A farm with a barn.
+Natural daylight, hard sun and deep shadow. Shallow depth of field. A farm
+with a barn.
 
 Dom drives a van down the driveway and stops in front of the barn.
 
@@ -71,636 +61,147 @@ Dom gets out and walks to the back of it.
 Mara steps out of the barn and asks him: "Is that the last one?"
 ```
 
-**2. `character_memory`** — who is in it and what they wear. This is the only
-channel that can change mid-chain:
+That is 3 beats, so 3 shots. Dialogue goes in **double quotes** — that is how the
+node knows which shots have speech.
+
+## `character_memory`
+
+Who is in it and what they wear. This is the channel that stays consistent across
+the whole chain:
 
 ```
 Dom = he, tall, 35, brunette, white t-shirt, blue jeans, work boots
 Mara = she, 30, red hair, grey coat, black jeans
 ```
 
-**3. `resolution` + `megapixels`** — the dropdown picks the **shape**, the number
-picks the **size**. They are independent: changing aspect ratio does not change
-cost. `1.0` = 1024×1024 worth of pixels (ComfyUI's own convention), and at 1.00
-every ratio lands on H3's native size. Step down for speed, VRAM and longer shots.
+Declaring a pronoun matters: it is how *"she takes off her coat"* is attributed to
+the right person when two people are on screen.
 
-**4. `shot_seconds`** — a **ceiling**, not the length of every shot. Wire
-**H3 Shot Length** into it, or leave it unconnected to let the VRAM budget decide.
+## Size and length
 
-Set `plan_only` to preview the shot split, lengths and every warning **without
-rendering**. Do that first; it is near-instant.
+**`resolution` picks the shape, `megapixels` picks the size.** They are independent
+— changing aspect ratio does not change cost.
+
+- `megapixels 1.0` = 1024×1024 worth of pixels, which is H3's native budget.
+- Step down for speed, VRAM and longer shots. `0.7` is a good working value on a
+  16 GB card.
+
+**`shot_seconds`** is a ceiling, not the length of every shot. Wire the **H3 Shot
+Length** node into it (it also reports the matching frame count), or leave it
+unconnected and the VRAM budget decides.
+
+Cost scales with **latent cells** — resolution *and* duration — and attention is
+quadratic in them. Lowering megapixels does far more for speed than any other
+setting.
+
+## Sampling
+
+| setting | value |
+|---|---|
+| `cfg` | **1.0** — H3 is CFG-free; there is no negative prompt |
+| `sampler_name` | `res_multistep`, or `euler` with PDD Acc |
+| `scheduler` | `simple` |
+| `shift_video` / `shift_audio` | **12 / 3** |
+
+Keep the two shifts about 4:1 apart. H3 carries the audio latent on the video
+schedule scaled by that ratio, so flattening it toward 1:1 breaks the audio.
+
+`steps` depends on your LoRA: 4-step turbo LoRAs work at 4, but 6–8 looks
+noticeably better, and 8 is the top of the useful range.
+
+## Outputs
+
+| slot | what it is |
+|---|---|
+| `images` | the finished frames |
+| `audio` | the synchronised soundtrack |
+| `info` | what the node did, and every warning — **read this** |
+| `script` | the exact per-shot text it built |
+| `soundscape` | the ambient bed actually used |
+| `latent` | the sampled latents, for latent post-processing |
+| `frames_per_shot`, `total_frames`, `shots`, `video_seconds`, `fps`, `fps_int` | numbers for downstream nodes |
+
+`info` is the one to wire to a Show Text node. Nearly every problem the node can
+detect is reported there.
 
 ## What it handles for you
 
-- **Beats → shots.** One paragraph, one shot. Nothing can silently collapse them.
-- **Pacing.** Each shot is sized from what its beat stages (~2s + ~2.5s per action
-  clause, or its spoken line). A 3-second action in a 12-second shot is how a model
-  ends up repeating or *reversing* the action.
-- **Characters.** Descriptions bind once per shot, at the first mention; repeat
-  names collapse to pronouns, because naming someone twice renders them twice.
-- **Wardrobe.** Clothing lives in one mutable channel, tracked per person. Removals
-  are read from your prose ("takes off her jacket", "steps out of her jeans", "the
-  coat falls to the ground") and stated with direction so they don't play in
-  reverse. A garment named in a quoted line is an instruction, not an action, so
-  asking for something to come off doesn't remove it a shot early. Whatever is
-  still on underneath is named, so a removal doesn't read as more than it was.
-- **Props.** "the van" in a later shot means the van from the earlier one.
-- **Restraints stay on.** `lock_restraints` (on by default) keeps handcuffs,
-  shackles, manacles, fetters, irons, gags, blindfolds, harnesses and leashes —
-  plus qualified forms like `ankle chain` or `leather wrist straps` — from being
-  removed by prose. A restraint is a plot state, not a garment. Without this they
-  came off by *accident*: "steps out of her jacket and the chain falls away" would
-  drop the ankle chain as a side effect of a beat about a jacket, because the
-  removal window reaches any tracked item near the cue. To take one off, say so
-  directly: `wardrobe: Mara -= handcuffs`. A restraint **applied by a beat** is
-  tracked from the prose — *"Dom handcuffs Mara's wrists"* puts them on and every
-  later shot honours them, with no `wardrobe:` line needed. Attribution is by the
-  OBJECT of the verb (the person it acts on, the reverse of a removal), the verb
-  supplies the item where it can (*gags*, *blindfolds*, *shackles*), and an
-  ambiguous verb needs evidence — a named restraint or a bound body region, so
-  *"ties her wrists"* counts and *"ties his laces"* does not. Never from quoted
-  speech, and never from a removal, so *"uncuffs her"* does not re-apply them.
+- **Beats → shots.** One paragraph, one shot. Nothing silently merges them.
+- **Pacing.** Each shot is sized from what its beat actually stages. A 3-second
+  action in a 12-second shot is how a model ends up repeating or reversing it.
+- **Characters.** Descriptions bind once per shot, at the first mention. Repeat
+  names collapse to pronouns, because naming someone twice can render them twice.
+- **Clothing.** Tracked per person. Removals are read from your prose (*"takes off
+  her jacket"*) and stated with direction so they don't play in reverse.
+- **Props.** *"the van"* in a later shot means the van from the earlier one.
+- **Continuity guards.** Limb counts, solid objects, continuous motion and
+  two-body arrangements are each stated positively when the shot needs them. They
+  have to be positive: at `cfg 1` the negative prompt is never evaluated, and a
+  negation in the positive names the thing it forbids.
+- **Audio.** Shots without dialogue are silenced so the model doesn't invent
+  speech; the ambient bed is matched in level across shots and carried between them
+  so the room doesn't change at every cut.
+- **Seams.** Each shot continues from the previous one's last frame, and the
+  duplicate frame at the join is trimmed.
+- **Overlays.** Optional watermark and intro title, composited after any upscale.
 
-  **Tape gags and collars** are covered where the named form is hardware: `duct
-  tape`, `gaffer tape` and `tape gag`, and `leather` / `locking` / `posture` /
-  `slave` / `shock` collars. Taping a mouth or collaring someone in a beat stores
-  the recognised form rather than the bare word, so it is protected like any other
-  restraint.
+## Reference images
 
-  **The hardware also has to look the same shot to shot.** Restating
-  *"handcuffs"* does not make it the *same* handcuffs — no more than *"a white
-  van"* twice is one van — and hardware is worse, because a bare noun carries no
-  appearance at all, so each shot invents the metal and the finish. Restraints
-  now get the identity sentence props have always had: *"the same ones as the
-  previous shot, unchanged in colour, material and fastening"*. Only for hardware
-  the chain has actually shown — something introduced by the current beat has no
-  previous shot to match.
-
-  Bare `tape`, `chain`, `collar`, `strap` and
-  `belt` are **not** treated as restraints — they are jewellery, a shirt part, a
-  dress part and a garment at least as often. It also states what the restraint
-  **does**: a cuffed character otherwise walks with their arms swinging, because
-  nothing said the body could not move freely — the restraint present and inert,
-  which reads as it having broken. The clause names the bound region positively
-  (`the wrists stay bound close together, the arms moving as one`), only for people
-  actually in the shot, and it disappears the moment the restraint is removed.
-  The wording follows **how** the restraint holds: a character cuffed to a
-  headboard gets `the cuffs stay locked closed around the wrists and fastened to
-  the headboard, the chain between them taut` instead of the bound-together text —
-  two contradictory sentences about one pair of wrists is exactly how the cuffs end
-  up rendered broken. Poses are covered too (behind the back, above the head,
-  spread-eagle — wrists bound apart at fixed points), and every variant adds that
-  the hardware itself stays whole: an open cuff or a snapped link mid-struggle was
-  otherwise free to happen. And because a restraint is a plot state, **how it is
-  used persists**: state it once ("cuffed to the headboard") and every later shot
-  keeps that wording even when its own prose only says "she strains" — without this
-  those shots fell back to the bound-together text and contradicted the attachment
-  all over again. Restating updates it ("cuffed to the wall instead"), and freeing
-  the character (`wardrobe: Mara -= handcuffs`) forgets it, so re-cuffed later they
-  start fresh.
-- **Uncovered zones.** The node tracks two body zones, `lower` and `upper`. When a
-  removal leaves one with nothing on it, it keeps that state **stated** in every
-  later shot until something covers the zone again — because deleting a garment is
-  only a silence, and a video model's default is a clothed person, so silence puts
-  the clothes back on a shot or two later.
-
-  It also states that a bared zone **stays** bared as the body turns — the same from
-  the front, the side and behind. The marker says the zone *is* bare; nothing said it
-  held once the body presented a surface the shot had not shown yet, and an
-  undescribed surface defaults to a clothed one, so the garment came back mid-shot on
-  a turn. That clause names no garment and no person: naming the garment puts it back
-  in the prompt, and naming the person a second time renders them twice.
-
-  `exposed_terms` is where you choose the wording, per character. Same syntax as
-  the sheet: a pronoun sets it for everyone who declares that pronoun, a name
-  overrides one person, and a trailing `upper` targets that zone instead of the
-  default `lower`. Anything after the `=` is passed through verbatim, so LoRA
-  trigger words ride along:
-
-  ```
-  she = <wording for the lower zone>
-  he  = <wording for the lower zone>, <lora trigger>
-  Mara upper = <wording for Mara's upper zone>
-  ```
-
-  Left unset, the node uses its own neutral wording, matched to the character's
-  declared pronoun. A key that matches no character and no pronoun is reported in
-  `info` rather than silently doing nothing — which is what a mistyped name, or an
-  object form like `her` instead of `she`, would otherwise do.
-
-  A character can also **start** with a zone uncovered rather than arriving there
-  through a removal — add `nude` (or `naked`, `undressed`, `unclothed`) for both
-  zones, `topless` or `bottomless` for one, to their `character_memory`, and the
-  wording applies from shot 1. This has to be written explicitly: a sheet that
-  simply doesn't list clothes (`Jon = he, 35, bald`) is read as under-specified,
-  never as a declaration.
-
-  Configuring any of this **is** the intent, so it overrides `prevent_nudity` — no
-  second switch to remember. The shot after a removal also starts **fresh**,
-  without the handoff frame, because continuing from a frame that still shows the
-  garment is how it comes back: a picture outvotes the sentence.
-- **`prevent_nudity`.** **On by default**: the prompt never asserts that a body is
-  uncovered. Removals still happen — what is gated is the sentence, and since the
-  model's default is a clothed person, it covers what nobody described. `info`
-  still reports any zone a removal left uncovered, so you find out either way.
-- **Shift is yours to set. Keep `shift_video` / `shift_audio` at 12 / 3.** There was
-  an `auto_shift` option here that lowered the shift to match a low step count. It has
-  been removed, because its premise was wrong. It read H3's 12/3 defaults as putting
-  "80% of the denoising into the final step" at 4 steps and flattened the schedule to
-  spread that out — but a 4-step distill LoRA is *trained* to jump from ~0.80 noise
-  straight to clean. That concentration is the distilled behaviour, not a fault, and
-  lowering the shift puts every step at noise levels the LoRA never saw, which shows
-  up as artifacting. None of the turbo/lightx2v LoRAs declares a schedule in its
-  metadata either, so there was nothing to look up and the number was a guess.
-
-  Whatever you set is passed through untouched. Keep `shift_audio` at
-  `shift_video / 4` if you do change it — `audio_scale` is that ratio, and flattening
-  it toward 1.0 breaks the audio branch. `info` still warns if the ratio drifts.
-
-- **Anatomy.** `anatomy_guard` states each person's limb *count* — one head, two
-  arms, two hands with five fingers, two legs with two feet — then pins every limb
-  to its body and gives the skeleton a layout: each arm at one shoulder running
-  shoulder–elbow–wrist–hand, each leg at one hip running hip–knee–ankle–foot, the
-  parts stacked in order (head on the neck, neck on the shoulders, arms along the
-  sides of the torso, legs under the hips), every limb moving only with the person
-  it belongs to, and one groin between the legs. A **negative prompt cannot do
-  this**: H3 is CFG-free at `cfg 1`, so the negative is never evaluated and "extra
-  limbs" there does nothing. Naming the number gives the model a target; negating one
-  only puts the word in the prompt. Never added to the anchor, and never to a shot
-  with nobody in it — describing a body in an empty frame is what burned faces into
-  opening frames before. `auto` = on below a 768 short edge, when a LoRA is applied,
-  or on any shot holding two or more people — spare limbs are grown where bodies meet
-  and move together, whatever the resolution.
-- **Solidity.** `solidity_guard` stops bodies passing through objects. Same
-  constraint as the anatomy guard, and the same solution: the negative is never
-  evaluated, and *"does not walk through the wall"* can't go in the positive either —
-  it names walking through a wall, and a mention is a presence cue. So it states
-  what bodies **do**: stop at the surface, rest on the floor, press against what
-  they touch, walk *around* the furniture. Then it names the solid things this shot
-  established — up to three, the beat's own first, so *"Mara climbs the stairs"*
-  leads with the stairs rather than with set dressing from the anchor.
-
-  `auto` (default) speaks only when the shot actually names something solid, reading
-  both the beat and the identity block, since the set is usually described in the
-  anchor. `on` states it every shot. Only ever applied to a shot with someone in
-  it — you need a body before it can pass through anything. Genuinely passable
-  things (a curtain, smoke) are deliberately not claimed to be solid.
-- **Motion continuity.** `motion_guard` stops a pose being reached without the
-  frames in between — a head arriving at a new angle with no path to it, the "neck
-  snap". A snap is not a *wrong* pose; it is a right pose with nothing joining it to
-  the last one, so the **path** is what gets stated: movement travels through every
-  position on the way, at one steady speed, the neck following the shoulders and the
-  shoulders following the hips. `auto` fires on a beat that actually moves someone
-  (turns, looks, walks, leans, reaches — and the high-jerk ones: struggles, pulls,
-  twists, writhes, where a limb most often arrives without its path); a beat where
-  nobody changes orientation has
-  no path to describe. A snap immediately *after* a cut is a different thing — that
-  is the model leaving the keyframe pose, and `handoff_offset` is the lever there.
-- **Two bodies in contact.** `contact_guard` keeps an arrangement correctly aligned
-  — any arrangement. It names none: the model already knows more position names than
-  a list could hold, and what it gets wrong is the geometry. So the geometry is
-  stated, and it holds for every case:
-
-  | | |
-  |---|---|
-  | **ownership** | each person keeps their own head, two arms and two legs, each joined to the body it belongs to — overlapping bodies is exactly when a limb gets reassigned to the wrong torso |
-  | **separation** | they meet at the surface of the skin, each keeping its own volume, rather than passing into one another |
-  | **stable roles** | above stays above, below stays below, behind stays behind, for the whole shot and from every camera angle |
-  | **support** | weight rests on whatever is holding it, and the two stay in proportion |
-
-  Needs **two people in the shot** — one body cannot be misaligned against another,
-  and saying otherwise in a one-person shot would invite the second in. `auto` fires
-  on a contact cue in the beat; `on` states it whenever two or more are present.
-
-  This holds a *stated* arrangement together; it cannot infer one you did not state.
-  Describe the arrangement in **relative** terms — who is above, behind, facing
-  whom, what carries the weight — rather than by a position name alone, and the
-  guard keeps it held.
-- **Soundscape from the scene.** `auto_soundscape` builds the ambient bed from your
-  prompt instead of you typing one. It reads the **anchor** — the soundscape is
-  global, stamped on every shot, so it must describe the *place*, not one beat's
-  action — falling back to the beats when the anchor is pure camera language.
-
-  ```
-  A disused aircraft hangar        -> cavernous interior, long reverb, distant metal ticks
-  Rain on the windows. A kitchen.  -> steady rain, quiet room tone, faint appliance hum
-  A rocky beach with waves         -> gusting wind, waves breaking, sea wind, distant gulls
-  Cinematic, shallow depth of field -> (nothing — that is a lens, not a meadow)
-  ```
-
-  Weather layers before place. **No human sound is ever generated** — no chatter,
-  crowd or announcements, even for a bar or a station — because an ambient bed that
-  implies voices is how H3 starts talking. `fill if blank` (default) leaves anything
-  you typed alone; `always` overrides it and says so in `info`.
-- **Silence, in three layers.** A prompt clause alone was never enough, because
-  two of the three causes aren't text.
-  1. **Text** — beats with no quoted dialogue get a lips-closed clause and a
-     no-voice soundscape.
-  2. **Picture** — a dialogue shot handing its *last* frame to a silent shot seeds
-     an open mouth mid-word, and a picture outvotes a sentence. The handoff frame is
-     taken 3 frames (~125 ms) earlier at exactly that boundary, automatically.
-  3. **Audio** — H3 is a *joint* model: the mouth follows the audio branch. On a
-     shot with no line that branch is otherwise unconditioned, invents a voice, and
-     the picture lip-syncs to it. The shot's audio channel is anchored to encoded
-     silence instead. That applies to **every** silent shot — including the first
-     one, which has no handoff, and reference-conditioned shots, which take an
-     audio-only keyframe to carry it. A shot with a `ref_image` wired is not exempt.
-
-  `mute_nonspeech_audio` is a fourth, weaker thing: it zeroes the waveform *after*
-  generation, so it silences the track but cannot close a mouth.
-
-  Inside a dialogue shot the silence is **per person**: a quoted line used to free
-  every mouth in frame, so whoever else was on screen mouthed along with lines
-  they never say — characters visibly reciting text nobody gave them. Spoken lines
-  are now attributed to whoever introduced them (`Jon says: "..."`, or `"..." said
-  Jon`), and everyone else in the shot gets the lips-closed state by pronoun. A
-  quote that can't be attributed frees nobody by guesswork, and a scare-quoted
-  word like she gave him a "look" — which is emphasis, not dialogue — is reported
-  in `info`, since it still flips the whole shot to speaking.
-- **Non-speech vocals (screams, sobs, gasps).** `allow_nonspeech_vocals` lets beats
-  with no quoted dialogue carry distress sounds. When it is on, the node skips the
-  lips-closed clause and softens the no-voice soundscape so it bans speech, dialogue
-  and singing but permits screams, sobs, gasps and moans. The audio branch is also
-  left unmuted on those shots. Speech is still suppressed — only double-quoted lines
-  count as speaking — so H3 does not invent chatter. Turn this on when your scene
-  contains distress sounds the default silence would remove.
-- **One noise field for the whole chain.** `vary_seed_per_shot` is **off** by
-  default. The seed picks the noise field a shot is sampled from, and that field
-  fixes the stochastic detail — grain, micro-texture, the exact rendering of every
-  surface the prompt never names. Reseed each shot and all of it resets at the
-  boundary, which reads as a cut even when the keyframe anchors the frame and the
-  location is unchanged. Shots still differ under one seed: each has its own beat
-  text and its own handoff keyframe. Turn it on only when you *want* the beats to
-  look separately shot. `info` warns when it is on.
-- **Seams.** `trim_seam` (on by default) drops the first frame of each shot after
-  the first, because that frame is the model's own reproduction of the handoff — the
-  last frame of the previous shot. Keeping it plays the same moment twice. So at a
-  working seam the two frames are **not** identical: they are one frame of normal
-  motion apart. Turn it off for one run if you want to check how faithfully the
-  anchor was reproduced.
-- **Latent upscale (optional pack).** `latent_upscale` upscales each shot **between
-  sampling and decode**, so the shot is *sampled* small and only *decoded* large.
-  Cost scales with latent cells and attention is quadratic in them, so sampling
-  512×512 and upscaling 2× to 1024×1024 is roughly **6× cheaper** than sampling
-  1024×1024 outright — the one lever that buys resolution instead of trading it.
-  Wiring the `latent` output to the same upscaler externally can't do this; by then
-  the decode has already happened at the sampled size.
-
-  Needs the separate **Comfyui_Minimax_h3_latent_Upscaler** pack and its weights in
-  `models/latent_upscale_models` — model and nodes both by
-  **[LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)**. **It is not a dependency**: without the pack the
-  setting does nothing, the render proceeds at the sampled size, and `info` says so.
-  Nothing errors. Only H3 builds are listed — the same folder holds LTX upscalers,
-  whose channel count doesn't match. Spatial only, so the frame count and the audio
-  are untouched, and tiled decode is forced on because decode memory grows with the
-  square of the scale.
-
-  **The chain does not inherit the upscaler.** Each shot hands the next one its last
-  frame, so taking that frame from the upscaled decode would put a neural
-  approximation *and* a downscale back to the sampling size into every boundary —
-  compounding along the chain until the cast drifts. The handoff is decoded from the
-  **pre-upscale** latent instead (a short tail, so it is cheap); only the shot's own
-  output frames are upscaled. If that decode fails, the upscaled frames are used and
-  the render carries on.
-- **One sound bed across the chain.** Two separate things, because levelling alone
-  was not enough. `bed_continuity` (on) anchors each shot's audio on the **previous
-  shot's tail** — the audio half of what the keyframe already does for the picture,
-  so the bed continues instead of being invented afresh. Without it, identical
-  soundscape *text* still gives you a different room every shot, and no amount of
-  post can fix content. A short tail (~0.5 s) is used, positioned at the shot's first
-  frame, so it states the bed and leaves the rest free; the full length would pin the
-  shot to a loop of it. A **silent** shot still gets the silence anchor instead (that
-  is what keeps mouths shut), and a **muted** shot contributes no tail, so the bed
-  picks up across a silent gap rather than restarting after it. **Only a shot with
-  no scripted line donates** — a dialogue shot's last half-second is mid-word
-  speech, and handing that to the next shot as its anchor tells the model to keep
-  talking rather than continuing the bed.
-
-  Every beat also *states* a bed now. A speaking beat with no soundscape of its own
-  used to fall off the end of the emission chain and get no `overall_soundscape:`
-  field at all — unconditioned ambience sitting between shots that each stated one,
-  which is exactly where the room changed.
-
-  The soundscape line is **stated positively** — `ambient background sound and room
-  tone alone`, not a run of negations. It sits at the very end of the prompt, which
-  is where a video model imprints text into the frame, and the old wording ended with
-  six comma-separated negations (*"no voices, no speech, no talking, no whispering,
-  no singing, no vocal sounds"*) that were being rendered on screen. H3's own shipped
-  example writes this field as flowing prose with no negations at all. It's the same
-  rule the rest of the node follows: at `cfg 1` the negative is never evaluated, so a
-  negation in the positive only names the thing it forbids.
-
-  `normalize_audio` then matches the **ambient floor** between shots. Each shot generates its audio independently, so its level
-  is whatever it landed on; joined, that steps at every boundary — most audibly in
-  the bed, because a bed is continuous by nature and the ear hears the room change
-  where the picture says it didn't.
-
-  It matches the **floor, not the peak**. Pinning peaks would flatten the chain's
-  dynamics: a shouted line and a whispered one are supposed to differ, and forcing
-  both to one peak makes the whisper shout. Every shot's quiet fifth is brought to
-  the median shot's, leaving everything above it intact. On a test chain whose beds
-  spanned 8.1×, they came out within 1.0× while the spoken shot stayed 48× above its
-  own floor. Gain is capped at ±12 dB so one odd shot can't be amplified into noise,
-  and the result is peak-scaled if that pushed anything past full scale. Muted shots
-  are excluded from the measurement rather than dragging the target toward silence.
-
-  `bed + seams` (default) also closes the sample step at each join over ~12 ms, in
-  place. A click is a step in sample value, so both sides are eased to meet at the
-  same value — it never changes length, because the track is frame-locked to the
-  video and an overlapping crossfade would slide every later shot out of sync.
-- **Overlays.** Optional PIL watermark and intro title, composited after any
-  upscale, never asked of the model.
-
-`info` reports what it did and warns before you waste a render — thin beats,
-dialogue that will be cut off or padded with invented speech, a removal that leaves
-a body zone bare, anchor content that misfires on every shot.
-
-## Resolution and megapixels
-
-Two widgets, and they do different jobs. **`resolution` picks the shape,
-`megapixels` picks the size.**
-
-`megapixels` is a **pixel budget**: `1.0` means 1024×1024 worth of pixels —
-1,048,576 — the same convention as ComfyUI's own `Scale Image to Total Pixels`, so
-the number means the same thing across your graph. The preset's aspect ratio is
-kept and both axes are snapped to a multiple of 32, which is what H3's latent grid
-requires. Set `megapixels` to **0** to switch it off and use the preset's own
-dimensions verbatim.
-
-### Why a budget instead of a short edge
-
-Cost and training-distribution match are functions of **token count** —
-`(h/16) · (w/16) · frames` — which tracks *total pixels*. The short edge does not,
-and the two disagree badly at the extremes of aspect ratio:
-
-| preset | short edge | reads as | actual |
-|---|---|---|---|
-| `1:1 768x768` | 768 | native | **0.56 MP** — 43% under budget |
-| `21:9 1536x672` | 672 | sub-native | **0.98 MP** — full budget |
-
-So the square preset that looks native is starved, and the ultra-wide that looks
-starved is fine. Judging by short edge gets both backwards. Holding megapixels
-constant is what makes two aspect ratios genuinely comparable — VRAM and token
-count stay put when you change shape.
-
-### Start at 1.00, then step down
-
-At **1.00MP** every ratio reproduces H3's native dimensions, so it is the natural
-starting point. Lower budgets buy speed, VRAM headroom and longer shots — the
-shot-length budget is resolution-aware and rescales automatically.
-
-| ratio | 0.44MP | 0.65MP | 1.00MP | 1.20MP |
-|---|---|---|---|---|
-| `16:9` | 896×512 | 1088×640 | 1344×768 | 1472×832 |
-| `9:16` | 512×896 | 640×1088 | 768×1344 | 832×1472 |
-| `4:3` | 800×576 | 960×704 | 1184×896 | 1280×960 |
-| `3:4` | 576×800 | 704×960 | 896×1184 | 960×1280 |
-| `1:1` | 672×672 | 832×832 | 1024×1024 | 1120×1120 |
-| `21:9` | 1024×448 | 1248×544 | 1536×672 | 1696×736 |
-| `9:21` | 448×1024 | 544×1248 | 672×1536 | 736×1696 |
-
-Those columns are roughly the old `fast` / `balanced` / `native` tiers, which were
-only ever three points on this axis. `megapixels` has no off-switch — a bare ratio
-has no size to fall back to — and its floor is 0.10.
-
-### The ratio names are approximations
-
-Worth knowing, because it explains why scaling works the way it does:
-
-```
-1344 / 768  = 1.750  ->  7:4    NOT 16:9, which is 1.778
-1536 / 672  = 2.286  ->  16:7   NOT 21:9, which is 2.333
-```
-
-Scaling runs from each ratio's **reference dimensions**, not from the nominal
-ratio in its name. That is precisely what makes 1.00MP land exactly on 1344×768 rather than
-on 1376×768, which is where a true 16:9 at the same budget would put you.
-
-### What gets reported
-
-`info` prints the size and MP **actually produced**, never what was requested.
-Snapping to the 32-grid moves the real area — typically by 1–2%, up to about 4% at
-the smallest budgets where a 32px step is a larger fraction of the image — and
-echoing your input back would hide what the render used:
-
-```
-megapixels 1.00 -> 1024x1024 (1.000MP actual; preset was 768x768 @ 0.562MP)
-```
-
-Both `plan_only` and a full render report it, so you can check the size before
-spending anything.
-
-**One thing this does not touch: sampling.** H3's shift is a fixed `12.0` in its
-model config with no resolution-dependent term — unlike Flux and SD3, there is no
-dynamic shift derived from sequence length. Changing `megapixels` changes cost and
-detail, not your sigma schedule.
-
-## Reference images (REF2VA)
-
-Connect up to four images to `ref_image_1…4`. By default (`ref_mode: where
-tagged`) they land on the shot whose text names them:
+Connect up to four images to `ref_image_1…4`. By default they land on the shot whose
+text names them:
 
 ```
 Dom, <Picture 1>, drives a van down the driveway.
 ```
 
-Only that shot is reference-conditioned; every other shot keeps its handoff.
+Every reference-conditioned shot **also** carries the previous frame as a keyframe,
+so using references never costs you continuity.
 
-**Every reference-conditioned shot also carries the previous frame as a real
-keyframe**, so references never cost you continuity — the keyframe fixes the
-opening frame, the references supply identity. That is true in all modes, not just
-for tagged shots: `every shot` used to mean every boundary was a hard cut, and
-`first shot` used to ignore your `start_image` outright, because ComfyUI 0.30 could
-not carry both channels at once. 0.31+ can, and the node now does.
+## Optional third-party packs
 
-The previous frame is also shown to the **text encoder**, not just to the DiT. A
-keyframe pins the opening frame without *describing* it, so a shot that only got
-the latent anchor rebuilt the scene from the prompt — same location, freshly
-imagined scenery, which reads as a cut. It now rides in as one more picture,
-appended after your references so the `<Picture N>` numbers your tags use are
-untouched.
+None of these are required, and the node works without them.
 
-If a reference gets reproduced in the opening frames, lower `ref_noise_aug` (0.95,
-then 0.90). Note the trade: `visual_cond_noise_aug` is a single value covering
-*every* conditioning latent, so a softened reference would soften the anchor with
-it. Below **0.99** the node therefore drops back to carrying the previous frame as
-an extra *reference* instead — weaker for continuity, but it leaves no anchor to
-compromise. `info` says which of the two you got.
+- **Latent upscale** — `latent_upscale` drives the **MiniMax-H3 Latent Upscaler by
+  [LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)**.
+  Weights go in `models/latent_upscale_models`; the nodes that run them are the
+  `Comfyui_Minimax_h3_latent_Upscaler` pack. All credit for the model and those
+  nodes goes to LBH-123-AI. It upscales between sampling and decode, so the shot is
+  *sampled* small and only *decoded* large — much cheaper than sampling large.
+  Without the pack installed the setting does nothing and `info` says so.
+- **PDD Acc LoRAs** — [alibaba-pai/MiniMax-H3-Acc-LoRAs](https://huggingface.co/alibaba-pai/MiniMax-H3-Acc-LoRAs)
+  via the `ComfyUI-MiniMax-H3-PDD-Acc` pack. Files go in `models/pdd_acc/`, not
+  `models/loras/` — a plain LoRA loader cannot run them. Connect the Apply node's
+  `sigmas` output to this node's `sigmas` input and keep `sampler_name` on `euler`.
+- **Sparse attention** — the `H3 SLA Attention` node, paired with an SLA turbo LoRA.
+  Place it on the MODEL wire **after** your LoRA loaders and last before this node,
+  or ComfyUI prunes it and it never runs.
 
-## Speed: Sol-Attn (optional, third-party)
+## If something looks wrong
 
-[**ComfyUI-sol-attn**](https://github.com/Saganaki22/ComfyUI-sol-attn) is a
-**separate pack** (Apache-2.0, wrapping NVIDIA's Sol-Attn kernel) — not part of
-this one. It ships MiniMax-H3-specific sparse attention and is worth having on a
-long chain: its own benchmarks put it at 1.38–1.65× over SageAttention on H3
-shapes. It chains straight in:
-
-```
-UNETLoader ─> MiniMax H3 Memory Efficient Sol Attention Patch ─> H3 Long Videos
-```
-
-Nothing here depends on it, and it patches attention while this node only patches
-the sampling schedule, so they don't collide.
-
-### Pair it with an SLA LoRA
-
-Sparse attention drops long-range coherence first, and in a video DiT that renders
-as **the same person twice**. The fix is an **SLA LoRA** — a turbo LoRA fine-tuned
-*with* sparse attention in the loop, so the weights have already adapted to the
-approximation. The two are a matched pair:
-
-| | sparse attention ON | OFF |
-|---|---|---|
-| **SLA LoRA** | the pairing you want | pays the LoRA's quality cost, collects no speedup |
-| **ordinary LoRA** | duplicated subjects | normal dense render |
-
-The node detects both halves and warns in `info` when they don't match — including
-under `plan_only`, so you find out before spending a render, not after.
-
-Detection reads the **filename** off the workflow graph, because that is the only
-place the information exists: an SLA LoRA carries no marker in its tensor names or
-its metadata and is byte-shape-identical to any un-resized rank-128 turbo LoRA. Any
-LoRA with `sla` as a delimited token in its name counts (`..._768p_sla_...`);
-`slack`, `translate` and `SLAYER` do not.
-
-## Speed: PDD Acc LoRAs (optional, third-party)
-
-Alibaba PAI's [**MiniMax-H3-Acc-LoRAs**](https://huggingface.co/alibaba-pai/MiniMax-H3-Acc-LoRAs)
-are parallel-decoding distillations: joint video and synchronized audio in **8 steps
-at CFG 1.0**, in FL2VA and Ref2VA variants (1.37 GB each). They run through
-[**ComfyUI-MiniMax-H3-PDD-Acc**](https://github.com/Jalen-Brunson/ComfyUI-MiniMax-H3-PDD-Acc),
-a **separate pack** — not part of this one.
-
-Unlike sparse attention, PDD never prunes the attention map, so it does not carry
-the duplication failure described above. The trade is fidelity at 8 steps, not
-spatial coherence.
-
-**These are not ordinary LoRAs and a plain LoRA loader cannot run them.** Alongside
-the rank-64 trunk each file carries a bank of per-interval final-layer heads; a
-stock loader applies the trunk, silently drops the head bank, and you get a
-degraded render with no error. The files go in `models/pdd_acc/`, not
-`models/loras/` — the Apply node lists only that folder.
-
-### Wire the schedule, don't reproduce it
-
-Each head is trained for one interval of a **fixed** sigma grid, and an evaluation
-that lands between boundaries has no head to drive it. That grid is exactly flow
-shift **12.0** sampled at **8** uniform timesteps:
-
-| k | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
-|---|---|---|---|---|---|---|---|---|---|
-| σ | 1.0 | 0.988235 | 0.972973 | 0.952381 | 0.923077 | 0.878049 | 0.800000 | 0.631579 | 0.0 |
-
-So under PDD, shift 12.0/3.0 is **not** a tuning choice the way it is on base H3 at
-20 steps — it is the grid the heads were distilled on, and anything else throws.
-
-Connect the Apply node's `sigmas` output to this node's **`sigmas`** input:
-
-```
-UNETLoader ─> MiniMax H3 PDD Acc LoRA (Apply) ─┬─ model ──> H3 Long Videos
-                                               └─ sigmas ─> H3 Long Videos
-```
-
-With `sigmas` connected the schedule comes from the LoRA itself and the `steps` and
-`scheduler` widgets stop affecting sampling. Keep `sampler_name` on **`euler`**:
-multi-stage samplers (`er_sde`, `dpmpp_*`, `res_*`) evaluate off-grid whatever
-schedule you hand them.
-
-Leave `sigmas` unconnected and nothing changes — this node builds its own schedule
-from the widgets, which is right for base H3 and for ordinary turbo LoRAs.
-
-### What the node checks
-
-If a PDD LoRA is applied and `sigmas` is empty, `info` says so before anything is
-sampled — including under `plan_only` — and names every widget that would miss the
-grid at once, rather than losing one render per mistake. The schedule-balance
-warning is also suppressed under PDD: shift 12 at 8 steps spends 63% of the sigma
-range on the last step, which trips its threshold and would otherwise advise
-lowering the shift — advice that throws.
-
-## Resolution: latent upscale (optional, third-party)
-
-The `latent_upscale` setting drives the **MiniMax-H3 Latent Upscaler by
-[LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)** — a
-345M-parameter 3D-convolution network trained on ~80,000 paired samples (70,000
-video, 8,000 image), purpose-built for H3's latent space. Its first convolution
-takes 24 input channels, which is H3's `latents_dim` exactly, and it works at H3's
-16× downsample. **All credit for the model and the upscaler nodes goes to
-LBH-123-AI**; this node only calls them.
-
-You need two things, neither of which ships here:
-
-- the weights, from [LBH-123-AI/Minimax_h3_latent_Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)
-  (`bf16`/`fp16` ≈ 691 MB, `fp32` ≈ 1.38 GB) in `models/latent_upscale_models`
-- the node pack that runs them, `Comfyui_Minimax_h3_latent_Upscaler`
-
-Without either, `latent_upscale` does nothing, the render proceeds at the sampled
-size, and `info` says so. It is **not** a dependency of this node.
-
-## What the node reads off a LoRA
-
-It reports where a LoRA's declared training disagrees with your settings. It never
-overrides a widget — a render has to stay reproducible from what the graph shows.
-
-| Checked | Source |
+| symptom | first thing to check |
 |---|---|
-| Base model is MiniMax-H3 | metadata (`base_model` / `ss_base_model_version`) |
-| Step count vs your `steps` | **filename** (`..._4step_...`) |
-| Training resolution vs your preset | **filename** (`..._768p_...`) |
+| out of VRAM while sampling | lower `megapixels`, then `shot_seconds`. Tiled decode cannot help a sampling OOM |
+| very slow, or wildly varying `s/it` | total staged model size against your system RAM — paging weights dominates everything else |
+| characters drift between shots | `vary_seed_per_shot` off, and check `info` for shots that lost their handoff |
+| a shot cuts instead of continuing | `info` names shots that dropped the keyframe, and why |
+| speech where there should be none | shots without a quoted line are silenced automatically; `info` reports which |
+| a LoRA errors on every block | the LoRA does not match your checkpoint's shapes — see `info` |
 
-Notes say which source they came from, because the two aren't equally trustworthy:
-metadata is what the trainer wrote, a filename is a convention anyone can break by
-renaming.
-
-**Not available, so not offered.** LoRA files carry no field for a recommended
-sampler, scheduler, cfg or shift — no metadata standard defines one — so the node
-does not pretend to know them. Trigger words are also unreadable in practice: they
-live in `ss_tag_frequency`, which kohya writes and ai-toolkit does not, so a LoRA's
-trigger still has to be typed in yourself — into the prompt, the sheet, or
-`exposed_terms`, depending on where it needs to land.
-
-**On ComfyUI portable its Triton kernels will not build**, and they fail *silently*
-— the patch reports itself inactive and you simply get the slower path. The
-embedded Python ships without development files:
-
-```
-python_embeded\Include\   contains only greenlet\
-python_embeded\libs\      does not exist
-```
-
-Fix (verified on **Python 3.13.12**, Triton 3.7.0, CUDA 13.3, SageAttention 2.2.0,
-SM120 — sol-attn's own test suite goes 3/7 → **7/7**):
-
-1. Check your version: `python_embeded\python.exe --version`
-2. Download the matching CPython NuGet package (it is a zip):
-   `https://api.nuget.org/v3-flatcontainer/python/3.13.12/python.3.13.12.nupkg`
-3. Copy `tools\include\*` into `python_embeded\Include\`
-4. Copy `tools\libs\python313.lib` into `python_embeded\libs\` (create it)
-
-Purely additive. This unblocks Triton generally, not just Sol-Attn. Redo it if a
-ComfyUI update replaces `python_embeded`.
-
-Note the sparse paths are **approximate** — A/B a shot before adopting them.
+`plan_only` costs seconds and answers most of these before a render.
 
 ## Requirements
 
-- ComfyUI 0.31+ with native MiniMax-H3 support (tested on 0.33; on 0.30 the audio
-  shifts behave differently -- see Requirements in REFERENCE.md)
-- **Pillow** only for the text overlays (ComfyUI already ships it)
-- No negative prompt — H3 is CFG-free at `cfg 1`; the node makes an empty one
-- No denoise input — fixed at 1.0; partial denoise desyncs the audio schedule
+- ComfyUI 0.31+ with native MiniMax-H3 support (tested on 0.33)
+- Pillow, for the text overlays only — ComfyUI already ships it
+- No negative prompt: H3 is CFG-free at `cfg 1`
+- No denoise input: fixed at 1.0, because partial denoise desyncs the audio schedule
 
-## Full reference
+## Credits
 
-**[REFERENCE.md](REFERENCE.md)** — the long-form field-by-field notes.
-
-> **It is out of date.** It still documents a `total_seconds` input that no longer
-> exists, and 17 of the node's 69 fields are missing from it — including
-> `megapixels`, `sampler_name`, `trim_seam`, `vary_seed_per_shot`, `prevent_nudity`,
-> `exposed_terms`, `lock_restraints`, `auto_soundscape` and all four guards
-> (`anatomy_guard`, `solidity_guard`, `motion_guard`, `contact_guard`). This README
-> and the in-node tooltips are current; REFERENCE.md is not. Read it for background,
-> not for behaviour.
+The **MiniMax-H3 Latent Upscaler** behind the `latent_upscale` setting is the work of
+**[LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)**, and
+is distributed with its own ComfyUI nodes. All credit for the model and those nodes
+goes there; this node only calls them, and works without them.
 
 ## Disclaimer
 
