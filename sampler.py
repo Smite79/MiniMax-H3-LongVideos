@@ -747,7 +747,7 @@ _RESTRAINT_HEADS = {
 # `chain` and `rope` were in each at first, so they qualified themselves and a bare
 # "gold chain" came out a restraint.
 _RESTRAINT_QUALIFIER = re.compile(
-    r"\b(?:ankle|wrist|leg|arm|thumb|neck|waist|"
+    r"\b(?:ankle|wrist|leg|arm|thumb|neck|waist|hip|thigh|groin|crotch|"
     r"chained|shackled|cuffed|bound|tied|locked|padlocked|restraining)\b", re.I)
 _RESTRAINT_NOUN = re.compile(
     r"\b(?:chain|chains|rope|ropes|cord|cords|tie|ties|strap|straps|collar|collars|"
@@ -1288,7 +1288,22 @@ _RESTRAIN_VERB_ITEM = {
 # "binds her wrists" restrains, "ties his laces" does not.
 _RESTRAINT_REGION_WORD = re.compile(
     r"\b(?:wrists?|ankles?|arms?|legs?|hands?|feet|foot|mouth|jaw|eyes?|neck|throat|"
-    r"waist|thumbs?)\b", re.I)
+    r"waist|hips?|thighs?|groin|crotch|thumbs?)\b", re.I)
+
+# How hardware is PLACED, as opposed to how a body is bound. These are weaker
+# evidence than the binding verbs above and are held to a stricter test: a NAMED
+# restraint has to appear, never a body region alone. "He wraps his arms around her"
+# is a placement verb on a body region and is plainly not a restraint, while "loops a
+# chain around her hips" names the hardware and is.
+#
+# Without these the only thing that fired was the restraint NOUN accidentally
+# matching the verb pattern -- "runs a chain..." worked because "chain" is in the
+# verb list, and "loops a chain..." did not. Same sentence shape, opposite result.
+_RESTRAIN_PLACE_VERB = re.compile(
+    r"\b(?:loops?|looped|looping|runs?|ran|running|threads?|threaded|threading|"
+    r"passes|passed|passing|places?|placed|placing|wraps?|wrapped|wrapping|"
+    r"fits?|fitted|fitting|attaches|attached|attaching|hooks?|hooked|"
+    r"slips?|slipped|winds?|wound|winding|puts?|putting)\b", re.I)
 
 # "uncuffs", "unties", "frees" -- an application verb inside a REMOVAL must not add.
 _UNRESTRAIN_CUE = re.compile(
@@ -1296,6 +1311,17 @@ _UNRESTRAIN_CUE = re.compile(
     r"locks?|locked|fastens?|fastened|gags?|gagged|straps?|strapped)|"
     r"frees?|freed|freeing|releases?|released|releasing|removes?|removed|"
     r"takes?\s+off|slips?\s+out\s+of|cuts?\s+(?:through|off))\b", re.I)
+
+
+def _restrained_party(after, names, pron_map, single):
+    """Who the restraint is applied TO: the first person named or pronouned AFTER
+    the verb, which is the opposite of how a removal reads. A one-person cast needs
+    no search."""
+    for w in re.findall(r"\b[A-Za-z]+\b", after):
+        r = _resolve_subject(w, names, pron_map, single)
+        if r:
+            return r
+    return names[0] if single and names else None
 
 
 def auto_restraint_additions(active, body, lock_restraints=True):
@@ -1314,14 +1340,20 @@ def auto_restraint_additions(active, body, lock_restraints=True):
     text = " " + _mask_quotes(body)[0] + " "
     if _UNRESTRAIN_CUE.search(text):
         return active
-    if not _RESTRAIN_VERB.search(text):
+    if not (_RESTRAIN_VERB.search(text) or _RESTRAIN_PLACE_VERB.search(text)):
         return active
     active = {k: list(v) for k, v in active.items()}
     names = [n for n in active if n]
     pron_map = _pron_map(active)
     single = len(names) == 1
 
-    for m in _RESTRAIN_VERB.finditer(text):
+    hits = [(m, False) for m in _RESTRAIN_VERB.finditer(text)]
+    hits += [(m, True) for m in _RESTRAIN_PLACE_VERB.finditer(text)]
+    seen_at = set()
+    for m, placed in sorted(hits, key=lambda h: h[0].start()):
+        if m.start() in seen_at:
+            continue                 # same word matched by both sets
+        seen_at.add(m.start())
         after = text[m.end():m.end() + 90]
         verb = m.group(0).lower()
         # Some verbs ARE the item: "gags her" needs no noun, and requiring one meant
@@ -1348,6 +1380,11 @@ def auto_restraint_additions(active, body, lock_restraints=True):
                     item = cand
                     break
             region = _RESTRAINT_REGION_WORD.search(after)
+            # A PLACEMENT verb needs the hardware NAMED. It is weaker evidence than a
+            # binding verb, and a bare body region would make "he wraps his arms
+            # around her" a restraint. Binding verbs keep the region fallback.
+            if item is None and placed:
+                continue
             if item is None and region:
                 reg = region.group(0).lower()
                 # Singular: the qualifier list carries "wrist", not "wrists", so a
