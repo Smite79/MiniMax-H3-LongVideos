@@ -652,6 +652,11 @@ def _is_mouth_state(item):
     it = (item or "").strip().lower()
     if not it:
         return False
+    # "Mouth taped shut" is a GAG -- hardware, not the per-shot mouth state that a
+    # dialogue shot is allowed to drop. Dropping it freed the taped mouth on every
+    # shot where the other person spoke, and the tape vanished from those shots.
+    if is_restraint(it):
+        return False
     return bool(re.search(r"\b(?:mouth|lips|jaw)\b", it) and
                 re.search(r"\b(?:closed|shut|together|still|sealed|not\s+talking|no\s+talking)\b", it))
 
@@ -870,10 +875,12 @@ _RESTRAINT_PHRASE = re.compile(
 
 _RESTRAINT_SPREADER = re.compile(r"\bspreaders?\b", re.I)
 _RESTRAINT_PARTICIPLE = re.compile(
-    r"\b(?:chained|shackled|cuffed|bound|tied|locked|padlocked)\b", re.I)
+    r"\b(?:chained|shackled|cuffed|handcuffed|bound|tied|locked|padlocked|taped|"
+    r"gagged|roped|strapped|manacled|hobbled|blindfolded|hooded|collared|"
+    r"hog-?tied|hog-?cuffed)\b", re.I)
 _BODY_PART_TOKEN = re.compile(
     r"\b(?:ankles?|wrists?|legs?|arms?|thumbs?|knees?|elbows?|hands?|feet|foot|"
-    r"fingers?|neck|waist)\b", re.I)
+    r"fingers?|neck|waist|mouth|lips|jaw|eyes)\b", re.I)
 
 
 def is_restraint(item):
@@ -931,7 +938,7 @@ _RESTRAINT_EFFECT = {
 # Which region each restraint binds. Checked against the item's full name, so
 # "ankle chain" and "leg irons" both reach `ankles`.
 _RESTRAINT_REGION = (
-    ("mouth",  re.compile(r"\b(?:gag|gagged|muzzle|muzzled)\b", re.I)),
+    ("mouth",  re.compile(r"\b(?:gag|gagged|muzzle|muzzled|mouth|lips)\b", re.I)),
     ("eyes",   re.compile(r"\b(?:blindfold|blindfolded|hood|hooded)\b", re.I)),
     ("ankles", re.compile(r"\b(?:ankle|ankles|leg|legs|hobble|feet|foot)\b", re.I)),
     ("wrists", re.compile(r"\b(?:handcuff|handcuffs|cuff|cuffs|wrist|wrists|manacle|"
@@ -1484,11 +1491,12 @@ def _same_hardware(item, existing):
     age) has no word in it. An empty head compiles to `\\b\\b`, which matches any
     string, so every restraint read as already worn and none was ever stored. Both
     sides are skipped when there is no head noun to compare."""
-    h_new = _item_head(item)
+    h_new = _singular_head(_item_head(item))
     if not h_new:
         return False
+    new_regions = restraint_regions([item])
     for e in existing:
-        h_old = _item_head(e)
+        h_old = _singular_head(_item_head(e))
         if not h_old:
             continue
         if h_old == h_new:
@@ -1497,7 +1505,32 @@ def _same_hardware(item, existing):
             return True
         if re.search(r"\b" + re.escape(h_old) + r"\b", _item_name(item), re.I):
             return True
+        # Same LIMB, both restraints: one piece of hardware. "handcuffs" arriving
+        # on wrists the sheet already says are handcuffed, or "wrist bindings" next
+        # to those handcuffs, stacked three names on one pair of cuffs -- and the
+        # identity clause then pinned three things to the previous shot's one.
+        old_regions = restraint_regions([e])
+        if new_regions and old_regions and new_regions == old_regions \
+                and new_regions != ["body"]:
+            return True
     return False
+
+
+def _singular_head(head):
+    """'chains' and 'chain' are one head noun; 'harness' keeps its 'ss'."""
+    h = (head or "").lower()
+    if len(h) > 3 and h.endswith("s") and not h.endswith("ss"):
+        return h[:-1]
+    return h
+
+
+# A two-word candidate must END on the hardware. "handcuffs that" passed as a
+# restraint because it contains one, and was then stored as an item in its own
+# right -- "handcuffs that" on the sheet, in every later shot.
+_PAIR_TAIL_STOP = frozenset((
+    "that", "which", "who", "and", "or", "to", "of", "in", "on", "at", "with", "the",
+    "a", "an", "her", "his", "their", "it", "them", "from", "around", "onto", "into",
+    "behind", "between", "over", "under", "off", "up", "down"))
 
 
 def _restrained_party(after, names, pron_map, single):
@@ -1563,6 +1596,8 @@ def auto_restraint_additions(active, body, lock_restraints=True):
             for cand in pairs + words:
                 if cand.split()[0] in ("a", "an", "the", "her", "his", "their"):
                     continue          # "a leash" -- the article is not part of it
+                if cand.split()[-1] in _PAIR_TAIL_STOP:
+                    continue          # "handcuffs that" -- the hardware is not the tail
                 if is_restraint(cand):
                     # Keep the colour and material the beat just supplied. Storing a
                     # bare noun leaves the identity clause with nothing to hold
@@ -1577,6 +1612,12 @@ def auto_restraint_additions(active, body, lock_restraints=True):
                 continue
             if item is None and region:
                 reg = region.group(0).lower()
+                # "between her legs" says where the hardware PASSES, not what it
+                # binds. Read as a leg restraint it became an ankle hobble -- "steps
+                # short and shuffling" -- on someone whose legs are free.
+                if re.search(r"\bbetween\s+(?:\w+['’]s|her|his|their|the)?\s*$",
+                             after[:region.start()], re.I):
+                    reg = "crotch"
                 # Singular: the qualifier list carries "wrist", not "wrists", so a
                 # plural region built "wrists straps" -- which is not recognised, and
                 # the item then sat in the wardrobe unprotected.
@@ -1646,7 +1687,21 @@ def auto_restraint_additions(active, body, lock_restraints=True):
     return active
 
 
-def auto_wardrobe_removals(active, body, lock_restraints=True):
+def _possessive_owner(window, names, pron_map, single):
+    """Whose garment an object phrase names: the first possessive in it that
+    resolves to a tracked person -- "Kate's jacket", "her jacket". None when the
+    phrase carries no possessive, or the pronoun is ambiguous."""
+    for m in re.finditer(r"\b([A-Za-z]+)(['’]s)?\b", window or ""):
+        word, marker = m.group(1), m.group(2)
+        if not marker and word.lower() not in ("her", "his", "their"):
+            continue
+        r = _resolve_subject(word, names, pron_map, single)
+        if r:
+            return r
+    return None
+
+
+def auto_wardrobe_removals(active, body, lock_restraints=True, by_other=None):
     """Infer clothing REMOVALS from a beat's own action text, so you don't have
     to write a 'wardrobe:' line at all -- "she takes off her jacket" drops the
     jacket by itself.
@@ -1678,6 +1733,8 @@ def auto_wardrobe_removals(active, body, lock_restraints=True):
         # verb ... off / out of / aside / away   (covers "takes off", "steps out of")
         r"\b(?:takes?|took|taken|taking|pulls?|pulled|peels?|peeled|strips?|stripped|"
         r"slips?|slipped|shrugs?|shrugged|tears?|tore|yanks?|yanked|casts?|kicks?|"
+        # a garment cut or ripped off someone -- by them or by someone else
+        r"cuts?|cutting|rips?|ripped|ripping|snips?|snipped|slices?|sliced|"
         r"throws?|threw|tosses|tossed|hangs?|hung|drops?|dropped|sets?|set|puts?|put|"
         # ...and the ones you get OUT OF rather than take off
         r"steps?|stepped|stepping|wriggles?|wriggled|wiggles?|wiggled|squirms?|squirmed|"
@@ -1729,6 +1786,16 @@ def auto_wardrobe_removals(active, body, lock_restraints=True):
             continue
         forward, backward = _removal_object_spans(text, m)
         tgt = nearest_subject(m.start())
+        # The OWNER named in the object wins over the sentence's subject. "Dan cuts
+        # off Kate's jacket" has Dan as its subject, and searching DAN's sheet for a
+        # jacket either strips the wrong person or -- when his sheet has no jacket --
+        # nobody, so the garment stays on her in every later shot. A possessive
+        # name, or a possessive pronoun that resolves to one person, says whose it is.
+        owner = _possessive_owner(forward, names, pron_map, single)
+        if owner is not None:
+            if by_other is not None and tgt is not None and tgt != owner:
+                by_other[owner] = True
+            tgt = owner
         # Try the verb's forward object first; only if that names nothing tracked do
         # we look BACK to the subject, which is where "her jacket falls to the
         # ground" and "her jacket slips off her shoulders" put the garment.
@@ -2020,7 +2087,7 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
         # so nothing is constrained -- guessing would gag the wrong mouth.
         listeners = set()
         if speaking and silence_nonspeech and len(names) >= 2 and not unnamed:
-            speakers = _speakers_in(body, names)
+            speakers = _speakers_in(body, names, _pron_map(active))
             if speakers:
                 bound_names = set(refs) or (
                     {n for n in names} if _PLURAL_CAST.search(body) else set())
@@ -2582,8 +2649,14 @@ def _spoken_quotes(body):
     return out
 
 
-def _speakers_in(body, names):
+def _speakers_in(body, names, pron_map=None):
     """Which tracked names are ATTRIBUTED to a spoken line in this beat.
+
+    A PRONOUN speaker counts when it resolves to one person -- "He says to her:"
+    is the commonest attribution there is, and reading it as nobody left the
+    listener's gag treated as a free mouth on every such shot. A pronoun AFTER the
+    cue is a speaker only when it follows directly ("said she"); "says to her"
+    names the listener, and crediting her would gag the wrong mouth.
 
     Attribution needs the name ADJACENT to a speech verb -- 'Jon says:' before
     the quote, or 'said Jon' just after the close. Presence anywhere in a window
@@ -2602,16 +2675,22 @@ def _speakers_in(body, names):
             cues = list(_SPOKEN_CUE.finditer(frag))
             if not cues:
                 continue
-            for n in names:
-                if not n:
-                    continue
-                esc = re.escape(n.lower())
+            tokens = [(re.escape(n.lower()), n) for n in names if n]
+            if pron_map:
+                tokens += [(p, None) for p in ("he", "she", "they")]
+            single = len([n for n in names if n]) == 1
+            for esc, n in tokens:
                 for nm in re.finditer(rf"\b{esc}\b", frag):
+                    person = n if n else _resolve_subject(nm.group(0), names, pron_map, single)
+                    if not person:
+                        continue
                     for c in cues:
                         if nm.end() <= c.start() and c.start() - nm.end() <= 16:
-                            found.add(n)      # 'Jon says: '
+                            found.add(person)      # 'Jon says: ' / 'He says: '
                         elif nm.start() >= c.end() and nm.start() - c.end() <= 4:
-                            found.add(n)      # 'said Jon'
+                            gap = frag[c.end():nm.start()]
+                            if n or not gap.strip():
+                                found.add(person)  # 'said Jon' / 'said she'
     return found
 
 
@@ -3109,7 +3188,7 @@ def _is_plural_garment(item):
     return bool(head) and head.endswith("s") and not head.endswith("ss")
 
 
-def takes_off_clause(pairs, active=None):
+def takes_off_clause(pairs, active=None, by_other=None):
     """The DIRECTION of a removal, stated in the shot that performs it.
 
     A removal is the one wardrobe change with a failure mode of its own: the motion
@@ -3151,7 +3230,16 @@ def takes_off_clause(pairs, active=None):
         # handled by whoever is nearby. Same rule as people: repeat the reference,
         # get the thing repeated. Saying where it ENDS UP is what stops it lingering
         # in someone's hands.
-        if subj:
+        if subj and by_other and by_other.get(name):
+            # Someone ELSE removed it. "She takes the jacket off" put the action on
+            # the wearer -- who may be asleep, or cuffed -- and contradicted the beat
+            # that said who did it. The garment is the subject; the beat already
+            # says whose hands.
+            obj = {"she": "her", "he": "him", "they": "them"}.get(subj.lower(), subj)
+            bits.append(f"the {what} {'come' if plural else 'comes'} off {obj} during "
+                        f"this shot; by the last frame {subj_pron} {verb} off, dropped away out "
+                        f"of frame, and {subj.lower()} is no longer wearing {pron}")
+        elif subj:
             bits.append(f"{subj} takes the {what} off during this shot; by the last frame "
                         f"{subj_pron} {verb} off, dropped away out of frame, and {subj.lower()} is "
                         f"no longer wearing {pron}")
@@ -3746,6 +3834,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if here_again:
             body, _ = dedupe_prop_mentions(body, here_again)
         off_now = []                         # (person, garment) coming off in THIS shot
+        removed_by_other = {}                # wearer -> True when someone else took it off
 
         def _drop(before, after):
             """Record what `after` no longer has, for both removal paths."""
@@ -3784,7 +3873,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             # on mid-scene rather than being listed in the sheet.
             active = auto_restraint_additions(active, body, lock_restraints)
             before = {k: list(v) for k, v in active.items()}
-            active = _drop(before, auto_wardrobe_removals(active, body, lock_restraints))
+            active = _drop(before, auto_wardrobe_removals(active, body, lock_restraints,
+                                                          by_other=removed_by_other))
             # A garment that lives ONLY in the anchor prose (never in the wardrobe
             # channel): the removal phrase names it, so scrub it from the anchor or
             # the anchor re-applies it forever.
@@ -3887,7 +3977,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         # impersonally, so it summons nobody.
         speak_off = [(n, it) for n, it in off_now
                      if not n or person_referenced(body, n, active)]
-        off_clause = takes_off_clause(speak_off, active)
+        off_clause = takes_off_clause(speak_off, active, removed_by_other)
         prop_clause = (prop_continuity_clause(bound_props, carried)
                        + prop_count_clause([n for n in here_again if n not in bound_props]))
         # A removal that leaves a body zone with NOTHING on it is the one the node
@@ -4020,7 +4110,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 if silent_shot:
                     block += f"\noverall_soundscape: {gs}{NO_VOICE_CLAUSE}"
                 elif no_speech:
-                    block += f"\noverall_soundscape: {gs}{NO_VOICE_SPEECH_CLAUSE}"
+                    # The user's bed may end in a full stop; the clause starts with a comma.
+                    block += f"\noverall_soundscape: {gs.rstrip('. ')}{NO_VOICE_SPEECH_CLAUSE}"
                 else:
                     block += f"\noverall_soundscape: {gs}"
             elif silent_shot:
