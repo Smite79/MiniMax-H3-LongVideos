@@ -21,6 +21,12 @@ ComfyUI core's H3 support, plus Pillow (already shipped) for the text overlays.
 
 **Requires ComfyUI 0.31 or newer** with native MiniMax-H3 support. Tested on 0.33.
 
+**Upgrading from an earlier version:** the node's type is now `H3LongVideosV2`, so a
+workflow saved against the old node shows it as missing. Delete it and add a fresh
+**H3 Long Videos**. This is deliberate — ComfyUI restores widgets by position, and
+the widget list changed, so an old node would silently load every setting into the
+wrong widget.
+
 ## What you need loaded
 
 | | |
@@ -33,10 +39,13 @@ ComfyUI core's H3 support, plus Pillow (already shipped) for the text overlays.
 ## Quick start
 
 ```
-UNETLoader ─┐                     images ─> Video Combine / Save Video
-CLIPLoader ─┼─> H3 Long Videos ─> audio  ─┘
+UNETLoader ─┐                     images ─> (H3 Overlay) ─> Video Combine / Save Video
+CLIPLoader ─┼─> H3 Long Videos ─> audio  ─────────────────┘
 VAELoader ──┘                     info   ─> Show Text
 ```
+
+**H3 Overlay** is optional: wire it in only when you want a watermark or an intro
+title composited onto the frames. Put it after any upscale.
 
 The text fields are **input sockets, not boxes on the node** — wire a multiline text
 node into them. `prompt` is required; leave it unconnected and the graph errors
@@ -143,7 +152,9 @@ detect is reported there.
   so the room doesn't change at every cut.
 - **Seams.** Each shot continues from the previous one's last frame, and the
   duplicate frame at the join is trimmed.
-- **Overlays.** Optional watermark and intro title, composited after any upscale.
+- **Guards.** One `guards` setting (off / auto / on) covers limb count, subject
+  count, solid objects, continuous motion and two-body contact. Leave it on `auto`.
+- **Overlays.** Watermark and intro title live on the separate **H3 Overlay** node.
 
 ## Reference images
 

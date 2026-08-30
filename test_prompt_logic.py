@@ -1247,16 +1247,29 @@ def check_beat_count_is_unbreakable():
                                "wardrobe: Dom -= coat", "##"), "auto")[0]
     check("...and a trailing one attaches to the beat above it", len(_trail) == 2)
     check("...keeping the directive", "wardrobe:" in _trail[1])
-    _wrap, _wnote = S.expand_beats(SP("Dom walks to the barn and opens\n"
-                                      "the doors, then steps inside.\n\n"
+    _wrap, _wnote = S.expand_beats(SP("Dom walks to the barn and opens the\n"
+                                      "doors, then steps inside.\n\n"
                                       "Mara follows him in.", "##"), "auto")
     check("a hard-wrapped sentence is one beat, not a fragment", len(_wrap) == 2)
     check("...joined back into one line", "opens the doors" in _wrap[0])
     check("...and the join is reported", "continued the sentence" in _wnote)
-    # Both halves of the signal are required, or ordinary beats would be swallowed.
+    check("a wrap after a comma is joined too",
+          len(S.expand_beats(SP("Dom opens the doors,\nthen steps inside.", "##"),
+                             "auto")[0]) == 1)
+    # The join must never cost a beat. It fires only when the line above CANNOT
+    # have ended -- an earlier rule ("no full stop above, lowercase below") merged
+    # three beats typed in the README's own style into one shot.
     check("beats typed without full stops still split",
           len(S.expand_beats(SP("Dom opens the doors\nMara follows him in\n"
                                 "Dom lifts a crate", "##"), "auto")[0]) == 3)
+    check("lowercase beats without full stops still split",
+          len(S.expand_beats(SP("walks across the tarmac\nclimbs in and flips the "
+                                "switches\ntaxis down the runway", "##"), "auto")[0]) == 3)
+    check("a beat ending on a pronoun is complete",
+          len(S.expand_beats(SP("Dom looks at her\nshe smiles", "##"), "auto")[0]) == 2)
+    check("a beat ending on a particle is complete",
+          len(S.expand_beats(SP("Mara follows him in\nshe looks around", "##"),
+                             "auto")[0]) == 2)
     check("a lowercase line after a finished sentence still splits",
           len(S.expand_beats(SP("Dom opens the doors.\nthe wind picks up.",
                                 "##"), "auto")[0]) == 2)
@@ -1487,6 +1500,10 @@ def check_forced_shot_seconds():
           == S.align_frame_count(S.MIN_CONTENT_FRAMES))
     check("...and with pacing off it still gets the ceiling",
           P([""], 24, 294, per_beat=False)[0][0] == 294)
+    # NO beats is a one-paragraph prompt -- one shot at the length asked for. The
+    # placeholder that stands in for it is not a beat with nothing in it.
+    check("a one-paragraph prompt (no beats) keeps the ceiling",
+          P([], 24, 294, per_beat=True)[0][0] == 294)
 
     # 'seconds:' is an explicit statement, so it is honored BELOW the guess floor --
     # the same bug class as shot_seconds being raised to 124f.
@@ -3018,6 +3035,20 @@ def check_restraints_applied_in_a_beat():
           S._reads_plural(["handcuffs"]) and S._reads_plural(["ankle chains"]))
     check("...on the item's own noun, not a fixed choice",
           not S._reads_plural(["leg chain"]) and not S._reads_plural(["duct tape gag"]))
+    check("a trailing 'ss' is not a plural", not S._reads_plural(["harness"]))
+
+    # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
+    # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
+    # whole-clip time expansion is the largest allocation in a run, so a "tiled"
+    # retry without a temporal tile retried with almost the same footprint.
+    check("a long clip is chunked in time", S._auto_tile_t(18) == S.AUTO_TILE_T)
+    check("a clip no longer than one tile is not", S._auto_tile_t(6) is None)
+    check("an explicit value still wins", S._auto_tile_t(18, 4) == 4)
+    # The overlay node composites in place; as a downstream node it must copy, or
+    # the watermark lands on the sampler's cached output.
+    _ov = open(os.path.join(os.path.dirname(os.path.abspath(S.__file__)), "overlay.py"),
+               encoding="utf-8").read()
+    check("the overlay node works on a copy of its input", ".clone()" in _ov.split("class H3Overlay", 1)[1])
 
     _A2 = {"Mara": ["she", "handcuffs"], "Dom": ["he", "shirt"]}
     check("nobody out of shot is given a restraint identity",
