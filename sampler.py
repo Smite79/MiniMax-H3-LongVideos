@@ -2046,6 +2046,17 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
                     desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=_drop_mouth(n)))
                     if desc:
                         pos = refs[n]
+                        # A POSSESSIVE first mention had the description inserted
+                        # inside the possessive -- "Kate (28, brown hair)'s ankles" --
+                        # which splits the name from the noun it owns and leaves a
+                        # dangling "'s" behind a parenthetical. Prose written as
+                        # "Dan grabs Kate's ankles" hits this on nearly every beat,
+                        # and a description that reads as its own noun phrase is the
+                        # kind of thing that renders as a second figure. Bind after
+                        # the possessive marker instead: "Kate's (28, ...) ankles".
+                        poss = re.match(r"['’]s\b", body[pos:])
+                        if poss:
+                            pos += poss.end()
                         body = body[:pos] + f" ({desc})" + body[pos:]
             else:
                 prefix_bits.append(roll_call)
