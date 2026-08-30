@@ -1348,6 +1348,9 @@ _POSTURE_SET = (
         r"curl(?:s|ed)\s+up|collapse[sd]?)\s+(?:down\s+)?(?:on|across|along|over)\s+" + _SURF, re.I)),
     ("lying", re.compile(r"\bon\s+(?:her|his|their)\s+(?:back|stomach|belly|side|front)\b", re.I)),
     ("lying", re.compile(r"\bhog-?(?:tied|cuffed)\b|\blying\b|\bprone\b|\bsupine\b", re.I)),
+    # No lying verb at all: "asleep on the concrete", "unconscious on the mat".
+    ("lying", re.compile(r"\b(?:asleep|sleeping|unconscious|passed\s+out|out\s+cold|"
+                         r"motionless|limp)\s+on\s+" + _SURF, re.I)),
     ("kneeling", re.compile(
         r"\b(?:kneels?|kneeling|knelt)\b(?:\s+(?:down\s+)?(?:on|at|beside)\s+" + _SURF + r")?"
         r"|\bon\s+(?:her|his|their)\s+knees\b", re.I)),
@@ -3923,6 +3926,17 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     # 2's "cuffed to the headboard", not fall back to wording that contradicts it.
     restraint_usage = {}
     posture_state = {}       # name -> (pose, surface): where each body is, until moved
+    # The ANCHOR may state a position too -- "Kate is laying on the floor, asleep."
+    # A tracked person's sentence is (rightly) scrubbed from the emitted anchor, or
+    # she would be introduced twice per shot; but the scrub was silently deleting
+    # the position stated in it. Read it as STATE before anything is scrubbed, so
+    # what the anchor says about where a body is survives as the carried posture.
+    detect_posture(anchor_id, active, posture_state)
+    if posture_state and notes_out is not None:
+        for _pn, (_pp, _ps) in posture_state.items():
+            notes_out.append(
+                f"the anchor puts {_pn} {_pp}{' on the ' + _ps if _ps else ''}; that position "
+                f"is carried into every shot until the prose moves them")
     # person -> restraint items they were ALREADY wearing when the last shot
     # rendered. Only those can be pinned to "the same ones as the previous shot";
     # hardware appearing for the first time has no previous shot to match.
