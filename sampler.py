@@ -1356,9 +1356,14 @@ _POSTURE_SET = (
         r"|\bon\s+(?:her|his|their)\s+knees\b", re.I)),
     ("sitting", re.compile(
         r"\b(?:sits?|sitting|sat|seated)\b(?:\s+(?:down\s+|up\s+)?(?:on|in|at)\s+" + _SURF + r")?", re.I)),
+    # Getting UP. Every cue here has to mean the body left the floor, or it clears a
+    # position the prose never changed: "crosses her legs" and "rises to the bait"
+    # both did, taking the floor out of a shot that had her lying on it.
     ("standing", re.compile(
-        r"\b(?:stands?|standing|stood|gets?\s+up|got\s+up|rises|rose|walks?|walked|"
-        r"steps?|stepped|runs?|ran|paces?|crosses|strides?|on\s+(?:her|his|their)\s+feet)\b", re.I)),
+        r"\b(?:stands?|standing|stood|gets?\s+up|got\s+up|walks?|walked|"
+        r"steps?|stepped|runs?|ran|paces?|strides?|on\s+(?:her|his|their)\s+feet)\b"
+        r"|\bcrosses\s+(?!her\b|his\b|their\b)"
+        r"|\b(?:rises?|rose)\s+to\s+(?:her|his|their)\s+feet\b", re.I)),
 )
 # Someone moved BY someone else: "lifts her onto the table", "sets her down on the
 # floor". The pronoun must be the object, not a possessive -- "positions her legs"
@@ -1400,12 +1405,18 @@ def detect_posture(body, active, posture, departed=()):
     move, so the clause must not claim they were already there."""
     names = [n for n in active if n and n not in (departed or ())]
     moved_now = set()
-    if not names:
+    # The one-person, no-character_memory mode: everything is the unnamed subject
+    # under ''. There is no name to resolve, so a posture cue in the prose is
+    # theirs by definition -- without this the whole feature was silently off for
+    # plain-text prompts, which is a documented way to drive this node.
+    lone = "" if (not names and "" in active) else None
+    if not names and lone is None:
         return moved_now
     pron_map = _pron_map({k: v for k, v in active.items() if k in names})
     single = len(names) == 1
     masked, _ = _mask_quotes(body or "")
-    moved = re.compile(_MOVED_TPL.replace("NAME", "|".join(re.escape(n) for n in names)), re.I)
+    moved = re.compile(_MOVED_TPL.replace(
+        "NAME", "|".join(re.escape(n) for n in names) if names else r"(?!)"), re.I)
     for sent in re.split(r"(?<=[.!?])\s+", masked):
         if not sent.strip():
             continue
@@ -1437,8 +1448,9 @@ def detect_posture(body, active, posture, departed=()):
             for m in rx.finditer(sent):
                 if any(a <= m.start() < b for a, b in moved_spans):
                     continue                            # "sits her on the chair" is a move
-                who = _subject_before(sent[:m.start()], names, pron_map, single)
-                if not who or who in moved_now:
+                who = (lone if lone is not None
+                       else _subject_before(sent[:m.start()], names, pron_map, single))
+                if who is None or who in moved_now:
                     continue
                 if pose == "standing":
                     posture.pop(who, None)              # upright is the default; say nothing
@@ -1458,11 +1470,13 @@ def posture_clause(posture, active, body, departed=(), carried=(), skip=()):
     held = {_norm_name(c) for c in (carried or ())}
     bits = []
     for name, (pose, surf) in (posture or {}).items():
-        if not name or name in skip or _norm_name(name) in gone:
+        if name in skip or (name and _norm_name(name) in gone):
             continue
-        if _norm_name(name) not in held and not person_in_shot(body, name, active, departed):
+        # The unnamed subject is the only person there; they are in every shot.
+        if name and _norm_name(name) not in held \
+                and not person_in_shot(body, name, active, departed):
             continue
-        subj = _subject_term(name, active)
+        subj = _subject_term(name, active) if name else "the subject"
         on = f"on the {surf} " if surf else ""
         if pose == "on" and not surf:
             continue
@@ -1648,15 +1662,36 @@ def _same_hardware(item, existing):
             return True
         if re.search(r"\b" + re.escape(h_old) + r"\b", _item_name(item), re.I):
             return True
-        # Same LIMB, both restraints: one piece of hardware. "handcuffs" arriving
-        # on wrists the sheet already says are handcuffed, or "wrist bindings" next
-        # to those handcuffs, stacked three names on one pair of cuffs -- and the
-        # identity clause then pinned three things to the previous shot's one.
+        # Same LIMB, and one of the two names no hardware of its own: one piece of
+        # equipment under two names. "handcuffs" arriving on wrists the sheet already
+        # describes as handcuffed, or "wrist bindings" next to those handcuffs,
+        # stacked three names on one pair of cuffs.
+        #
+        # Both naming REAL hardware is a different case and must stay two items: a
+        # rope tied around wrists that are already cuffed is a second restraint, and
+        # dropping it lost it from the chain entirely.
         old_regions = restraint_regions([e])
         if new_regions and old_regions and new_regions == old_regions \
-                and new_regions != ["body"]:
+                and new_regions != ["body"] \
+                and (_generic_restraint(item) or _generic_restraint(e)):
             return True
     return False
+
+
+# Named hardware ("handcuffs", "rope", "hip chain") versus a description of a bound
+# body ("Wrists handcuffed behind back") or a placeholder ("wrist bindings"). Only
+# the latter can be another name for equipment already tracked.
+_GENERIC_RESTRAINT_HEAD = frozenset((
+    "binding", "bindings", "restraint", "restraints", "bond", "bonds"))
+
+
+def _generic_restraint(item):
+    head = _singular_head(_item_head(item))
+    if head in {_singular_head(h) for h in _GENERIC_RESTRAINT_HEAD}:
+        return True
+    name = _item_name(item or "")
+    return not (_RESTRAINT_NOUN.search(name) or _item_head(item) in _RESTRAINT_HEADS
+                or _RESTRAINT_PHRASE.search(name))
 
 
 def _singular_head(head):
