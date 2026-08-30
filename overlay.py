@@ -253,3 +253,82 @@ def apply_overlays(frames, fps, watermark="", wm_position="bottom-right", wm_siz
             notes.append(f"intro title skipped ({type(e).__name__}: {e})")
 
     return frames, "; ".join(notes)
+
+
+# --- the node --------------------------------------------------------------
+# Overlays used to be eleven widgets on the sampler. They are compositing, not
+# generation: they run after the render, touch no conditioning, and most renders
+# never use them. Eleven widgets is a fifth of that node's surface spent on a
+# feature you reach for occasionally, so they live out here instead -- wire this
+# node when you want a watermark or a title card, and the sampler stays about
+# making video.
+class H3Overlay:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "fps": ("INT", {"default": 24, "min": 1, "max": 120,
+                    "tooltip": "Only used to convert the intro's SECONDS into frames. "
+                               "Match your save node; H3 always renders 24."}),
+            },
+            "optional": {
+                "watermark_text": ("STRING", {"default": "",
+                    "tooltip": "Composited onto every frame with PIL -- never asked of the "
+                               "model, which would render drifting, re-spelling letterforms. "
+                               "Empty disables it."}),
+                "watermark_position": (["bottom-right", "bottom-left", "bottom-center",
+                                        "top-right", "top-left", "top-center", "center"],
+                    {"default": "bottom-right"}),
+                "watermark_size": ("FLOAT", {"default": 4.0, "min": 0.5, "max": 40.0, "step": 0.5,
+                    "tooltip": "Cap height as a percentage of the frame's SHORT edge, so it "
+                               "looks the same at every aspect ratio."}),
+                "watermark_opacity": ("FLOAT", {"default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "watermark_margin": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 25.0, "step": 0.5,
+                    "tooltip": "Inset from the frame edge, as a percentage of the short edge."}),
+                "intro_text": ("STRING", {"multiline": True, "default": "",
+                    "tooltip": "Title card held over the opening frames, then faded out. "
+                               "Empty disables it."}),
+                "intro_position": (["center", "lower-third", "top-center", "bottom-center"],
+                    {"default": "center"}),
+                "intro_seconds": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 30.0, "step": 0.5,
+                    "tooltip": "How long the title holds at full opacity before the fade."}),
+                "intro_fade": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 10.0, "step": 0.1,
+                    "tooltip": "Fade-out length in seconds, after the hold."}),
+                "intro_size": ("FLOAT", {"default": 9.0, "min": 1.0, "max": 40.0, "step": 0.5,
+                    "tooltip": "Cap height as a percentage of the short edge."}),
+                "overlay_font": ("STRING", {"default": "arial.ttf",
+                    "tooltip": "TrueType font for BOTH overlays: a bare name resolved against "
+                               "the system font folder (arial.ttf, arialbd.ttf, segoeui.ttf) or "
+                               "a full path. Falls back to the first font that loads."}),
+                "overlay_stroke": ("INT", {"default": 0, "min": 0, "max": 20,
+                    "tooltip": "Black outline thickness around the white text. 0 keeps it pure "
+                               "white; 2-3 makes it survive a bright sky or a white wall."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "info")
+    FUNCTION = "run"
+    CATEGORY = "H3"
+    DESCRIPTION = ("Composite a watermark and/or an intro title onto finished frames. "
+                   "Put it AFTER any upscale, so glyphs are rasterized at the final "
+                   "pixel size instead of being interpolated up with the picture.")
+
+    def run(self, images, fps=24, watermark_text="", watermark_position="bottom-right",
+            watermark_size=4.0, watermark_opacity=0.75, watermark_margin=3.0,
+            intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
+            intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0):
+        frames, note = apply_overlays(
+            images, max(1, int(fps)), watermark_text, watermark_position, watermark_size,
+            watermark_opacity, watermark_margin, intro_text, intro_seconds,
+            intro_fade, intro_size, intro_position, overlay_font, overlay_stroke)
+        if not note:
+            wanted = bool((watermark_text or "").strip() or (intro_text or "").strip())
+            note = "overlays applied" if wanted else "no overlay text given -- frames unchanged"
+        return (frames, note)
+
+
+NODE_CLASS_MAPPINGS = {"H3Overlay": H3Overlay}
+NODE_DISPLAY_NAME_MAPPINGS = {"H3Overlay": "H3 Overlay (watermark + title)"}
+__all__ = ["apply_overlays", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

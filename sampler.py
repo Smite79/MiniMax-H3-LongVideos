@@ -258,12 +258,8 @@ def split_paragraphs(text, delimiter):
 # APPEND to this tuple when adding a widget; never insert into the middle.
 ADDED_WIDGETS = (
     "beat_split", "per_beat_length",
-    "watermark_text", "watermark_position", "watermark_size", "watermark_opacity",
-    "watermark_margin", "intro_text", "intro_position", "intro_seconds",
-    "intro_fade", "intro_size", "overlay_font", "overlay_stroke",
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
-    "exposed_terms", "anatomy_guard", "lock_restraints", "solidity_guard",
-    "motion_guard", "contact_guard", "latent_upscale", "latent_upscale_scale",
+    "exposed_terms", "lock_restraints", "guards", "latent_upscale",
     "normalize_audio", "bed_continuity",
     "auto_soundscape", "allow_nonspeech_vocals",
     # Not a widget -- a SIGMAS socket carries no widget value and so cannot shift
@@ -6188,19 +6184,6 @@ class H3LongVideos:
                                "chosen size, which is what a 0 in the old widget did. One "
                                "paragraph = one shot, so total video = (paragraph count) x this. "
                                "Max ~15s."}),
-                "allow_oversize_shots": ("BOOLEAN", {"default": False,
-                    "tooltip": "OFF (default): a forced shot_seconds that won't fit VRAM is clamped DOWN to "
-                               "what fits, and the clamp is reported in info. ON: honor the requested length "
-                               "even if it exceeds the budget -- the render may spill into system RAM (slow) "
-                               "or OOM. Only affects forced shot_seconds, not auto."}),
-                "vram_headroom_gb": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 32.0, "step": 0.5}),
-                "allow_res_backoff": ("BOOLEAN", {"default": True,
-                    "tooltip": "If VRAM is tight, step resolution down instead of failing."}),
-                # ON by default: the prompt-side clauses ASK H3 not to vocalize (and now
-                # condition the soundscape field too), but asking is not a guarantee --
-                # babble under a silent shot was the one artifact that survived both.
-                # Muting is the only deterministic answer, so it is the default and the
-                # trade-off (that shot's ambience goes too) is stated in `info`.
                 "mute_nonspeech_audio": ("BOOLEAN", {"default": True,
                     "tooltip": "DETERMINISTIC gibberish fix: FULLY silence the audio of any shot that has no "
                                "scripted dialogue (no double-quoted line). Prompt-level silencing asks H3 "
@@ -6243,76 +6226,11 @@ class H3LongVideos:
                                "stop any residual difference reading as a click. It never changes "
                                "length -- the track is frame-locked to the video. Muted shots are "
                                "excluded from the measurement entirely."}),
-                "mute_fade_ms": ("INT", {"default": 40, "min": 0, "max": 500, "step": 10,
-                    "tooltip": "Fade applied to the AUDIBLE shots that border a silenced one, so audio "
-                               "doesn't cut to digital silence with a click. The silenced shots keep NO "
-                               "original audio at all -- fading the muted shot itself would leave this many "
-                               "ms of the gibberish audible at each end of every muted shot."}),
-                "decode_tile_frames": ("INT", {"default": 0, "min": 0, "max": 128, "step": 1,
-                    "tooltip": "Temporal tiling for the VAE decode (tile_t). 0 = ComfyUI default, which "
-                               "expands the WHOLE clip at once -- the single largest allocation in a run, "
-                               "and the usual point where a big checkpoint tips into shared memory. Try 8-16 "
-                               "if you spill during decode rather than sampling. Lower = less peak VRAM, "
-                               "slightly slower."}),
-                "decode_tile_size": ("INT", {"default": 0, "min": 0, "max": 1024, "step": 32,
-                    "tooltip": "Spatial tile size for the VAE decode (tile_x/tile_y). 0 = ComfyUI default. "
-                               "Try 256 on a tight card at 1344x768."}),
                 "cleanup_between_shots": ("BOOLEAN", {"default": True,
                     "tooltip": "Between beats, move each shot's decoded video+audio to system RAM and run "
                                "a full VRAM+RAM purge (GC + CUDA cache), so a long chain doesn't accumulate "
                                "on the GPU and OOM. Recommended on 16GB. Turn off only on a big card where "
                                "you want to skip the per-shot cleanup cost."}),
-                "upscale": (["off", "rtx", "model", "lanczos"], {"default": "off",
-                    "tooltip": "Optional post-pass on the finished frames. 'rtx' = NVIDIA RTX Video Super "
-                               "Resolution (Tensor Cores -- fastest and best for video; needs the "
-                               "Nvidia_RTX_Nodes_ComfyUI pack, falls back automatically if absent). 'model' = "
-                               "a Real-ESRGAN/UltraSharp upscale model from upscale_model. 'lanczos' = plain "
-                               "resize. All of these ENHANCE/ENLARGE; for true detail reconstruction from a "
-                               "low-res render, use a separate LTX 2.3 upscale pass."}),
-                "upscale_model": (_upscale_model_list(), {
-                    "tooltip": "Upscale model from models/upscale_models (used when upscale = model)."}),
-                "upscale_target_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32,
-                    "tooltip": "Fit the result's short edge to this many px (0 = keep the model's native "
-                               "factor / no resize). E.g. generate 512 fast, set 768 to land at native size."}),
-                "upscale_batch": ("INT", {"default": 4, "min": 1, "max": 64,
-                    "tooltip": "Frames per chunk for the model upscale (lower = less VRAM, slower)."}),
-                "watermark_text": ("STRING", {"default": "",
-                    "tooltip": "Composited with PIL onto every finished frame -- NOT rendered by the "
-                               "model and NOT added to the prompt. White glyphs on a transparent layer, "
-                               "alpha-blended over the video, so only the letters land on the picture. "
-                               "Applied AFTER any upscale, so the text is crisp at final resolution. "
-                               "Leave empty for none."}),
-                "watermark_position": (["bottom-right", "bottom-left", "bottom-center",
-                                        "top-right", "top-left", "top-center", "center"],
-                    {"default": "bottom-right"}),
-                "watermark_size": ("FLOAT", {"default": 4.0, "min": 0.5, "max": 40.0, "step": 0.5,
-                    "tooltip": "Cap height as a percentage of the frame's SHORT edge, so the mark keeps "
-                               "its apparent size across portrait and landscape presets alike."}),
-                "watermark_opacity": ("FLOAT", {"default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "tooltip": "Multiplies the white text alpha. 1.0 = solid white; 0.75 reads as a "
-                               "watermark without burying the picture under it."}),
-                "watermark_margin": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 25.0, "step": 0.5,
-                    "tooltip": "Inset from the frame edge, as a percentage of the SHORT edge."}),
-                "intro_text": ("STRING", {"multiline": True, "forceInput": True, "default": "",
-                    "tooltip": "Title composited over the OPENING frames -- white on transparent, so the "
-                               "first shot plays underneath it rather than being replaced by a card. "
-                               "Multi-line is centered as a block. Holds for intro_seconds, then fades "
-                               "out over intro_fade. Also PIL, never the model."}),
-                "intro_position": (["center", "lower-third", "top-center", "bottom-center"],
-                    {"default": "center"}),
-                "intro_seconds": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 30.0, "step": 0.5,
-                    "tooltip": "How long the title stays at full opacity before the fade starts."}),
-                "intro_fade": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 10.0, "step": 0.1,
-                    "tooltip": "Linear fade-out length after the hold. 0 = hard cut."}),
-                "intro_size": ("FLOAT", {"default": 9.0, "min": 0.5, "max": 40.0, "step": 0.5,
-                    "tooltip": "Title cap height as a percentage of the frame's SHORT edge."}),
-                "overlay_font": ("STRING", {"default": "arial.ttf",
-                    "tooltip": "TrueType font for BOTH overlays: a bare name resolved against the system "
-                               "font folder (arial.ttf, arialbd.ttf, segoeui.ttf) or a full path to a "
-                               ".ttf/.otf file. Falls back to the first font that loads if this one fails."}),
-                "overlay_stroke": ("INT", {"default": 0, "min": 0, "max": 20,
-                    "tooltip": "Black outline thickness in pixels around the white text. 0 keeps it pure "
-                               "white as asked; 2-3 makes it survive a bright sky or a white wall."}),
                 "ref_mode": (["where tagged", "first shot", "every shot", "every shot + handoff ref"],
                     {"default": "where tagged",
                      "tooltip": "Which shots the ref_image inputs condition. A shot carries EITHER "
@@ -6404,31 +6322,22 @@ class H3LongVideos:
                                "'chain', 'collar', 'strap' and 'belt' are NOT treated as restraints; "
                                "they are jewellery, a shirt part, a dress part and a garment at least "
                                "as often."}),
-                "contact_guard": (["off", "auto", "on"], {"default": "auto",
-                    "tooltip": "Keep two bodies in contact correctly aligned -- any position, "
-                               "not a list of named ones.\n\n"
-                               "Position-agnostic on purpose. The model already knows more "
-                               "position names than a dictionary could hold; what it gets wrong "
-                               "is the GEOMETRY, so the geometry is what gets stated, and these "
-                               "hold for every arrangement:\n"
-                               "  - OWNERSHIP: each person keeps their own head, two arms and two "
-                               "legs, each joined to the body it belongs to. Overlapping bodies "
-                               "is exactly when an arm gets reassigned to the wrong torso.\n"
-                               "  - SEPARATION: they meet at the surface of the skin, each keeping "
-                               "its own volume, rather than passing into one another.\n"
-                               "  - STABLE ROLES: whoever is above stays above, below stays below, "
-                               "behind stays behind, for the whole shot and from every camera "
-                               "angle. Positions morph mid-shot because nothing fixes them.\n"
-                               "  - SUPPORT: weight rests on whatever is holding it, and the two "
-                               "bodies stay in proportion.\n\n"
-                               "Needs TWO people in the shot -- one body cannot be misaligned "
-                               "against another, and saying otherwise would invite a second person "
-                               "in. 'auto' fires on a contact cue in the beat; 'on' states it "
-                               "whenever two or more people are present.\n\n"
-                               "Describe the arrangement in the beat itself in RELATIVE terms "
-                               "(who is above, behind, facing whom) rather than by a position "
-                               "name alone -- this guard holds a stated arrangement together, it "
-                               "cannot infer one you did not state."}),
+                "guards": (["off", "auto", "on"], {"default": "auto",
+                    "tooltip": "The continuity guards, as one setting: solid objects, continuous "
+                               "motion, two-body contact, the limb count and the subject count.\n\n"
+                               "They were five separate widgets and were never meant to be tuned "
+                               "against each other -- every one of them wants 'auto'.\n\n"
+                               "'auto' (recommended): each guard fires only on the shots that need "
+                               "it -- a contact cue in the beat, two or more people in frame, or a "
+                               "render below the model's native size, where duplication and extra "
+                               "limbs get much more likely.\n"
+                               "'on': state all of them on every shot. More words competing with "
+                               "your prose, and a scenery shot gets told about bodies.\n"
+                               "'off': say none of it. Use when the guards are fighting a stylised "
+                               "look you actually want.\n\n"
+                               "Each is stated POSITIVELY -- at cfg 1 the negative prompt is never "
+                               "evaluated, and a negation in the positive names the thing it "
+                               "forbids."}),
                 "latent_upscale": (_latent_upscale_model_list(), {"default": "off",
                     "tooltip": "Upscale each shot in LATENT space, between sampling and decode, "
                                "so the shot is SAMPLED small and only DECODED large.\n\n"
@@ -6449,56 +6358,6 @@ class H3LongVideos:
                                "count and the audio are untouched. Decode memory goes up with the "
                                "square of the scale, so tiled decode is forced on while this is "
                                "active."}),
-                "latent_upscale_scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0,
-                    "step": 0.05, "round": 0.01,
-                    "tooltip": "Latent upscale factor, applied to both axes. 2.0 doubles each "
-                               "side (4x the pixels). 1.0 disables it as surely as 'off'. Ignored "
-                               "when latent_upscale is 'off'."}),
-                "motion_guard": (["off", "auto", "on"], {"default": "auto",
-                    "tooltip": "Stop poses being reached without the frames in between -- the "
-                               "head arriving at a new angle with no path to it (a 'neck snap'), "
-                               "a body teleporting between two positions.\n\n"
-                               "What is missing in a snap is the PATH, not the pose, so the path "
-                               "is what gets stated: movement travels through every position on "
-                               "the way, at one steady speed, the neck following the shoulders "
-                               "and the shoulders following the hips. Positive, because at cfg 1 "
-                               "H3 is CFG-free and the negative is never evaluated -- and 'the "
-                               "head does not snap round' in the positive names a head snapping "
-                               "round.\n\n"
-                               "'auto' speaks only on a beat that actually moves someone (turns, "
-                               "looks, walks, leans, reaches... and the high-jerk ones -- struggles, "
-                               "pulls, twists, writhes -- where a limb most often arrives without its "
-                               "path), since a beat where nobody changes orientation has no path to "
-                               "describe. 'on' states it every shot. Names nobody, so it adds no "
-                               "second reference to anyone already in frame.\n\n"
-                               "A snap right after a cut is a different thing: that is the model "
-                               "leaving the keyframe pose. handoff_offset helps there."}),
-                "solidity_guard": (["off", "auto", "on"], {"default": "auto",
-                    "tooltip": "Keep bodies from passing through objects. States that the solid "
-                               "things in the shot occupy space and that bodies stop at surfaces.\n\n"
-                               "Stated POSITIVELY, and it has to be: H3 is CFG-free at cfg 1, so a "
-                               "negative prompt is never evaluated, and 'does not walk through the "
-                               "wall' in the positive names walking through a wall -- a mention is a "
-                               "presence cue. It says what bodies DO instead: stop at the surface, "
-                               "rest on the floor, press against what they touch, go around the "
-                               "furniture.\n\n"
-                               "'auto' speaks only when the shot actually names something solid "
-                               "(walls, doors, tables, stairs, vehicles, crates, trees...), reading "
-                               "BOTH the beat and the identity block, since the set is usually "
-                               "described in the anchor. 'on' states it every shot. Only ever "
-                               "applied to a shot with someone in it -- a body is needed before one "
-                               "can pass through anything."}),
-                 "anatomy_guard": (["off", "auto", "on"], {"default": "auto",
-                     "tooltip": "State each person's limb COUNT positively, to stop spare arms, "
-                                "duplicated hands and the third leg. H3 is CFG-free at cfg 1, so a "
-                                "NEGATIVE prompt is never evaluated -- 'extra limbs' in a negative does "
-                                "nothing. Naming a number gives the model a target instead; negating one "
-                                "only puts the word in the prompt. Added per-shot and only where people "
-                                "are actually present, never in the anchor (anchor body words are what "
-                                "burn a face into every opening frame). 'auto' = on below 768 short edge "
-                                "OR when a LoRA is applied, and also on ANY shot holding two or more "
-                                "people -- spare limbs are grown where bodies meet and move together. "
-                                "Costs ~90 tokens on shots with people."}),
                 "exposed_terms": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "What a stripped body zone is CALLED, per character, so it persists "
                                "automatically instead of being typed into every beat. Same syntax as "
@@ -6538,19 +6397,6 @@ class H3LongVideos:
                                "on items the character is already wearing, so 'the plane takes off' does "
                                "nothing. Additions/swaps still use 'wardrobe: += ...' (which overrides). "
                                "Turn OFF to control wardrobe only via explicit 'wardrobe:' lines."}),
-                "subject_count_guard": (["auto", "on", "off"], {"default": "auto",
-                    "tooltip": "Anti-duplication: prepend an explicit subject count to each shot "
-                               "(\"Exactly two people in this shot, no duplicates, no other people in "
-                               "frame\"). Character duplication gets much more likely BELOW the model's "
-                               "native 768 short edge -- fewer pixels per subject pushes the sample out of "
-                               "the training distribution and the figure gets tiled. A LoRA causes it too: a "
-                               "distilled LoRA fixes composition (including how many people are in frame) "
-                               "in its first step or two, so it duplicates even at native size -- there the "
-                               "count is moved to the FRONT of the prompt so it binds before the scene. "
-                               "'auto' = on when the short edge is under 768 OR a LoRA is applied, and also "
-                               "on ANY shot holding two or more people -- multi-figure frames are where "
-                               "duplication happens even at native size; "
-                               "'on' always; 'off' never."}),
                  "auto_silence_nonspeech": ("BOOLEAN", {"default": True,
                      "tooltip": "Stop mouths moving / gibberish audio on shots with no dialogue. Any beat "
                                 "with no scripted speech gets an explicit 'lips closed, no dialogue' clause, "
@@ -6745,12 +6591,12 @@ class H3LongVideos:
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
             per_beat_length=True, beat_split="auto",
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
-            exposed_terms="", anatomy_guard="auto", lock_restraints=True,
-            solidity_guard="auto", motion_guard="auto", contact_guard="auto",
+            exposed_terms="", lock_restraints=True, guards="auto",
+            anatomy_guard=None, solidity_guard=None, motion_guard=None, contact_guard=None,
             latent_upscale="off", latent_upscale_scale=2.0,
              auto_soundscape="fill if blank",
              auto_silence_nonspeech=True, allow_nonspeech_vocals=False,
-             subject_count_guard="auto",
+             subject_count_guard=None,
             upscale="off", upscale_model="none",
             upscale_target_short_edge=0, upscale_batch=4,
             mute_nonspeech_audio=True, mute_fade_ms=40, normalize_audio="bed + seams",
@@ -6763,6 +6609,18 @@ class H3LongVideos:
             ref_mode="where tagged", ref_image_size="match", ref_noise_aug=0.999,
             sigmas=None,
             graph=None, node_id=None):
+
+        # The five continuity guards are ONE widget now. They were never independent
+        # in practice -- every one of them wants 'auto', and five three-way dropdowns
+        # asking the same question is most of what made this node hard to read. The
+        # per-guard parameters are kept on the signature so the composer below is
+        # unchanged and a caller can still drive one of them alone; None means "take
+        # it from `guards`", which is what the node itself always does now.
+        anatomy_guard = guards if anatomy_guard is None else anatomy_guard
+        solidity_guard = guards if solidity_guard is None else solidity_guard
+        motion_guard = guards if motion_guard is None else motion_guard
+        contact_guard = guards if contact_guard is None else contact_guard
+        subject_count_guard = guards if subject_count_guard is None else subject_count_guard
 
         # FIRST: detect a checkpoint swap since the previous execution and hard-flush.
         # A stale resident model from a different checkpoint would otherwise poison
@@ -7447,12 +7305,19 @@ class H3LongVideos:
             all_frames, up_note = _upscale_frames(all_frames, upscale, upscale_model,
                                                   upscale_target_short_edge, upscale_batch)
 
-        # Text overlays LAST -- after the upscale, so glyphs are rasterized at the
-        # final pixel size instead of being interpolated up along with the picture.
-        all_frames, ov_note = _overlay.apply_overlays(
-            all_frames, fps, watermark_text, watermark_position, watermark_size,
-            watermark_opacity, watermark_margin, intro_text, intro_seconds,
-            intro_fade, intro_size, intro_position, overlay_font, overlay_stroke)
+        # Overlays are a separate node now ("H3 Overlay"). They are compositing, not
+        # generation -- they touch no conditioning and most renders never use them, so
+        # eleven widgets for them was a fifth of this node's surface. Wire H3 Overlay
+        # after this node (and after any upscale, so glyphs are rasterized at the final
+        # pixel size rather than interpolated up with the picture). The parameters
+        # below still work when a caller passes them, so nothing that drove this
+        # programmatically breaks.
+        ov_note = ""
+        if (watermark_text or "").strip() or (intro_text or "").strip():
+            all_frames, ov_note = _overlay.apply_overlays(
+                all_frames, fps, watermark_text, watermark_position, watermark_size,
+                watermark_opacity, watermark_margin, intro_text, intro_seconds,
+                intro_fade, intro_size, intro_position, overlay_font, overlay_stroke)
 
         script = "\n---\n".join(gens)
         actual = all_frames.shape[0] / fps
@@ -7573,16 +7438,32 @@ class H3LongVideos:
 # node" boxes: "H3LongVideosV1" is the original name, "H3LongVideosFL2VA" the rename,
 # and "H3LongVideosREF2VA" the separate reference node that has now been folded in.
 # They are aliases onto the same class -- there is no second implementation.
+# The node's registered TYPE. Changing it is a deliberate, breaking rebuild.
+#
+# ComfyUI restores a saved node's widgets POSITIONALLY, from the `widgets_values`
+# array, and matches them to the node by this id. Nothing in that array records
+# which widget a value belonged to. So when the node's widget list changes shape --
+# and it did: eight widgets became input sockets, which REMOVES them from the array
+# starting at index 0 -- every value in a workflow saved beforehand lands on the
+# wrong widget, silently. Not approximately: `resolution` receives the prompt text,
+# `steps` receives megapixels, `per_beat_length` receives a float from `ref_noise_aug`
+# that reads as False, and `vary_seed_per_shot` receives shift_video's 12.0, which is
+# truthy and pins it on. The node then behaves as though its settings are ignored,
+# because they are -- it never saw them.
+#
+# There is no migration hook to repair that: the values arrive already misassigned.
+# The only reliable fix is to make the binding IMPOSSIBLE, which is what a new id
+# does. A workflow saved against the old ids now reports the node as missing and has
+# to be re-added, which is the loud version of a failure that was silent.
+#
+# The legacy aliases are deliberately NOT kept. Mapping them to this class is exactly
+# what let a stale instance bind and mis-restore.
+H3_NODE_ID = "H3LongVideosV2"
+
 NODE_CLASS_MAPPINGS = {
-    "H3LongVideos": H3LongVideos,
-    "H3LongVideosFL2VA": H3LongVideos,        # do not remove
-    "H3LongVideosV1": H3LongVideos,           # do not remove
-    "H3LongVideosREF2VA": H3LongVideos,       # do not remove
+    H3_NODE_ID: H3LongVideos,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3LongVideos": "H3 Long Videos (FL2VA + REF2VA)",
-    "H3LongVideosFL2VA": "H3 Long Videos (FL2VA + REF2VA)",
-    "H3LongVideosV1": "H3 Long Videos (FL2VA + REF2VA)",
-    "H3LongVideosREF2VA": "H3 Long Videos (FL2VA + REF2VA)",
+    H3_NODE_ID: "H3 Long Videos (FL2VA + REF2VA)",
 }
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "H3_NODE_ID"]

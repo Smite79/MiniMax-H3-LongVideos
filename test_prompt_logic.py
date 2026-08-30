@@ -1145,6 +1145,63 @@ def check_subject_count_guard():
 
 
 
+def check_widget_order_is_append_only():
+    """A widget may be APPENDED. It may never be inserted, removed or reordered.
+
+    ComfyUI restores a saved node's widgets positionally from `widgets_values`, and
+    that array records no names. Removing or inserting a widget therefore shifts
+    every later value onto a different widget in every workflow saved beforehand --
+    silently, because each value is individually valid. That is how `per_beat_length`
+    came to be fed a float (reading as False, which is the shot-repeating bug) and
+    `vary_seed_per_shot` came to be fed 12.0 (truthy, pinning it on so the toggle
+    looked ignored).
+
+    The frozen list below is the order as of the V2 rebuild. Appending to the END is
+    safe and this test allows it. Anything else fails here, at the point the mistake
+    is made, instead of in someone's graph weeks later."""
+    print("\n=== widget order is append-only ===")
+    FROZEN = [
+        "resolution", "megapixels", "steps", "cfg", "sampler_name", "scheduler", "seed",
+        "plan_only", "fps", "apply_model_sampling", "shift_video", "shift_audio",
+        "trim_seam", "vary_seed_per_shot", "handoff_offset", "mute_nonspeech_audio",
+        "cleanup_between_shots", "auto_wardrobe", "auto_silence_nonspeech", "beat_split",
+        "per_beat_length", "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props",
+        "prevent_nudity", "lock_restraints", "guards", "latent_upscale", "normalize_audio",
+        "bed_continuity", "auto_soundscape", "allow_nonspeech_vocals",
+    ]
+    NON_WIDGET = {"MODEL", "CLIP", "VAE", "IMAGE", "AUDIO", "LATENT", "SIGMAS", "CONDITIONING"}
+    schema = S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].INPUT_TYPES()
+    order = []
+    for sec in ("required", "optional"):
+        for name, spec in (schema.get(sec) or {}).items():
+            t = spec[0]
+            opts = spec[1] if len(spec) > 1 else {}
+            if isinstance(opts, dict) and opts.get("forceInput"):
+                continue                     # a socket, never in widgets_values
+            if isinstance(t, str) and t in NON_WIDGET:
+                continue
+            order.append(name)
+    check("no widget was removed or reordered", order[:len(FROZEN)] == FROZEN)
+    if order[:len(FROZEN)] != FROZEN:
+        for i, (want, got) in enumerate(zip(FROZEN, order)):
+            if want != got:
+                print(f"    FIRST DIVERGENCE at index {i}: expected {want!r}, found {got!r}")
+                print(f"    every saved workflow now feeds {got!r} the value saved for {want!r}")
+                break
+        if len(order) < len(FROZEN):
+            print(f"    {len(FROZEN) - len(order)} widget(s) removed: "
+                  f"{[w for w in FROZEN if w not in order]}")
+    check("any new widgets were APPENDED, not inserted", len(order) >= len(FROZEN))
+    added = order[len(FROZEN):]
+    if added:
+        print(f"    appended since the freeze (safe): {added}")
+    # The id must change if the order ever does. That is the only thing that stops a
+    # stale graph binding to a node whose widgets have moved underneath it.
+    check("the node id records the rebuild", S.H3_NODE_ID == "H3LongVideosV2")
+    check("legacy ids are not mapped back onto the class",
+          set(S.NODE_CLASS_MAPPINGS) == {S.H3_NODE_ID})
+
+
 def check_beat_count_is_unbreakable():
     """No widget value may reduce the beat count. beat_split's strict 'blank line'
     option was the only one that could -- six beats typed as two blocks of three came
@@ -1755,7 +1812,7 @@ def _sla_graph(lora, sparse):
     if sparse:
         g["3"] = {"class_type": "SolAttnPatch", "inputs": {"model": [prev, 0], "tau": 0.1}}
         prev = "3"
-    g["9"] = {"class_type": "H3LongVideos",
+    g["9"] = {"class_type": S.H3_NODE_ID,
               "inputs": {"model": [prev, 0], "clip": ["8", 0], "prompt": "a woman walks"}}
     return _FakeGraph(g)
 
@@ -1866,7 +1923,7 @@ def check_sla_pairing():
         "2": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": SLA}},
         "5": {"class_type": "LoraLoaderModelOnly",
               "inputs": {"model": ["1", 0], "lora_name": "other_branch.safetensors"}},
-        "9": {"class_type": "H3LongVideos", "inputs": {"model": ["2", 0]}}})
+        "9": {"class_type": S.H3_NODE_ID, "inputs": {"model": ["2", 0]}}})
     check("the walk follows only the model chain feeding this node",
           S.upstream_lora_names(g, "9") == [SLA])
     # A cycle must not hang the walk.
@@ -2278,7 +2335,7 @@ def check_lora_hints():
             g[str(i)] = {"class_type": "LoraLoaderModelOnly",
                          "inputs": {"model": [prev, 0], "lora_name": l}}
             prev = str(i)
-        g["9"] = {"class_type": "H3LongVideos", "inputs": {"model": [prev, 0]}}
+        g["9"] = {"class_type": S.H3_NODE_ID, "inputs": {"model": [prev, 0]}}
         return _FakeGraph(g)
 
     # On a stack the step-count LoRA is usually NOT the nearest one, and checking
@@ -3421,9 +3478,8 @@ def check_latent_upscale():
     check("the widget exists even with no pack installed -- widget positions are "
           "positional and must not depend on another pack",
           "_latent_upscale_model_list()" in src)
-    check("both widgets are appended, so saved workflows keep their order",
-          "latent_upscale" in S.ADDED_WIDGETS
-          and "latent_upscale_scale" in S.ADDED_WIDGETS)
+    check("the widget is appended, so the schema order stays stable",
+          "latent_upscale" in S.ADDED_WIDGETS)
 
     # It sits between sampling and decode, on the VIDEO half only.
     check("it runs before the decode, not after",
@@ -3681,8 +3737,9 @@ def check_contact_guard():
     off = S.distribute_generations("A quiet studio.", ["Mara and Dom embrace."],
                                    "", "", CM, contact_guard="off")
     check("'off' reaches the per-shot text", "ONE fixed arrangement" not in off[0])
-    check("the widget is appended, so saved workflows keep their order",
-          "contact_guard" in S.ADDED_WIDGETS)
+    # Folded into the single `guards` widget; the parameter still drives the clause.
+    check("the guard is reachable through the one guards widget",
+          "guards" in S.ADDED_WIDGETS)
     check("...and run() passes it through", "contact_guard=contact_guard" in src)
 
 
@@ -3732,8 +3789,7 @@ def check_motion_guard():
     off = S.distribute_generations("A quiet studio.", ["Mara turns away."], "", "", CM,
                                    motion_guard="off")
     check("'off' reaches the per-shot text", "Movement is continuous" not in off[0])
-    check("the widget is appended, so saved workflows keep their order",
-          "motion_guard" in S.ADDED_WIDGETS)
+    check("...and motion comes from the same one widget", "guards" in S.ADDED_WIDGETS)
     check("...and run() passes it through", "motion_guard=motion_guard" in src)
 
 
@@ -3797,8 +3853,7 @@ def check_solidity_guard():
                                    "", "", CM, solidity_guard="off")
     check("'off' reaches the per-shot text", "Solid things stay solid" not in off[0])
 
-    check("the widget is appended, so saved workflows keep their order",
-          "solidity_guard" in S.ADDED_WIDGETS)
+    check("...and solidity comes from the same one widget", "guards" in S.ADDED_WIDGETS)
     check("...and run() passes it through",
           "solidity_guard=solidity_guard" in src)
 
@@ -3849,7 +3904,7 @@ def check_anatomy_guard():
         check(f"the clause places joints ({good})", good in txt)
 
     # The widget must be APPENDED, or saved workflows shift.
-    check("anatomy_guard is an appended widget", "anatomy_guard" in S.ADDED_WIDGETS)
+    check("the limb count comes from the one guards widget", "guards" in S.ADDED_WIDGETS)
 
 
 def check_anatomy_auto_multi_person():
@@ -3885,7 +3940,7 @@ def check_latent_output():
     latent-only mode is not possible -- but the pre-decode latent is ~1000x smaller
     than the frames it becomes, so carrying one per shot is free."""
     print("\n=== latent output ===")
-    cls = S.NODE_CLASS_MAPPINGS["H3LongVideos"]
+    cls = S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID]
     check("RETURN_TYPES and RETURN_NAMES agree",
           len(cls.RETURN_TYPES) == len(cls.RETURN_NAMES))
     check("a LATENT output exists", "LATENT" in cls.RETURN_TYPES)
@@ -4168,7 +4223,7 @@ def check_audio_scale_coupling():
         sys.modules["comfy.samplers"].KSampler = _KS
     for _n in ("samplers", "utils", "nested_tensor", "model_management"):
         setattr(sys.modules["comfy"], _n, sys.modules["comfy." + _n])
-    opt = S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["optional"]
+    opt = S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].INPUT_TYPES()["optional"]
     lo = opt["shift_audio"][1]["min"]
     check("shift_audio can go low enough to hold the ratio at low shift_video",
           lo <= 0.75)
@@ -4280,11 +4335,12 @@ def check_megapixel_sizing():
     # widget is available for the input type" (comfy/comfy_types/node_typing.py:112).
     # The text comes from a connected multiline node instead, so the same prose can
     # feed several samplers and be edited in one place.
-    _schema = S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()
+    _schema = S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].INPUT_TYPES()
     _all = {**_schema.get("required", {}), **_schema.get("optional", {})}
     _text = [k for k, v in _all.items()
              if len(v) > 1 and isinstance(v[1], dict) and v[1].get("multiline")]
-    check("all seven text fields are still declared", len(_text) == 7)
+    # Six, not seven: intro_text left with the overlays, which are their own node now.
+    check("all six text fields are still declared", len(_text) == 6)
     check("...and every one of them is a socket, not a box",
           all(_all[k][1].get("forceInput") for k in _text))
     check("prompt is among them", "prompt" in _text)
@@ -4292,7 +4348,7 @@ def check_megapixel_sizing():
           "prompt" in _schema["required"])
     # The optional ones must survive being left unconnected: run() supplies "".
     _sig = __import__("inspect").signature(
-        S.NODE_CLASS_MAPPINGS["H3LongVideos"].run).parameters
+        S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].run).parameters
     check("every optional text socket defaults to empty in run()",
           all(_sig[k].default == "" for k in _text if k != "prompt"))
 
@@ -4308,7 +4364,7 @@ def check_megapixel_sizing():
           _sig["shot_seconds"].default == 0.0
           and _all["shot_seconds"][1]["default"] == 0.0)
 
-    req = list(S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["required"])
+    req = list(S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].INPUT_TYPES()["required"])
     check("megapixels is a required widget on the sampler", "megapixels" in req)
     check("...positioned immediately after resolution",
           req.index("megapixels") == req.index("resolution") + 1)
@@ -4328,13 +4384,13 @@ def check_megapixel_sizing():
     check("an unknown label falls back to 16:9",
           S.parse_resolution("nonsense") == S.NATIVE_RES["16:9"])
     # megapixels can no longer be 0: a bare ratio has no size to fall back to.
-    _req = S.NODE_CLASS_MAPPINGS["H3LongVideos"].INPUT_TYPES()["required"]
+    _req = S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].INPUT_TYPES()["required"]
     check("megapixels has a non-zero floor", _req["megapixels"][1]["min"] > 0)
     check("...and defaults to the native budget",
           _req["megapixels"][1]["default"] == 1.0)
     check("run() accepts it", "megapixels" in
           __import__("inspect").signature(
-              S.NODE_CLASS_MAPPINGS["H3LongVideos"].run).parameters)
+              S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].run).parameters)
 
 
 def check_vram_budget():
@@ -5103,6 +5159,8 @@ def main():
     check_listeners_stay_silent()
     check_emphasis_quote_reported()
     check_anatomy_auto_multi_person()
+    # Last: needs the comfy stubs the schema tests above install.
+    check_widget_order_is_append_only()
 
     print()
     if _fails:
