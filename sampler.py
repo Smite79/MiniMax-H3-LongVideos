@@ -1375,16 +1375,29 @@ _MOVED_TPL = (r"\b(?P<verb>lifts?|lifted|hauls?|hauled|drags?|dragged|pulls?|pul
               r"(?P<obj>her|him|them|NAME)\s*"
               r"(?=(?:up|down|back|over|onto|on\s+to|on|into|to|against|across|off|out|by|"
               r"and|then|[,.;]|$))")
-_POSTURE_TEXT = {
-    "lying":    "{s} is lying {on}and stays lying {there}for the whole shot, in the same place "
-                "and the same position from the first frame to the last, the body flat against it",
-    "kneeling": "{s} is kneeling {on}and stays kneeling {there}for the whole shot, in the same "
-                "place from the first frame to the last",
-    "sitting":  "{s} is sitting {on}and stays sitting {there}for the whole shot, in the same "
-                "place from the first frame to the last",
-    "on":       "{s} is {on}and stays there for the whole shot, in the same place from the "
-                "first frame to the last",
-}
+# What the clause has to fix is the body standing UP between shots. It must not
+# also freeze it: "the same position from the first frame to the last, the body
+# flat against it" was stated over beats that had her wake, look around, thrash
+# and roll onto her side, and a guard that contradicts the beat is a guard the
+# model has to resolve -- which reads as the beat not being followed. So it pins
+# the SUPPORT and the level, and says outright that movement happens there.
+def _posture_sentence(subj, pose, surf):
+    on = f"on the {surf}" if surf else ""
+    if pose == "lying":
+        base = f"{subj} is lying {on}".rstrip() if on else f"{subj} is lying down"
+        rest = f"the body stays down {on}".rstrip() if on else f"{subj.lower()} stays down"
+        return (f"{base} and stays down for the whole shot -- {rest} from the first frame "
+                f"to the last, and any movement happens there, low and in place")
+    if pose == "kneeling":
+        base = f"{subj} is kneeling {on}".rstrip() if on else f"{subj} is kneeling"
+        return (f"{base} and stays kneeling for the whole shot, in the same place from the "
+                f"first frame to the last, any movement happening there")
+    if pose == "sitting":
+        base = f"{subj} is sitting {on}".rstrip() if on else f"{subj} is seated"
+        return (f"{base} and stays seated for the whole shot, in the same place from the "
+                f"first frame to the last, any movement happening there")
+    return (f"{subj} is {on} and stays there for the whole shot, in the same place from the "
+            f"first frame to the last, any movement happening there")
 
 
 def _subject_before(frag, names, pron_map, single):
@@ -1477,10 +1490,9 @@ def posture_clause(posture, active, body, departed=(), carried=(), skip=()):
                 and not person_in_shot(body, name, active, departed):
             continue
         subj = _subject_term(name, active) if name else "the subject"
-        on = f"on the {surf} " if surf else ""
         if pose == "on" and not surf:
             continue
-        bits.append(_POSTURE_TEXT[pose].format(s=subj, on=on, there="there " if surf else ""))
+        bits.append(_posture_sentence(subj, pose, surf))
     if not bits:
         return ""
     return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
