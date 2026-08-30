@@ -1177,6 +1177,59 @@ def check_beat_count_is_unbreakable():
     check("auto still reports when it split a paragraph", "split one beat per LINE" in note)
     check("the note no longer advertises the removed option", "blank line" not in note)
 
+    # --- no beat may be built with nothing in it to render -------------------------
+    # A shot whose beat has no action of its own has only the anchor to work from, so
+    # it re-renders the scene that came before it. Three separate inputs produced one:
+    # a paragraph of directives alone, a sentence the editor hard-wrapped, and a beat
+    # the estimator could read nothing in (which was then given the LONGEST shot).
+    _dir = S.expand_beats(SP("Dom opens the doors.\n\nwardrobe: Dom -= coat\n\n"
+                             "Mara follows him in.", "##"), "auto")[0]
+    check("a paragraph of directives alone is not a beat of its own", len(_dir) == 2)
+    check("...it attaches to the beat it introduces", "wardrobe:" in _dir[1])
+    _trail = S.expand_beats(SP("Dom opens the doors.\n\nMara follows him in.\n\n"
+                               "wardrobe: Dom -= coat", "##"), "auto")[0]
+    check("...and a trailing one attaches to the beat above it", len(_trail) == 2)
+    check("...keeping the directive", "wardrobe:" in _trail[1])
+    _wrap, _wnote = S.expand_beats(SP("Dom walks to the barn and opens\n"
+                                      "the doors, then steps inside.\n\n"
+                                      "Mara follows him in.", "##"), "auto")
+    check("a hard-wrapped sentence is one beat, not a fragment", len(_wrap) == 2)
+    check("...joined back into one line", "opens the doors" in _wrap[0])
+    check("...and the join is reported", "continued the sentence" in _wnote)
+    # Both halves of the signal are required, or ordinary beats would be swallowed.
+    check("beats typed without full stops still split",
+          len(S.expand_beats(SP("Dom opens the doors\nMara follows him in\n"
+                                "Dom lifts a crate", "##"), "auto")[0]) == 3)
+    check("a lowercase line after a finished sentence still splits",
+          len(S.expand_beats(SP("Dom opens the doors.\nthe wind picks up.",
+                                "##"), "auto")[0]) == 2)
+
+    # --- a bare wardrobe operator must not invent a person -------------------------
+    # '-= coat' was read as '= coat' -- the leading '-' was stripped as a bullet --
+    # so instead of removing the garment it REPLACED an unnamed subject's outfit with
+    # it, putting a nameless extra in every later shot, rendered as a bare "coat.".
+    check("the remove operator survives entry splitting", S._entries("-= coat") == ["-= coat"])
+    check("...and still strips a real bullet",
+          S._entries("- Mara = she, coat") == ["Mara = she, coat"])
+    _A = {"Mara": ["she", "30", "coat"], "Dom": ["he", "35"]}
+    check("a bare removal no longer creates a nameless person",
+          "" not in S.apply_wardrobe_change(_A, "-= coat"))
+    _wn = []
+    S.apply_wardrobe_change(_A, "-= coat", _wn)
+    check("...and says so, naming the fix", _wn and "names nobody" in _wn[0])
+    check("with ONE person named it is unambiguous and applies",
+          S.apply_wardrobe_change({"Mara": ["she", "coat"]}, "-= coat") == {"Mara": ["she"]})
+    check("a one-person unnamed sheet still works",
+          S.apply_wardrobe_change({"": ["she", "coat"]}, "-= coat") == {"": ["she"]})
+    check("a named removal is untouched",
+          S.apply_wardrobe_change(_A, "Mara -= coat")["Mara"] == ["she", "30"])
+    _g = S.distribute_generations(
+        "Daylight, a farm with a barn.",
+        ["Dom opens the doors.", "wardrobe: Mara -= coat\nMara follows him in."],
+        "", "", "Mara = she, 30, red hair, coat\nDom = he, 35, tall")
+    check("no bare garment is stamped into the shot",
+          not re.search(r"barn\.\s+coat\.", _g[1]))
+
 
 def check_name_dedupe():
     """A person named twice in one beat is rendered twice by the model. The second and
@@ -1367,8 +1420,16 @@ def check_forced_shot_seconds():
     # frame, an overlong shot is filled with invented (often reversed) motion.
     est = S.estimate_beat_seconds(varied[1])
     check("a two-action beat estimates well under a 12s ceiling", 5.0 <= est <= 9.0)
-    check("a beat with no content at all keeps the ceiling",
-          P([""], 24, 294, per_beat=True)[0][0] == 294)
+    # A beat the estimator can read NOTHING in used to fall through to the ceiling,
+    # which handed the least content the most time to fill -- the exact pairing that
+    # renders as the action repeating or running backwards. With per-beat sizing on
+    # it now gets the shortest shot instead; with sizing off the ceiling still stands,
+    # because that is what turning it off asks for.
+    check("a beat with no content at all gets the SHORTEST shot, not the longest",
+          P([""], 24, 294, per_beat=True)[0][0]
+          == S.align_frame_count(S.MIN_CONTENT_FRAMES))
+    check("...and with pacing off it still gets the ceiling",
+          P([""], 24, 294, per_beat=False)[0][0] == 294)
 
     # 'seconds:' is an explicit statement, so it is honored BELOW the guess floor --
     # the same bug class as shot_seconds being raised to 124f.
