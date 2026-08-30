@@ -3249,6 +3249,29 @@ def check_restraints_applied_in_a_beat():
           "feet rest on the floor" in S.distribute_generations(
               "A room.", ["Kate walks to the bench."], "", "", _SC)[0])
 
+    # --- a sheet <Picture N> tag binds ONCE, not on every shot ---------------------
+    # A tag in character_memory is stamped into every shot that describes that
+    # person, so every one of those shots receives the reference -- handed over
+    # almost noise-free, which invites the model to reproduce it, background and
+    # all. That is the scene changing shot to shot.
+    _rc = "Kate = she, <Picture 1>, 28, blonde hair, white shirt\nDan = he, 40, black jacket"
+    _rn = []
+    _rg = S.distribute_generations(
+        "A basement.", ["Kate lies on the floor.", "Dan walks in.",
+                        "Dan kneels beside her.", "Kate looks up at him."],
+        "", "", _rc, notes_out=_rn)
+    check("the sheet tag binds on the first shot", S.picture_tags(_rg[0]) == [1])
+    check("...and on no shot after it",
+          all(S.picture_tags(g) == [] for g in _rg[1:]))
+    check("...while the rest of the description survives", "blonde hair" in _rg[3])
+    check("...and info explains where it went",
+          any("binds HERE" in n for n in _rn))
+    # A tag the user wrote into a BEAT is an explicit request and is left alone.
+    _bt = S.distribute_generations(
+        "A basement.", ["Kate lies on the floor.", "Kate, <Picture 1>, turns her head."],
+        "", "", _rc)
+    check("a tag written into a beat still binds there", S.picture_tags(_bt[1]) == [1])
+
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
     # whole-clip time expansion is the largest allocation in a run, so a "tiled"
