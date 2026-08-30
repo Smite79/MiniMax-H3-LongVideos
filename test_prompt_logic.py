@@ -3146,6 +3146,38 @@ def check_restraints_applied_in_a_beat():
           S.detect_posture("Kate is asleep on the concrete.", {"Kate": ["she"]}, _p2 := {}) == set()
           and _p2.get("Kate") == ("lying", "concrete"))
 
+    # Only a cue that means the body LEFT the floor may clear the position.
+    # "crosses her legs" and "rises to the bait" both did, taking the floor out of
+    # a shot whose prose never moved her.
+    _A2p = {"Kate": ["she"], "Dan": ["he"]}
+    for _b, _keep in (("Kate crosses her legs.", True), ("Kate crosses her ankles.", True),
+                      ("Kate rises to the bait.", True), ("Kate rolls onto her side.", True),
+                      ("Kate crosses the room.", False), ("Kate rises to her feet.", False),
+                      ("Kate stands up.", False)):
+        _pp = {"Kate": ("lying", "floor")}
+        S.detect_posture(_b, _A2p, _pp)
+        check(f"{'keeps' if _keep else 'clears'} the floor: {_b!r}",
+              bool(_pp.get("Kate")) == _keep)
+    # The unnamed subject (a sheet with no names) gets the same carried position.
+    _u = {"": ["red coat"]}
+    _up = {}
+    S.detect_posture("A woman in a red coat is lying on the floor.", _u, _up)
+    check("the unnamed subject's position is tracked", _up.get("") == ("lying", "floor"))
+    check("...and stated impersonally",
+          "The subject is lying on the floor" in S.posture_clause(_up, _u, "She opens her eyes."))
+
+    # Same limb, both naming REAL hardware: two restraints, not one under two names.
+    check("a rope added to cuffed wrists is kept",
+          len([i for i in S.auto_restraint_additions(
+              {"Kate": ["she", "handcuffs"], "Dan": ["he"]},
+              "Dan ties a rope around her wrists as well.")["Kate"] if i != "she"]) == 2)
+    check("...while a generic name for the same limb is not",
+          S._same_hardware("wrist bindings", ["handcuffs"]))
+    check("...nor a sheet phrase describing the same bound limb",
+          S._same_hardware("handcuffs", ["Wrists handcuffed behind back"]))
+    check("hardware is generic only when it names none",
+          S._generic_restraint("wrist bindings") and not S._generic_restraint("rope"))
+
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
     # whole-clip time expansion is the largest allocation in a run, so a "tiled"
