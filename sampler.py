@@ -284,6 +284,34 @@ def is_directive_line(line):
     return bool(re.match(r"\s*(" + "|".join(DIRECTIVE_KEYS) + r")\s*:", line or "", re.I))
 
 
+# A line that finished its sentence. Closing quotes and brackets count, so a line
+# ending on dialogue ("...last one?") is complete.
+_LINE_FINISHED = re.compile(r"""[.!?…]["'”’)\]]*\s*$""")
+# ...and a line that starts mid-sentence: lowercase, or the punctuation that only
+# ever continues one. A line opening with a capital is treated as a new beat even
+# when the line above it lacks a full stop, because that is far more likely to be
+# a beat typed without punctuation than a sentence wrapped mid-word.
+_LINE_CONTINUES = re.compile(r"^\s*(?:[a-z0-9]|[,;:)—-])")
+
+
+def _join_wrapped_lines(lines, rejoined=0):
+    """Rejoin lines that are one wrapped sentence. Returns (lines, rejoined_count).
+
+    Only when BOTH sides agree: the line above does not end its sentence AND the
+    line below starts mid-sentence. Either signal alone is too weak -- beats are
+    routinely typed without a full stop, and that must keep splitting."""
+    out = []
+    for ln in lines:
+        if (out and not is_directive_line(ln) and not is_directive_line(out[-1])
+                and not _LINE_FINISHED.search(out[-1])
+                and _LINE_CONTINUES.match(ln)):
+            out[-1] = out[-1].rstrip() + " " + ln.strip()
+            rejoined += 1
+            continue
+        out.append(ln)
+    return out, rejoined
+
+
 def expand_beats(paras, mode="auto"):
     """Turn the prompt's beat PARAGRAPHS into the final beat list. Returns
     (beats, note).
@@ -317,12 +345,33 @@ def expand_beats(paras, mode="auto"):
     # is enough to trigger it, so the safe branch has to be the default.
     if mode not in ("auto", "each line"):
         mode = "auto"
-    out, split_from = [], 0
+    out, split_from, rejoined = [], 0, 0
+    carry = []          # directives from a paragraph that had no content of its own
     for p in paras:
         lines = [ln for ln in (p or "").splitlines() if ln.strip()]
         content = [ln for ln in lines if not is_directive_line(ln)]
+        # A paragraph of DIRECTIVES ALONE is not a beat. It used to become one, and
+        # a beat with no action in it is the worst thing this node can produce: the
+        # shot has nothing of its own to render, so it continues or REPEATS what the
+        # previous shot did. Directives belong to a beat, so they wait for the next
+        # one -- or fall back to the beat above when nothing follows, which is the
+        # same rule the within-paragraph case already used.
+        if not content:
+            carry.extend(lines)
+            continue
+        if carry:
+            lines = carry + lines
+            carry = []
+        # Hard-wrapped prose is not several beats. A line that does not finish its
+        # sentence, followed by one that starts mid-sentence, is one sentence the
+        # editor wrapped -- splitting it there leaves a fragment ("the doors, then
+        # steps inside.") with no subject, and a shot built from a fragment falls
+        # back on the anchor and re-renders the scene that came before it.
+        if len(content) > 1:
+            lines, rejoined = _join_wrapped_lines(lines, rejoined)
+            content = [ln for ln in lines if not is_directive_line(ln)]
         if len(content) <= 1:
-            out.append(p)
+            out.append(NL.join(lines))
         else:
             split_from += 1
             pending = []
@@ -341,12 +390,24 @@ def expand_beats(paras, mode="auto"):
                     out[-1] = out[-1] + NL + NL.join(pending)
                 else:
                     out.append(NL.join(pending))
-    note = ""
+    if carry:                        # a trailing paragraph of directives, nothing after
+        if out:
+            out[-1] = out[-1] + NL + NL.join(carry)
+        else:
+            out.append(NL.join(carry))
+    notes = []
     if split_from and mode == "auto":
-        note = (f"{split_from} paragraph(s) held several lines and were split one beat per LINE "
-                f"-> {len(out)} beats. Separate beats with a BLANK line (or a '##' line) to control "
-                f"this yourself")
-    return out, note
+        notes.append(
+            f"{split_from} paragraph(s) held several lines and were split one beat per LINE "
+            f"-> {len(out)} beats. Separate beats with a BLANK line (or a '##' line) to control "
+            f"this yourself")
+    if rejoined:
+        notes.append(
+            f"{rejoined} line(s) continued the sentence above them and were joined to it rather "
+            f"than made into beats of their own -- a beat built from half a sentence has no "
+            f"action to render and repeats the shot before it. End a beat's line with '.' to "
+            f"split there")
+    return out, ". ".join(notes)
 
 
 def _garment_side(side):
@@ -439,7 +500,15 @@ def _entries(text):
     removals fail to match. Also tolerates a leading '-' bullet per line."""
     parts = []
     for chunk in re.split(r"[;\n\r]+", text or ""):
-        chunk = chunk.strip().lstrip("-*\u2022 ").strip()
+        chunk = chunk.strip()
+        # A leading '-' is a BULLET only when it is not the '-=' REMOVE operator.
+        # Stripping it unconditionally turned the documented bare form
+        # 'wardrobe: -= jacket' into '= jacket', which does the opposite of what it
+        # says: instead of taking the garment off, it REPLACED the unnamed subject's
+        # outfit with it, inventing a person who was not in the scene and stamping
+        # them into every shot from then on.
+        if not chunk.startswith("-="):
+            chunk = chunk.lstrip("-*\u2022 ").strip()
         if chunk:
             parts.append(chunk)
     return parts
@@ -458,7 +527,7 @@ def parse_wardrobe(text):
     return out
 
 
-def apply_wardrobe_change(active, text):
+def apply_wardrobe_change(active, text, notes=None):
     """Apply a per-beat 'wardrobe:' directive so you DON'T restate the whole
     outfit to change one thing. Entries split on ';'; each targets one person
     (or the unnamed subject) with an operator:
@@ -481,6 +550,23 @@ def apply_wardrobe_change(active, text):
             name, val = _split_name(part); op = "="   # bare or 'Name: items' -> replace
         name = _norm_name(name)
         items = _split_items(val)
+        # A BARE form ('-= jacket') means "the unnamed subject", which only exists in
+        # a one-person scene. When the sheet names people instead, writing the change
+        # to '' created a SECOND, nameless figure wearing the item -- present in every
+        # later shot. With one person named it is unambiguous, so it goes to them;
+        # with several it is a typo, and saying so beats guessing which one.
+        if name == "" and "" not in active:
+            named = [n for n in active if n]
+            if len(named) == 1:
+                name = named[0]
+            elif named:
+                if notes is not None:
+                    notes.append(
+                        f"wardrobe '{part.strip()}' names nobody, and this scene has "
+                        f"{len(named)} named people -- skipped, because applying it to no "
+                        f"one puts a nameless extra person in the shot. Write it as "
+                        f"'{named[0]} {part.strip()}'")
+                continue
         cur = active.get(name, [])
         if op == "=":
             active[name] = items
@@ -3402,7 +3488,17 @@ def plan_beat_frames(beats, fps, budget, per_beat=True):
         if want is None:
             want = estimate_beat_seconds(b) if per_beat else 0.0
             src, floor, snap = "content", content_floor, align_frame_count_nearest
-        if want <= 0:                       # no signal -> the ceiling
+            # A beat with nothing the estimator can read -- a fragment, a lone noun,
+            # a mood line -- used to fall through to the CEILING, which handed the
+            # least content the most time to fill. That is the worst pairing this
+            # function can produce, and it renders as the action repeating. With
+            # per-beat sizing on, no signal means the SHORTEST shot instead.
+            if per_beat and want <= 0:
+                out.append(content_floor)
+                notes.append(f"shot {i}: {content_floor}f (~{content_floor / fps:.1f}s, "
+                             f"no action the estimator could read)")
+                continue
+        if want <= 0:                       # pacing off -> the ceiling
             out.append(cap)
             continue
         n = min(cap, max(floor, snap(int(round(want * fps)))))
@@ -3642,7 +3738,10 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         if wardrobe_change is not None:
             before = {k: list(v) for k, v in active.items()}
             # explicit: takes effect THIS shot
-            active = _drop(before, apply_wardrobe_change(active, wardrobe_change))
+            _wnotes = []
+            active = _drop(before, apply_wardrobe_change(active, wardrobe_change, _wnotes))
+            if notes_out is not None:
+                notes_out.extend(f"shot {gi}: {n}" for n in _wnotes)
         # Auto-removals are resolved BEFORE the shot is composed, so the garment is
         # already out of the person's description in the very shot that takes it off.
         #
