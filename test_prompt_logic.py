@@ -3110,24 +3110,33 @@ def check_restraints_applied_in_a_beat():
            "Kate stands up and walks to the window."]
     _pg = S.distribute_generations(_SA, _pb, "", "", _SC)
     check("the floor is stated on every later beat",
-          all("stays lying there" in g and "on the floor" in g for g in _pg[:5]))
+          all("stays down" in g and "on the floor" in g for g in _pg[:5]))
     check("...through beats that only name the other person",
-          "stays lying there" in _pg[1] and "stays lying there" in _pg[2])
-    check("'positions her legs' does not move her", "stays lying there" in _pg[3])
-    check("Dan walking off does not move her", "stays lying there" in _pg[2])
+          "stays down" in _pg[1] and "stays down" in _pg[2])
+    check("'positions her legs' does not move her", "stays down" in _pg[3])
+    check("Dan walking off does not move her", "stays down" in _pg[2])
     check("a lift by someone else ends it, and that beat makes no claim",
-          "stays lying" not in _pg[5] and "stays there" not in _pg[5])
+          "stays down" not in _pg[5] and "stays there" not in _pg[5])
     check("...and the new place is stated after it", "on the table and stays there" in _pg[6])
     check("sitting up keeps the surface", "sitting on the table" in _pg[7])
     check("standing up clears it -- upright is the default and is not asserted",
-          "stays" not in _pg[8].split("Solid things")[0] or "stays lying" not in _pg[8])
+          "stays down" not in _pg[8] and "stays seated" not in _pg[8])
+    # The clause pins the SUPPORT, not every joint: a beat that has her wake,
+    # thrash or roll must not be contradicted by the guard holding her down.
+    _mv = S.distribute_generations(_SA, ["Kate is lying on the floor, asleep.",
+                                         "Kate thrashes in her restraints and rolls onto her side."],
+                                   "", "", _SC)
+    check("the position guard allows movement in place",
+          "any movement happens there" in _mv[1]
+          and "same position" not in _mv[1] and "flat against" not in _mv[1])
+    check("...while still holding the body down", "stays down" in _mv[1])
     check("bound ankles on a lying body do not take steps",
           "steps short" not in _pg[1] and "the legs moving as one" in _pg[1])
     check("...and do once she is up", "steps short" in _pg[8])
     _lay = S.distribute_generations(_SA, ["Dan lays her down on the mat.", "Dan looks away."],
                                     "", "", _SC)
     check("laid down by someone else is lying there next beat",
-          "lying on the mat and stays" in _lay[1])
+          "lying on the mat and stays down" in _lay[1])
     check("a hogtied body is lying",
           S.detect_posture("Kate is now hogtied.", {"Kate": ["she"], "Dan": ["he"]}, _p := {}) == set()
           and _p.get("Kate", (None,))[0] == "lying")
@@ -3139,7 +3148,7 @@ def check_restraints_applied_in_a_beat():
         ["Dan cuts off Kate's jacket and throws it away.", "Dan walks to the bench."],
         "", "", _SC, notes_out=(_anotes := []))
     check("a position stated in the anchor is carried as state",
-          all("stays lying there" in g and "on the floor" in g for g in _an))
+          all("stays down" in g and "on the floor" in g for g in _an))
     check("...and info says the anchor set it",
           any("anchor puts Kate lying" in n for n in _anotes))
     check("'asleep on the concrete' is lying with no lying verb",
