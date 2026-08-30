@@ -3131,6 +3131,20 @@ def check_restraints_applied_in_a_beat():
     check("a hogtied body is lying",
           S.detect_posture("Kate is now hogtied.", {"Kate": ["she"], "Dan": ["he"]}, _p := {}) == set()
           and _p.get("Kate", (None,))[0] == "lying")
+    # A position stated in the ANCHOR: the tracked person's sentence is scrubbed
+    # from the emitted anchor (or she is introduced twice per shot), and the scrub
+    # was silently deleting the position with it. It seeds the carried state now.
+    _an = S.distribute_generations(
+        "Handheld camera. A concrete basement. Kate is laying on the floor, asleep.",
+        ["Dan cuts off Kate's jacket and throws it away.", "Dan walks to the bench."],
+        "", "", _SC, notes_out=(_anotes := []))
+    check("a position stated in the anchor is carried as state",
+          all("stays lying there" in g and "on the floor" in g for g in _an))
+    check("...and info says the anchor set it",
+          any("anchor puts Kate lying" in n for n in _anotes))
+    check("'asleep on the concrete' is lying with no lying verb",
+          S.detect_posture("Kate is asleep on the concrete.", {"Kate": ["she"]}, _p2 := {}) == set()
+          and _p2.get("Kate") == ("lying", "concrete"))
 
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
