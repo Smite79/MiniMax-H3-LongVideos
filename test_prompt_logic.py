@@ -3225,6 +3225,30 @@ def check_restraints_applied_in_a_beat():
     check("dressing her again clears the clause",
           "keeps exactly what" in _rd[0] and "keeps exactly what" not in _rd[1])
 
+    # --- the always-on guards must not describe a body that is on the floor --------
+    # "arms hanging along the sides of the torso, legs under the hips" and "feet rest
+    # on the floor" both describe a body STANDING UP. Stamped on every shot, they
+    # were several upright cues against the one sentence saying she was down, and
+    # the picture that won was the one most of the words described.
+    _lg = S.distribute_generations(
+        "A basement.", ["Kate is laying down on the floor with her head on the ground, asleep.",
+                        "Dan cuts off her shirt and throws it away.",
+                        "Kate wakes up and looks around.",
+                        "Kate stands up and walks to the door."],
+        "", "", _SC, anatomy_auto=True)
+    for _i in range(3):
+        check(f"shot {_i + 1}: no upright cue while she is down",
+              "legs under the hips" not in _lg[_i] and "feet rest on the floor" not in _lg[_i])
+    # The limb clause needs two people in frame, so check the shot that has them.
+    check("...the limb ORDER is still stated, without the upright pose",
+          "each leg at its own hip" in _lg[1])
+    check("...and the support still is", "held up by it" in _lg[0])
+    check("once she stands, the upright wording returns",
+          "feet rest on the floor" in _lg[3] and "stays down" not in _lg[3])
+    check("a shot with nobody down keeps the standing wording",
+          "feet rest on the floor" in S.distribute_generations(
+              "A room.", ["Kate walks to the bench."], "", "", _SC)[0])
+
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
     # whole-clip time expansion is the largest allocation in a run, so a "tiled"

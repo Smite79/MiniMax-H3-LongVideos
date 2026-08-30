@@ -1211,7 +1211,7 @@ def solid_things_in(text):
     return out
 
 
-def solidity_clause(body, persistent="", mode="auto"):
+def solidity_clause(body, persistent="", mode="auto", lying=False):
     """Assert that the objects in this shot occupy space and stop bodies.
 
     'auto' only speaks when the shot actually names something solid, so a beat with
@@ -1232,7 +1232,7 @@ def solidity_clause(body, persistent="", mode="auto"):
             found.append(w)
     if not _guard_fires(mode, found):
         return ""
-    out = SOLIDITY_STATE
+    out = SOLIDITY_STATE_LYING if lying else SOLIDITY_STATE
     if found:
         # A bare list, so no verb has to agree with a noun that may be plural
         # ("the stairs is solid"). Three at most -- past that it reads as an
@@ -2973,12 +2973,23 @@ HANDOFF_LATENT_TAIL = 8
 # so this anchors the START and the rest of the track stays free.
 AUDIO_HANDOFF_TAIL = 20
 
-ANATOMY_STATE = (" Each person has one head, two arms, two hands with five fingers on each hand, "
+_ANATOMY_HEAD = (" Each person has one head, two arms, two hands with five fingers on each hand, "
                  "and two legs with two feet. Each arm joins the body at one shoulder and runs "
                  "shoulder to elbow to wrist to hand; each leg joins at one hip and runs hip to "
-                 "knee to ankle to foot. The parts stack in order: head on the neck, neck on the "
-                 "shoulders, arms hanging along the sides of the torso, legs under the hips. Every "
-                 "limb moves only with the person it belongs to. Between the legs there is one groin.")
+                 "knee to ankle to foot.")
+_ANATOMY_TAIL = (" Every limb moves only with the person it belongs to. Between the legs there is "
+                 "one groin.")
+# "arms hanging along the sides of the torso, legs under the hips" describes a body
+# that is STANDING UP. Stamped on every shot it was three upright cues against one
+# sentence saying she was on the floor -- and the picture that won was the one most
+# of the words described. The order of the joints is what this guard is for; which
+# way they hang is not, so the lying variant states the order without the pose.
+ANATOMY_STATE = (_ANATOMY_HEAD + " The parts stack in order: head on the neck, neck on the "
+                 "shoulders, arms hanging along the sides of the torso, legs under the hips."
+                 + _ANATOMY_TAIL)
+ANATOMY_STATE_LYING = (_ANATOMY_HEAD + " The parts stay joined in that order: the head at the "
+                       "neck, the neck at the shoulders, each arm at its own shoulder, each leg "
+                       "at its own hip." + _ANATOMY_TAIL)
 
 # Two bodies in physical contact. Position-AGNOSTIC on purpose: a dictionary of named
 # positions would be endless, and the model already knows more names than any list
@@ -3074,6 +3085,13 @@ _SOLID_NOUNS = re.compile(
 SOLIDITY_STATE = (" Solid things stay solid: a body stops where it meets a surface, feet rest on "
                   "the floor, hands press against what they touch, and anyone crossing the space "
                   "walks around the furniture rather than across it.")
+# "feet rest on the floor" is a standing body. The point of the sentence is that a
+# body is SUPPORTED by what it lies on rather than sinking through it -- true of a
+# body on the ground too, and worth saying there, just not with the feet.
+SOLIDITY_STATE_LYING = (" Solid things stay solid: a body stops where it meets a surface, a body "
+                        "resting on the floor is held up by it, hands press against what they "
+                        "touch, and anyone crossing the space walks around the furniture rather "
+                        "than across it.")
 
 LIPS_CLOSED_STATE = (" Everyone in this shot is silent with their mouth closed and lips together, "
                      "jaw still, not talking.")
@@ -4287,6 +4305,12 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         present_names = [n for n in active if n and n not in departed]
         in_shot_now = {n for n in present_names
                        if person_in_shot(body, n, active, departed)}
+        # Is anyone the shot is about on the ground? The always-on guards describe an
+        # upright body by default, and those cues outnumber the one sentence saying
+        # otherwise -- so they follow the posture instead of fighting it.
+        lying_here = any((posture_state.get(n) or (None,))[0] == "lying"
+                         for n in (in_shot_now | set(prev_in_shot) | {""})
+                         if n in posture_state)
         people_here = bool(active.get("")) or bool(in_shot_now)
         # EVERY per-shot state below is gated on someone being in the shot, for one
         # reason: describing a body in a frame that has none can only invite one in.
@@ -4311,7 +4335,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 # limbs are grown where bodies meet or move together, whatever
                 # the resolution.
                 (anatomy_guard or (anatomy_auto and n_in_shot >= 2),
-                 lambda: ANATOMY_STATE),
+                 lambda: ANATOMY_STATE_LYING if lying_here else ANATOMY_STATE),
                 # what the restraints DO -- limits on limbs already established
                 (lock_restraints, lambda: restraint_clause(active, body, lock_restraints,
                                                            usage=restraint_usage,
@@ -4340,7 +4364,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 (True, lambda: ("" if _restrained_present(active, body)
                                 else motion_clause(body, motion_guard))),
                 # and last, what it cannot move through
-                (True, lambda: solidity_clause(body, ident, solidity_guard)),
+                (True, lambda: solidity_clause(body, ident, solidity_guard, lying_here)),
             ]
             for want, produce in states:
                 clause = produce() if want else ""
