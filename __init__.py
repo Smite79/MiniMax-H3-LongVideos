@@ -40,9 +40,10 @@ Install: put this whole folder in ComfyUI/custom_nodes/ and restart ComfyUI.
 from .sampler import NODE_CLASS_MAPPINGS as _s_c, NODE_DISPLAY_NAME_MAPPINGS as _s_d
 from .shot_length import NODE_CLASS_MAPPINGS as _sl_c, NODE_DISPLAY_NAME_MAPPINGS as _sl_d
 from .inspector import NODE_CLASS_MAPPINGS as _i_c, NODE_DISPLAY_NAME_MAPPINGS as _i_d
+from .overlay import NODE_CLASS_MAPPINGS as _o_c, NODE_DISPLAY_NAME_MAPPINGS as _o_d
 
-NODE_CLASS_MAPPINGS = {**_s_c, **_sl_c, **_i_c}
-NODE_DISPLAY_NAME_MAPPINGS = {**_s_d, **_sl_d, **_i_d}
+NODE_CLASS_MAPPINGS = {**_s_c, **_sl_c, **_i_c, **_o_c}
+NODE_DISPLAY_NAME_MAPPINGS = {**_s_d, **_sl_d, **_i_d, **_o_d}
 
 # No WEB_DIRECTORY: the only frontend script was autoshift.js, which wrote
 # auto-derived flow shifts back into the widgets. auto_shift is gone -- its premise
