@@ -3096,6 +3096,42 @@ def check_restraints_applied_in_a_beat():
                                     "", _SC, allow_nonspeech_vocals=True)[0]
     check("no '.,' where the vocal clause joins the bed", ".," not in _snd)
 
+    # --- where a body IS persists like the wardrobe does ----------------------------
+    # A beat that put someone on the floor was the only shot that said so; the
+    # handoff anchors only the first frame, so later shots stood her up.
+    _pb = ["Kate is lying on the floor, asleep. Dan walks in and cuts off her jacket.",
+           "Dan cuts off Kate's shirt and throws it away.",
+           "Dan walks off to grab a chain and brings it back. He wraps it around her waist.",
+           "Dan grabs her ankles and positions her legs behind her back.",
+           "Kate wakes up. He says to her: \"Good morning.\"",
+           "Dan lifts her onto the table.",
+           "Dan looks at the door.",
+           "Kate sits up.",
+           "Kate stands up and walks to the window."]
+    _pg = S.distribute_generations(_SA, _pb, "", "", _SC)
+    check("the floor is stated on every later beat",
+          all("stays lying there" in g and "on the floor" in g for g in _pg[:5]))
+    check("...through beats that only name the other person",
+          "stays lying there" in _pg[1] and "stays lying there" in _pg[2])
+    check("'positions her legs' does not move her", "stays lying there" in _pg[3])
+    check("Dan walking off does not move her", "stays lying there" in _pg[2])
+    check("a lift by someone else ends it, and that beat makes no claim",
+          "stays lying" not in _pg[5] and "stays there" not in _pg[5])
+    check("...and the new place is stated after it", "on the table and stays there" in _pg[6])
+    check("sitting up keeps the surface", "sitting on the table" in _pg[7])
+    check("standing up clears it -- upright is the default and is not asserted",
+          "stays" not in _pg[8].split("Solid things")[0] or "stays lying" not in _pg[8])
+    check("bound ankles on a lying body do not take steps",
+          "steps short" not in _pg[1] and "the legs moving as one" in _pg[1])
+    check("...and do once she is up", "steps short" in _pg[8])
+    _lay = S.distribute_generations(_SA, ["Dan lays her down on the mat.", "Dan looks away."],
+                                    "", "", _SC)
+    check("laid down by someone else is lying there next beat",
+          "lying on the mat and stays" in _lay[1])
+    check("a hogtied body is lying",
+          S.detect_posture("Kate is now hogtied.", {"Kate": ["she"], "Dan": ["he"]}, _p := {}) == set()
+          and _p.get("Kate", (None,))[0] == "lying")
+
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
     # whole-clip time expansion is the largest allocation in a run, so a "tiled"
