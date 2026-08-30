@@ -1313,6 +1313,63 @@ _UNRESTRAIN_CUE = re.compile(
     r"takes?\s+off|slips?\s+out\s+of|cuts?\s+(?:through|off))\b", re.I)
 
 
+# Words worth carrying onto a restraint's stored name. Colour and material are what
+# the identity clause has to hold constant between shots: "the same ones, unchanged
+# in colour" can only hold a colour the prompt actually states, and storing a bare
+# "tape gag" threw away the "grey duct" the beat had just supplied. Deliberately
+# short -- only what renders.
+_HARDWARE_DESCRIPTOR = re.compile(
+    r"^(?:grey|gray|silver|black|white|red|blue|green|brown|tan|yellow|orange|"
+    r"pink|purple|chrome|steel|metal|metallic|iron|brass|copper|leather|nylon|"
+    r"plastic|rubber|canvas|cloth|silk|satin|velvet|duct|gaffer|gaffa|packing|"
+    r"electrical|masking|heavy|thick|thin|wide|narrow|padded|studded|braided)$", re.I)
+
+
+def _describe_hardware(after, noun):
+    """`noun` with the colour/material words that immediately precede it in `after`.
+
+    "a heavy steel chain" -> "heavy steel chain". Walks backwards from the noun and
+    stops at the first word that is not a descriptor, so an article or a verb never
+    rides along."""
+    words = re.findall(r"\b[\w-]+\b", after)
+    low = [w.lower() for w in words]
+    head = noun.split()[-1].lower()
+    if head not in low:
+        return noun
+    i = low.index(head)
+    j = i
+    while j > 0 and _HARDWARE_DESCRIPTOR.match(low[j - 1]):
+        j -= 1
+    return " ".join(low[j:i + 1]) if j < i else noun
+
+
+def _same_hardware(item, existing):
+    """Is this the same piece of hardware as something already worn?
+
+    Head-noun equality is not enough: "duct tape" and "tape gag" have heads `tape`
+    and `gag`, so one sentence stored both and the shot then carried two items for
+    one object. Either name containing the other's head noun is the same thing.
+
+    A head can come back EMPTY -- a sheet entry that is pure digits ("30" for an
+    age) has no word in it. An empty head compiles to `\\b\\b`, which matches any
+    string, so every restraint read as already worn and none was ever stored. Both
+    sides are skipped when there is no head noun to compare."""
+    h_new = _item_head(item)
+    if not h_new:
+        return False
+    for e in existing:
+        h_old = _item_head(e)
+        if not h_old:
+            continue
+        if h_old == h_new:
+            return True
+        if re.search(r"\b" + re.escape(h_new) + r"\b", _item_name(e), re.I):
+            return True
+        if re.search(r"\b" + re.escape(h_old) + r"\b", _item_name(item), re.I):
+            return True
+    return False
+
+
 def _restrained_party(after, names, pron_map, single):
     """Who the restraint is applied TO: the first person named or pronouned AFTER
     the verb, which is the opposite of how a removal reads. A one-person cast needs
@@ -1377,7 +1434,10 @@ def auto_restraint_additions(active, body, lock_restraints=True):
                 if cand.split()[0] in ("a", "an", "the", "her", "his", "their"):
                     continue          # "a leash" -- the article is not part of it
                 if is_restraint(cand):
-                    item = cand
+                    # Keep the colour and material the beat just supplied. Storing a
+                    # bare noun leaves the identity clause with nothing to hold
+                    # constant, so each shot picks the appearance again.
+                    item = _describe_hardware(after, cand)
                     break
             region = _RESTRAINT_REGION_WORD.search(after)
             # A PLACEMENT verb needs the hardware NAMED. It is weaker evidence than a
@@ -1394,7 +1454,16 @@ def auto_restraint_additions(active, body, lock_restraints=True):
                     reg = reg[:-1]
                 # Tape over a mouth is a gag; "tape" alone must stay non-restraint,
                 # so store the form that IS one rather than a word that is not.
-                if verb.startswith("tape") and reg in ("mouth", "jaw", "lips"):
+                # The descriptors usually sit BEFORE the noun, and when the noun is
+                # itself the matched word ("...silver duct TAPE over her mouth") they
+                # sit before the match. Look back through the sentence so the colour
+                # and material survive -- they are the only thing the identity clause
+                # can hold constant between shots.
+                before = text[:m.end()]
+                described = _describe_hardware(before, verb)
+                if described != verb and is_restraint(described):
+                    item = described
+                elif verb.startswith("tape") and reg in ("mouth", "jaw", "lips"):
                     item = "tape gag"
                 else:
                     # Keep the actual hardware where the beat named it -- "buckles a
@@ -1408,7 +1477,28 @@ def auto_restraint_additions(active, body, lock_restraints=True):
                     # said something specific, and the two read as contradicting each
                     # other, which is how the cuffs came out broken.
                     named = next((w for w in words if _RESTRAINT_NOUN.fullmatch(w)), None)
-                    item = f"{reg} {named or 'bindings'}"
+                    if named:
+                        # Descriptors first, then the region, then the noun:
+                        # "heavy steel hip chain". The region has to be adjacent to
+                        # the noun for the qualifier rule to see it.
+                        desc = _describe_hardware(after, named).split()[:-1]
+                        item = " ".join(desc + [reg, named])
+                    else:
+                        # The noun may be the matched word itself, before the region.
+                        d2 = _describe_hardware(text[:m.end()], verb)
+                        if _RESTRAINT_NOUN.fullmatch(verb):
+                            item = " ".join(d2.split()[:-1] + [reg, verb])
+                        else:
+                            item = f"{reg} bindings"
+            # "gag" is the only token restraint_regions() reads as the mouth, so an
+            # item named for its material ("grey duct tape") landed on the vague
+            # whole-body effect instead of the mouth. Keep BOTH: the description is
+            # what the identity clause holds constant between shots, and the region
+            # word is what tells the shot which part of the body is covered.
+            if (item and region
+                    and region.group(0).lower().rstrip("s") in ("mouth", "jaw", "lip")
+                    and not _RESTRAINT_REGION[0][1].search(item)):
+                item = f"{item} gag"
         if item is None:
             continue
         who = None
@@ -1421,7 +1511,7 @@ def auto_restraint_additions(active, body, lock_restraints=True):
             who = names[0]
         if who is None or who not in active:
             continue
-        if not any(_item_head(i) == _item_head(item) for i in active[who]):
+        if not _same_hardware(item, active[who]):
             active[who].append(item)
     return active
 

@@ -2810,14 +2810,55 @@ def check_restraints_applied_in_a_beat():
     check("the second pins the cuffs the first showed",
           "handcuffs are the same ones" in _id[1])
     check("...but not hardware introduced by that same beat",
-          "ankle bindings" not in _id[1].split("same ones")[0][-80:])
+          "ankle chain" not in _id[1].split("same ones")[0][-80:])
+    # The noun the beat used, not a generic label: "bindings" carries no appearance,
+    # so pinning it to the previous shot pins nothing.
     check("once shown, the ankle chain is pinned too",
-          "ankle bindings" in _id[2] and "same ones as the previous shot" in _id[2])
+          "ankle chain" in _id[2] and "same ones as the previous shot" in _id[2])
     check("...and stays pinned", "same ones as the previous shot" in _id[3])
     check("the clause names no alternative to summon",
           not re.search(r"\bno\b|\bnot\b|\bdifferent\b", S._RESTRAINT_SAME, re.I))
     check("...and reads as prose, not a keyword list",
           " and " in S._join_list(["a", "b", "c"]))
+
+    # --- the hardware's APPEARANCE is what gets held constant -----------------------
+    # "the same ones as the previous shot" can only pin an appearance the item
+    # actually carries. A bare noun carries none, so a colour or material the beat
+    # supplied has to survive into the stored item -- otherwise every shot picks the
+    # finish again and the identity clause pins nothing.
+    _AD = {"Mara": ["she", "30", "red hair", "grey coat"], "Dom": ["he", "35"]}
+    def _stored(beat):
+        out = S.auto_restraint_additions(_AD, beat)
+        return [i for i in out["Mara"] if i not in _AD["Mara"]]
+    for _b, _want in (
+            ("Dom tapes her mouth shut with grey duct tape.", "grey duct tape"),
+            ("Dom presses silver duct tape over her mouth.", "silver duct tape"),
+            ("Dom buckles a black leather collar around her neck.", "black leather"),
+            ("Dom loops a heavy steel chain around her hips.", "heavy steel")):
+        check(f"the description is kept: {_want!r}",
+              any(_want in i for i in _stored(_b)))
+    # An age is pure digits and has no head noun. An empty head used to match every
+    # string, so a sheet carrying one suppressed EVERY restraint.
+    check("a sheet with an age still takes restraints",
+          _stored("Dom handcuffs Mara's wrists.") != [])
+    check("a described item is not stored twice",
+          len(_stored("Dom puts duct tape over her mouth.")) == 1)
+    # The description must not cost the region: "gag" is what marks the mouth, and
+    # an item named for its material carries no region word of its own.
+    for _b in ("Dom puts duct tape over her mouth.",
+               "Dom tapes her mouth shut with grey duct tape.",
+               "Dom presses silver duct tape over her mouth."):
+        check(f"...and still reads as the mouth: {_b[:30]!r}",
+              S.restraint_regions(S.auto_restraint_additions(_AD, _b)["Mara"])
+              == ["mouth"])
+    _desc = S.distribute_generations(
+        "A quiet room.", ["Dom presses grey duct tape over her mouth.",
+                          "Mara walks to the window.", "Mara turns around."],
+        "", "", _CM, lock_restraints=True)
+    check("the description survives into every later beat",
+          all("grey duct tape" in g for g in _desc[1:]))
+    check("...and is pinned to the previous shot's",
+          all("same ones as the previous shot" in g for g in _desc[1:]))
 
     _A2 = {"Mara": ["she", "handcuffs"], "Dom": ["he", "shirt"]}
     check("nobody out of shot is given a restraint identity",
