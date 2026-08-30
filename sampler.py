@@ -1410,22 +1410,26 @@ _MOVED_TPL = (r"\b(?P<verb>lifts?|lifted|hauls?|hauled|drags?|dragged|pulls?|pul
 # model has to resolve -- which reads as the beat not being followed. So it pins
 # the SUPPORT and the level, and says outright that movement happens there.
 def _posture_sentence(subj, pose, surf):
-    on = f"on the {surf}" if surf else ""
+    """Lead with the FIRST frame.
+
+    "She is lying on the floor and stays down..." describes a state without saying
+    when it starts, and the shot was opening in some other pose and animating into
+    this one -- a body that sits up and then falls down. The opening frame is the
+    thing being got wrong, so it is the thing stated first."""
+    sl = subj.lower()
+    on_sp = f" on the {surf}" if surf else ""
     if pose == "lying":
-        base = f"{subj} is lying {on}".rstrip() if on else f"{subj} is lying down"
-        rest = f"the body stays down {on}".rstrip() if on else f"{subj.lower()} stays down"
-        return (f"{base} and stays down for the whole shot -- {rest} from the first frame "
-                f"to the last, and any movement happens there, low and in place")
+        rest = f" -- the body rests on the {surf} to the last frame" if surf else ""
+        return (f"from the first frame {sl} is already lying{on_sp or ' down'} and stays down "
+                f"for the whole shot{rest}; any movement happens there, low and in place")
     if pose == "kneeling":
-        base = f"{subj} is kneeling {on}".rstrip() if on else f"{subj} is kneeling"
-        return (f"{base} and stays kneeling for the whole shot, in the same place from the "
-                f"first frame to the last, any movement happening there")
+        return (f"from the first frame {sl} is already kneeling{on_sp} and stays kneeling for "
+                f"the whole shot, in the same place to the last frame; any movement happens there")
     if pose == "sitting":
-        base = f"{subj} is sitting {on}".rstrip() if on else f"{subj} is seated"
-        return (f"{base} and stays seated for the whole shot, in the same place from the "
-                f"first frame to the last, any movement happening there")
-    return (f"{subj} is {on} and stays there for the whole shot, in the same place from the "
-            f"first frame to the last, any movement happening there")
+        return (f"from the first frame {sl} is already sitting{on_sp} and stays seated for the "
+                f"whole shot, in the same place to the last frame; any movement happens there")
+    return (f"from the first frame {sl} is already{on_sp} and stays there for the whole shot, "
+            f"in the same place to the last frame; any movement happens there")
 
 
 def _subject_before(frag, names, pron_map, single):
@@ -7330,6 +7334,27 @@ class H3LongVideos:
         # looking at the sequence -- which is why chains lose their cast in the
         # middle rather than degrading steadily.
         cohesion_notes = continuity_warnings(gens)
+        # A shot that states a POSITION and also carries a near-clean reference is
+        # being told two different things about its opening frames, and the picture
+        # wins: the shot opens in the reference's pose and animates into the stated
+        # one. That is a body that sits up and then falls down. Nothing else reports
+        # it, because each half is individually correct.
+        _refs_live = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
+                      if r is not None]
+        if _refs_live and float(ref_noise_aug) >= 0.98:
+            _posed = [i + 1 for i, g in enumerate(gens)
+                      if picture_tags(g) and re.search(r"is already (?:lying|sitting|kneeling)", g)]
+            if _posed:
+                _first = " Shot 1 has no previous frame to start from, so wire first_frame with " \
+                         "an image in that position." if 1 in _posed else ""
+                cohesion_notes.append(
+                    f"shot(s) {', '.join(str(n) for n in _posed)} state a body POSITION and also "
+                    f"carry a reference image at ref_noise_aug {float(ref_noise_aug):g} -- which "
+                    f"hands the model a noise-free picture and invites it to reproduce that "
+                    f"picture in the opening frames. The shot then opens in the reference's pose "
+                    f"and moves into the stated one, which renders as sitting up and falling "
+                    f"down. Lower ref_noise_aug (0.95, then 0.90) so the reference informs the "
+                    f"face without being copied.{_first}")
         # A per-shot seed resets the noise field -- and with it the grain, the
         # micro-texture and every surface detail the prompt never names -- at each
         # boundary. That reads as a cut even when the keyframe anchors the frame and

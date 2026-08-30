@@ -3135,6 +3135,10 @@ def check_restraints_applied_in_a_beat():
           "any movement happens there" in _mv[1]
           and "same position" not in _mv[1] and "flat against" not in _mv[1])
     check("...while still holding the body down", "stays down" in _mv[1])
+    check("the opening frame is stated first, not just the state",
+          "from the first frame" in _mv[1].lower()
+          and "is already lying" in _mv[1])
+
     check("bound ankles on a lying body do not take steps",
           "steps short" not in _pg[1] and "the legs moving as one" in _pg[1])
     check("...and do once she is up", "steps short" in _pg[8])
@@ -3178,7 +3182,8 @@ def check_restraints_applied_in_a_beat():
     S.detect_posture("A woman in a red coat is lying on the floor.", _u, _up)
     check("the unnamed subject's position is tracked", _up.get("") == ("lying", "floor"))
     check("...and stated impersonally",
-          "The subject is lying on the floor" in S.posture_clause(_up, _u, "She opens her eyes."))
+          "the subject is already lying on the floor" in
+          S.posture_clause(_up, _u, "She opens her eyes.").lower())
 
     # Same limb, both naming REAL hardware: two restraints, not one under two names.
     check("a rope added to cuffed wrists is kept",
