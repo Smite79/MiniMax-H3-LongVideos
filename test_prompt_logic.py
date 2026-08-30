@@ -3037,6 +3037,65 @@ def check_restraints_applied_in_a_beat():
           not S._reads_plural(["leg chain"]) and not S._reads_plural(["duct tape gag"]))
     check("a trailing 'ss' is not a plural", not S._reads_plural(["harness"]))
 
+    # --- what a real script exposed, reproduced neutrally ---------------------------
+    _SC = ("Kate = she, 28, brown hair, grey jacket, white shirt, blue jeans, "
+           "Wrists handcuffed behind back, Mouth taped shut, Ankles handcuffed together\n"
+           "Dan = he, 40, black jacket")
+    _SA = "Cold light in a concrete workshop."
+    def _ksheet(g, who="Kate"):
+        m = re.search(who + r"(?:'s)? \(([^)]*)\)", g)
+        return m.group(1) if m else ""
+    # A garment cut off by ANOTHER person, named possessively. "cuts" was not a
+    # removal verb, and the sentence's subject (Dan) was searched for the jacket
+    # instead of its owner -- so it stayed on her sheet in every later shot.
+    _rm = S.distribute_generations(_SA, ["Dan cuts off Kate's jacket and throws it away.",
+                                         "Kate looks at the door."], "", "", _SC)
+    check("a garment cut off by someone else comes off its owner",
+          "jacket" not in _ksheet(_rm[1]))
+    check("...and not off the person doing the cutting", "jacket" in _rm[1].split("Dan (")[1][:40]
+          if "Dan (" in _rm[1] else True)
+    check("...by pronoun as well", "jacket" not in _ksheet(S.distribute_generations(
+        _SA, ["Dan cuts off her jacket.", "Kate looks at the door."], "", "", _SC)[1]))
+    check("...and the direction clause does not make HER the one taking it off",
+          "comes off her during this shot" in _rm[0] and "She takes the" not in _rm[0])
+    check("a self-removal is still worded as hers",
+          "She takes the grey jacket off" in S.distribute_generations(
+              _SA, ["Kate takes off her jacket."], "", "", _SC)[0])
+    # Sheet-declared restraints in participle form were not restraints at all: no
+    # physical clause, and the taped mouth was dropped as per-shot mouth state.
+    for _it, _reg in (("Wrists handcuffed behind back", "wrists"),
+                      ("Mouth taped shut", "mouth"), ("Ankles handcuffed together", "ankles")):
+        check(f"sheet item is a restraint: {_it!r}",
+              S.is_restraint(_it) and S.restraint_regions([_it]) == [_reg])
+    _sr = S.distribute_generations(_SA, ["Kate lies on the floor."], "", "", _SC)[0]
+    check("...and the sheet alone yields the physical clause",
+          "behind the back" in _sr and "mouth stays covered" in _sr)
+    check("a taped mouth is hardware, not mouth state", not S._is_mouth_state("Mouth taped shut"))
+    check("...and survives a shot where the other person speaks",
+          "Mouth taped shut" in _ksheet(S.distribute_generations(
+              _SA, ['Kate stirs. Dan points at her and says: "Sit up."'], "", "", _SC)[0]))
+    # Duplicates: "handcuffs that" was stored as an item; "wrist bindings" stacked
+    # on wrists the sheet already had cuffed; "chains" next to "chain".
+    _dup = S.auto_restraint_additions({"Kate": ["she", "Wrists handcuffed behind back"], "Dan": ["he"]},
+                                      "Dan locks her ankles to the handcuffs that bind her wrists.")
+    check("no fragment or second name for one pair of cuffs",
+          [i for i in _dup["Kate"] if i != "she"] == ["Wrists handcuffed behind back"])
+    check("plural and singular are one head noun",
+          S._same_hardware("crotch chains", ["hip chain"]))
+    # "between her legs" is a crotch chain, not an ankle hobble.
+    _cc = S.auto_restraint_additions({"Kate": ["she"], "Dan": ["he"]},
+                                     "Dan runs a chain between Kate's legs and locks it.")
+    check("a chain between the legs is not a leg restraint",
+          S.restraint_regions([i for i in _cc["Kate"] if i != "she"]) == ["body"])
+    check("...while legs chained together still is",
+          S.restraint_regions([i for i in S.auto_restraint_additions(
+              {"Kate": ["she"], "Dan": ["he"]}, "Dan chains her legs together.")["Kate"]
+              if i != "she"]) == ["ankles"])
+    # A bed ending in a full stop met the clause's leading comma: ".,"
+    _snd = S.distribute_generations(_SA, ["Kate lies on the floor."], "Wall echoes, footsteps.",
+                                    "", _SC, allow_nonspeech_vocals=True)[0]
+    check("no '.,' where the vocal clause joins the bed", ".," not in _snd)
+
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
     # whole-clip time expansion is the largest allocation in a run, so a "tiled"
@@ -4763,10 +4822,23 @@ def check_listeners_stay_silent():
     check("a quote attributed AFTER the close still speaks Jon",
           "stays silent through the line" in g3[0] and '"Open it,"' in g3[0])
 
+    # A pronoun speaker is attribution, not guesswork, when the sheet declares
+    # distinct pronouns -- the same resolution every removal already relies on.
+    # "He says to her:" is the commonest attribution there is, and reading it as
+    # nobody left the listener's gag treated as a free mouth on every such shot.
     g4 = S.distribute_generations(
         "A garage.", ['She says: "Open it." He steps back.'], "", "", cm)
-    check("an unattributed quote frees nobody by guesswork",
-          "stays silent through the line" not in g4[0])
+    check("a declared pronoun attributes the line",
+          "stays silent through the line" in g4[0])
+    check("'says to her' credits the speaker, not the listener",
+          S._speakers_in('He says to her: "Open it."', ["Mara", "Jon"],
+                         S._pron_map(S.parse_wardrobe(cm))) == {"Jon"})
+    # ...but two people sharing a pronoun IS guesswork, and frees nobody.
+    g4b = S.distribute_generations(
+        "A garage.", ['She says: "Open it." The other steps back.'], "", "",
+        "Mara = she, red hair, lips together\nAnn = she, blonde hair, lips together")
+    check("an ambiguous pronoun frees nobody by guesswork",
+          "stays silent through the line" not in g4b[0])
 
     solo = S.distribute_generations(
         "A garage.", ['Mara says: "Open it."'], "", "",
