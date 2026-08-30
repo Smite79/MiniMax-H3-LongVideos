@@ -4982,6 +4982,29 @@ def main():
     check("repeated names: description binds at that mention",
           "Kristy (silver hair" in rshots[0])
 
+    # --- a POSSESSIVE first mention binds after the "'s", not inside it ------------
+    # "Dan grabs Kate's ankles" used to compose as "Kate (28, brown hair)'s ankles",
+    # splitting the name from the noun it owns and leaving the possessive stranded
+    # behind a parenthetical. Prose written that way hits it on nearly every beat,
+    # and a description that reads as its own noun phrase invites a second figure.
+    _pcm = "Kate = she, 28, brown hair, grey coveralls\nDan = he, 40, tall, black jacket"
+    _pg = S.distribute_generations(
+        "Cold fluorescent light in a concrete workshop.",
+        ["Dan grabs Kate's ankles and ties them.",
+         "Kate's coveralls are torn at the knee."], "", "", _pcm)
+    check("a possessive mention keeps its noun attached",
+          "Kate's (28, brown hair, grey coveralls) ankles" in _pg[0])
+    check("...with no description stranded inside the possessive",
+          ")'s" not in _pg[0] and ")'s" not in _pg[1])
+    check("...and it still works when the possessive opens the beat",
+          "Kate's (28, brown hair, grey coveralls) coveralls" in _pg[1])
+    check("a non-possessive mention is unchanged",
+          "Kate (28, brown hair, grey coveralls) wakes" in S.distribute_generations(
+              "Cold fluorescent light in a concrete workshop.",
+              ["Kate wakes up and sees Dan."], "", "", _pcm)[0])
+    check("...and the name is still bound only once",
+          _pg[0].count("Kate") == 1 and _pg[0].count("Dan") == 1)
+
     # --- PLAIN-TEXT beats (no character_memory): garments AND people ------------
     pt_anchor = ("A woman with silver hair in a red jacket and a bald man in navy "
                  "overalls, in a hangar, warm light.")
