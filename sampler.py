@@ -261,7 +261,7 @@ ADDED_WIDGETS = (
     "ref_mode", "ref_image_size", "ref_noise_aug", "auto_props", "prevent_nudity",
     "exposed_terms", "lock_restraints", "guards", "latent_upscale",
     "normalize_audio", "bed_continuity",
-    "auto_soundscape", "allow_nonspeech_vocals",
+    "auto_soundscape", "allow_nonspeech_vocals", "min_shot_seconds",
     # Not a widget -- a SIGMAS socket carries no widget value and so cannot shift
     # widgets_values. Listed here anyway so the same append rule keeps it dead last
     # in the schema, which is also the only position that leaves the INPUT SOCKET
@@ -3819,7 +3819,7 @@ def beat_seconds_directive(beat):
     return None
 
 
-def plan_beat_frames(beats, fps, budget, per_beat=True):
+def plan_beat_frames(beats, fps, budget, per_beat=True, min_seconds=0.0):
     """Per-beat shot lengths in frames. Returns (lengths, notes).
 
     `budget` is the CEILING -- the VRAM budget, or a forced shot_seconds already
@@ -3851,7 +3851,15 @@ def plan_beat_frames(beats, fps, budget, per_beat=True):
     # silently turned every request below ~5.2s into 124f, so 1s/2s/3s/4s all rendered
     # identically and both the widget and the `seconds:` directive looked broken.
     cap = max(5, int(budget))
+    # `min_seconds` raises the floor for CONTENT-sized shots. One seed only gives
+    # every shot the same noise field when the shots are the same SHAPE, so a floor
+    # near the ceiling is how a chain gets consistent grain -- see the cohesion note
+    # in run(). It never raises a shot above the ceiling, and it never overrides a
+    # 'seconds:' line, which is a duration stated outright.
     content_floor = align_frame_count(MIN_CONTENT_FRAMES)
+    if min_seconds and min_seconds > 0:
+        content_floor = max(content_floor,
+                            align_frame_count(int(round(float(min_seconds) * fps))))
     out, notes = [], []
     fps = max(1, int(fps))
     for i, b in enumerate(beats, 1):
@@ -6845,6 +6853,23 @@ class H3LongVideos:
                                 "when your scene contains distress sounds that H3 would otherwise "
                                 "suppress. Keep auto_silence_nonspeech ON for shots that should be "
                                 "truly silent."}),
+                "min_shot_seconds": ("FLOAT", {"default": 10.0, "min": 0.0, "max": 15.0,
+                    "step": 0.5, "round": 0.01,
+                    "tooltip": "Shortest a CONTENT-SIZED shot may be. Raises the floor that "
+                               "per_beat_length sizes against; it never lifts a shot above the "
+                               "shot_seconds/VRAM ceiling, and it never overrides a 'seconds:' "
+                               "line on a beat -- that is a duration you stated outright.\n\n"
+                               "Why it exists: one seed only gives every shot the same noise "
+                               "field when the shots are the same SHAPE. Noise is drawn to the "
+                               "latent's size, so shots of different frame counts get unrelated "
+                               "noise from the same seed, and the grain and surface detail reset "
+                               "at every boundary. A floor at or near the ceiling makes the "
+                               "lengths uniform, which is what makes the seed hold.\n\n"
+                               "The cost is pacing: a beat with one action in it now gets a shot "
+                               "longer than the action, and the model fills the rest by repeating "
+                               "or REVERSING it. info reports those beats as THIN. Give a thin "
+                               "beat a second action, or its own 'seconds:'.\n\n"
+                               "0 disables the floor and restores pure content sizing."}),
                 "character_memory": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "Optional dedicated wardrobe channel (same role as a 'wardrobe:' line in "
                                "the first paragraph -- use whichever you prefer; this field wins if both "
@@ -7022,7 +7047,7 @@ class H3LongVideos:
             decode_tile_frames=0, decode_tile_size=0,
             cleanup_between_shots=True,
             anchor_override="", shot_seconds=0.0, allow_oversize_shots=False,
-            per_beat_length=True, beat_split="auto",
+            per_beat_length=True, beat_split="auto", min_shot_seconds=10.0,
             character_memory="", auto_wardrobe=True, auto_props=True, prevent_nudity=True,
             exposed_terms="", lock_restraints=True, guards="auto",
             anatomy_guard=None, solidity_guard=None, motion_guard=None, contact_guard=None,
@@ -7250,7 +7275,15 @@ class H3LongVideos:
         # this". Forcing a length used to DISABLE per-beat sizing entirely, which is
         # why a plan made with a forced length disagreed with the auto render: two
         # different code paths for the same question.
-        lens, len_notes = plan_beat_frames(beats, fps, ln, per_beat=bool(per_beat_length))
+        lens, len_notes = plan_beat_frames(beats, fps, ln, per_beat=bool(per_beat_length),
+                                           min_seconds=float(min_shot_seconds or 0.0))
+        if min_shot_seconds and per_beat_length:
+            _floor_f = align_frame_count(int(round(float(min_shot_seconds) * fps)))
+            if _floor_f > ln:
+                ln_note = ((ln_note + " ") if ln_note else "") + (
+                    f"min_shot_seconds is {float(min_shot_seconds):g}s ({_floor_f}f) but the "
+                    f"ceiling here is {ln}f (~{ln / fps:.1f}s), so every shot is the ceiling. "
+                    f"Lower megapixels to buy the duration back, or lower min_shot_seconds")
         secs = [n / fps for n in lens]
         if len_notes:
             n_short = sum(1 for n in lens if n < ln)

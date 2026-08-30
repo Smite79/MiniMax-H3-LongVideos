@@ -1197,6 +1197,11 @@ def check_widget_order_is_append_only():
         print(f"    appended since the freeze (safe): {added}")
     # The id must change if the order ever does. That is the only thing that stops a
     # stale graph binding to a node whose widgets have moved underneath it.
+    check("the shot-length floor defaults to 10s",
+          schema["optional"]["min_shot_seconds"][1]["default"] == 10.0)
+    import inspect as _insp
+    check("...and run() takes it", "min_shot_seconds" in _insp.signature(
+        S.NODE_CLASS_MAPPINGS[S.H3_NODE_ID].run).parameters)
     check("the node id records the rebuild", S.H3_NODE_ID == "H3LongVideosV2")
     check("legacy ids are not mapped back onto the class",
           set(S.NODE_CLASS_MAPPINGS) == {S.H3_NODE_ID})
@@ -3271,6 +3276,29 @@ def check_restraints_applied_in_a_beat():
         "A basement.", ["Kate lies on the floor.", "Kate, <Picture 1>, turns her head."],
         "", "", _rc)
     check("a tag written into a beat still binds there", S.picture_tags(_bt[1]) == [1])
+
+    # --- min_shot_seconds: uniform lengths are what make one seed hold -------------
+    # Noise is drawn to the latent's SHAPE, so shots of different frame counts get
+    # unrelated noise from the same seed. A floor near the ceiling makes the lengths
+    # uniform. It must not override the ceiling, nor a stated 'seconds:'.
+    _mb = ["Kate stands still.",
+           "Dan cuts off her shirt and throws it away.",
+           "Dan walks the length of the room, checks the door, then comes back.",
+           "seconds: 4\nKate blinks."]
+    _ml, _ = S.plan_beat_frames(_mb, 24, 362, per_beat=True, min_seconds=10.0)
+    check("10s lands on the 17k+5 grid", S.align_frame_count(240) == 243)
+    check("content-sized beats all reach the floor", _ml[:3] == [243, 243, 243])
+    check("...so one seed gives them one noise field", len(set(_ml[:3])) == 1)
+    check("an explicit 'seconds:' still wins under the floor", _ml[3] < 243)
+    check("the floor never lifts a shot above the ceiling",
+          all(n <= 175 for n in S.plan_beat_frames(_mb, 24, 175, per_beat=True,
+                                                   min_seconds=10.0)[0]))
+    check("0 restores pure content sizing",
+          len(set(S.plan_beat_frames(_mb, 24, 362, per_beat=True, min_seconds=0.0)[0][:3])) > 1)
+    # The cost is real and must be reported: a one-action beat in a 10s shot is the
+    # padding that renders as the action repeating or reversing.
+    check("a beat too thin for the floor is reported",
+          S.pacing_warnings(_mb[:1], [243], 24) != [])
 
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The

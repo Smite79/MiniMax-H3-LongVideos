@@ -99,6 +99,15 @@ the right person when two people are on screen.
 Length** node into it (it also reports the matching frame count), or leave it
 unconnected and the VRAM budget decides.
 
+**`min_shot_seconds`** (default 10) is the floor. It exists for seed consistency:
+noise is drawn to the latent's *shape*, so shots of different frame counts get
+unrelated noise from the same seed and the grain resets at every cut. A floor near
+the ceiling makes the lengths uniform, which is what makes one seed hold across a
+chain. The cost is pacing — a one-action beat in a 10s shot leaves the model time it
+was told nothing about, and it fills that by repeating or reversing the action, so
+`info` flags those beats as THIN. Give a thin beat a second action, or its own
+`seconds:` line, which always wins. Set it to 0 for pure content sizing.
+
 Cost scales with **latent cells** — resolution *and* duration — and attention is
 quadratic in them. Lowering megapixels does far more for speed than any other
 setting.
