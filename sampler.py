@@ -280,26 +280,34 @@ def is_directive_line(line):
     return bool(re.match(r"\s*(" + "|".join(DIRECTIVE_KEYS) + r")\s*:", line or "", re.I))
 
 
-# A line that finished its sentence. Closing quotes and brackets count, so a line
-# ending on dialogue ("...last one?") is complete.
-_LINE_FINISHED = re.compile(r"""[.!?…]["'”’)\]]*\s*$""")
+# A line that CANNOT have finished its sentence: it ends on a comma, on a
+# possessive, or on a word that never ends one -- an article, a preposition, a
+# conjunction. This list is deliberately short. "Dom looks at her" and "Mara
+# follows him in" are complete beats that end on a pronoun and a particle, so
+# those words are NOT here: a rule that merged them would silently lose a shot,
+# which is the one failure the splitter is built never to produce.
+_LINE_UNFINISHED = re.compile(
+    r"(?:,|\w['’]s|\b(?:a|an|the|and|or|but|nor|to|of|with|for|into|onto|from|"
+    r"than|whose|very|my|your|our))\s*$", re.I)
 # ...and a line that starts mid-sentence: lowercase, or the punctuation that only
-# ever continues one. A line opening with a capital is treated as a new beat even
-# when the line above it lacks a full stop, because that is far more likely to be
-# a beat typed without punctuation than a sentence wrapped mid-word.
+# ever continues one.
 _LINE_CONTINUES = re.compile(r"^\s*(?:[a-z0-9]|[,;:)—-])")
 
 
 def _join_wrapped_lines(lines, rejoined=0):
     """Rejoin lines that are one wrapped sentence. Returns (lines, rejoined_count).
 
-    Only when BOTH sides agree: the line above does not end its sentence AND the
-    line below starts mid-sentence. Either signal alone is too weak -- beats are
-    routinely typed without a full stop, and that must keep splitting."""
+    Only when BOTH sides agree: the line above cannot have ended its sentence AND
+    the line below starts mid-sentence. The first test is strict on purpose. An
+    earlier version joined on "no full stop above, lowercase below", and that
+    merged three beats typed in the README's own style -- lowercase, no
+    punctuation -- into one shot. Missing a wrap leaves a fragment shot, which is
+    visible and reported; merging beats loses a shot with no trace. Between the
+    two, miss the wrap."""
     out = []
     for ln in lines:
         if (out and not is_directive_line(ln) and not is_directive_line(out[-1])
-                and not _LINE_FINISHED.search(out[-1])
+                and _LINE_UNFINISHED.search(out[-1])
                 and _LINE_CONTINUES.match(ln)):
             out[-1] = out[-1].rstrip() + " " + ln.strip()
             rejoined += 1
@@ -1255,8 +1263,9 @@ def _reads_plural(items):
     """Does this list of item names take a plural verb?"""
     if len(items) != 1:
         return True
-    name = items[0].strip()
-    return bool(_ALWAYS_PLURAL.search(name)) or name.lower().endswith("s")
+    name = items[0].strip().lower()
+    # "harness" is singular; a trailing "ss" is never a plural marker.
+    return bool(_ALWAYS_PLURAL.search(name)) or (name.endswith("s") and not name.endswith("ss"))
 
 
 def _join_list(items):
@@ -3479,6 +3488,10 @@ def plan_beat_frames(beats, fps, budget, per_beat=True):
     REVERSING the action. Leaning short costs an unfinished action that the next
     shot continues from the handoff frame; leaning long costs a jacket that takes
     itself off and puts itself back on."""
+    # No beats at all is a one-paragraph prompt: one shot, and the user's length
+    # is the ceiling. That placeholder must not be mistaken for a beat with nothing
+    # in it -- the no-signal rule below would hand the simplest possible render 3s.
+    placeholder = not beats
     beats = beats if beats else [""]
     # MIN_SHOT_FRAMES is the floor of the *VRAM budget* -- the shortest shot the node
     # falls back to when it has to guess with no information at all. It must not raise
@@ -3500,7 +3513,7 @@ def plan_beat_frames(beats, fps, budget, per_beat=True):
             # least content the most time to fill. That is the worst pairing this
             # function can produce, and it renders as the action repeating. With
             # per-beat sizing on, no signal means the SHORTEST shot instead.
-            if per_beat and want <= 0:
+            if per_beat and want <= 0 and not placeholder:
                 out.append(content_floor)
                 notes.append(f"shot {i}: {content_floor}f (~{content_floor / fps:.1f}s, "
                              f"no action the estimator could read)")
@@ -4254,6 +4267,24 @@ def _empty_av_latent(width, height, length, fps, batch_size=1):
     return {"samples": comfy.nested_tensor.NestedTensor((video, audio))}, fc
 
 
+AUTO_TILE_T = 8      # latent frames per temporal decode chunk, when tiling is on
+
+
+def _auto_tile_t(n_latent_frames, requested=None):
+    """Temporal tile for a tiled decode. An explicit value wins.
+
+    The decode_tile_frames widget is gone, so this is where the value comes from
+    now. It has to come from somewhere: ComfyUI's decode_tiled_3d defaults tile_t
+    to 999, i.e. SPATIAL tiles only, and expanding the whole clip's time axis at
+    once is the single largest allocation in a run. A "tiled" decode that keeps the
+    full temporal extent barely lowers the peak, so the OOM retry that switches
+    tiling on was, without this, retrying with almost the same footprint."""
+    if requested:
+        return int(requested)
+    n = int(n_latent_frames or 0)
+    return AUTO_TILE_T if n > AUTO_TILE_T else None
+
+
 def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=None):
     """Decode the video latent. If `free_first` is the diffusion model, unload it
     first: sampling is finished, and the ~5GB video VAE needs the room. Leaving the
@@ -4274,6 +4305,7 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
         # streaming, it is what tips the card over. Decoding in temporal chunks
         # trades a little speed for a much lower peak; None keeps ComfyUI's defaults.
         args = {}
+        tile_t = _auto_tile_t(latent.shape[2] if latent.ndim >= 5 else 0, tile_t)
         if tile_t:
             args["tile_t"] = int(tile_t)
             args["overlap_t"] = max(1, int(tile_t) // 8)

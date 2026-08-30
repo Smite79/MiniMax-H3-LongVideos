@@ -310,7 +310,7 @@ class H3Overlay:
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "info")
     FUNCTION = "run"
-    CATEGORY = "H3"
+    CATEGORY = "MiniMax-H3/utils"
     DESCRIPTION = ("Composite a watermark and/or an intro title onto finished frames. "
                    "Put it AFTER any upscale, so glyphs are rasterized at the final "
                    "pixel size instead of being interpolated up with the picture.")
@@ -319,8 +319,14 @@ class H3Overlay:
             watermark_size=4.0, watermark_opacity=0.75, watermark_margin=3.0,
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0):
+        # apply_overlays composites IN PLACE. Inside the sampler that was its own
+        # tensor; here `images` is another node's cached output, and writing into it
+        # would put the watermark onto the upstream result -- so a second run with a
+        # different text composites over the first, and the sampler's own `images`
+        # output carries text it never drew. Work on a copy.
+        frames = images.detach().cpu().clone()
         frames, note = apply_overlays(
-            images, max(1, int(fps)), watermark_text, watermark_position, watermark_size,
+            frames, max(1, int(fps)), watermark_text, watermark_position, watermark_size,
             watermark_opacity, watermark_margin, intro_text, intro_seconds,
             intro_fade, intro_size, intro_position, overlay_font, overlay_stroke)
         if not note:
