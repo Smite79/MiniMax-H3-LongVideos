@@ -3187,6 +3187,44 @@ def check_restraints_applied_in_a_beat():
     check("hardware is generic only when it names none",
           S._generic_restraint("wrist bindings") and not S._generic_restraint("rope"))
 
+    # --- a garment cut off must not come back while prevent_nudity is ON ------------
+    # The gate deletes the garment and forbids saying the zone is bare, which leaves
+    # it UNDESCRIBED -- and a video model's prior for an undescribed body is a
+    # clothed one, so it covers what nobody described. That is the cut-off garment
+    # reappearing a shot later. The gate does not forbid saying nothing NEW arrives.
+    # The bra matters: without it, removing the crop top empties the upper zone in
+    # beat 1 and the clause rightly fires there, so there is no "before" to test.
+    _nd = ("Kate = she, 28, blonde hair, white crop top, white bra, black shorts, "
+           "white thong\nDan = he, 40")
+    _ng = S.distribute_generations(
+        "A basement.", ["Dan cuts off Kate's crop top and throws it away.",
+                        "Dan cuts off Kate's shorts and throws them away, exposing her white thong.",
+                        "Dan cuts off Kate's thong and throws it away.",
+                        "Kate lies still.",
+                        "Dan steps back and looks at her."], "", "", _nd, prevent_nudity=True)
+    check("one garment comes off per beat, not two",
+          "white thong" in _ng[1] and "thong comes off" not in _ng[1])
+    check("...and each beat's own garment does come off",
+          "crop top comes off" in _ng[0] and "shorts come off" in _ng[1]
+          and "thong comes off" in _ng[2])
+    check("an emptied zone gets the no-new-clothing clause",
+          "keeps exactly what" in _ng[2])
+    check("...and keeps it on every later shot", all("keeps exactly what" in g for g in _ng[3:]))
+    check("...before the zone is emptied it is absent", "keeps exactly what" not in _ng[0])
+    check("the clause asserts no nudity and names no garment",
+          not re.search(r"\bbare\b|\bnaked\b|\bnude\b|crop top|shorts|thong",
+                        re.search(r"[^.]*keeps exactly what[^.]*\.", _ng[2]).group(0)))
+    check("nobody stripped -> no clause",
+          "keeps exactly what" not in S.distribute_generations(
+              "A room.", ["Kate walks in."], "", "", _nd)[0])
+    # A beat that DOES dress her must not be told nothing is put on.
+    _rd = S.distribute_generations(
+        "A room.", ["Dan cuts off Kate's shorts and throws them away.",
+                    "wardrobe: Kate += grey robe\nDan wraps a robe around her."],
+        "", "", "Kate = she, 28, black shorts\nDan = he, 40", prevent_nudity=True)
+    check("dressing her again clears the clause",
+          "keeps exactly what" in _rd[0] and "keeps exactly what" not in _rd[1])
+
     # --- a tiled decode gets a TEMPORAL tile, now that the widget is gone ----------
     # ComfyUI's decode_tiled_3d defaults tile_t to 999: spatial tiles only. The
     # whole-clip time expansion is the largest allocation in a run, so a "tiled"

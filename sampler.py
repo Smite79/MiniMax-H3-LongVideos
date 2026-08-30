@@ -1088,6 +1088,34 @@ _BARE_PERSIST = {
 }
 
 
+def no_redress_clause(names, active, body):
+    """Nothing NEW arrives on the body, for people whose emptied zone cannot be
+    described.
+
+    With prevent_nudity ON a removal deletes the garment and says nothing about the
+    zone -- and a video model's prior for an undescribed body is a clothed one, so it
+    covers what nobody described. That is a garment that was cut off in one shot
+    reappearing in the next, which is the thing being reported.
+
+    This says the one true thing the gate still allows: what is on the body at the
+    start of the shot is all that is on it. It names no garment and no body part, so
+    it asserts no nudity -- it just closes the model's cheapest way to fill the gap.
+    Nothing here removes anything either; a shot that DOES dress someone states that
+    in its own prose, and this clause is only emitted for the people whose zone the
+    gate left unstated."""
+    bits = []
+    for name in sorted(n for n in (names or ()) if n is not None):
+        if name and not person_referenced(body, name, active):
+            continue
+        subj = _subject_term(name, active) if name else "the subject"
+        bits.append(f"{subj} keeps exactly what {subj.lower()} has on at the start of this "
+                    f"shot, and it stays that way to the last frame -- nothing is put on and "
+                    f"no clothing appears that was not already there")
+    if not bits:
+        return ""
+    return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+
+
 def bare_persist_clause(bare_zones, active, body):
     """State that an already-bared zone stays bare through a change of angle.
 
@@ -4123,6 +4151,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 for tok in tokens:
                     active[nm].remove(tok)
         bare_now = {}
+        redress_risk = set()      # zone emptied, but prevent_nudity forbids saying so
         for nm in list(active):
             marks = {z: exposed_mark(z, nm, active.get(nm, []), exposed)
                      for z in ("lower", "upper")}
@@ -4140,6 +4169,13 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
             # Declaring nudity in the sheet is as explicit as filling in
             # exposed_terms, so it overrides the guard for that person the same way.
             if prevent_nudity and not exposed and nm not in declared:
+                # The zone is now undescribed, and an undescribed body renders
+                # CLOTHED -- which is the garment coming back on a shot after it was
+                # cut off. The gate forbids saying the body is bare; it does not
+                # forbid saying that nothing NEW arrives on it, which costs the model
+                # its cheapest way to fill the gap. See no_redress_clause().
+                if add:
+                    redress_risk.add(nm)
                 add = []
             stripped_here = any(n == nm for n, _ in off_now)
             # The handoff reset is recorded INDEPENDENTLY of the nudity gate above:
@@ -4293,6 +4329,9 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 # a bared zone stays bared once the body turns to a surface the shot
                 # has not shown; the model's default for undescribed skin is clothed
                 (True, lambda: bare_persist_clause(bare_now, active, body)),
+                # ...and where the gate left the zone unstated, that nothing new
+                # arrives to cover it -- otherwise the cut-off garment comes back.
+                (True, lambda: no_redress_clause(redress_risk, active, body)),
                 # two bodies arranged, BEFORE being told to hold together while moving
                 (True, lambda: contact_clause(body, n_in_shot, contact_guard)),
                 # then how that body moves -- unless someone in the frame is bound:
