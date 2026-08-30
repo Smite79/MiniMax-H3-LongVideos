@@ -2858,7 +2858,48 @@ def check_restraints_applied_in_a_beat():
     check("the description survives into every later beat",
           all("grey duct tape" in g for g in _desc[1:]))
     check("...and is pinned to the previous shot's",
-          all("same ones as the previous shot" in g for g in _desc[1:]))
+          all(re.search(r"same ones? as the previous shot", g) for g in _desc[1:]))
+
+    # --- worn hardware survives a beat that does not mention its wearer ------------
+    # Every shot continues from the previous shot's last frame, so a beat that
+    # follows the OTHER person does not take the hardware off her. Gating this on
+    # being named in the beat dropped it for exactly those shots.
+    _cam = S.distribute_generations(
+        "A quiet room.", ["Dom loops a chain between her legs.",
+                          "Mara walks to the window.", "Dom crosses to the table."],
+        "", "", _CM, lock_restraints=True)
+    check("the camera resting on the other person keeps the hardware",
+          "chain" in _cam[2])
+    check("...and still pins it to the previous shot", "same one" in _cam[2])
+    # ...but not forever: one shot of absence is a camera move, several is someone
+    # who has gone, and a chain in a frame she is not in is its own failure.
+    _far = S.distribute_generations(
+        "A quiet room.", ["Dom loops a chain between her legs.",
+                          "Mara walks to the window.", "Dom crosses to the table.",
+                          "Dom pours a drink.", "Dom sits down."],
+        "", "", _CM, lock_restraints=True)
+    check("the carry lapses once she is gone from several beats",
+          "chain" not in _far[3] and "chain" not in _far[4])
+    check("...and resumes when she is back in frame",
+          "chain" in S.distribute_generations(
+              "A quiet room.", ["Dom loops a chain between her legs.",
+                                "Dom crosses to the table.", "Mara turns around."],
+              "", "", _CM, lock_restraints=True)[2])
+    # A stated departure ends it at once -- she is not in the frame to wear it.
+    _left = S.distribute_generations(
+        "A quiet room.", ["Dom loops a chain between her legs.", "Mara leaves.",
+                          "Dom sits down.", "Dom pours a drink."],
+        "", "", _CM, lock_restraints=True)
+    check("a departure stops the claim immediately",
+          "chain" not in _left[2] and "chain" not in _left[3])
+    # Agreement: "The leg chain ARE the same ONES" does not parse, and a sentence
+    # that does not parse is weaker conditioning than one that does.
+    check("a single item takes a singular verb",
+          "chain is the same one as" in _cam[2])
+    check("...and a plural one still reads plural",
+          S._reads_plural(["handcuffs"]) and S._reads_plural(["ankle chains"]))
+    check("...on the item's own noun, not a fixed choice",
+          not S._reads_plural(["leg chain"]) and not S._reads_plural(["duct tape gag"]))
 
     _A2 = {"Mara": ["she", "handcuffs"], "Dom": ["he", "shirt"]}
     check("nobody out of shot is given a restraint identity",
@@ -2894,7 +2935,7 @@ def check_restraints_applied_in_a_beat():
     check("placed hardware survives every later beat",
           all("hip" in g for g in _pl[1:]))
     check("...and is pinned to the previous shot's",
-          all("same ones as the previous shot" in g for g in _pl[1:]))
+          all(re.search(r"same ones? as the previous shot", g) for g in _pl[1:]))
 
     # End to end: it has to survive into later shots, which is the whole point.
     gens = S.distribute_generations(
