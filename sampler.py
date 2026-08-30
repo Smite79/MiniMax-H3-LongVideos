@@ -1333,7 +1333,143 @@ def restraint_identity_clause(active, body, seen, departed=(), carried=()):
                                   one="ones" if plural else "one")
 
 
-def restraint_clause(active, body, lock_restraints=True, usage=None):
+# --- where a body IS ---------------------------------------------------------
+# Clothing, props and restraints persist across shots; POSITION did not. A beat
+# that put someone on the floor was the only shot that said so. Every later beat
+# about the other person left her whereabouts unstated, and the handoff frame
+# anchors only the FIRST frame -- so over the rest of the shot the model was free
+# to stand her up, and a cuffed character rendered on her feet with nothing in the
+# prompt against it. Posture is now a carried state, like the wardrobe: set by the
+# prose, stated positively on every later shot, changed only by the prose.
+_SURF = r"(?:the\s+|a\s+|an\s+|her\s+|his\s+|their\s+)?(\w+)"
+_POSTURE_SET = (
+    ("lying", re.compile(
+        r"\b(?:lies?|lying|lay|lays|laying|sprawl(?:s|ed|ing)?|slump(?:s|ed)?|"
+        r"curl(?:s|ed)\s+up|collapse[sd]?)\s+(?:down\s+)?(?:on|across|along|over)\s+" + _SURF, re.I)),
+    ("lying", re.compile(r"\bon\s+(?:her|his|their)\s+(?:back|stomach|belly|side|front)\b", re.I)),
+    ("lying", re.compile(r"\bhog-?(?:tied|cuffed)\b|\blying\b|\bprone\b|\bsupine\b", re.I)),
+    ("kneeling", re.compile(
+        r"\b(?:kneels?|kneeling|knelt)\b(?:\s+(?:down\s+)?(?:on|at|beside)\s+" + _SURF + r")?"
+        r"|\bon\s+(?:her|his|their)\s+knees\b", re.I)),
+    ("sitting", re.compile(
+        r"\b(?:sits?|sitting|sat|seated)\b(?:\s+(?:down\s+|up\s+)?(?:on|in|at)\s+" + _SURF + r")?", re.I)),
+    ("standing", re.compile(
+        r"\b(?:stands?|standing|stood|gets?\s+up|got\s+up|rises|rose|walks?|walked|"
+        r"steps?|stepped|runs?|ran|paces?|crosses|strides?|on\s+(?:her|his|their)\s+feet)\b", re.I)),
+)
+# Someone moved BY someone else: "lifts her onto the table", "sets her down on the
+# floor". The pronoun must be the object, not a possessive -- "positions her legs"
+# moves the legs, not her -- so it has to be followed by where she goes.
+_MOVED_TPL = (r"\b(?P<verb>lifts?|lifted|hauls?|hauled|drags?|dragged|pulls?|pulled|carries|"
+              r"carried|picks?\s+up|picked\s+up|sets?|props?|propped|sits?|sat|stands?|stood|"
+              r"puts?|places?|placed|lays?|laid|lowers?|lowered|hoists?|heaves?|throws?|threw|"
+              r"flips?|rolls?|turns?|pushes|pushed|shoves?|shoved|drops?|dropped)\s+"
+              r"(?P<obj>her|him|them|NAME)\s*"
+              r"(?=(?:up|down|back|over|onto|on\s+to|on|into|to|against|across|off|out|by|"
+              r"and|then|[,.;]|$))")
+_POSTURE_TEXT = {
+    "lying":    "{s} is lying {on}and stays lying {there}for the whole shot, in the same place "
+                "and the same position from the first frame to the last, the body flat against it",
+    "kneeling": "{s} is kneeling {on}and stays kneeling {there}for the whole shot, in the same "
+                "place from the first frame to the last",
+    "sitting":  "{s} is sitting {on}and stays sitting {there}for the whole shot, in the same "
+                "place from the first frame to the last",
+    "on":       "{s} is {on}and stays there for the whole shot, in the same place from the "
+                "first frame to the last",
+}
+
+
+def _subject_before(frag, names, pron_map, single):
+    """The nearest name or subject pronoun before a cue, resolved to a person."""
+    best = None
+    for m in re.finditer(r"\b([A-Za-z]+)\b", frag):
+        w = m.group(1)
+        if w.lower() in ("he", "she", "they") or any(w.lower() == n.lower() for n in names):
+            r = _resolve_subject(w, names, pron_map, single)
+            if r:
+                best = r
+    return best
+
+
+def detect_posture(body, active, posture, departed=()):
+    """Update `posture` ({name: (pose, surface)}) from this beat. Returns the names
+    whose position was changed by someone ELSE this beat -- the beat shows that
+    move, so the clause must not claim they were already there."""
+    names = [n for n in active if n and n not in (departed or ())]
+    moved_now = set()
+    if not names:
+        return moved_now
+    pron_map = _pron_map({k: v for k, v in active.items() if k in names})
+    single = len(names) == 1
+    masked, _ = _mask_quotes(body or "")
+    moved = re.compile(_MOVED_TPL.replace("NAME", "|".join(re.escape(n) for n in names)), re.I)
+    for sent in re.split(r"(?<=[.!?])\s+", masked):
+        if not sent.strip():
+            continue
+        moved_spans = []
+        for m in moved.finditer(sent):
+            who = _resolve_subject(m.group("obj"), names, pron_map, single)
+            if not who:
+                continue
+            moved_spans.append((m.start(), m.end()))
+            tail = sent[m.end():]
+            sm = re.match(r"\s*(?:up\s+|down\s+|back\s+)?(?:onto|on\s+to|on|into|against|over|to|across)\s+"
+                          + _SURF, tail, re.I)
+            verb = m.group("verb").lower()
+            if re.match(r"(?:flips?|rolls?|turns?)$", verb):
+                continue                                # turned over, same place
+            moved_now.add(who)
+            if re.match(r"(?:lays?|laid|lowers?|lowered|puts?|sets?|places?|placed|drops?|dropped)$", verb) \
+                    and sm and re.match(r"\s*(?:down\s+)?(?:on|onto|across)\b", tail, re.I):
+                posture[who] = ("lying", sm.group(1))
+            elif re.match(r"(?:sits?|sat)$", verb):
+                posture[who] = ("sitting", sm.group(1) if sm else None)
+            elif re.match(r"(?:stands?|stood)$", verb):
+                posture.pop(who, None)
+            elif sm:
+                posture[who] = ("on", sm.group(1))
+            else:
+                posture.pop(who, None)                 # carried off somewhere unstated
+        for pose, rx in _POSTURE_SET:
+            for m in rx.finditer(sent):
+                if any(a <= m.start() < b for a, b in moved_spans):
+                    continue                            # "sits her on the chair" is a move
+                who = _subject_before(sent[:m.start()], names, pron_map, single)
+                if not who or who in moved_now:
+                    continue
+                if pose == "standing":
+                    posture.pop(who, None)              # upright is the default; say nothing
+                    continue
+                surf = next((g for g in m.groups() if g), None)
+                prev = posture.get(who)
+                if surf is None and prev:
+                    surf = prev[1]              # "sits up" on the table she was lying on
+                posture[who] = (pose, surf)
+    return moved_now
+
+
+def posture_clause(posture, active, body, departed=(), carried=(), skip=()):
+    """State where each person is and that they stay there. Gated like the
+    restraint identity clause: in shot now, or on screen a moment ago."""
+    gone = {_norm_name(d) for d in (departed or ())}
+    held = {_norm_name(c) for c in (carried or ())}
+    bits = []
+    for name, (pose, surf) in (posture or {}).items():
+        if not name or name in skip or _norm_name(name) in gone:
+            continue
+        if _norm_name(name) not in held and not person_in_shot(body, name, active, departed):
+            continue
+        subj = _subject_term(name, active)
+        on = f"on the {surf} " if surf else ""
+        if pose == "on" and not surf:
+            continue
+        bits.append(_POSTURE_TEXT[pose].format(s=subj, on=on, there="there " if surf else ""))
+    if not bits:
+        return ""
+    return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
+
+
+def restraint_clause(active, body, lock_restraints=True, usage=None, posture=None):
     """State what each restrained person's body cannot do, for the people in shot.
 
     Only for someone actually referenced in the beat -- describing a bound body in
@@ -1372,9 +1508,13 @@ def restraint_clause(active, body, lock_restraints=True, usage=None):
         found = _detect_restraint_usage(text)
         if usage is not None and (found["tether"] or found["pose"]):
             usage[name] = found
-        effects = "; ".join(_restraint_effect_text(r, text,
-                                                   usage.get(name) if usage else None)
-                            for r in regions)
+        lying = bool(posture) and (posture.get(name) or (None,))[0] == "lying"
+        effects = "; ".join(
+            # "steps short and shuffling" puts a lying body on its feet.
+            "the ankles stay bound close together, the legs moving as one"
+            if (r == "ankles" and lying) else
+            _restraint_effect_text(r, text, usage.get(name) if usage else None)
+            for r in regions)
         bits.append(f"{subj} is physically restrained -- {effects}")
     if not bits:
         return ""
@@ -3782,6 +3922,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     # USE persists with the wardrobe: shot 5 saying "she strains" must keep shot
     # 2's "cuffed to the headboard", not fall back to wording that contradicts it.
     restraint_usage = {}
+    posture_state = {}       # name -> (pose, surface): where each body is, until moved
     # person -> restraint items they were ALREADY wearing when the last shot
     # rendered. Only those can be pinned to "the same ones as the previous shot";
     # hardware appearing for the first time has no previous shot to match.
@@ -3817,6 +3958,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 if nm and re.search(r"\b" + re.escape(nm) + r"\b", named_here, re.I):
                     departed.discard(nm)
         body = body or "continue the action, same subject"
+        moved_now = detect_posture(body, active, posture_state, departed)
         # Props introduced in an EARLIER beat: bind the first definite reference to
         # them, so "the van" in shot 2 means the van from shot 1 instead of an
         # invented one standing next to it. Garments are excluded -- they have their
@@ -4075,13 +4217,18 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                  lambda: ANATOMY_STATE),
                 # what the restraints DO -- limits on limbs already established
                 (lock_restraints, lambda: restraint_clause(active, body, lock_restraints,
-                                                           usage=restraint_usage)),
+                                                           usage=restraint_usage,
+                                                           posture=posture_state)),
                 # ...and that it is the SAME hardware as last shot. Stating the item
                 # again does not make it the same item: "handcuffs" carries no
                 # appearance, so each shot invents the metal and the links afresh.
                 (lock_restraints,
                  lambda: restraint_identity_clause(active, body, restraint_seen,
                                                    departed, prev_in_shot)),
+                # where the body IS, and that it stays there. The beat that moves
+                # someone shows the move; every beat after it has to say the result.
+                (True, lambda: posture_clause(posture_state, active, body, departed,
+                                              prev_in_shot, moved_now)),
                 # a bared zone stays bared once the body turns to a surface the shot
                 # has not shown; the model's default for undescribed skin is clothed
                 (True, lambda: bare_persist_clause(bare_now, active, body)),
