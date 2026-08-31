@@ -26,7 +26,9 @@ Everything about what the video should CONTAIN is yours to write.
 
 import gc
 import math
+import os
 import re
+import sys
 
 import torch
 
@@ -731,6 +733,214 @@ def sampling_oom_help(w, h, frames, fps, megapixels=0.0):
 
 
 
+# --- upscaling ---------------------------------------------------------------
+
+def _resize_short_edge(frames, target, method="lanczos"):
+    """Resize a [B,H,W,C] frame batch so its short edge == target (keeping aspect,
+    snapped to /32). Plain high-quality resize -- enlarges, doesn't add detail."""
+    b, h, w, c = frames.shape
+    if min(h, w) == target:
+        return frames
+    if h <= w:
+        nh = target; nw = max(32, int(round(target * w / h / 32) * 32))
+    else:
+        nw = target; nh = max(32, int(round(target * h / w / 32) * 32))
+    s = frames.movedim(-1, 1)
+    s = comfy.utils.common_upscale(s, nw, nh, method, "disabled")
+    return s.movedim(1, -1)
+
+
+def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
+    """Optional post-pass upscale of the finished frames (on CPU).
+      mode 'model'   : run a ComfyUI upscale model (Real-ESRGAN/UltraSharp class)
+                       via the registered loader+apply nodes, chunked with cleanup
+                       so 2000+ frames don't OOM; then fit to target short edge.
+      mode 'rtx'     : NVIDIA RTX Video Super Resolution (Tensor Cores; fastest,
+                       best quality for video -- needs Nvidia_RTX_Nodes_ComfyUI).
+      mode 'lanczos' : plain high-quality resize to the target short edge.
+    Any failure falls back to lanczos (or the raw frames), so it never breaks a
+    render. Returns (frames, note). NOTE: this SHARPENS/ENLARGES; it does not
+    reconstruct video detail the way a second-model (LTX 2.3) pass does."""
+    if mode == "off" or frames is None or getattr(frames, "shape", [0])[0] == 0:
+        return frames, ""
+    note = ""
+    if mode == "rtx":
+        # NVIDIA RTX Video Super Resolution (Comfy-Org/Nvidia_RTX_Nodes_ComfyUI).
+        # Runs on RTX Tensor Cores -- far faster than ESRGAN-class models and
+        # generally cleaner on video, though like them it enhances/enlarges rather
+        # than reconstructing detail (an LTX 2.3 re-generation does that).
+        try:
+            rtx = (_find_node(["rtx", "video", "super"]) or _find_node(["rtxvideosuperresolution"])
+                   or _find_node(["rtx", "upscale"]))
+            if rtx is None:
+                raise RuntimeError("RTX node not installed (Nvidia_RTX_Nodes_ComfyUI)")
+            scale = 2
+            if target_short_edge and int(target_short_edge) > 0:
+                cur = min(frames.shape[1], frames.shape[2])
+                if cur > 0:
+                    scale = max(1, min(4, int(round(int(target_short_edge) / cur))))
+            out = []
+            n = frames.shape[0]
+            step = max(1, int(batch))
+            for st in range(0, n, step):
+                part = frames[st:st + step]
+                res = None
+                for kw in ({"image": part, "scale": scale}, {"images": part, "scale": scale},
+                           {"image": part, "scale_factor": scale}, {"image": part}):
+                    try:
+                        res = _invoke_node(rtx, **kw); break
+                    except TypeError:
+                        continue
+                if res is None:
+                    raise RuntimeError("RTX node signature not recognized")
+                out.append(res.detach().to("cpu"))
+                del res, part
+                _deep_cleanup()
+            frames = torch.cat(out, dim=0)
+            note = f"RTX Video Super Resolution x{scale}"
+            if target_short_edge and int(target_short_edge) > 0:
+                frames = _resize_short_edge(frames, int(target_short_edge))
+                note += f"; fit to {int(target_short_edge)}px short edge"
+            return frames, note
+        except Exception as e:
+            mode = "model"
+            note = f"RTX upscale unavailable ({e}); fell back to model/lanczos"
+    if mode == "model" and model_name and model_name != "none":
+        try:
+            loader = _find_node(["upscale", "model", "load"]) or _find_node(["loadupscalemodel"])
+            applier = _find_node(["imageupscale", "model"]) or _find_node(["upscaleimageusingmodel"])
+            if loader is None or applier is None:
+                raise RuntimeError("upscale-model nodes not found")
+            up_model = _invoke_node(loader, model_name=model_name)
+            out = []
+            n = frames.shape[0]
+            for s in range(0, n, max(1, int(batch))):
+                part = frames[s:s + max(1, int(batch))]
+                res = _invoke_node(applier, upscale_model=up_model, image=part)
+                out.append(res.detach().to("cpu"))
+                del res, part
+                _deep_cleanup()
+            frames = torch.cat(out, dim=0)
+            note = f"upscaled with {model_name}"
+        except Exception as e:
+            mode = "lanczos"
+            note = f"model upscale unavailable ({e}); used lanczos"
+    if target_short_edge and int(target_short_edge) > 0:
+        try:
+            frames = _resize_short_edge(frames, int(target_short_edge))
+            note = (note + "; " if note else "") + f"fit to {int(target_short_edge)}px short edge"
+        except Exception as e:
+            note = (note + "; " if note else "") + f"resize failed ({e})"
+    elif mode == "lanczos" and not note:
+        note = "lanczos selected but no target set -> unchanged"
+    return frames, note
+
+
+def _upscale_model_list():
+    """Filenames in models/upscale_models, plus 'none'. Read fresh at INPUT_TYPES
+    time so newly-added models show up on a graph reload."""
+    try:
+        import folder_paths
+        return ["none"] + list(folder_paths.get_filename_list("upscale_models"))
+    except Exception:
+        return ["none"]
+
+
+def upscale_video_latent(video, model_name, scale):
+    """(upscaled_video_latent, note). Never raises -- a failure returns the input.
+
+    Spatial only: the temporal length comes back unchanged, which is what lets this
+    sit between sampling and decode without touching the audio half or the frame
+    count the rest of the chain has already committed to."""
+    if not model_name or model_name == "off" or float(scale) <= 1.0:
+        return video, ""
+    cls = latent_upscaler_node()
+    if cls is None:
+        return video, ("latent_upscale is set but the 'Minimax H3 Latent Upscaler' node pack is "
+                       "not installed, so the shots were rendered at their sampled size. Install "
+                       "Comfyui_Minimax_h3_latent_Upscaler, or set latent_upscale to 'off'")
+    try:
+        before = tuple(video.shape)
+        # Its UpscaleMode is a str-Enum, so the literal VALUE compares equal without
+        # importing the pack. Read the enum off the class when it is reachable, and
+        # fall back to the literal -- hardcoding a foreign string is the fragile part
+        # of this integration, so it is not the only path.
+        mode_val = "scale by multiplier"
+        try:
+            mode_val = sys.modules[cls.__module__].UpscaleMode.SCALE_BY
+        except Exception:
+            pass
+        out = _invoke_node(cls, latent={"samples": video},
+                           model_name=model_name,
+                           mode={"mode": mode_val, "scale": float(scale)},
+                           align=32, device="cuda", precision="fp16")
+        up = out["samples"] if isinstance(out, dict) else out
+        if up is None or up.dim() != video.dim() or up.shape[2] != video.shape[2]:
+            # A temporal change would desync the audio half and the frame count.
+            return video, ("the latent upscaler returned an unexpected shape, so the shot was "
+                           "left at its sampled size")
+        return up.to(video.dtype), (f"latent upscale {model_name} x{float(scale):g}: "
+                                    f"{before[-2]}x{before[-1]} -> {up.shape[-2]}x{up.shape[-1]} "
+                                    f"latent cells per frame, sampled small and decoded large")
+    except Exception as e:
+        return video, (f"latent upscale failed ({type(e).__name__}), so the shots were rendered "
+                       f"at their sampled size")
+
+
+def _latent_upscale_model_list():
+    """H3 latent-upscaler weights in models/latent_upscale_models, plus 'off'.
+
+    Filtered to H3 builds: that folder also holds LTX spatial/temporal upscalers,
+    and offering one here would let it be picked for a model it cannot take -- the
+    first conv is [512, 24, 3, 3, 3] and 24 is H3's latents_dim specifically.
+
+    Listed whether or not the node pack that RUNS them is installed. The widget has
+    to exist unconditionally or a saved workflow would lose its widget positions the
+    moment the pack was uninstalled; being unable to run is handled at render time."""
+    try:
+        import folder_paths
+        d = os.path.join(folder_paths.models_dir, "latent_upscale_models")
+        names = [f for f in sorted(os.listdir(d))
+                 if f.lower().endswith((".pth", ".safetensors"))
+                 and ("minimax" in f.lower() or "h3" in f.lower())]
+    except Exception:
+        names = []
+    return ["off"] + names
+
+
+def _find_node(substrings):
+    """Find a registered node whose key contains all of `substrings` (lowercased)."""
+    maps = getattr(nodes, "NODE_CLASS_MAPPINGS", {}) or {}
+    for k, v in maps.items():
+        kl = k.lower()
+        if all(s in kl for s in substrings):
+            return v
+    return None
+
+
+def _invoke_node(cls, **kwargs):
+    """Call a registered ComfyUI node (V1 FUNCTION or V3 execute) with kwargs and
+    return its first output. Used to reuse ComfyUI's own upscale-model loader/apply
+    so we don't reimplement spandrel loading or tiled scaling."""
+    inst = cls()
+    fn = None
+    if getattr(cls, "FUNCTION", None) and hasattr(inst, cls.FUNCTION):
+        fn = getattr(inst, cls.FUNCTION)
+    else:
+        for cand in ("execute", "upscale", "load_model", "load"):
+            if hasattr(inst, cand):
+                fn = getattr(inst, cand); break
+    if fn is None:
+        raise RuntimeError("no callable entrypoint")
+    out = fn(**kwargs)
+    out = getattr(out, "result", out)
+    return out[0] if isinstance(out, (tuple, list)) else out
+
+
+def latent_upscaler_node():
+    return _find_node(["minimaxh3latentupscaler", "3d"]) or _find_node(["minimaxh3latentupscaler"])
+
+
 # --- one shot's conditioning ------------------------------------------------
 
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
@@ -888,6 +1098,37 @@ class H3LongVideos:
                 "cleanup_between_shots": ("BOOLEAN", {"default": True,
                     "tooltip": "Move each finished shot to system RAM and purge VRAM between "
                                "shots, so a long chain does not accumulate on the card."}),
+                "latent_upscale": (_latent_upscale_model_list(), {"default": "off",
+                    "tooltip": "Upscale each shot in LATENT space, between sampling and decode, "
+                               "so the shot is SAMPLED small and only DECODED large. That is the "
+                               "cheap one: cost scales with latent cells and attention is "
+                               "quadratic in them, so sampling 512x512 and upscaling 2x is far "
+                               "less work than sampling 1024x1024.\n\n"
+                               "Model and nodes by LBH-123-AI; needs the separate Minimax H3 "
+                               "Latent Upscaler pack and its weights in "
+                               "models/latent_upscale_models. Without the pack this does nothing "
+                               "and info says so. Spatial only, so frame count and audio are "
+                               "untouched, and tiled decode is forced while it is on."}),
+                "latent_upscale_scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0,
+                    "step": 0.05,
+                    "tooltip": "Latent upscale factor on both axes. 2.0 doubles each side. "
+                               "1.0 disables it as surely as 'off'."}),
+                "upscale": (["off", "rtx", "model", "lanczos"], {"default": "off",
+                    "tooltip": "Post-pass on the FINISHED frames, after the latent pass and after "
+                               "the shots are joined. 'rtx' = NVIDIA RTX Video Super Resolution "
+                               "(needs the Nvidia_RTX_Nodes_ComfyUI pack, falls back if absent); "
+                               "'model' = an upscale model from upscale_models; 'lanczos' = a "
+                               "plain resize. These ENLARGE; for real detail reconstruction from a "
+                               "low-res render use a separate pass."}),
+                "upscale_model": (_upscale_model_list(), {
+                    "tooltip": "Which model, when upscale = model. From models/upscale_models."}),
+                "upscale_target_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096,
+                    "step": 32,
+                    "tooltip": "Fit the result's short edge to this many pixels. 0 keeps the "
+                               "model's own factor."}),
+                "upscale_batch": ("INT", {"default": 4, "min": 1, "max": 64,
+                    "tooltip": "Frames per chunk for the model upscale. Lower = less VRAM, "
+                               "slower."}),
                 "plan_only": ("BOOLEAN", {"default": False,
                     "tooltip": "Report the shot split, lengths and warnings without rendering."}),
             },
@@ -908,7 +1149,10 @@ class H3LongVideos:
             ref_image_4=None, negative=None, sigmas=None,
             shift_video=12.0, shift_audio=3.0, apply_model_sampling=True,
             silence_nonspeech=True, trim_seam=True, ref_noise_aug=0.999,
-            tiled_decode=True, cleanup_between_shots=True, plan_only=False):
+            tiled_decode=True, cleanup_between_shots=True, plan_only=False,
+            latent_upscale="off", latent_upscale_scale=2.0,
+            upscale="off", upscale_model="none", upscale_target_short_edge=0,
+            upscale_batch=4):
 
         notes = []
         swap = flush_for_model_change(model)
@@ -998,7 +1242,22 @@ class H3LongVideos:
             except Exception:
                 handoff_lat = None
 
-            imgs = _decode_video(vae, out, tiled_decode, free_first=model)
+            # LATENT upscale, between sampling and decode: the shot is SAMPLED small
+            # and only DECODED large, which is where the saving is -- cost scales with
+            # latent cells and attention is quadratic in them. Note the handoff latent
+            # was taken ABOVE, before this: the chain must inherit the sampled latent,
+            # not the upscaler's reinterpretation of it, or that guess compounds.
+            shot_tiled = tiled_decode
+            if latent_upscale and latent_upscale != "off" and parts and len(parts) == 2:
+                vid_up, up_note = upscale_video_latent(parts[0], latent_upscale,
+                                                       latent_upscale_scale)
+                if vid_up is not parts[0]:
+                    out["samples"] = comfy.nested_tensor.NestedTensor((vid_up, parts[1]))
+                    shot_tiled = True      # a 2x latent is ~4x the decode memory
+                if up_note and up_note not in notes:
+                    notes.append(up_note)
+
+            imgs = _decode_video(vae, out, shot_tiled, free_first=model)
             wav = _decode_audio(audio_vae, out)
             sr = wav["sample_rate"]
             del out
@@ -1015,6 +1274,14 @@ class H3LongVideos:
                 _deep_cleanup()
 
         video = torch.cat(vid_out, dim=0)
+        # PIXEL upscale, once, on the finished chain. After the latent pass and after
+        # the join, so a model-based upscaler sees whole frames and the seam is not
+        # upscaled twice.
+        if upscale and upscale != "off":
+            video, up_note = _upscale_frames(video, upscale, upscale_model,
+                                             upscale_target_short_edge, upscale_batch)
+            if up_note:
+                notes.append(up_note)
         audio = torch.cat(aud_out, dim=-1)
         total = video.shape[0]
         notes.append(f"rendered {total} frames (~{total / H3_FPS:.1f}s)")
