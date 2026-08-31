@@ -61,6 +61,68 @@ NATIVE_RES = {
 }
 
 
+CANVAS_MULTIPLE = 32
+
+
+REF_IMAGE_SHORT_EDGE = 2048
+
+
+_LAST_MODEL_FP = {"fp": None}
+
+
+_SILENT_UNIT = {"lat": None}
+
+
+def _call_node(cls, model, shift_video, shift_audio):
+    """Call the H3 sampling node whether it uses the V1 (INPUT_TYPES/FUNCTION) or
+    V3 (define_schema/execute) API, mapping the shift args by name."""
+    inst = cls()
+    # V1 API
+    if hasattr(cls, "INPUT_TYPES") and getattr(cls, "FUNCTION", None):
+        req = cls.INPUT_TYPES().get("required", {})
+        kwargs = {}
+        for name in req:
+            low = name.lower()
+            if low == "model":
+                kwargs[name] = model
+            elif "video" in low:
+                kwargs[name] = float(shift_video)
+            elif "audio" in low:
+                kwargs[name] = float(shift_audio)
+        out = getattr(inst, cls.FUNCTION)(**kwargs)
+        # A V3 node exposes INPUT_TYPES and a truthy FUNCTION ('EXECUTE_NORMALIZED')
+        # for compatibility, so this branch runs on 0.31+ too -- and there it returns
+        # a NodeOutput, not a tuple. Without the unwrap the caller got the wrapper
+        # object where a MODEL belonged. Unreachable today because the direct patch
+        # succeeds first, which is exactly why it went unnoticed.
+        out = getattr(out, "result", out)
+        return out[0] if isinstance(out, (tuple, list)) else out
+    # V3 API: an execute()/patch() classmethod taking model + shift kwargs
+    fn = None
+    for cand in ("execute", "patch", "apply"):
+        if hasattr(inst, cand):
+            fn = getattr(inst, cand); break
+    if fn is None:
+        raise RuntimeError("unknown node API")
+    out = fn(model=model, shift_video=float(shift_video), shift_audio=float(shift_audio))
+    out = getattr(out, "result", out)                 # V3 NodeOutput
+    return out[0] if isinstance(out, (tuple, list)) else out
+
+
+def _is_audio_vae(v):
+    """True when v looks like the H3 audio VAE (DAC/BigVGAN), False when it looks
+    like a video/image VAE, None when it can't be told. The video VAEs carry a
+    3-tuple upscale_ratio (t, y, x); the audio VAE carries a scalar and reports
+    latent_dim 2 with an audio_sample_rate."""
+    ur = getattr(v, "upscale_ratio", None)
+    if isinstance(ur, (tuple, list)):
+        return False
+    if getattr(v, "audio_sample_rate", None) or getattr(v, "audio_sample_rate_output", None):
+        return True
+    if isinstance(ur, (int, float)) and getattr(v, "latent_dim", None) == 2:
+        return True
+    return None
+
 
 # --- sizing -----------------------------------------------------------------
 
@@ -76,11 +138,11 @@ def video_latent_t(fc):
     return 2 if fc <= 5 else ((fc - 5) // 17) * 5 + 2
 
 
-def temporal_shape(length):
+def temporal_shape(length, fps=H3_FPS):
     """(frame count, video latent frames, audio latent frames) for a shot.
 
-    Always at 24 fps: the audio latent has to line up with 24 fps video or the
-    shot's sound is stretched against its picture."""
+    `fps` is accepted but deliberately IGNORED: the audio latent has to line up
+    with 24 fps video or the shot's sound is stretched against its picture."""
     fc = align_frame_count(length)
     return fc, video_latent_t(fc), round(fc / H3_FPS * AUDIO_LATENT_FPS)
 
@@ -673,7 +735,7 @@ def sampling_oom_help(w, h, frames, fps, megapixels=0.0):
 
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                        handoff=None, handoff_latent=None, refs=None,
-                       ref_noise_aug=0.999, silent=False):
+                       ref_noise_aug=0.999, silent=False, ref_image_size="match"):
     """Text + references + keyframe for a single shot.
 
     THE ONE RULE from H3's layout: a shot's conditioning rows are packed in the
@@ -686,7 +748,7 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     refs = [r for r in (refs or []) if r is not None]
     items, blocks = [], []
     if refs:
-        items, blocks = _build_ref_images(refs, width, height)
+        items, blocks = _build_ref_images(vae, refs, width, height, ref_image_size)
 
     hand_img = None
     if handoff is not None:
