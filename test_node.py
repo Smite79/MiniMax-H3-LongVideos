@@ -166,6 +166,28 @@ def test_text_in_frame():
         check(f"ordinary prose is not: {_t[:28]!r}", not S._TEXT_CUE.search(_t))
 
 
+def test_reference_tags():
+    print("\n=== <Picture N> tags ===")
+    # comfy/text_encoders/minimax.py writes the "<Picture N>: " label itself,
+    # numbering by the order it receives images. A shot using only <Picture 2>
+    # gets that image labelled <Picture 1>, so the text has to be renumbered or
+    # it points at nothing.
+    refs = ["A", "B", "C", "D"]
+    out, imgs, dropped = S.resolve_tags("Kate, <Picture 2>, walks in.", refs)
+    check("a lone slot 2 is renumbered to 1", "<Picture 1>" in out)
+    check("...and carries the right image", imgs == ["B"])
+    out2, imgs2, _ = S.resolve_tags("Kate <Picture 2> and Dan <Picture 4> meet.", refs)
+    check("two slots renumber in order",
+          "<Picture 1>" in out2 and "<Picture 2>" in out2 and imgs2 == ["B", "D"])
+    out3, imgs3, drop3 = S.resolve_tags("Kate, <Picture 9>, walks in.", refs)
+    check("a tag with no image is removed", "Picture" not in out3 and drop3 == [9])
+    check("...leaving readable text", out3 == "Kate, walks in.")
+    check("untagged text is untouched",
+          S.resolve_tags("No tags here.", refs)[0] == "No tags here.")
+    check("no refs connected drops every tag",
+          S.resolve_tags("Kate, <Picture 1>, walks in.", [])[1] == [])
+
+
 def test_schema():
     print("\n=== node schema ===")
     schema = S.H3LongVideos.INPUT_TYPES()
@@ -202,6 +224,7 @@ def main():
     test_speech_and_refs()
     test_removals()
     test_text_in_frame()
+    test_reference_tags()
     test_schema()
     print()
     if _fails:
