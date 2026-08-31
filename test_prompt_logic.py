@@ -2465,8 +2465,16 @@ def check_ref_modes():
           "shot_refs = [r for r in shot_refs if r is not handoff]" in src)
     check("the '+ handoff ref' fallback survives for softened refs",
           'ref_mode == "every shot + handoff ref"' in src)
-    check("shot_handoff still drops after a wardrobe strip",
-          "None if after_strip" in src)
+    # The strip no longer drops the keyframe. It cost the whole frame -- pose,
+    # position, scene, identity -- to protect one garment, and in a script that
+    # strips something in four consecutive beats, four consecutive shots started
+    # from noise and re-guessed the body's position each time. The garment is held
+    # off by three text-side guards instead.
+    check("a strip no longer drops the keyframe", "None if after_strip" not in src)
+    check("...and the shot is reported instead", "follow a beat that took" in src)
+    check("...with the direction wording still stated", "dropped away out of frame" in src)
+    check("...and the no-new-clothing clause still emitted",
+          "no clothing appears that was not already there" in src)
     # The aug gate itself, which decides which way a ref shot goes.
     check("at H3's default aug the keyframe rides along",
           S.keyframe_rides_with_refs(0.999) and S.keyframe_rides_with_refs(None))

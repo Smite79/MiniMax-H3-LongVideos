@@ -7405,6 +7405,18 @@ class H3LongVideos:
         # looking at the sequence -- which is why chains lose their cast in the
         # middle rather than degrading steadily.
         cohesion_notes = continuity_warnings(gens)
+        # Shots that follow a strip now KEEP the previous frame (see the handoff
+        # decision below). Say so, and say what holds the garment off, because the
+        # keyframe is the one thing that can put it back.
+        _after_strip = [n + 1 for n in strip_shots if n + 1 <= len(gens)]
+        if _after_strip:
+            cohesion_notes.append(
+                f"shot(s) {', '.join(str(n) for n in _after_strip)} follow a beat that took "
+                f"clothing off and KEEP the previous frame as their keyframe, so the pose, the "
+                f"position and the scene carry across. The garment is held off by the removal's "
+                f"own direction wording, by being gone from this shot's description, and by the "
+                f"no-new-clothing clause. If a garment does come back on one of these shots, "
+                f"say so -- that is the trade this makes")
         # A shot that states a POSITION and also carries a near-clean reference is
         # being told two different things about its opening frames, and the picture
         # wins: the shot opens in the reference's pose and animates into the stated
@@ -7619,9 +7631,27 @@ class H3LongVideos:
             handoff_src = []           # pre-upscale tail frames, when upscaling is on
             audio_tail = []            # this shot's audio tail, for the NEXT shot's bed
             audio_carry = (audio_bed[-1] if (bed_continuity and audio_bed) else None)
+            # A shot following a strip USED TO start fresh, on the reasoning that the
+            # previous last frame might still show the removal in progress and a
+            # picture of the garment beats any sentence saying it is off.
+            #
+            # That reset costs the entire frame to protect one garment: pose, position,
+            # scene and identity all come from the keyframe, and dropping it makes the
+            # next shot re-invent every one of them from text. In a script that strips
+            # something in four consecutive beats, four consecutive shots started from
+            # noise -- which is a body whose position is re-guessed each time, and a
+            # head that settles to the ground during the shot instead of beginning
+            # there. It also re-rolled the scene and the framing at every one of those
+            # boundaries.
+            #
+            # Three text-side guards now cover the garment, none of which existed when
+            # the reset was added: the removal states its own direction and end state
+            # ("by the last frame it is off, dropped away out of frame"), the garment
+            # is gone from the next shot's description, and no_redress_clause() says
+            # outright that nothing new appears on the body. The keyframe is worth more
+            # than the fourth guard, so it is kept and the shot is reported instead.
             after_strip = i in strip_shots          # strip_shots is 1-based, i is 0-based
-            shot_handoff = (None if after_strip
-                            else handoff if (carry_keyframe or not shot_refs) else None)
+            shot_handoff = handoff if (carry_keyframe or not shot_refs) else None
             if shot_refs:
                 ref_shots.append(i + 1)
             if i == 0:
