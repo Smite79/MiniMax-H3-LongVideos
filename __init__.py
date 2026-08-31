@@ -5,15 +5,10 @@ Make long (up to ~120s) MiniMax-H3 videos from a single prompt + a single
 length, in ComfyUI.
 
 Nodes:
-  * H3 Long Videos     (sampler.py)      - one prompt + shot length -> video+audio,
-                                           covering BOTH H3 conditioning tasks:
-                                           FL2VA (first/last frame anchors the shot)
-                                           and REF2VA (reference images condition on
-                                           what a character looks like). Connect no
-                                           ref_image_* and it is pure FL2VA.
-                                           (set plan_only=True to PREVIEW the shot
-                                           split using the node's own settings, no
-                                           render -- replaces the old Plan node)
+  * H3 Long Videos     (sampler.py)      - one prompt -> a chain of shots with
+                                           synchronised audio. Your text is passed
+                                           through verbatim; the node does the
+                                           chaining, not the writing.
   * H3 Shot Length     (shot_length.py)  - one shot length as seconds AND a valid
                                            H3 frame count (17k+5 grid, 362 cap);
                                            wire `seconds` -> the sampler and
