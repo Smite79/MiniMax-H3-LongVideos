@@ -144,6 +144,32 @@ def test_removals():
           "jacket" not in final and "shirt" not in final and "black boots" in final)
 
 
+def test_layers():
+    print("\n=== layers appear when they become visible ===")
+    # A scene listing every layer at once tells the model the character wears
+    # all of them simultaneously, with nothing saying which is hidden. The
+    # keyframe holds the first frame; by the last frame only the text governs,
+    # and the under layer starts showing through the top one.
+    body, rem, add = S.extract_directives(
+        "Dan cuts off her jacket.\nremove: jacket\nadd: her white shirt is now visible")
+    check("both directives are taken out of the beat",
+          body == "Dan cuts off her jacket.")
+    check("the removal is captured", rem == ["jacket"])
+    check("the addition is captured verbatim",
+          add == ["her white shirt is now visible"])
+    check("'wear:' is accepted too",
+          S.extract_directives("x\nwear: a red coat")[2] == ["a red coat"])
+    check("a beat with neither is unchanged",
+          S.extract_directives("She walks in.") == ("She walks in.", [], []))
+    check("the old two-value helper still works",
+          S.extract_removals("x\nremove: hat") == ("x", ["hat"]))
+    # An added layer retires when it is itself removed.
+    gone, shown = ["white shirt"], ["her white shirt is now visible",
+                                    "her black bra is now visible"]
+    live = [a for a in shown if S.scrub_removed(a, gone).strip()]
+    check("a removed layer stops being described", live == ["her black bra is now visible"])
+
+
 def test_text_in_frame():
     print("\n=== watermarks and subtitles ===")
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
@@ -231,6 +257,7 @@ def main():
     test_sizing()
     test_speech_and_refs()
     test_removals()
+    test_layers()
     test_text_in_frame()
     test_reference_tags()
     test_schema()

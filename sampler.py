@@ -817,16 +817,47 @@ def strip_legacy_fields(text):
     return out.strip(), n
 
 
-def extract_removals(beat):
-    """(beat text with the directive lines taken out, [tokens])."""
-    tokens = []
+_ADD_LINE = re.compile(r"^[ \t]*(?:add|wear|wearing)[ \t]*:[ \t]*(.+?)[ \t]*$", re.I | re.M)
 
-    def take(m):
-        tokens.extend(t.strip() for t in m.group(1).split(",") if t.strip())
+
+def extract_directives(beat):
+    """(beat text with directive lines taken out, [removed tokens], [added phrases]).
+
+    `add:` is the other half of `remove:`, and it exists because of a specific
+    failure: a scene that lists every layer at once -- jacket, shirt, underwear --
+    tells the model the character is wearing all of them simultaneously, with
+    nothing saying which is hidden. The keyframe pins the first frame, so early
+    frames look right; by the last frame only the text is governing, and the under
+    layer starts showing through the top one.
+
+    So describe what is VISIBLE, and add a layer when it becomes visible:
+
+        Dan cuts off her jacket and throws it away.
+        remove: jacket
+        add: her white shirt underneath
+
+    The added phrase is appended to the scene from that shot onward, in your words,
+    unchanged."""
+    removed, added = [], []
+
+    def take_removed(m):
+        removed.extend(t.strip() for t in m.group(1).split(",") if t.strip())
         return ""
 
-    body = _REMOVE_LINE.sub(take, beat or "")
-    return re.sub(r"\n{2,}", "\n", body).strip(), tokens
+    def take_added(m):
+        phrase = m.group(1).strip()
+        if phrase:
+            added.append(phrase)
+        return ""
+
+    body = _ADD_LINE.sub(take_added, _REMOVE_LINE.sub(take_removed, beat or ""))
+    return re.sub(r"\n{2,}", "\n", body).strip(), removed, added
+
+
+def extract_removals(beat):
+    """Back-compatible shim: (body, removed tokens)."""
+    body, removed, _ = extract_directives(beat)
+    return body, removed
 
 
 def scrub_removed(text, tokens):
@@ -1292,14 +1323,26 @@ class H3LongVideos:
         # the scene stops describing a garment a beat has taken off. It applies to
         # the removing shot too: the keyframe already shows the garment on at the
         # start, and a description saying it is still worn is what puts it back.
-        shots, speech, gone = [], [], []
+        shots, speech, gone, shown = [], [], [], []
         for b in beats:
-            body, toks = extract_removals(b)
+            body, toks, adds = extract_directives(b)
             if toks:
                 gone.extend(t for t in toks if t not in gone)
                 notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
                              + ", ".join(toks))
+            if adds:
+                shown.extend(a for a in adds if a not in shown)
+                notes.append(f"added to the scene from shot {len(shots) + 1} on: "
+                             + "; ".join(adds))
             shot_scene = scrub_removed(scene, gone)
+            # An added layer is subject to removal too: once the shirt comes off, the
+            # phrase that introduced it has to go with it, or the scene keeps
+            # describing a garment that is no longer there.
+            live = [a for a in shown if scrub_removed(a, gone).strip()]
+            if live:
+                tail = ". ".join(a.rstrip(".") for a in live) + "."
+                tail = tail[0].upper() + tail[1:]
+                shot_scene = f"{shot_scene} {tail}".strip() if shot_scene else tail
             shots.append(f"{shot_scene} {body}".strip() if shot_scene else body)
             speech.append(has_speech(body))
 

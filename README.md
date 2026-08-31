@@ -72,39 +72,48 @@ tokenizer registers dedicated tokens for dialogue (`<d>`, `</d>`), captions
 meant to *draw*. Text in plain quotes is not marked as any of them, and a model with
 a caption channel is entitled to read it as a caption.
 
-## Clothing that comes off
+## Clothing, and layers
 
-The scene paragraph is stamped on every shot, so a garment described there is still
-being described after a beat takes it off — and a description of a worn garment
-beats a sentence saying it came off. Say what came off:
+**Describe what is visible.** A scene that lists every layer at once — jacket, shirt,
+underwear — tells the model the character is wearing all of them *simultaneously*,
+with nothing saying which is hidden. The keyframe holds the first frame, so the shot
+starts right; by the last frame only the text is governing, and the under layer starts
+showing through the top one.
+
+So list the outer layer, and bring each one in as it becomes visible:
 
 ```
-A basement. Kate is 20, blonde, grey jacket, white shirt, black boots.
+A basement. Kate is 20, blonde, wearing a grey jacket.
 
 Dan cuts off her jacket and throws it away.
 remove: jacket
+add: her white shirt underneath is now visible
 
 Dan cuts off her shirt and throws it away.
 remove: shirt
+add: her black bra is now visible
 
 Kate looks up at him.
 ```
 
-From that shot onward the item is dropped from the scene:
+Which produces:
 
 ```
-shot 1  ... blonde, white shirt, black boots ...  Dan cuts off her jacket...
-shot 2  ... blonde, black boots ...               Dan cuts off her shirt...
-shot 3  ... blonde, black boots ...               Kate looks up at him.
+shot 1  ... Kate is 20, blonde. Her white shirt underneath is now visible.
+shot 2  ... Kate is 20, blonde. Her black bra is now visible.
+shot 3  ... Kate is 20, blonde. Her black bra is now visible.
 ```
 
-`remove:` (or `off:`) takes a comma-separated list, and the line itself never
-reaches the model. It applies to the removing shot too — the keyframe already shows
-the garment on at the start, and it is the *description* saying it is still worn
-that puts it back.
+`remove:` drops any part of the scene naming that item, from that shot onward.
+`add:` (or `wear:`) appends your phrase to the scene, in your words, from that shot
+onward — and retires automatically when a later `remove:` names it.
 
-This is the only place the node edits your text, and it only ever deletes. It does
-not infer removals from your prose; you say what came off.
+Both take effect on their own shot: the keyframe already shows the previous state at
+the start, and it is the *description* claiming a garment is still worn that puts it
+back. The directive lines never reach the model.
+
+This is the only place the node edits your text, and it does exactly what you tell
+it — no removals are inferred from your prose.
 
 ## Settings
 
