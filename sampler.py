@@ -819,6 +819,43 @@ def strip_legacy_fields(text):
 
 _ADD_LINE = re.compile(r"^[ \t]*(?:add|wear|wearing)[ \t]*:[ \t]*(.+?)[ \t]*$", re.I | re.M)
 
+# Prose that reads as taking something off. NOT used to remove anything -- inferring
+# removals from prose is what made the old node unpredictable. It is used only to
+# notice that a beat looks like a removal while the scene still describes the
+# garment, and to say so, because that combination is a garment that comes back.
+_REMOVAL_PROSE = re.compile(
+    r"\b(?:take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|strip(?:s|ped|ping)?|"
+    r"cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|slip(?:s|ped)?|shrug(?:s|ged)?|"
+    r"remove[sd]?|removing|unzip(?:s|ped)?|unbutton(?:s|ed)?|undo(?:es)?|undid|"
+    r"unhook(?:s|ed)?|unclasp(?:s|ed)?|yank(?:s|ed)?|toss(?:es|ed)?|throw[s]?|threw)\b",
+    re.I)
+
+
+def names_any(text, tokens):
+    """Does `text` name any of these items?"""
+    return any(re.search(r"\b" + re.escape(t) + r"\b", text or "", re.I)
+               for t in (tokens or []) if t)
+
+
+def missing_removals(beat, scene, already):
+    """Garment words the SCENE still describes, in a beat whose prose takes
+    something off and which carries no `remove:` line for them.
+
+    Reports; never acts."""
+    if not scene or not _REMOVAL_PROSE.search(beat or ""):
+        return []
+    hits = []
+    for word in re.findall(r"\b[\w-]{4,}\b", beat or ""):
+        low = word.lower()
+        if low in already or low in hits:
+            continue
+        if re.search(r"\b" + re.escape(word) + r"\b", scene, re.I):
+            hits.append(low)
+    # Words that are in the scene because they are the PERSON or the place, not
+    # something worn. A name or a room is not a garment.
+    return [h for h in hits if not re.search(
+        r"\b" + re.escape(h) + r"\b\s*(?:is|was|walks|stands|sits)", scene, re.I)]
+
 
 def extract_directives(beat):
     """(beat text with directive lines taken out, [removed tokens], [added phrases]).
@@ -869,15 +906,43 @@ def scrub_removed(text, tokens):
     rather than becoming a stub."""
     if not text or not tokens:
         return text
-    pats = [re.compile(r"\b" + re.escape(t) + r"\b", re.I) for t in tokens if t]
-    kept_sentences = []
-    for sent in re.split(r"(?<=[.!?])\s+", text):
-        frags = [f for f in sent.split(",") if not any(p.search(f) for p in pats)]
-        kept = ", ".join(f.strip() for f in frags if f.strip())
-        kept = re.sub(r"\s+([.!?])", r"\1", kept)
-        if re.search(r"[A-Za-z0-9]", kept):
-            kept_sentences.append(kept if kept[-1] in ".!?" else kept + ".")
-    return " ".join(kept_sentences).strip()
+    out = text
+    for t in [t for t in tokens if t]:
+        # The item and the words that belong to it -- an article and up to two
+        # modifiers -- and nothing else. Deleting the whole comma fragment took
+        # neighbours with it: removing "jacket" from "a grey jacket over a white
+        # shirt" deleted the shirt too, and an undescribed garment is one the model
+        # re-invents, which looks like the clothing changing by itself.
+        out = re.sub(r"\b(?:(?:a|an|the|her|his|their)\s+)?(?:[\w-]+\s+){0,2}"
+                     + re.escape(t) + r"\b", "", out, flags=re.I)
+    # Tidy what the deletion left behind, without touching anything it did not.
+    # Twice: removing a stranded verb can strand the conjunction in front of it
+    # ("Kate is 20 and wears a grey jacket" -> "... and wears" -> "... and").
+    for _ in range(2):
+        out = re.sub(r"\s{2,}", " ", out)
+        # "wearing and black boots" / "wears over a white shirt"
+        out = re.sub(r"\b(wearing|wears|in|dressed)\s+(?:and|over|under|with)\s+",
+                     r"\1 ", out, flags=re.I)
+        # a clothing verb with nothing left to govern
+        out = re.sub(r"\s*\b(?:wearing|wears|dressed in)\s*(?=[.,;]|$)", "", out, flags=re.I)
+        # a connector left hanging before punctuation or the end
+        out = re.sub(r"\s+(?:and|over|under|with)\s*(?=[.,;]|$)", "", out, flags=re.I)
+        out = re.sub(r",\s*(?=,)", "", out)
+        out = re.sub(r"\s*,\s*(?=[.!?])", "", out)
+        out = re.sub(r"\s+([.,;!?])", r"\1", out)
+    out = re.sub(r"\s{2,}", " ", out)
+    # Drop a sentence the deletion emptied, and one it reduced to a bare subject
+    # ("She wears a red coat." -> "She.") -- which describes nobody and is one more
+    # mention of a person, which is its own problem.
+    kept = []
+    for sent in re.split(r"(?<=[.!?])\s+", out):
+        s = sent.strip()
+        if not re.search(r"[A-Za-z0-9]", s):
+            continue
+        if re.fullmatch(r"(?:he|she|they|it|[A-Z][\w-]*)\s*[.!?]?", s, re.I):
+            continue
+        kept.append(s if s[-1] in ".!?" else s + ".")
+    return " ".join(kept).strip()
 
 
 # --- upscaling ---------------------------------------------------------------
@@ -1330,6 +1395,12 @@ class H3LongVideos:
                 gone.extend(t for t in toks if t not in gone)
                 notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
                              + ", ".join(toks))
+            maybe = missing_removals(body, scene, gone)
+            if maybe:
+                notes.append(f"shot {len(shots) + 1} reads as taking something off, but the "
+                             f"scene still describes {', '.join(maybe)} and there is no "
+                             f"'remove:' line for it -- so every shot keeps saying it is worn. "
+                             f"Add 'remove: {maybe[0]}' to that beat")
             if adds:
                 shown.extend(a for a in adds if a not in shown)
                 notes.append(f"added to the scene from shot {len(shots) + 1} on: "
@@ -1338,7 +1409,7 @@ class H3LongVideos:
             # An added layer is subject to removal too: once the shirt comes off, the
             # phrase that introduced it has to go with it, or the scene keeps
             # describing a garment that is no longer there.
-            live = [a for a in shown if scrub_removed(a, gone).strip()]
+            live = [a for a in shown if not names_any(a, gone)]
             if live:
                 tail = ". ".join(a.rstrip(".") for a in live) + "."
                 tail = tail[0].upper() + tail[1:]

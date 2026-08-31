@@ -135,6 +135,33 @@ def test_removals():
           S.scrub_removed("A room. She wears a red coat. Dan waits.", ["red coat"])
           == "A room. Dan waits.")
     check("no tokens means no edit", S.scrub_removed(sc, []) == sc)
+    # Surgical: only the named garment goes. Deleting the whole comma fragment
+    # took neighbours with it, and an undescribed garment is one the model
+    # re-invents -- which looks like the clothing changing by itself.
+    check("a neighbour joined by 'and' survives",
+          S.scrub_removed("Kate is 20, blonde, wearing a grey jacket and black boots.",
+                          ["jacket"]) == "Kate is 20, blonde, wearing black boots.")
+    check("a layer named after 'over' survives",
+          S.scrub_removed("Kate wears a grey jacket over a white shirt.", ["jacket"])
+          == "Kate wears a white shirt.")
+    check("a stranded conjunction is cleaned up",
+          S.scrub_removed("A basement. Kate is 20 and wears a grey jacket.", ["jacket"])
+          == "A basement. Kate is 20.")
+    check("a sentence reduced to a bare subject is dropped",
+          S.scrub_removed("A room. She wears a red coat. Dan waits.", ["red coat"])
+          == "A room. Dan waits.")
+    check("text with none of the tokens is untouched",
+          S.scrub_removed("A basement with devices on the walls. Kate is 20.", ["jacket"])
+          == "A basement with devices on the walls. Kate is 20.")
+    # A beat that reads as a removal but carries no directive is REPORTED, never
+    # acted on -- inferring removals from prose is what made the old node erratic.
+    _sc2 = "A basement. Kate is 20, blonde, wearing a grey jacket and black boots."
+    check("a missing remove: is noticed",
+          S.missing_removals("Dan cuts off her jacket.", _sc2, []) == ["jacket"])
+    check("...and not once the directive is there",
+          S.missing_removals("Dan cuts off her jacket.", _sc2, ["jacket"]) == [])
+    check("...and an ordinary beat is quiet",
+          S.missing_removals("Kate walks to the window.", _sc2, []) == [])
     # Removals accumulate: once off, a garment stays out of every later shot.
     gone = []
     for _b in ("a\nremove: jacket", "b\nremove: shirt", "c"):
@@ -166,8 +193,9 @@ def test_layers():
     # An added layer retires when it is itself removed.
     gone, shown = ["white shirt"], ["her white shirt is now visible",
                                     "her black bra is now visible"]
-    live = [a for a in shown if S.scrub_removed(a, gone).strip()]
+    live = [a for a in shown if not S.names_any(a, gone)]
     check("a removed layer stops being described", live == ["her black bra is now visible"])
+    check("...and one that was not removed stays", S.names_any("a red coat", ["coat"]))
 
 
 def test_text_in_frame():
