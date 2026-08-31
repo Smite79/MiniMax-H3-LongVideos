@@ -163,6 +163,10 @@ detect is reported there.
   duplicate frame at the join is trimmed.
 - **Guards.** One `guards` setting (off / auto / on) covers limb count, subject
   count, solid objects, continuous motion and two-body contact. Leave it on `auto`.
+- **Upscaling.** `latent_upscale` (+ `latent_upscale_scale`) runs between sampling
+  and decode, so the shot is *sampled* small and only *decoded* large. `upscale`
+  (`rtx` / `model` / `lanczos`, with `upscale_model`, `upscale_target_short_edge`
+  and `upscale_batch`) is a post-pass on the finished frames.
 - **Overlays.** Watermark and intro title live on the separate **H3 Overlay** node.
 
 ## Reference images

@@ -1197,6 +1197,19 @@ def check_widget_order_is_append_only():
         print(f"    appended since the freeze (safe): {added}")
     # The id must change if the order ever does. That is the only thing that stops a
     # stale graph binding to a node whose widgets have moved underneath it.
+    # Removed by the V2 simplification and put back on request. Appended, so no
+    # existing widget moves; the code paths were never deleted, only unexposed.
+    for _uw, _ud in (("upscale", "off"), ("upscale_model", None),
+                     ("upscale_target_short_edge", 0), ("upscale_batch", 4),
+                     ("latent_upscale", "off"), ("latent_upscale_scale", 2.0)):
+        _spec = schema["optional"].get(_uw)
+        check(f"{_uw} is on the node", _spec is not None)
+        if _spec is not None and _ud is not None:
+            check(f"...defaulting to {_ud!r}", _spec[1].get("default") == _ud)
+    check("the pixel-space pass is still wired into run()",
+          "_upscale_frames(all_frames, upscale, upscale_model" in
+          open(S.__file__, encoding="utf-8").read())
+
     check("the shot-length floor defaults to 10s",
           schema["optional"]["min_shot_seconds"][1]["default"] == 10.0)
     import inspect as _insp

@@ -262,6 +262,10 @@ ADDED_WIDGETS = (
     "exposed_terms", "lock_restraints", "guards", "latent_upscale",
     "normalize_audio", "bed_continuity",
     "auto_soundscape", "allow_nonspeech_vocals", "min_shot_seconds",
+    # Restored after the V2 simplification removed them: the pixel-space pass and
+    # the latent scale. Appended, so no existing widget moves.
+    "upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
+    "latent_upscale_scale",
     # Not a widget -- a SIGMAS socket carries no widget value and so cannot shift
     # widgets_values. Listed here anyway so the same append rule keeps it dead last
     # in the schema, which is also the only position that leaves the INPUT SOCKET
@@ -6884,6 +6888,25 @@ class H3LongVideos:
                                "or REVERSING it. info reports those beats as THIN. Give a thin "
                                "beat a second action, or its own 'seconds:'.\n\n"
                                "0 disables the floor and restores pure content sizing."}),
+                "upscale": (["off", "rtx", "model", "lanczos"], {"default": "off",
+                    "tooltip": "Optional post-pass on the finished frames. 'rtx' = NVIDIA RTX Video Super "
+                               "Resolution (Tensor Cores -- fastest and best for video; needs the "
+                               "Nvidia_RTX_Nodes_ComfyUI pack, falls back automatically if absent). 'model' = "
+                               "a Real-ESRGAN/UltraSharp upscale model from upscale_model. 'lanczos' = plain "
+                               "resize. All of these ENHANCE/ENLARGE; for true detail reconstruction from a "
+                               "low-res render, use a separate LTX 2.3 upscale pass."}),
+                "upscale_model": (_upscale_model_list(), {
+                    "tooltip": "Upscale model from models/upscale_models (used when upscale = model)."}),
+                "upscale_target_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32,
+                    "tooltip": "Fit the result's short edge to this many px (0 = keep the model's native "
+                               "factor / no resize). E.g. generate 512 fast, set 768 to land at native size."}),
+                "upscale_batch": ("INT", {"default": 4, "min": 1, "max": 64,
+                    "tooltip": "Frames per chunk for the model upscale (lower = less VRAM, slower)."}),
+                "latent_upscale_scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0,
+                    "step": 0.05, "round": 0.01,
+                    "tooltip": "Latent upscale factor, applied to both axes. 2.0 doubles each "
+                               "side (4x the pixels). 1.0 disables it as surely as 'off'. Ignored "
+                               "when latent_upscale is 'off'."}),
                 "character_memory": ("STRING", {"multiline": True, "forceInput": True, "default": "",
                     "tooltip": "Optional dedicated wardrobe channel (same role as a 'wardrobe:' line in "
                                "the first paragraph -- use whichever you prefer; this field wins if both "
