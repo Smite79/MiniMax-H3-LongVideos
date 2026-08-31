@@ -191,11 +191,25 @@ def split_beats(prompt):
 
 
 _QUOTED = re.compile(r'["“][^"”]+["”]')
+# H3's OWN dialogue delimiter. comfy/text_encoders/minimax.py registers <d> and </d>
+# as special tokens, alongside a caption channel (<|caption_start|>...) and a lyrics
+# one -- so the model distinguishes speech, captions and lyrics explicitly. Text in
+# plain quotes is not marked as any of them, and a model with a caption channel is
+# entitled to read it as a caption, which renders as text ON the picture.
+_DIALOGUE_TAG = re.compile(r"<\s*d\s*>(.+?)<\s*/\s*d\s*>", re.I | re.S)
+# Tokens that ASK for text on the frame. If one of these is in the prompt, the
+# subtitles are being requested, not invented.
+_CAPTION_TOKEN = re.compile(r"<\|(?:caption|lyrics)_(?:start|end)\|>", re.I)
 
 
 def has_speech(beat):
-    """Does this beat contain a scripted line? Double quotes are the signal."""
-    return bool(_QUOTED.search(beat or ""))
+    """Does this beat contain a scripted line?
+
+    Either H3's own <d>...</d> marker or plain double quotes. Only checking quotes
+    meant a beat written the way the model expects was treated as silent, and its
+    audio muted."""
+    text = beat or ""
+    return bool(_DIALOGUE_TAG.search(text) or _QUOTED.search(text))
 
 
 _PICTURE_TAG = re.compile(r"<\s*picture[\s_\-]*(\d+)\s*>", re.I)
@@ -1312,6 +1326,23 @@ class H3LongVideos:
         # cfg 1 there is no negative prompt to take them back -- adding "no watermark"
         # to the positive only names it again, which is how a mention becomes a
         # presence cue. So: point at the words, and leave the decision to the author.
+        # H3 has a caption channel of its own. A prompt carrying those tokens is
+        # ASKING for text on the picture.
+        if any(_CAPTION_TOKEN.search(s) for s in shots):
+            notes.append("the prompt contains H3's caption/lyrics tokens "
+                         "(<|caption_start|> and friends) -- those request text ON the "
+                         "picture. Remove them unless you want subtitles burned in")
+        # Quoted dialogue with no <d> marker. H3 distinguishes speech, captions and
+        # lyrics with explicit tokens; unmarked quoted text is not identified as any
+        # of them, and a model with a caption channel may render it rather than say
+        # it. Worth trying if subtitles are appearing under spoken lines.
+        n_bare = sum(1 for b in beats
+                     if _QUOTED.search(b) and not _DIALOGUE_TAG.search(b))
+        if n_bare:
+            notes.append(f"{n_bare} beat(s) carry dialogue in plain quotes. H3 has its own "
+                         f"dialogue marker -- <d>like this</d> -- and a caption channel "
+                         f"besides. If spoken lines are coming out as on-screen subtitles, "
+                         f"wrap them in <d>...</d> and compare")
         cued = sorted({m.group(0).lower() for s in shots for m in _TEXT_CUE.finditer(s)})
         if cued:
             notes.append(f"the prompt names on-screen text ({', '.join(cued)}) -- H3 draws "
