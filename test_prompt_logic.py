@@ -3168,6 +3168,22 @@ def check_restraints_applied_in_a_beat():
     # Bound wrists on a body that is DOWN must be tied back to the ground.
     check("wrists bound behind the back do not stand a lying body up",
           "still down on the ground" in _ord)
+    # The HEAD has to be named. "the body rests on the floor" leaves it unaccounted
+    # for, and an unsupported head on a limp figure gets animated settling -- the
+    # head falling to the ground during the shot instead of already being on it.
+    _hd = S.distribute_generations(
+        "A basement.",
+        ["Kate is laying down on the floor with head on the ground, asleep.",
+         "Kate wakes up and thrashes in her restraints."], "", "", _SC)
+    check("the head is stated as already down", "the head already down on the floor" in _hd[0])
+    check("...and as keeping contact", "keeping contact with it" in _hd[0])
+    check("...on every shot she is down", "the head already down on the floor" in _hd[1])
+    # Asleep is a STILL body; awake and thrashing is not.
+    check("an asleep body is settled and still", "settled and completely still" in _hd[0])
+    check("...with breathing so the frame is not frozen", "slow breathing" in _hd[0])
+    check("once awake, movement is allowed again",
+          "settled and completely still" not in _hd[1]
+          and "any movement happens there" in _hd[1])
     check("...and a standing body is unaffected",
           "still down on the ground" not in S.distribute_generations(
               "A basement.", ["Kate stands by the door."], "", "", _SC)[0])

@@ -1413,7 +1413,12 @@ _MOVED_TPL = (r"\b(?P<verb>lifts?|lifted|hauls?|hauled|drags?|dragged|pulls?|pul
 # and roll onto her side, and a guard that contradicts the beat is a guard the
 # model has to resolve -- which reads as the beat not being followed. So it pins
 # the SUPPORT and the level, and says outright that movement happens there.
-def _posture_sentence(subj, pose, surf):
+_ASLEEP_CUE = re.compile(
+    r"\b(?:asleep|sleeping|unconscious|passed\s+out|out\s+cold|knocked\s+out|"
+    r"limp|motionless|inert|drugged|sedated)\b", re.I)
+
+
+def _posture_sentence(subj, pose, surf, asleep=False):
     """Lead with the FIRST frame.
 
     "She is lying on the floor and stays down..." describes a state without saying
@@ -1423,9 +1428,18 @@ def _posture_sentence(subj, pose, surf):
     sl = subj.lower()
     on_sp = f" on the {surf}" if surf else ""
     if pose == "lying":
-        rest = f" -- the body rests on the {surf} to the last frame" if surf else ""
+        # Name the HEAD. "the body rests on the floor" leaves the head unaccounted
+        # for, and an unsupported head on a limp figure gets animated settling --
+        # the head falling to the ground during the shot instead of already being
+        # on it. Saying it is ALREADY down is what removes the fall.
+        where = f"the {surf}" if surf else "the ground"
+        rest = (f" -- the body rests on {where} to the last frame, the head already down "
+                f"on {where} and keeping contact with it")
+        tail = ("; the body is settled and completely still, at rest from the first frame, "
+                "slow breathing the only movement" if asleep
+                else "; any movement happens there, low and in place")
         return (f"from the first frame {sl} is already lying{on_sp or ' down'} and stays down "
-                f"for the whole shot{rest}; any movement happens there, low and in place")
+                f"for the whole shot{rest}{tail}")
     if pose == "kneeling":
         return (f"from the first frame {sl} is already kneeling{on_sp} and stays kneeling for "
                 f"the whole shot, in the same place to the last frame; any movement happens there")
@@ -1528,7 +1542,8 @@ def posture_clause(posture, active, body, departed=(), carried=(), skip=()):
         subj = _subject_term(name, active) if name else "the subject"
         if pose == "on" and not surf:
             continue
-        bits.append(_posture_sentence(subj, pose, surf))
+        bits.append(_posture_sentence(subj, pose, surf,
+                                      asleep=bool(_ASLEEP_CUE.search(body or ""))))
     if not bits:
         return ""
     return " " + ". ".join(b[0].upper() + b[1:] for b in bits) + "."
