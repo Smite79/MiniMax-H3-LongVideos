@@ -4725,6 +4725,11 @@ def _resize(image, width, height, crop):
     return s.movedim(1, -1)
 
 
+# H3's video VAE downsamples 16x on each spatial axis (see _empty_av_latent below,
+# and the latent_h/latent_w the reference blocks declare).
+VAE_SPATIAL = 16
+
+
 def _empty_av_latent(width, height, length, fps, batch_size=1):
     fc, lt, at = temporal_shape(length, fps)
     video = torch.zeros([batch_size, 24, lt, height // 16, width // 16], device=mm.intermediate_device())
@@ -4992,9 +4997,41 @@ def _build_ref_images(vae, images, gen_w, gen_h, mode="match"):
     return items, blocks
 
 
+def _keyframe_latent(vae, hand_img, handoff_latent, width, height, notes=None):
+    """The keyframe latent for this shot: the previous shot's OWN latent when it
+    fits, otherwise a fresh encode of the decoded frame.
+
+    Every boundary used to run latent -> decode -> image -> encode -> latent. One
+    round trip is lossy; a chain of them compounds, because each shot is generated
+    from the previous shot's already-degraded keyframe. Over ten beats that is ten
+    round trips of softening and colour drift, which is quality falling away as the
+    chain gets longer.
+
+    The DiT only ever needed a latent, and the previous shot produced one. The
+    decoded frame is still handed to the text encoder -- the VLM has to SEE it --
+    but its degradation no longer feeds the picture.
+
+    Falls back on any mismatch: a resolution backoff, a latent upscale, or a shape
+    this build does not expect. Continuity is worth more than the round trip."""
+    if handoff_latent is not None:
+        try:
+            lat = handoff_latent
+            want = (int(height) // VAE_SPATIAL, int(width) // VAE_SPATIAL)
+            if lat.ndim == 5 and tuple(lat.shape[-2:]) == want and lat.shape[2] >= 1:
+                return lat[:, :, -1:].contiguous()
+            if notes is not None:
+                notes.append(f"handoff re-encoded (latent {tuple(lat.shape[-2:])} vs "
+                             f"expected {want})")
+        except Exception as e:
+            if notes is not None:
+                notes.append(f"handoff re-encoded ({type(e).__name__})")
+    return vae.encode(hand_img)
+
+
 def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, handoff,
                              ref_images=None, ref_image_size="match", ref_noise_aug=None,
-                             audio_vae=None, silent=False, audio_carry=None):
+                             audio_vae=None, silent=False, audio_carry=None,
+                             handoff_latent=None, kf_notes=None):
     latent, fc = _empty_av_latent(width, height, length, fps)
     refs = [r for r in (ref_images or []) if r is not None]
     if refs:
@@ -5056,7 +5093,9 @@ def _build_shot_conditioning(clip, vae, prompt, width, height, length, fps, hand
         if hand_img is not None:
             # Same tensor the tokenizer was given, encoded once: the VLM is shown the
             # frame and the DiT is anchored to it, which is what a seamless cut needs.
-            kfs.append({"resolved_frame_index": 0, "latent": vae.encode(hand_img)})
+            kfs.append({"resolved_frame_index": 0,
+                        "latent": _keyframe_latent(vae, hand_img, handoff_latent,
+                                                   width, height, kf_notes)})
         # A reference-conditioned shot needs the silence anchor just as much as a
         # keyframe-conditioned one, and it used to get NOTHING: `silent` was only
         # honoured on the keyframe-only path below, so wiring any ref_image made the
@@ -7000,12 +7039,15 @@ class H3LongVideos:
                 handoff, decode_tile_frames=0, decode_tile_size=0,
                 refs=None, ref_image_size="match", ref_noise_aug=None, silent=False,
                 latent_upscale="off", latent_upscale_scale=2.0, up_notes=None,
-                handoff_out=None, audio_carry=None, audio_out=None):
+                handoff_out=None, audio_carry=None, audio_out=None,
+                handoff_latent=None, handoff_latent_out=None):
         positive, latent = _build_shot_conditioning(clip, vae, prompt, w, h, ln, fps, handoff,
                                                     ref_images=refs, ref_image_size=ref_image_size,
                                                     ref_noise_aug=ref_noise_aug,
                                                     audio_vae=audio_vae, silent=silent,
-                                                    audio_carry=audio_carry)
+                                                    audio_carry=audio_carry,
+                                                    handoff_latent=handoff_latent,
+                                                    kf_notes=up_notes)
         seed, steps, cfg, sn, sch, denoise, sigmas = sa
         # Conditioning is built, so the text encoder and VAEs are dead weight for the
         # whole sampling loop -- evict them and keep only the DiT on the card.
@@ -7066,6 +7108,15 @@ class H3LongVideos:
         # does not move.
         up_note = ""
         pre_up = None                      # the sampled video latent, before upscaling
+        if handoff_latent_out is not None:
+            try:
+                _raw = out.get("samples") if isinstance(out, dict) else None
+                _parts = _raw.unbind() if (_raw is not None and hasattr(_raw, "unbind")) else None
+                if _parts and len(_parts) >= 1:
+                    handoff_latent_out.append(_parts[0][:, :, -1:].detach()
+                                              .to("cpu", copy=True))
+            except Exception:
+                pass          # fall back to re-encoding the decoded frame
         if latent_upscale and latent_upscale != "off":
             raw2 = out.get("samples") if isinstance(out, dict) else None
             parts2 = raw2.unbind() if (raw2 is not None and hasattr(raw2, "unbind")) else None
@@ -7551,6 +7602,11 @@ class H3LongVideos:
         latent_chunks = []                 # per-shot sampled latents, pre-decode
         mouth_settled = []                 # shots seeded from a settled (closed) mouth
         handoff, sr = first_frame, None
+        # The previous shot's own latent. Using it as the next keyframe skips a
+        # decode/encode round trip per boundary, which is what made a long chain
+        # soften shot by shot. None on shot 1: first_frame is pixels, so it is
+        # encoded once, as it always was.
+        handoff_lat = None
         ref_list = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4) if r is not None]
         ref_shots = []                     # which shots ended up ref-conditioned
         ref_missing = []                   # <Picture N> tags naming an unconnected slot
@@ -7629,6 +7685,7 @@ class H3LongVideos:
             # No scripted line -> anchor this shot's audio branch to silence.
             shot_silent = bool(auto_silence_nonspeech and not allow_nonspeech_vocals and i < len(spk) and not spk[i])
             handoff_src = []           # pre-upscale tail frames, when upscaling is on
+            handoff_lat_out = []       # this shot's last video LATENT, for the next keyframe
             audio_tail = []            # this shot's audio tail, for the NEXT shot's bed
             audio_carry = (audio_bed[-1] if (bed_continuity and audio_bed) else None)
             # A shot following a strip USED TO start fresh, on the reasoning that the
@@ -7661,7 +7718,8 @@ class H3LongVideos:
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
                                                      up_notes, handoff_src,
-                                                     audio_carry, audio_tail)
+                                                     audio_carry, audio_tail,
+                                                     handoff_lat, handoff_lat_out)
                         break
                     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                         if not _is_oom(e):
@@ -7680,7 +7738,8 @@ class H3LongVideos:
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
                                                      up_notes, handoff_src,
-                                                     audio_carry, audio_tail)
+                                                     audio_carry, audio_tail,
+                                                     handoff_lat, handoff_lat_out)
                 except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                     if _is_oom(e) and getattr(e, "_h3_stage", "") == "sampling":
                         # Retrying with tiles would re-run the whole sampling pass and
@@ -7696,7 +7755,8 @@ class H3LongVideos:
                                                      shot_refs, ref_image_size, ref_noise_aug, shot_silent,
                                                      latent_upscale, latent_upscale_scale,
                                                      up_notes, handoff_src,
-                                                     audio_carry, audio_tail)
+                                                     audio_carry, audio_tail,
+                                                     handoff_lat, handoff_lat_out)
 
             if shot_latent is not None:
                 latent_chunks.append(shot_latent)
@@ -7755,6 +7815,12 @@ class H3LongVideos:
             else:
                 handoff = hsrc[-1:].clone()
             del hsrc
+            # The latent that produced that frame, for the next shot's keyframe. Only
+            # when the frame taken is the shot's LAST one: handoff_offset steps back
+            # in pixel frames, and the latent's temporal axis does not divide the same
+            # way, so a stepped-back handoff re-encodes as before rather than guessing.
+            handoff_lat = (handoff_lat_out[-1]
+                           if (handoff_lat_out and not shot_hoff) else None)
             if trim_seam and i > 0:
                 frames = frames[1:]; wav = wav[..., max(0, round(sr / fps)):]
 
