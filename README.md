@@ -156,6 +156,31 @@ Two independent passes, both off by default:
 The chain always hands on the **sampled** latent, never the upscaled one — otherwise
 the upscaler's reinterpretation feeds the next shot and compounds down the chain.
 
+## Text in the frame
+
+The node composites nothing onto your video — watermarks and title cards live on the
+separate **H3 Overlay** node, and only if you wire it in. If text is appearing in the
+output, it came from the model, and there are three things worth checking.
+
+**Is H3 Overlay wired in** with `watermark_text` or `intro_text` set? That is the one
+thing that puts text there deliberately.
+
+**Does your prompt name text?** H3 draws letterforms when asked. `info` flags words
+like *subtitle*, *caption*, *watermark*, *logo*, *credits*, *timestamp* and *title
+card* if they appear in a beat.
+
+**Is it a leftover field label?** The previous version of this node printed
+`overall_soundscape:` and `non_diegetic_music:` at the bottom of every shot. Paste
+one of those old scripts back in as a prompt and — now that your text goes to the
+model verbatim — those labels are read as *text to put on the picture*. They are
+stripped automatically and `info` says how many.
+
+**What will not work:** putting *"no watermark, no subtitles"* in a negative prompt.
+H3 runs at `cfg 1.0`, where the negative is never evaluated. And putting it in the
+*positive* names the thing you are trying to avoid, which invites it. If the model
+draws a watermark unprompted, the levers are a different checkpoint or LoRA, or a
+crop after the fact — not the prompt.
+
 ## Audio
 
 H3 is a joint model: the mouth follows the audio branch. A shot with no quoted
