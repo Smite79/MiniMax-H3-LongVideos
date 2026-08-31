@@ -1156,7 +1156,7 @@ def _guard_fires(mode, cued):
     return mode == "on" or bool(cued)
 
 
-def contact_clause(body, n_present, mode="auto"):
+def contact_clause(body, n_present, mode="auto", names=()):
     """Geometry for two bodies in contact: whose limbs, no interpenetration, fixed roles.
 
     Needs TWO people. One body cannot be misaligned against another, and stating a
@@ -1166,7 +1166,7 @@ def contact_clause(body, n_present, mode="auto"):
     'auto' fires on a contact cue in the beat. 'on' states it whenever two or more
     people are in the shot, which is worth having if bodies drift apart or merge in
     beats that do not name the contact explicitly."""
-    if n_present < 2 or not _guard_fires(mode, _CONTACT_CUE.search(body or "")):
+    if n_present < 2 or not _guard_fires(mode, contact_present(body, names)):
         return ""
     return CONTACT_STATE
 
@@ -3047,17 +3047,39 @@ ANATOMY_STATE_LYING = (_ANATOMY_HEAD + " The parts stay joined in that order: th
 #                 nothing says the arrangement is fixed.
 #   support       weight rests somewhere real, which is what stops a body floating in
 #                 a pose that nothing is holding up.
+# Two bodies touching, unambiguously: these need no object to be sure of.
 _CONTACT_CUE = re.compile(
     r"\b(?:straddl\w+|astride|mount\w+|on top of|underneath|beneath|"
     r"embrac\w+|entwin\w+|intertwin\w+|wrapped around|arms around|legs around|"
-    r"holds?|holding|grips?|gripping|clutch\w+|press\w+ against|pinned|"
-    r"lies? on|lying on|lies? under|lying under|lies? beside|lying beside|"
-    r"kneels? (?:behind|before|between|in front of)|sits? on|sitting on|"
-    r"behind her|behind him|behind them|face to face|facing each other|"
+    # "behind her BACK" is where a restraint holds the wrists, not one body behind
+    # another -- it was putting a two-body arrangement into every cuffed-wrists beat.
+    r"pinned|behind (?:her|him|them)\b(?!\s+back)|face to face|facing each other|"
     r"against (?:her|him|them)|body to body|skin to skin|"
-    r"in (?:her|his|their) lap|carries|carrying|lifts?|lifting|"
-    r"leans? (?:on|against|over)|bent over|"
-    r"sex|intercourse|making love|coupling|position)\b", re.I)
+    r"in (?:her|his|their) lap|"
+    r"sex|intercourse|making love|coupling)\b", re.I)
+# ...and the verbs that mean contact only when the object is a PERSON. Every one of
+# these takes an object just as often, and the shot then gets a two-body arrangement
+# it never had: "lying on THE FLOOR" was read as one body lying on another, "walks in
+# HOLDING A PAIR OF SCISSORS" as him holding her. The clause that follows says the
+# bodies meet, one is above the other and the weight rests on what supports it --
+# which is an instruction to pick the other person up, in a beat that never said so.
+# "position" was in the strong list too, and matched "positions her legs".
+_CONTACT_VERB_PERSON = re.compile(
+    r"\b(?:holds?|holding|grips?|gripping|clutch\w+|carries|carrying|lifts?|lifting|"
+    r"press(?:es|ed|ing)?\s+against|leans?\s+(?:on|against|over)|"
+    r"(?:lies?|lying)\s+(?:on|under|beside|behind)|(?:sits?|sitting)\s+on|"
+    r"kneels?\s+(?:behind|before|between|in\s+front\s+of)|bent\s+over)\s+", re.I)
+
+
+def contact_present(body, names=()):
+    """Is there real two-body contact in this beat?"""
+    text = body or ""
+    if _CONTACT_CUE.search(text):
+        return True
+    toks = [re.escape(n) for n in (names or []) if n]
+    person = re.compile(r"^(?:the\s+|a\s+|an\s+)?(?:her|him|them|his|their"
+                        + (("|" + "|".join(toks)) if toks else "") + r")\b", re.I)
+    return any(person.match(text[m.end():]) for m in _CONTACT_VERB_PERSON.finditer(text))
 
 CONTACT_STATE = (
     " Two bodies in contact form ONE fixed arrangement. Each person keeps their own head, "
@@ -4422,7 +4444,8 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 # arrives to cover it -- otherwise the cut-off garment comes back.
                 (True, lambda: no_redress_clause(redress_risk, active, body)),
                 # two bodies arranged, BEFORE being told to hold together while moving
-                (True, lambda: contact_clause(body, n_in_shot, contact_guard)),
+                (True, lambda: contact_clause(body, n_in_shot, contact_guard,
+                                             [n for n in active if n])),
                 # then how that body moves -- unless someone in the frame is bound:
                 # the free-travel sentence outvotes the binding, and H3 settles
                 # that fight by rendering the restraints giving up.
