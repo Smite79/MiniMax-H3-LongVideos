@@ -168,6 +168,10 @@ def test_removals():
     _r3 = S.scrub_removed(_long, ["crop top", "shorts", "thong"])
     check("three removals leave only what is still worn",
           _r3 == "A basement. Kate is 20, blonde, shiny white bra.")
+    check("a picture tag is never dropped with a garment",
+          S.picture_tags(S.scrub_removed(
+              "A basement. Kate is 20, <Picture 1> blonde crop top, boots.",
+              ["crop top"])) == [1])
     check("text with none of the tokens is untouched",
           S.scrub_removed("A basement with devices on the walls. Kate is 20.", ["jacket"])
           == "A basement with devices on the walls. Kate is 20.")
