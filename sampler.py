@@ -929,6 +929,12 @@ def scrub_removed(text, tokens):
         out_frags = []
         for frag in frags:
             if any(p.search(frag) for p in pats) and not _HAS_VERB.search(frag):
+                # A <Picture N> tag is not clothing and must never leave with a
+                # garment that happened to share its fragment -- losing it costs
+                # that shot its identity reference.
+                tags = _PICTURE_TAG.findall(frag)
+                if tags:
+                    out_frags.append(" ".join(f"<Picture {n}>" for n in tags))
                 continue                      # a bare wardrobe entry: drop it whole
             out_frags.append(frag)
         kept.append(",".join(out_frags))
