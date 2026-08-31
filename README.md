@@ -152,6 +152,35 @@ degrades every shot after the first.
   the opening frames. Lower it (0.95, then 0.90) if a reference is fighting your
   staging.
 
+## Speed
+
+`info` reports where each render actually spent its time:
+
+```
+rendered 2673 frames (~111.4s) in 940s -- sampling 380s (40%), decode 505s (54%),
+other 55s (6%); per shot 34.5s + 45.9s
+```
+
+Use that before changing anything, because the two halves trade against each other.
+
+- **`megapixels`** is the strongest lever and the only one that lowers *both*.
+  Attention is quadratic in latent cells, so 1.0 → 0.7 is roughly half the
+  attention, and 1.0 → 0.5 about a quarter.
+- **`steps`** is linear on the sampling half only.
+- **Shot length**: per-shot cost is quadratic, so for a fixed total runtime more
+  shorter shots is cheaper — 110s as 15×7s costs about 71% of 11×10s. The price is
+  more boundaries to hold together, and shots of different lengths break seed
+  consistency, so keep them uniform.
+- **`latent_upscale` is not a free win.** It samples small and decodes large, so it
+  moves cost from sampling to decode — a 2× latent is 4× the decode, and tiling is
+  forced on top. It pays off when sampling dominates (20+ steps). At 6–8 steps with
+  a distill LoRA, decode is already the larger half and this makes the render
+  *slower*. `info` says so when decode outweighs sampling.
+- **`cleanup_between_shots`** and **`tiled_decode`** are insurance against OOM and
+  both cost time. Turn them off if you are not near the limit.
+- **If `s/it` varies wildly between identical runs**, the working set is not fitting
+  in system RAM and everything above is noise until it does.
+
 ## Upscaling
 
 Two independent passes, both off by default:

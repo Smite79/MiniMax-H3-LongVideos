@@ -251,6 +251,17 @@ def test_first_frame():
     check("...and without one, shot 1 encodes nothing", bare.encodes == 1, f"{bare.encodes}")
 
 
+def test_timing_report():
+    print("\n=== the timing breakdown ===")
+    P = "A room.\n\nOne.\n\nTwo."
+    info = run_node(P)[2]
+    for want in ("sampling", "decode", "per shot"):
+        check(f"info reports {want}", want in info)
+    check("...with a wall-clock total", "rendered" in info and "s --" in info)
+    # plan_only does no work, so it must not claim any timings.
+    check("plan_only reports no timings", "per shot" not in run_node(P, plan_only=True)[2])
+
+
 def test_upscale_paths():
     print("\n=== upscale wiring ===")
     # Neither pack is installed here, so both fall back. What is under test is that
@@ -283,6 +294,7 @@ def main():
     test_references_and_silence()
     test_first_frame()
     test_upscale_paths()
+    test_timing_report()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

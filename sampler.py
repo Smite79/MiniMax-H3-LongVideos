@@ -28,6 +28,7 @@ import math
 import os
 import re
 import sys
+import time
 
 import torch
 
@@ -1480,6 +1481,12 @@ class H3LongVideos:
             negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
 
         handoff = first_frame
+        # Where the time actually goes. Sampling and decode trade off against each
+        # other -- latent_upscale buys cheaper sampling and pays for it at decode,
+        # and which side wins depends on `steps`. Reported so the trade is a
+        # measurement rather than an argument.
+        t_sample = t_decode = 0.0
+        t_start = time.perf_counter()
         vid_out, aud_out, sr = [], [], 44100
         _deep_cleanup()
 
@@ -1499,8 +1506,10 @@ class H3LongVideos:
                 ref_noise_aug=ref_noise_aug, silent=silent)
             _evict_all_but(model)
             try:
+                _t0 = time.perf_counter()
                 out = sample_shot(model, cond, negative, latent, seed, steps, cfg,
                                   sampler_name, scheduler, sigmas)
+                t_sample += time.perf_counter() - _t0
             except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                 if not _is_oom(e):
                     raise
@@ -1530,8 +1539,10 @@ class H3LongVideos:
                 if up_note and up_note not in notes:
                     notes.append(up_note)
 
+            _t0 = time.perf_counter()
             imgs = _decode_video(vae, out, shot_tiled, free_first=model)
             wav = _decode_audio(audio_vae, out)
+            t_decode += time.perf_counter() - _t0
             sr = wav["sample_rate"]
             del out
 
@@ -1557,7 +1568,20 @@ class H3LongVideos:
                 notes.append(up_note)
         audio = torch.cat(aud_out, dim=-1)
         total = video.shape[0]
-        notes.append(f"rendered {total} frames (~{total / H3_FPS:.1f}s)")
+        wall = time.perf_counter() - t_start
+        n = max(1, len(shots))
+        other = max(0.0, wall - t_sample - t_decode)
+        notes.append(
+            f"rendered {total} frames (~{total / H3_FPS:.1f}s) in {wall:.0f}s -- "
+            f"sampling {t_sample:.0f}s ({100 * t_sample / wall:.0f}%), "
+            f"decode {t_decode:.0f}s ({100 * t_decode / wall:.0f}%), "
+            f"other {other:.0f}s ({100 * other / wall:.0f}%); "
+            f"per shot {t_sample / n:.1f}s + {t_decode / n:.1f}s")
+        if t_decode > t_sample:
+            notes.append("decode is costing more than sampling here -- latent_upscale "
+                         "trades cheaper sampling for a 4x more expensive decode, so it "
+                         "is the wrong way round at this step count. megapixels is the "
+                         "lever that lowers both")
         return (video, {"waveform": audio, "sample_rate": sr}, " | ".join(notes), script,
                 frames, total, len(shots), round(total / H3_FPS, 2))
 
