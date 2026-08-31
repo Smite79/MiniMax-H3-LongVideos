@@ -283,8 +283,14 @@ def test_upscale_paths():
     # The latent handoff must come from the SAMPLED latent, never the upscaled one,
     # or the chain inherits the upscaler's guess and it compounds.
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
-    check("the handoff frame is taken from the DECODED shot, after any upscale",
-          "handoff = imgs[-1:]" in src)
+    # The chain must not inherit the upscaler's reinterpretation: the shot's own
+    # frames stay upscaled, but the handoff is decoded from the SAMPLED latent.
+    # Eleven boundaries of upscaled-then-downscaled frames compounds into colour
+    # cast and mush.
+    check("the handoff comes from the pre-upscale latent",
+          "pre_up[:, :, -n:]" in src and "hand_src = tail" in src)
+    check("...and is clamped before it is re-encoded",
+          "clamp(0.0, 1.0)" in src)
 
 
 def main():
