@@ -2262,35 +2262,9 @@ def dedupe_person_mentions(body, active):
     return _unmask_quotes(masked, spans)
 
 
-def _bind_ref_once(name, items, ref_bound):
-    """A <Picture N> tag that came from the SHEET binds on the person's FIRST shot
-    and is dropped after it.
-
-    A tag in character_memory is stamped into every shot that describes that person,
-    so every one of those shots receives the reference image -- and at H3's own
-    ref_noise_aug the reference is handed over almost noise-free, which invites the
-    model to reproduce it. Reproducing a portrait's own framing and background in
-    every shot is the scene changing shot to shot.
-
-    Identity only has to be established once; from there the handoff keyframe
-    carries it, which is what the chain is for. A tag written into a BEAT is left
-    alone -- that is an explicit request for that shot."""
-    if ref_bound is None or not any(_PICTURE_TAG.search(i or "") for i in items):
-        return items, False
-    if name in ref_bound:
-        out = []
-        for it in items:
-            stripped = _PICTURE_TAG.sub("", it or "").strip(" ,")
-            if stripped:
-                out.append(stripped)
-        return out, True
-    ref_bound.add(name)
-    return items, False
-
-
 def compose_persistent(body, active, anchor_id, removed=None, departed=None,
                        count_subjects=False, speaking=False, front_load=False,
-                       count_auto=False, silence_nonspeech=True, ref_bound=None):
+                       count_auto=False, silence_nonspeech=True):
     """Assemble one shot's text WITHOUT duplicating subjects.
 
     Each present person's description is injected as a parenthetical at the FIRST
@@ -2376,8 +2350,7 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
         if not refs and len(names) > 1 and _PLURAL_CAST.search(body):
             bits = []
             for n in names:
-                _items, _ = _bind_ref_once(n, active[n], ref_bound)
-                desc = ", ".join(_clean_items(_items, n, drop_mouth_state=_drop_mouth(n)))
+                desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=_drop_mouth(n)))
                 bits.append(f"{n} ({desc})" if desc else n)
             roll_call = ((", ".join(bits[:-1]) + " and " + bits[-1])
                          + (" are both in this shot." if len(bits) == 2
@@ -2388,8 +2361,7 @@ def compose_persistent(body, active, anchor_id, removed=None, departed=None,
             # inject from rightmost position first so earlier indices stay valid
             if not roll_call:
                 for n in sorted(refs, key=lambda k: refs[k], reverse=True):
-                    _items, _ = _bind_ref_once(n, active[n], ref_bound)
-                    desc = ", ".join(_clean_items(_items, n, drop_mouth_state=_drop_mouth(n)))
+                    desc = ", ".join(_clean_items(active[n], n, drop_mouth_state=_drop_mouth(n)))
                     if desc:
                         pos = refs[n]
                         # A POSSESSIVE first mention had the description inserted
@@ -4105,8 +4077,6 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
     # 2's "cuffed to the headboard", not fall back to wording that contradicts it.
     restraint_usage = {}
     posture_state = {}       # name -> (pose, surface): where each body is, until moved
-    ref_bound = set()        # people whose sheet <Picture N> tag has already been placed
-    ref_noted = set()
     # The ANCHOR may state a position too -- "Kate is laying on the floor, asleep."
     # A tracked person's sentence is (rightly) scrubbed from the emitted anchor, or
     # she would be introduced twice per shot; but the scrub was silently deleting
@@ -4316,16 +4286,7 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
         persistent = compose_persistent(body, active, anchor_id, removed, departed, count_subjects,
                                         speaking=has_speech(body), front_load=front_load,
                                         count_auto=count_auto,
-                                        silence_nonspeech=bool(auto_silence_nonspeech),
-                                        ref_bound=ref_bound)
-        if notes_out is not None:
-            for _rn in sorted(ref_bound - ref_noted):
-                ref_noted.add(_rn)
-                notes_out.append(
-                    f"shot {gi}: {_rn}'s <Picture> tag comes from character_memory, so it binds "
-                    f"HERE and is dropped from later shots -- a near-clean reference on every "
-                    f"shot invites the model to reproduce that image, background and all, which "
-                    f"reads as the scene changing. Write the tag into a beat to place it yourself")
+                                        silence_nonspeech=bool(auto_silence_nonspeech))
         # State the DIRECTION of the change, in the shot that performs it. Only for
         # people actually in this shot; an anchor-prose garment is stated
         # impersonally, so it summons nobody.
