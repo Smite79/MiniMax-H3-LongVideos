@@ -122,7 +122,14 @@ def test_schema():
     n_widgets = sum(1 for d in (req, opt) for k, v in d.items()
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
-    check(f"the node is small: {n_widgets} widgets", n_widgets <= 20)
+    # 17 core + 6 upscale. The point of the number is that it stays small enough
+    # to read; the old node had 38 and nobody could find anything.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 24)
+    for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
+               "latent_upscale", "latent_upscale_scale"):
+        check(f"{_u} is on the node", _u in opt)
+    check("both upscalers default to off",
+          opt["upscale"][1]["default"] == "off" and opt["latent_upscale"][1]["default"] == "off")
     check("outputs include info and script",
           "info" in S.H3LongVideos.RETURN_NAMES and "script" in S.H3LongVideos.RETURN_NAMES)
     check("it registers under one id", set(S.NODE_CLASS_MAPPINGS) == {"H3LongVideos"})

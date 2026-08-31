@@ -239,12 +239,39 @@ def test_first_frame():
     check("a supplied first frame is encoded once", vae.encodes == 1, f"{vae.encodes}")
 
 
+def test_upscale_paths():
+    print("\n=== upscale wiring ===")
+    # Neither pack is installed here, so both fall back. What is under test is that
+    # the calls are wired correctly and a render still completes -- the failure mode
+    # that shipped twice was a signature mismatch, not a bad upscale.
+    P = "A room.\n\nOne.\n\nTwo."
+    try:
+        imgs, _a, info, _s, _p, total, _sh, _sec = run_node(
+            P, latent_upscale="off", upscale="lanczos", upscale_target_short_edge=128)
+        ok, detail = imgs.ndim == 4 and imgs.shape[0] == total, str(tuple(imgs.shape))
+    except Exception as e:
+        ok, detail = False, f"{type(e).__name__}: {e}"
+    check("a pixel upscale pass runs and returns frames", ok, detail)
+    try:
+        imgs2 = run_node(P, latent_upscale="off")[0]
+        check("no upscale leaves the frames alone", imgs2.ndim == 4)
+    except Exception as e:
+        check("no upscale leaves the frames alone", False, f"{type(e).__name__}: {e}")
+    # The latent handoff must come from the SAMPLED latent, never the upscaled one,
+    # or the chain inherits the upscaler's guess and it compounds.
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("the handoff latent is taken before the latent upscale",
+          src.index("handoff_lat = (parts[0]")
+          < src.index("vid_up, up_note = upscale_video_latent"))
+
+
 def main():
     test_plan()
     test_render()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()
+    test_upscale_paths()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

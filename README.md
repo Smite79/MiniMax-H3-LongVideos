@@ -100,6 +100,25 @@ boundary compounds over a long chain into visible softening.
   the opening frames. Lower it (0.95, then 0.90) if a reference is fighting your
   staging.
 
+## Upscaling
+
+Two independent passes, both off by default:
+
+- **`latent_upscale`** (+ `latent_upscale_scale`) runs *between sampling and decode*,
+  so the shot is **sampled small and only decoded large**. That is the one that saves
+  time — cost scales with latent cells and attention is quadratic in them. Needs the
+  *Minimax H3 Latent Upscaler* pack (model and nodes by
+  [LBH-123-AI](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)) with its
+  weights in `models/latent_upscale_models`. Without the pack it does nothing and
+  `info` says so. Tiled decode is forced while it is on, since a 2× latent is roughly
+  4× the decode memory.
+- **`upscale`** (`rtx` / `model` / `lanczos`, with `upscale_model`,
+  `upscale_target_short_edge`, `upscale_batch`) is a post-pass on the finished frames,
+  applied once after the shots are joined.
+
+The chain always hands on the **sampled** latent, never the upscaled one — otherwise
+the upscaler's reinterpretation feeds the next shot and compounds down the chain.
+
 ## Audio
 
 H3 is a joint model: the mouth follows the audio branch. A shot with no quoted
