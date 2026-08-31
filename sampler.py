@@ -49,6 +49,9 @@ RES_MULTIPLE = 32
 KEYFRAME_SAFE_AUG = 0.99       # below this, a ref aug would soften the keyframe too
 AUTO_TILE_T = 8                # temporal chunk for a tiled decode
 MAX_FRAMES = 362               # H3's own ceiling (~15s)
+# Latent frames decoded from the PRE-upscale latent to source the handoff. Enough
+# for the VAE's temporal context to produce a clean last frame, and cheap.
+HANDOFF_LATENT_TAIL = 8
 GB = 1024 ** 3
 
 # H3-Base is trained at 768 on the short edge; below that the whole frame softens.
@@ -1561,10 +1564,12 @@ class H3LongVideos:
             # was taken ABOVE, before this: the chain must inherit the sampled latent,
             # not the upscaler's reinterpretation of it, or that guess compounds.
             shot_tiled = tiled_decode
+            pre_up = None            # the SAMPLED video latent, when upscaling ran
             if latent_upscale and latent_upscale != "off" and parts and len(parts) == 2:
                 vid_up, up_note = upscale_video_latent(parts[0], latent_upscale,
                                                        latent_upscale_scale)
                 if vid_up is not parts[0]:
+                    pre_up = parts[0]
                     out["samples"] = comfy.nested_tensor.NestedTensor((vid_up, parts[1]))
                     shot_tiled = True      # a 2x latent is ~4x the decode memory
                 if up_note and up_note not in notes:
@@ -1577,7 +1582,25 @@ class H3LongVideos:
             sr = wav["sample_rate"]
             del out
 
-            handoff = imgs[-1:].detach().to("cpu", copy=True)
+            # The chain must not inherit the UPSCALER's reinterpretation. The shot's
+            # own frames stay upscaled, but the handoff comes from the sampled latent
+            # -- otherwise every boundary hands on an upscaled-then-downscaled frame,
+            # and eleven shots of that compounds into colour cast and mush.
+            hand_src = imgs
+            if pre_up is not None:
+                try:
+                    n = min(int(pre_up.shape[2]), HANDOFF_LATENT_TAIL)
+                    tail = _decode_video(vae, {"samples": pre_up[:, :, -n:].contiguous()},
+                                         True)
+                    if tail is not None and tail.shape[0] > 0:
+                        hand_src = tail
+                except Exception:
+                    pass                  # fall back to the upscaled frames
+            # Clamp before it becomes a keyframe. A decode can land slightly outside
+            # 0..1, and feeding that back in to be re-encoded every boundary is a
+            # drift that accumulates rather than cancels.
+            handoff = hand_src[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True)
+            del hand_src
             if trim_seam and i > 0:
                 imgs = imgs[1:]
                 wav["waveform"] = wav["waveform"][..., max(0, round(sr / H3_FPS)):]
