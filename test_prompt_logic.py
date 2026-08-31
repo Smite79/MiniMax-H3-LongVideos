@@ -2492,9 +2492,26 @@ def check_ref_modes():
     check("...appended AFTER the references, so <Picture N> tags still point right",
           src.index("items, blocks = _build_ref_images")
           < src.index('items = items + [{"type": "image"'))
-    check("...and the same tensor is reused as the keyframe latent, encoded once",
-          '"latent": vae.encode(hand_img)' in src
+    check("...and the same frame anchors the DiT",
+          "_keyframe_latent(vae, hand_img, handoff_latent" in src
           and src.count("_resize(handoff[:1], width, height") == 2)
+    # ...but the DiT is anchored by the previous shot's OWN latent where it fits.
+    # Decoding and re-encoding at every boundary is a lossy round trip, and a
+    # chain of them compounds: each shot is generated from the previous shot's
+    # already-degraded keyframe, so a long script softens shot by shot.
+    check("the keyframe latent comes from the previous shot, not a re-encode",
+          "return lat[:, :, -1:].contiguous()" in src)
+    check("...and falls back to encoding on any mismatch",
+          "return vae.encode(hand_img)" in src)
+    check("...guarded on the expected latent size",
+          "tuple(lat.shape[-2:]) == want" in src)
+    check("...taken from the PRE-upscale latent, like the decoded tail",
+          "handoff_latent_out.append" in src
+          and src.index("handoff_latent_out.append") < src.index("vid_up, up_note ="))
+    check("...and not used when handoff_offset steps back a frame",
+          "if (handoff_lat_out and not shot_hoff) else None" in src)
+    check("shot 1 still encodes first_frame, which is pixels",
+          "handoff_lat = None" in src)
     check("...on the same aug gate as the keyframe itself",
           "hand_img = _resize(handoff[:1], width, height" in src
           and "if handoff is not None and keyframe_rides_with_refs(ref_noise_aug):\n"
