@@ -3344,12 +3344,20 @@ def check_restraints_applied_in_a_beat():
         "A basement.", ["Kate lies on the floor.", "Dan walks in.",
                         "Dan kneels beside her.", "Kate looks up at him."],
         "", "", _rc, notes_out=_rn)
-    check("the sheet tag binds on the first shot", S.picture_tags(_rg[0]) == [1])
-    check("...and on no shot after it",
-          all(S.picture_tags(g) == [] for g in _rg[1:]))
+    # The sheet tag reaches EVERY shot that describes that person, and must. It is
+    # the only identity anchor a long chain has: without it, shot 11 is generated
+    # from shot 10's drifted endpoint, which is generated from shot 9's, and the
+    # character comes apart as the beat count grows. Binding it once was tried to
+    # stop the reference dictating the opening pose, and it cost exactly that.
+    check("the sheet tag reaches the first shot", S.picture_tags(_rg[0]) == [1])
+    check("...and every later shot that describes her",
+          all(S.picture_tags(g) == [1] for g in _rg if "blonde hair" in g))
     check("...while the rest of the description survives", "blonde hair" in _rg[3])
-    check("...and info explains where it went",
-          any("binds HERE" in n for n in _rn))
+    _long = S.distribute_generations(
+        "A basement.", [f"Beat {i}: Kate shifts and Dan watches her." for i in range(1, 12)],
+        "", "", _rc)
+    check("an 11-beat chain keeps its identity anchor throughout",
+          all(S.picture_tags(g) == [1] for g in _long))
     # A tag the user wrote into a BEAT is an explicit request and is left alone.
     _bt = S.distribute_generations(
         "A basement.", ["Kate lies on the floor.", "Kate, <Picture 1>, turns her head."],
