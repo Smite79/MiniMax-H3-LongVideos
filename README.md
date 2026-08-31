@@ -85,9 +85,12 @@ across a chain.
 
 ## Continuity
 
-Each shot after the first starts from the previous shot's last frame, handed over
-as a **latent** — not decoded to pixels and re-encoded. A VAE round trip per
-boundary compounds over a long chain into visible softening.
+Each shot after the first starts from the previous shot's last frame, encoded as a
+keyframe the way H3 expects one: a keyframe is a *single* pixel frame, which lands
+on the 5-frame grid point and encodes to two latent frames. Handing over a slice of
+the previous shot's own latent instead looks like a free optimisation and is not —
+a causal encoder's last latent is not a standalone opening frame, and using it
+degrades every shot after the first.
 
 - **`first_frame`** pins the opening frame of shot 1, the only shot with no
   previous frame. If shot 1 must start in a particular pose or position, this is
