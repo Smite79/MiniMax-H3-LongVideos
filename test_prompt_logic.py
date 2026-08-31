@@ -4022,22 +4022,41 @@ def check_contact_guard():
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
     CM = "Mara = she, 30, red hair\nDom = he, 35, tall"
 
+    _CN = ["Mara", "Dom"]
     check("a contact cue is detected",
-          bool(S._CONTACT_CUE.search("Dom holds Mara against the wall")))
+          S.contact_present("Dom holds Mara against the wall", _CN))
     check("...including a purely positional one",
-          bool(S._CONTACT_CUE.search("Dom kneels behind Mara")))
+          S.contact_present("Dom kneels behind Mara", _CN))
     check("...and a mutual orientation",
-          bool(S._CONTACT_CUE.search("they stand facing each other")))
+          S.contact_present("they stand facing each other", _CN))
     check("an ordinary beat is not a contact cue",
-          not S._CONTACT_CUE.search("Mara walks to the window"))
+          not S.contact_present("Mara walks to the window", _CN))
+    # A verb whose object is a THING is not two-body contact. Each of these put a
+    # two-body arrangement -- bodies meeting, one above the other, weight resting on
+    # what supports it -- into a beat where nobody touched anyone, which reads as one
+    # character handling the other unbidden.
+    for _b in ("Mara is lying on the floor, asleep.",
+               "Dom walks in holding a pair of scissors.",
+               "Dom positions her legs behind her back.",
+               "Dom leans on the workbench.", "Dom carries a crate inside.",
+               "Dom sits on the chair.", "Mara lies beside the heater."):
+        check(f"an object, not a body: {_b[:34]!r}", not S.contact_present(_b, _CN))
+    for _b in ("Dom lies on top of her.", "Dom holds her wrists.",
+               "Dom lifts her onto the table.", "Dom kneels behind Mara.",
+               "Dom leans over her.", "Mara straddles him.",
+               "Dom presses against her."):
+        check(f"real contact still fires: {_b[:34]!r}", S.contact_present(_b, _CN))
 
     # TWO people, or nothing. One body cannot be misaligned against another, and
     # describing a two-body arrangement in a one-person shot invites the second in --
     # the presence-cue failure every per-shot state here is gated against.
     check("one person gets nothing even with a contact cue",
-          S.contact_clause("Dom holds her against the wall", 1, "auto") == "")
+          S.contact_clause("Dom holds her against the wall", 1, "auto", _CN) == "")
+    # A NAME is a person too, so the caller passes the cast.
     check("two people and a cue fires",
-          bool(S.contact_clause("Dom holds Mara", 2, "auto")))
+          bool(S.contact_clause("Dom holds Mara", 2, "auto", _CN)))
+    check("...and without the cast a bare name is not assumed to be a person",
+          S.contact_clause("Dom holds Mara", 2, "auto") == "")
     check("'on' fires for two people without a cue",
           bool(S.contact_clause("they talk", 2, "on")))
     check("'on' still needs two people", S.contact_clause("she talks", 1, "on") == "")
