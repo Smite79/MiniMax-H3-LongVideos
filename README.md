@@ -63,8 +63,14 @@ Nothing more. If a shot should say something about posture, position, clothing o
 continuity, write it in the beat — the node will not write it for you, and it will
 not argue with what you wrote.
 
-Dialogue goes in **double quotes**. That is how the node knows which shots have
-speech; the rest are silenced.
+Dialogue goes in **double quotes**, or in H3's own marker `<d>like this</d>`. Either
+tells the node which shots have speech; the rest are silenced.
+
+If spoken lines are coming out as **on-screen subtitles**, try `<d>…</d>`. H3's
+tokenizer registers dedicated tokens for dialogue (`<d>`, `</d>`), captions
+(`<|caption_start|>`) and lyrics — so the model distinguishes speech from text it is
+meant to *draw*. Text in plain quotes is not marked as any of them, and a model with
+a caption channel is entitled to read it as a caption.
 
 ## Clothing that comes off
 

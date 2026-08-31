@@ -97,6 +97,14 @@ def test_sizing():
 def test_speech_and_refs():
     print("\n=== silence and references ===")
     check("a quoted line counts as speech", S.has_speech('She says: "Get up."'))
+    # H3 registers <d>...</d> as its own dialogue delimiter, alongside a caption
+    # channel. Only checking quotes meant a beat written the way the model expects
+    # was treated as silent and had its audio muted.
+    check("H3's own dialogue marker counts too", S.has_speech("She says <d>Get up.</d>"))
+    check("...even at the start of a beat", S.has_speech("<d>Get up.</d> he says"))
+    check("caption tokens are recognised as a request for on-screen text",
+          bool(S._CAPTION_TOKEN.search("<|caption_start|>hi<|caption_end|>")))
+    check("...and ordinary prose is not", not S._CAPTION_TOKEN.search("She walks in."))
     check("curly quotes count too", S.has_speech("He said “now”."))
     check("an ordinary beat has no speech", not S.has_speech("She walks to the window."))
     check("an empty beat has no speech", not S.has_speech(""))
