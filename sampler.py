@@ -12,9 +12,8 @@ What this node does is the part a prompt cannot do -- the mechanics of chaining:
   * gives every shot the SAME length, so one seed is one noise field across the
     chain (noise is drawn to the latent's shape, so unequal lengths mean unrelated
     noise from the same seed, and detail resets at every cut);
-  * hands each shot the previous shot's last frame as a keyframe LATENT, passed
-    straight through rather than decoded and re-encoded -- a VAE round trip per
-    boundary compounds over a long chain into visible softening;
+  * hands each shot the previous shot's last frame as its keyframe, encoded the
+    way H3 expects a keyframe to be encoded (one frame -> the 5f grid point);
   * keeps identity references on every shot, which is the only fixed anchor a long
     chain has against drift;
   * anchors the audio branch to real silence on shots with no quoted line, because
@@ -534,34 +533,21 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         return None                         # never fail a render for a nicety
 
 
-def _keyframe_latent(vae, hand_img, handoff_latent, width, height, notes=None):
-    """The keyframe latent for this shot: the previous shot's OWN latent when it
-    fits, otherwise a fresh encode of the decoded frame.
+def _keyframe_latent(vae, hand_img):
+    """The keyframe latent for this shot: an ENCODE of the previous shot's last frame.
 
-    Every boundary used to run latent -> decode -> image -> encode -> latent. One
-    round trip is lossy; a chain of them compounds, because each shot is generated
-    from the previous shot's already-degraded keyframe. Over ten beats that is ten
-    round trips of softening and colour drift, which is quality falling away as the
-    chain gets longer.
+    This was briefly an optimisation -- pass the previous shot's own latent straight
+    through and skip a VAE round trip per boundary. It was wrong, and it degraded
+    every shot after the first.
 
-    The DiT only ever needed a latent, and the previous shot produced one. The
-    decoded frame is still handed to the text encoder -- the VLM has to SEE it --
-    but its degradation no longer feeds the picture.
+    A keyframe is ONE pixel frame, and H3's grid puts that at 5f -> TWO latent
+    frames. Slicing [:, :, -1:] off a finished shot hands over one. Worse, the video
+    VAE is causal: the last latent of a 72-frame sequence encodes its temporal
+    context, not a standalone opening frame, so even at the right count it does not
+    mean what a keyframe means. The spatial-size guard could not see either problem.
 
-    Falls back on any mismatch: a resolution backoff, a latent upscale, or a shape
-    this build does not expect. Continuity is worth more than the round trip."""
-    if handoff_latent is not None:
-        try:
-            lat = handoff_latent
-            want = (int(height) // VAE_SPATIAL, int(width) // VAE_SPATIAL)
-            if lat.ndim == 5 and tuple(lat.shape[-2:]) == want and lat.shape[2] >= 1:
-                return lat[:, :, -1:].contiguous()
-            if notes is not None:
-                notes.append(f"handoff re-encoded (latent {tuple(lat.shape[-2:])} vs "
-                             f"expected {want})")
-        except Exception as e:
-            if notes is not None:
-                notes.append(f"handoff re-encoded ({type(e).__name__})")
+    The round trip is real but it is one lossy step on a correctly formed anchor,
+    which beats a cheap malformed one."""
     return vae.encode(hand_img)
 
 
@@ -944,7 +930,7 @@ def latent_upscaler_node():
 # --- one shot's conditioning ------------------------------------------------
 
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
-                       handoff=None, handoff_latent=None, refs=None,
+                       handoff=None, refs=None,
                        ref_noise_aug=0.999, silent=False, ref_image_size="match"):
     """Text + references + keyframe for a single shot.
 
@@ -984,8 +970,7 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     kfs = []
     if hand_img is not None:
         kfs.append({"resolved_frame_index": 0,
-                    "latent": _keyframe_latent(vae, hand_img, handoff_latent,
-                                               width, height, None)})
+                    "latent": _keyframe_latent(vae, hand_img)})
     # Silence on the audio branch for a shot with no scripted line. H3 is joint:
     # an unconditioned audio stream invents a voice and the picture lip-syncs to it,
     # and no sentence in the prompt outvotes a stream that has already decided
@@ -1206,7 +1191,7 @@ class H3LongVideos:
         if negative is None:
             negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
 
-        handoff, handoff_lat = first_frame, None
+        handoff = first_frame
         vid_out, aud_out, sr = [], [], 44100
         _deep_cleanup()
 
@@ -1219,7 +1204,7 @@ class H3LongVideos:
 
             cond, latent, fc = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, frames,
-                handoff=handoff, handoff_latent=handoff_lat, refs=shot_refs,
+                handoff=handoff, refs=shot_refs,
                 ref_noise_aug=ref_noise_aug, silent=silent)
             _evict_all_but(model)
             try:
@@ -1232,15 +1217,12 @@ class H3LongVideos:
                     f"H3 Long Videos: shot {i + 1} of {len(shots)} ran out of VRAM while "
                     f"sampling. " + sampling_oom_help(w, h, fc, H3_FPS, megapixels)) from e
 
-            # The next shot's keyframe, taken from THIS shot's own latent: passing it
-            # straight through skips a decode/encode round trip per boundary, and those
-            # compound over a chain into visible softening.
+            # The video latent, for the latent upscale below. NOT used as the next
+            # shot's keyframe -- see _keyframe_latent for why that failed.
             try:
                 parts = out["samples"].unbind() if hasattr(out["samples"], "unbind") else None
-                handoff_lat = (parts[0][:, :, -1:].detach().to("cpu", copy=True)
-                               if parts else None)
             except Exception:
-                handoff_lat = None
+                parts = None
 
             # LATENT upscale, between sampling and decode: the shot is SAMPLED small
             # and only DECODED large, which is where the saving is -- cost scales with

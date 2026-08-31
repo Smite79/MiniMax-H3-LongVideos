@@ -205,12 +205,19 @@ def test_render():
 
 
 def test_keyframe_handoff():
-    print("\n=== the handoff uses the latent, not a re-encode ===")
+    print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
     run_node("A room.\n\nOne.\n\nTwo.\n\nThree.", vae=vae)
-    # Shot 1 has no previous frame; shots 2-4 hand over a latent. With the latent
-    # path working, the VAE is asked to ENCODE nothing at all.
-    check("no VAE encode per boundary", vae.encodes == 0, f"{vae.encodes} encodes")
+    # Shot 1 has no previous frame; shots 2-4 each encode the frame handed to them.
+    # Passing the previous shot's own latent instead was tried and was wrong: a
+    # keyframe is ONE pixel frame, which lands on H3's 5f grid point and encodes to
+    # TWO latent frames, and a causal encoder's last latent is not a standalone
+    # opening frame anyway. It degraded every shot after the first.
+    # 3 shots = 2 boundaries; shot 1 has no previous frame and no first_frame here.
+    check("one encode per boundary, none for shot 1", vae.encodes == 2,
+          f"{vae.encodes} encodes")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("no latent is smuggled in as a keyframe", "handoff_latent" not in src)
 
 
 def test_references_and_silence():
@@ -236,7 +243,12 @@ def test_first_frame():
     print("\n=== first_frame anchors shot 1 ===")
     vae = FakeVAE()
     run_node("A room.\n\nOne.\n\nTwo.", vae=vae, first_frame=torch.rand(1, H, W, 3))
-    check("a supplied first frame is encoded once", vae.encodes == 1, f"{vae.encodes}")
+    # 2 shots: shot 1 encodes the supplied first_frame, shot 2 encodes the handoff.
+    check("a supplied first frame is encoded as shot 1's keyframe", vae.encodes == 2,
+          f"{vae.encodes}")
+    bare = FakeVAE()
+    run_node("A room.\n\nOne.\n\nTwo.", vae=bare)
+    check("...and without one, shot 1 encodes nothing", bare.encodes == 1, f"{bare.encodes}")
 
 
 def test_upscale_paths():
@@ -260,9 +272,8 @@ def test_upscale_paths():
     # The latent handoff must come from the SAMPLED latent, never the upscaled one,
     # or the chain inherits the upscaler's guess and it compounds.
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
-    check("the handoff latent is taken before the latent upscale",
-          src.index("handoff_lat = (parts[0]")
-          < src.index("vid_up, up_note = upscale_video_latent"))
+    check("the handoff frame is taken from the DECODED shot, after any upscale",
+          "handoff = imgs[-1:]" in src)
 
 
 def main():
