@@ -136,6 +136,36 @@ def test_removals():
           "jacket" not in final and "shirt" not in final and "black boots" in final)
 
 
+def test_text_in_frame():
+    print("\n=== watermarks and subtitles ===")
+    src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    check("the sampler composites nothing onto the frames",
+          "watermark" not in src.lower().split("# --- removals")[0]
+          or "PIL" not in src)
+    # Old scripts pasted back in as a prompt carry the field labels the previous
+    # version printed. Verbatim pass-through sends them to the model, and a line
+    # reading "overall_soundscape: room tone" is read as text to put ON the frame.
+    old = ("[Generation 1] A basement. Dan walks in.\n"
+           "overall_soundscape: room tone, footsteps\n"
+           "non_diegetic_music: N/A\n\n"
+           "[Generation 2] She looks up.\n"
+           "overall_soundscape: room tone\n")
+    clean, n = S.strip_legacy_fields(old)
+    check("the field labels are dropped", n == 5 and "soundscape" not in clean)
+    check("...and the shot tags with them", "[Generation" not in clean)
+    check("...but the real text survives",
+          "A basement. Dan walks in." in clean and "She looks up." in clean)
+    check("...and the beat split is unchanged", len(S.split_beats(clean)[1]) == 1)
+    check("an ordinary prompt is untouched",
+          S.strip_legacy_fields("A room.\n\nShe walks in.")[1] == 0)
+    # Naming text is what draws text, and at cfg 1 no negative prompt undoes it.
+    for _t in ("Subtitles appear at the bottom.", "A watermark in the corner.",
+               "The end credits roll.", "A timestamp in the corner."):
+        check(f"named text is flagged: {_t[:28]!r}", bool(S._TEXT_CUE.search(_t)))
+    for _t in ("A room with a neon sign.", "She walks in.", "He signs the form."):
+        check(f"ordinary prose is not: {_t[:28]!r}", not S._TEXT_CUE.search(_t))
+
+
 def test_schema():
     print("\n=== node schema ===")
     schema = S.H3LongVideos.INPUT_TYPES()
@@ -171,6 +201,7 @@ def main():
     test_sizing()
     test_speech_and_refs()
     test_removals()
+    test_text_in_frame()
     test_schema()
     print()
     if _fails:

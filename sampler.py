@@ -738,6 +738,42 @@ def sampling_oom_help(w, h, frames, fps, megapixels=0.0):
 _REMOVE_LINE = re.compile(r"^[ \t]*(?:remove|removed|off)[ \t]*:[ \t]*(.+?)[ \t]*$",
                           re.I | re.M)
 
+# Field labels the OLD version of this node printed at the bottom of every shot it
+# built. Paste one of those old scripts back in as a prompt and the labels now go
+# to the model verbatim -- and a line reading "overall_soundscape: room tone" is
+# read as text to put ON THE PICTURE. They are never scene description, so they are
+# dropped, and info says so.
+# A whole line that is nothing but one of those labels. Only the exact field names
+# the old node emitted -- a bare "music:" could be someone's own scene note.
+_LEGACY_FIELD = re.compile(
+    r"^[ \t]*(?:overall_soundscape|non_diegetic_music)[ \t]*:.*$", re.I | re.M)
+# ...and the shot tag it put at the FRONT of a line that also carries real text, so
+# only the tag comes off.
+_LEGACY_PREFIX = re.compile(r"^[ \t]*\[(?:Generation|Shot)[ \t]*\d+\][ \t]*", re.I | re.M)
+
+# Words that ask for letterforms in the frame. H3 renders text when the prompt
+# names text, and at cfg 1 there is no negative prompt to take it back -- so this
+# warns rather than edits: only you know whether "a neon sign" is set dressing you
+# want or a watermark you do not.
+_TEXT_CUE = re.compile(
+    r"\b(?:subtitle[sd]?|caption(?:s|ed)?|closed[- ]caption\w*|watermark(?:ed|s)?|"
+    r"logo|logos|credits|title card|end card|lower third|chyron|"
+    r"timestamp|time stamp|date stamp|timecode|"
+    r"text overlay|on-?screen text|banner|karaoke)\b", re.I)
+
+
+def strip_legacy_fields(text):
+    """(text, how many field-label lines were dropped)."""
+    text = text or ""
+    n = len(_LEGACY_FIELD.findall(text)) + len(_LEGACY_PREFIX.findall(text))
+    if not n:
+        return text, 0
+    out = _LEGACY_PREFIX.sub("", _LEGACY_FIELD.sub("", text))
+    # The field lines leave blank lines behind, and a blank line is a beat boundary
+    # here -- collapsing them keeps the shot count the author intended.
+    out = re.sub(r"[ \t]*\n[ \t]*\n[ \t]*\n+", "\n\n", out)
+    return out.strip(), n
+
 
 def extract_removals(beat):
     """(beat text with the directive lines taken out, [tokens])."""
@@ -1197,6 +1233,12 @@ class H3LongVideos:
             notes.append(swap)
         check_vae_wiring(vae, audio_vae)
 
+        prompt, n_legacy = strip_legacy_fields(prompt)
+        if n_legacy:
+            notes.append(f"dropped {n_legacy} field-label line(s) left over from an older "
+                         f"version of this node (overall_soundscape:, [Generation N] and the "
+                         f"like) -- your text now goes to the model verbatim, and a label like "
+                         f"that is read as text to put ON the picture")
         scene, beats = split_beats(prompt)
         if not beats:
             raise RuntimeError("H3 Long Videos: the prompt is empty. Write at least one "
@@ -1238,6 +1280,15 @@ class H3LongVideos:
         if first_frame is None:
             notes.append("no first_frame: shot 1 has nothing pinning its opening frame, so its "
                          "starting pose and framing come from the text and any reference")
+        # Text in the frame. H3 draws letterforms when the prompt names them, and at
+        # cfg 1 there is no negative prompt to take them back -- adding "no watermark"
+        # to the positive only names it again, which is how a mention becomes a
+        # presence cue. So: point at the words, and leave the decision to the author.
+        cued = sorted({m.group(0).lower() for s in shots for m in _TEXT_CUE.finditer(s)})
+        if cued:
+            notes.append(f"the prompt names on-screen text ({', '.join(cued)}) -- H3 draws "
+                         f"letterforms when asked, and at cfg 1 no negative prompt can take "
+                         f"them back. Remove the words if you do not want the text")
         if float(cfg) != 1.0:
             notes.append(f"cfg is {float(cfg):g}; H3 is CFG-free and expects 1.0")
 
