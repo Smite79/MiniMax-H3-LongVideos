@@ -1576,6 +1576,11 @@ def restraint_clause(active, body, lock_restraints=True, usage=None, posture=Non
             if (r == "ankles" and lying) else
             _restraint_effect_text(r, text, usage.get(name) if usage else None)
             for r in regions)
+        # Wrists bound behind the back is a seated figure in almost every picture
+        # ever captioned that way, so on a body that is DOWN the restraint has to be
+        # tied back to the ground or it quietly stands the body up again.
+        if lying and "wrists" in regions:
+            effects += ", the whole body still down on the ground while they are held there"
         bits.append(f"{subj} is physically restrained -- {effects}")
     if not bits:
         return ""
@@ -4379,6 +4384,15 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                                 if person_in_shot(body, n, active, departed)),
                             1 if active.get("") else 0)
             states = [
+                # WHERE THE BODY IS, before anything describes or constrains it.
+                # This used to sit near the end, eighteenth of twenty-five sentences
+                # and after the restraint clause -- so the shot was told the wrists
+                # are bound behind the back (which reads as a seated figure in almost
+                # every picture ever captioned that way) and only afterwards that she
+                # is on the floor. The position has to be established first; every
+                # clause below then describes a body already lying down.
+                (True, lambda: posture_clause(posture_state, active, body, departed,
+                                              prev_in_shot, moved_now)),
                 # the mouth, before anything describes the body it is in
                 (no_speech and not allow_vocals, lambda: LIPS_CLOSED_STATE + LIPS_CLOSED_TAIL),
                 # the limb COUNT, before anything constrains those limbs. 'auto'
@@ -4397,10 +4411,6 @@ def distribute_generations(anchor, beats, gs, music="", char_memory="", auto_war
                 (lock_restraints,
                  lambda: restraint_identity_clause(active, body, restraint_seen,
                                                    departed, prev_in_shot)),
-                # where the body IS, and that it stays there. The beat that moves
-                # someone shows the move; every beat after it has to say the result.
-                (True, lambda: posture_clause(posture_state, active, body, departed,
-                                              prev_in_shot, moved_now)),
                 # a bared zone stays bared once the body turns to a surface the shot
                 # has not shown; the model's default for undescribed skin is clothed
                 (True, lambda: bare_persist_clause(bare_now, active, body)),

@@ -3138,6 +3138,26 @@ def check_restraints_applied_in_a_beat():
     check("the opening frame is stated first, not just the state",
           "from the first frame" in _mv[1].lower()
           and "is already lying" in _mv[1])
+    # WHERE the body is has to be established before anything describes or
+    # constrains it. Stated eighteenth of twenty-five sentences -- after the wrists
+    # were said to be bound behind the back, which is a seated figure in almost
+    # every picture captioned that way -- it was correct and losing.
+    _ord = S.distribute_generations(
+        "A basement.", ["Kate is lying on the floor, asleep. Dan walks in and cuts off her shirt."],
+        "", "", _SC, anatomy_auto=True, count_subjects=True)[0].split("\n")[0]
+    _sents = re.split(r"(?<=\.)\s+", _ord)
+    _ipos = next((i for i, s in enumerate(_sents) if "already lying" in s), 99)
+    _irest = next((i for i, s in enumerate(_sents) if "physically restrained" in s), 99)
+    _ilimb = next((i for i, s in enumerate(_sents) if "one head, two arms" in s), 99)
+    check("the position is stated before the restraints", _ipos < _irest)
+    check("...and before the limb block", _ipos < _ilimb)
+    check("...and in the first half of the shot text", _ipos < len(_sents) / 2)
+    # Bound wrists on a body that is DOWN must be tied back to the ground.
+    check("wrists bound behind the back do not stand a lying body up",
+          "still down on the ground" in _ord)
+    check("...and a standing body is unaffected",
+          "still down on the ground" not in S.distribute_generations(
+              "A basement.", ["Kate stands by the door."], "", "", _SC)[0])
 
     check("bound ankles on a lying body do not take steps",
           "steps short" not in _pg[1] and "the legs moving as one" in _pg[1])
