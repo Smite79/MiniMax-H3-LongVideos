@@ -204,6 +204,34 @@ _PICTURE_TAG = re.compile(r"<\s*picture[\s_\-]*(\d+)\s*>", re.I)
 def picture_tags(text):
     return sorted({int(m.group(1)) for m in _PICTURE_TAG.finditer(text or "")})
 
+
+def resolve_tags(text, ref_list):
+    """(text with its tags renumbered, the images that shot carries, dropped slots).
+
+    comfy/text_encoders/minimax.py writes the "<Picture N>: " label ITSELF, numbering
+    by the order it receives the images -- so a shot that uses only <Picture 2>
+    receives that image labelled <Picture 1>, and text still saying <Picture 2>
+    points at nothing. The tags are renumbered per shot to match what the shot
+    actually carries: slot 2 alone becomes <Picture 1>; slots 2 and 4 become
+    <Picture 1> and <Picture 2>.
+
+    A tag naming a slot with no image connected refers to nothing at all, so it is
+    removed from the text rather than left for the encoder to puzzle over."""
+    wanted = picture_tags(text)
+    live = [n for n in wanted if 1 <= n <= len(ref_list or [])]
+    dropped = [n for n in wanted if n not in live]
+    renum = {old: new for new, old in enumerate(live, 1)}
+
+    def sub(m):
+        n = int(m.group(1))
+        return f"<Picture {renum[n]}>" if n in renum else ""
+
+    out = _PICTURE_TAG.sub(sub, text or "")
+    out = re.sub(r"\s+([,.;:])", r"\1", out)      # " ," left by a removed tag
+    out = re.sub(r",\s*,+", ",", out)             # ",," where the tag was the only item
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip(), [ref_list[n - 1] for n in live], dropped
+
 def check_audio_vae_loaded(audio_vae):
     """Catch an UNCONVERTED audio VAE checkpoint.
 
@@ -1313,8 +1341,11 @@ class H3LongVideos:
         for i, shot_prompt in enumerate(shots):
             shot_refs = refs_all
             if tagged:
-                want = picture_tags(shot_prompt)
-                shot_refs = [refs_all[n - 1] for n in want if 1 <= n <= len(refs_all)]
+                shot_prompt, shot_refs, missing = resolve_tags(shot_prompt, refs_all)
+                for n in missing:
+                    msg = f"<Picture {n}> names a slot with no image connected"
+                    if msg not in notes:
+                        notes.append(msg)
             silent = bool(silence_nonspeech and not speech[i])
 
             cond, latent, fc = build_conditioning(
