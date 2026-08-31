@@ -150,6 +150,24 @@ def test_removals():
     check("a sentence reduced to a bare subject is dropped",
           S.scrub_removed("A room. She wears a red coat. Dan waits.", ["red coat"])
           == "A room. Dan waits.")
+    # A wardrobe LIST entry goes whole. Trimming a fixed number of modifiers off
+    # the front left orphans behind -- "skin-tight shiny black" after removing
+    # "shorts" -- and an orphan description sitting in a garment list is read as
+    # some garment, which is a garment coming back.
+    _long = ("A basement. Kate is 20, blonde, shiny white bra, shiny white lace thong, "
+             "skin-tight shiny black micro volleyball shorts, black crop top.")
+    _r1 = S.scrub_removed(_long, ["shorts"])
+    check("a long list entry is removed whole",
+          "shorts" not in _r1 and "skin-tight" not in _r1 and "micro" not in _r1)
+    check("...and its neighbours are intact",
+          "shiny white bra" in _r1 and "shiny white lace thong" in _r1
+          and "black crop top" in _r1)
+    _r2 = S.scrub_removed(_long, ["thong"])
+    check("no orphan adjective is left behind",
+          "lace" not in _r2 and ", shiny," not in _r2)
+    _r3 = S.scrub_removed(_long, ["crop top", "shorts", "thong"])
+    check("three removals leave only what is still worn",
+          _r3 == "A basement. Kate is 20, blonde, shiny white bra.")
     check("text with none of the tokens is untouched",
           S.scrub_removed("A basement with devices on the walls. Kate is 20.", ["jacket"])
           == "A basement with devices on the walls. Kate is 20.")

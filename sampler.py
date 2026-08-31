@@ -832,6 +832,12 @@ _REMOVAL_PROSE = re.compile(
     re.I)
 
 
+_HAS_VERB = re.compile(
+    r"\b(?:is|are|was|were|be|being|been|has|have|had|wears?|wearing|dressed|"
+    r"walks?|walked|stands?|stood|sits?|sat|lies?|lying|holds?|holding|"
+    r"cuts?|pulls?|takes?|steps?|turns?|looks?|comes?|goes)\b", re.I)
+
+
 def names_any(text, tokens):
     """Does `text` name any of these items?"""
     return any(re.search(r"\b" + re.escape(t) + r"\b", text or "", re.I)
@@ -907,8 +913,27 @@ def scrub_removed(text, tokens):
     rather than becoming a stub."""
     if not text or not tokens:
         return text
-    out = text
-    for t in [t for t in tokens if t]:
+    live = [t for t in tokens if t]
+    pats = [re.compile(r"\b" + re.escape(t) + r"\b", re.I) for t in live]
+    # A scene lists what someone wears as comma-separated NOUN PHRASES ("blonde,
+    # shiny white bra, skin-tight shiny black micro volleyball shorts"). For those,
+    # the whole entry goes: trimming a fixed number of modifiers off the front left
+    # orphans like "skin-tight shiny black" sitting in the list, and an orphan
+    # description is read as some garment -- which is a garment coming back.
+    #
+    # A fragment with a VERB in it is prose, not a list entry, and there the entry
+    # is only part of the sentence, so it gets the surgical treatment below.
+    kept = []
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        frags = sent.split(",")
+        out_frags = []
+        for frag in frags:
+            if any(p.search(frag) for p in pats) and not _HAS_VERB.search(frag):
+                continue                      # a bare wardrobe entry: drop it whole
+            out_frags.append(frag)
+        kept.append(",".join(out_frags))
+    out = " ".join(k for k in kept if k.strip())
+    for t in live:
         # The item and the words that belong to it -- an article and up to two
         # modifiers -- and nothing else. Deleting the whole comma fragment took
         # neighbours with it: removing "jacket" from "a grey jacket over a white
