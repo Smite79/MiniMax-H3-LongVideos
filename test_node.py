@@ -106,6 +106,36 @@ def test_speech_and_refs():
     check("no tag means none", S.picture_tags("Dan walks in.") == [])
 
 
+def test_removals():
+    print("\n=== clothing removal between beats ===")
+    body, toks = S.extract_removals("Dan cuts off her jacket.\nremove: jacket")
+    check("the directive never reaches the model", "remove:" not in body)
+    check("...and the beat itself is untouched", body == "Dan cuts off her jacket.")
+    check("the item is captured", toks == ["jacket"])
+    check("several items on one line",
+          S.extract_removals("x\nremove: bra, shirt")[1] == ["bra", "shirt"])
+    check("'off:' works too", S.extract_removals("x\noff: hat")[1] == ["hat"])
+    check("a beat with no directive is unchanged",
+          S.extract_removals("She walks in.") == ("She walks in.", []))
+    sc = "A basement. Kate is 20, blonde, grey jacket, white shirt, black boots. Dan is 35."
+    check("the item leaves the scene",
+          "jacket" not in S.scrub_removed(sc, ["jacket"]))
+    check("...and everything else stays",
+          all(w in S.scrub_removed(sc, ["jacket"])
+              for w in ("blonde", "white shirt", "black boots", "Dan is 35")))
+    check("a sentence that was only about it is dropped whole",
+          S.scrub_removed("A room. She wears a red coat. Dan waits.", ["red coat"])
+          == "A room. Dan waits.")
+    check("no tokens means no edit", S.scrub_removed(sc, []) == sc)
+    # Removals accumulate: once off, a garment stays out of every later shot.
+    gone = []
+    for _b in ("a\nremove: jacket", "b\nremove: shirt", "c"):
+        gone.extend(t for t in S.extract_removals(_b)[1] if t not in gone)
+    final = S.scrub_removed(sc, gone)
+    check("both stay gone in a later beat",
+          "jacket" not in final and "shirt" not in final and "black boots" in final)
+
+
 def test_schema():
     print("\n=== node schema ===")
     schema = S.H3LongVideos.INPUT_TYPES()
@@ -140,6 +170,7 @@ def main():
     test_verbatim()
     test_sizing()
     test_speech_and_refs()
+    test_removals()
     test_schema()
     print()
     if _fails:

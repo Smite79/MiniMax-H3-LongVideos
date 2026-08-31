@@ -66,6 +66,40 @@ not argue with what you wrote.
 Dialogue goes in **double quotes**. That is how the node knows which shots have
 speech; the rest are silenced.
 
+## Clothing that comes off
+
+The scene paragraph is stamped on every shot, so a garment described there is still
+being described after a beat takes it off — and a description of a worn garment
+beats a sentence saying it came off. Say what came off:
+
+```
+A basement. Kate is 20, blonde, grey jacket, white shirt, black boots.
+
+Dan cuts off her jacket and throws it away.
+remove: jacket
+
+Dan cuts off her shirt and throws it away.
+remove: shirt
+
+Kate looks up at him.
+```
+
+From that shot onward the item is dropped from the scene:
+
+```
+shot 1  ... blonde, white shirt, black boots ...  Dan cuts off her jacket...
+shot 2  ... blonde, black boots ...               Dan cuts off her shirt...
+shot 3  ... blonde, black boots ...               Kate looks up at him.
+```
+
+`remove:` (or `off:`) takes a comma-separated list, and the line itself never
+reaches the model. It applies to the removing shot too — the keyframe already shows
+the garment on at the start, and it is the *description* saying it is still worn
+that puts it back.
+
+This is the only place the node edits your text, and it only ever deletes. It does
+not infer removals from your prose; you say what came off.
+
 ## Settings
 
 | setting | value |

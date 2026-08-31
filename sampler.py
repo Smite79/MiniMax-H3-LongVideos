@@ -719,6 +719,58 @@ def sampling_oom_help(w, h, frames, fps, megapixels=0.0):
 
 
 
+
+# --- removals ----------------------------------------------------------------
+# The one place the node edits your text, and it only ever DELETES.
+#
+# The scene paragraph is stamped on every shot, so a garment described there is
+# still being described after a beat takes it off -- and a description of a worn
+# garment beats a sentence saying it came off. The old node inferred removals from
+# prose, which meant guessing, and the guessing is most of what made it
+# unpredictable. This does not guess. You say what came off:
+#
+#     Dan cuts off her jacket and throws it away.
+#     remove: jacket
+#
+# From that shot onward, any part of the scene naming "jacket" is dropped. The
+# directive line itself never reaches the model.
+
+_REMOVE_LINE = re.compile(r"^[ \t]*(?:remove|removed|off)[ \t]*:[ \t]*(.+?)[ \t]*$",
+                          re.I | re.M)
+
+
+def extract_removals(beat):
+    """(beat text with the directive lines taken out, [tokens])."""
+    tokens = []
+
+    def take(m):
+        tokens.extend(t.strip() for t in m.group(1).split(",") if t.strip())
+        return ""
+
+    body = _REMOVE_LINE.sub(take, beat or "")
+    return re.sub(r"\n{2,}", "\n", body).strip(), tokens
+
+
+def scrub_removed(text, tokens):
+    """Drop the parts of `text` that name a removed item.
+
+    Comma-separated fragments first, because that is how a scene lists what someone
+    is wearing ("blonde, 20, grey jacket, black boots"). A sentence that is left
+    with no words at all is dropped whole, so "She wears a red coat." disappears
+    rather than becoming a stub."""
+    if not text or not tokens:
+        return text
+    pats = [re.compile(r"\b" + re.escape(t) + r"\b", re.I) for t in tokens if t]
+    kept_sentences = []
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        frags = [f for f in sent.split(",") if not any(p.search(f) for p in pats)]
+        kept = ", ".join(f.strip() for f in frags if f.strip())
+        kept = re.sub(r"\s+([.!?])", r"\1", kept)
+        if re.search(r"[A-Za-z0-9]", kept):
+            kept_sentences.append(kept if kept[-1] in ".!?" else kept + ".")
+    return " ".join(kept_sentences).strip()
+
+
 # --- upscaling ---------------------------------------------------------------
 
 def _resize_short_edge(frames, target, method="lanczos"):
@@ -1152,8 +1204,20 @@ class H3LongVideos:
 
         w, h = scale_to_megapixels(*parse_resolution(resolution), megapixels)
         frames = align_frame_count(int(round(float(shot_seconds) * H3_FPS)))
-        shots = [f"{scene} {b}".strip() if scene else b for b in beats]
-        speech = [has_speech(b) for b in beats]
+        # 'remove:' lines take their item out of the SCENE from that shot onward, so
+        # the scene stops describing a garment a beat has taken off. It applies to
+        # the removing shot too: the keyframe already shows the garment on at the
+        # start, and a description saying it is still worn is what puts it back.
+        shots, speech, gone = [], [], []
+        for b in beats:
+            body, toks = extract_removals(b)
+            if toks:
+                gone.extend(t for t in toks if t not in gone)
+                notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
+                             + ", ".join(toks))
+            shot_scene = scrub_removed(scene, gone)
+            shots.append(f"{shot_scene} {body}".strip() if shot_scene else body)
+            speech.append(has_speech(body))
 
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
                     if r is not None]
