@@ -177,63 +177,52 @@ it — no removals are inferred from your prose.
 
 ## Things that must stay the same
 
-**Restraints are handled for you.** `hold_restraints` (on by default) watches for
-hardware going on — handcuffs, chain, rope, tape — and from that shot onward every shot carries one sentence: *every restraint stays whole and closed,
-fastened exactly as it was put on*. It latches: a beat that does not mention the
-cuffs does not mean they came off. A `remove:` naming the hardware clears it.
+**Fastened hardware is held for you.** `hold_restraints` (on by default) notices when
+something that fastens is put on a person — handcuffs, a chain, rope, tape — and from
+that shot onward every shot carries one sentence: *every restraint stays whole and
+closed, fastened exactly as it was put on*. It latches, so a beat that does not
+mention it does not mean it came off, and a `remove:` naming it clears it.
 
 This is the **only** continuity fact the node asserts on its own, because it is the
-one that cannot be recovered — a cuff that renders open is not a detail that
-drifted, it is the scene ceasing to make sense. Ambiguous hardware needs a binding
-verb or a body part alongside it, so a chain-link fence and a leather belt do not
-arm it.
+one that cannot be recovered: hardware that renders open or snapped is not a detail
+that drifted, it is the scene ceasing to make sense. Ambiguous items need a
+fastening verb or a body part alongside them, so a chain-link fence and a leather
+belt do not arm it.
 
 **Turning is handled too.** The keyframe pins the *front* of the body. When a beat
 turns someone — or brings the camera round behind them — the model is filling in a
 surface it has never been shown, and its prior for an undescribed body is a
 **clothed** one. That is a removed garment coming back, often stacked in the wrong
-order, and hardware on the far side re-inventing itself as it rotates into view.
+order, and anything on the far side re-inventing itself as it rotates into view.
 
-**Being moved counts too** — lifted, dragged, rolled, laid down. Same reason: the
+**Being moved counts too** — lifted, carried, rolled, laid down. Same reason: the
 keyframe pinned one pose seen from one side, and moving the body puts it where that
 frame never showed it. The verb needs a *person* as its object and somewhere to go,
-so *"lifts her onto the table"* counts while *"lifts the crate"*, *"positions her
-legs"* and *"pulls her shorts off"* do not.
+so *"lifts her onto the table"* counts while *"lifts the crate"* and *"positions her
+legs"* do not.
 
 On those shots, and only once there is state worth holding, one sentence is added:
 *the body reads the same from every angle and in every position — what is on it now
 is all that is on it, front, side and behind, and whatever is fastened stays
 fastened.* It names no garment and no person.
 
-Everything else that has to hold across the chain goes in the **scene paragraph**,
-which reaches every shot:
-
-```
-A store room. Mara is 30, red hair, hands cuffed in front of her. Her handcuffs
-stay whole and closed throughout, fastened exactly as they were put on.
-```
-
-That one line is stamped on every shot, which is what stops restraints rendering
-open or snapped during a struggle. Use `add:` if the thing only becomes true partway
-through:
-
-```
-Jon loops the chain through the door handle and locks it.
-add: the chain stays locked and closed, fastened as it was put on
-```
+**Anything else that has to hold across the chain goes in the scene paragraph**,
+which reaches every shot — a property of the light, a fact about the room, a
+condition of a costume. Use `add:` if it only becomes true partway through, and
+`remove:` when it stops being true.
 
 Two rules worth knowing, both learned the hard way:
 
 - **State what IS, not what is not.** At `cfg 1` the negative prompt is never
   evaluated, so a negation in the positive only names the thing it forbids. *"the
-  cuffs stay whole and closed"* works; *"the cuffs do not break"* names breaking.
+  glass stays intact"* works; *"the glass does not break"* names breaking.
 - **Do not re-state a removed garment.** Once something is off, never mention it
   again — not even to say it is gone. A mention is a presence cue.
 
 `remove:` already covers the removing shot itself: it tells that shot to finish the
 removal by the last frame, and adds that *everything else on the body stays exactly
-as it is, untouched and still fastened, whole and closed as it was put on* — which
-is what stops an action running on into the next garment or into the hardware.
+as it is, untouched and still fastened* — which is what stops an action running on
+into whatever is next.
 
 ## Settings
 
