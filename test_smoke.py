@@ -399,6 +399,36 @@ def test_anchor_is_the_scene():
     check("...and the scene still leads", all("A basement." in s for s in sh2))
 
 
+def test_detail_trend():
+    print("\n=== the chain is measured for softening ===")
+    # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
+    # next shot's keyframe. That round trip is lossy and it runs on the model's own
+    # output, so shot 11 is sampled from a picture that has been through ten
+    # decode/encode cycles. The softening is invisible shot to shot and obvious end
+    # to end, which is exactly the kind of thing to measure rather than argue about.
+    sharp = torch.rand(48, 48, 3)
+    soft = sharp.clone()
+    for _ in range(4):
+        soft[1:-1, 1:-1] = (soft[:-2, 1:-1] + soft[2:, 1:-1]
+                            + soft[1:-1, :-2] + soft[1:-1, 2:]) / 4
+    check("a blurred frame measures less detail",
+          S.frame_detail(sharp)[0] > S.frame_detail(soft)[0])
+    check("a flat frame measures no detail", S.frame_detail(torch.zeros(8, 8, 3))[0] == 0)
+    check("a 1px frame does not divide by zero", S.frame_detail(torch.rand(1, 1, 3)) == (0.0, 0.0))
+    # The report only claims a trend when there is one.
+    falling = S.detail_report([(0.09, .2), (0.08, .2), (0.07, .2), (0.06, .2)])
+    check("a falling chain is called out", "DOWN 33%" in falling)
+    check("...with the cause named", "re-encodes it as the next" in falling)
+    check("...and a way out", "restart_after_removal" in falling)
+    check("a flat chain is not alarming",
+          "flat within" in S.detail_report([(0.09, .2), (0.089, .2), (0.091, .2)]))
+    check("one shot claims no trend", S.detail_report([(0.09, .2)]) == "")
+    check("no shots, no line", S.detail_report([]) == "")
+    check("the run reports it", "detail per shot" in run_node("A room.\n\nOne.\n\nTwo.")[2])
+    check("...and plan_only does not",
+          "detail per shot" not in run_node("A room.\n\nOne.\n\nTwo.", plan_only=True)[2])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -454,6 +484,7 @@ def main():
     test_auto_removal()
     test_fall_keeps_the_hardware()
     test_anchor_is_the_scene()
+    test_detail_trend()
     test_timing_report()
     print()
     if _fails:
