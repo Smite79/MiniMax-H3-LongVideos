@@ -80,12 +80,12 @@ action stops getting a shot with room for two.
 
 That matters because a shot which runs longer than its beat leaves the model seconds
 it was told nothing about, and the cheapest way to fill them is to **carry on with
-the action**: shears that cut a garment off keep cutting into what is underneath.
+the action**: a hand that pulls a coat off a shoulder keeps pulling.
 
 ```
-Dan cuts off her bra and throws it away.               ~7s of content
-Dan cuts off her bra and throws it away, then sets     ~12s
-the shears down and steps back.
+Mara pulls off her wet coat and drops it on the bench.      ~7s of content
+Mara pulls off her wet coat and drops it on the bench,      ~12s
+then wipes the rain off her face and sits down.
 ```
 
 So the first gets a ~7s shot and the second a ~10s one. The estimate leans **short**
@@ -103,8 +103,8 @@ Either way `info` flags any beat its shot still outlasts, by shot number.
 
 ## Clothing, and layers
 
-**Describe what is visible.** A scene that lists every layer at once — jacket, shirt,
-underwear — tells the model the character is wearing all of them *simultaneously*,
+**Describe what is visible.** A scene that lists every layer at once — coat, jumper,
+shirt — tells the model the character is wearing all of them *simultaneously*,
 with nothing saying which is hidden. The keyframe holds the first frame, so the shot
 starts right; by the last frame only the text is governing, and the under layer starts
 showing through the top one.
@@ -112,25 +112,25 @@ showing through the top one.
 So list the outer layer, and bring each one in as it becomes visible:
 
 ```
-A basement. Kate is 20, blonde, wearing a grey jacket.
+A hallway, cold light. Mara is 30, red hair, wearing a wet grey coat.
 
-Dan cuts off her jacket and throws it away.
-remove: jacket
-add: her white shirt underneath is now visible
+Mara pulls off her coat and hangs it on the hook.
+remove: coat
+add: her navy jumper underneath is now visible
 
-Dan cuts off her shirt and throws it away.
-remove: shirt
-add: her black bra is now visible
+She pulls the jumper over her head and drops it on the chair.
+remove: jumper
+add: her white shirt is now visible
 
-Kate looks up at him.
+Mara looks back at the door.
 ```
 
 Which produces:
 
 ```
-shot 1  ... Kate is 20, blonde. Her white shirt underneath is now visible.
-shot 2  ... Kate is 20, blonde. Her black bra is now visible.
-shot 3  ... Kate is 20, blonde. Her black bra is now visible.
+shot 1  ... Mara is 30, red hair. Her navy jumper underneath is now visible.
+shot 2  ... Mara is 30, red hair. Her white shirt is now visible.
+shot 3  ... Mara is 30, red hair. Her white shirt is now visible.
 ```
 
 `remove:` drops any part of the scene naming that item, from that shot onward.
@@ -167,7 +167,7 @@ Check the `script` output first. If the garment is absent from the text and stil
 screen, it is coming through the keyframe and this is the setting that stops it.
 
 **The same applies to your own beats.** They go to the model word for word, so a
-later beat that says *"her crop top"* puts the crop top back — the scene is clean and
+later beat that says *"her coat"* puts the coat back — the scene is clean and
 the removal was honoured, and then the beat asks for it. In a ten-beat script that
 reads as the removal failing at random. `info` names the beat and the garment when it
 happens; the removing beat itself is not flagged, since it has to name it.
@@ -178,8 +178,7 @@ it — no removals are inferred from your prose.
 ## Things that must stay the same
 
 **Restraints are handled for you.** `hold_restraints` (on by default) watches for
-hardware going on — cuffs, chains, rope, tape, a gag, a collar — and from that shot
-onward every shot carries one sentence: *every restraint stays whole and closed,
+hardware going on — handcuffs, chain, rope, tape — and from that shot onward every shot carries one sentence: *every restraint stays whole and closed,
 fastened exactly as it was put on*. It latches: a beat that does not mention the
 cuffs does not mean they came off. A `remove:` naming the hardware clears it.
 
@@ -210,8 +209,8 @@ Everything else that has to hold across the chain goes in the **scene paragraph*
 which reaches every shot:
 
 ```
-A basement. Kate is 20, blonde, wrists cuffed behind her back. Her cuffs and
-chains stay whole and closed throughout, fastened exactly as they were put on.
+A store room. Mara is 30, red hair, hands cuffed in front of her. Her handcuffs
+stay whole and closed throughout, fastened exactly as they were put on.
 ```
 
 That one line is stamped on every shot, which is what stops restraints rendering
@@ -219,8 +218,8 @@ open or snapped during a struggle. Use `add:` if the thing only becomes true par
 through:
 
 ```
-Dan locks the chain around her waist.
-add: the waist chain stays locked and closed, fastened as it was put on
+Jon loops the chain through the door handle and locks it.
+add: the chain stays locked and closed, fastened as it was put on
 ```
 
 Two rules worth knowing, both learned the hard way:
