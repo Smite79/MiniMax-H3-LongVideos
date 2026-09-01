@@ -220,6 +220,28 @@ def test_layers():
     check("...and one that was not removed stays", S.names_any("a red coat", ["coat"]))
 
 
+def test_thin_beats():
+    print("\n=== a shot longer than its beat ===")
+    # A shot that outlasts its action leaves the model seconds it was told
+    # nothing about, and the cheapest way to fill them is to CARRY ON: shears
+    # that cut a garment off keep cutting into what is underneath.
+    one = "Dan cuts off her bra and throws it away."
+    two = ("Dan cuts off her bra and throws it away, then sets the shears down "
+           "and steps back.")
+    check("a two-clause beat asks for about 7s", 6.0 <= S.beat_seconds(one) <= 8.0)
+    check("adding what happens next asks for more", S.beat_seconds(two) > S.beat_seconds(one))
+    check("directive lines do not count as content",
+          S.beat_seconds(one) == S.beat_seconds(one + "\nremove: bra"))
+    check("dialogue is timed by words", S.beat_seconds('She says: "one two three four five."') > 0)
+    check("an empty beat asks for nothing", S.beat_seconds("") == 0)
+    check("the reported beat is flagged in a 10s shot",
+          any("shot 1" in t for t in S.thin_beats([one], 10.0)))
+    check("...and is not once it has somewhere to go",
+          S.thin_beats([two], 10.0) == [])
+    check("...nor at a shot length that matches it",
+          S.thin_beats([one], 7.0) == [])
+
+
 def test_text_in_frame():
     print("\n=== watermarks and subtitles ===")
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
@@ -308,6 +330,7 @@ def main():
     test_speech_and_refs()
     test_removals()
     test_layers()
+    test_thin_beats()
     test_text_in_frame()
     test_reference_tags()
     test_schema()

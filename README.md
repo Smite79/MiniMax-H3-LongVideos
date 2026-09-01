@@ -72,6 +72,27 @@ tokenizer registers dedicated tokens for dialogue (`<d>`, `</d>`), captions
 meant to *draw*. Text in plain quotes is not marked as any of them, and a model with
 a caption channel is entitled to read it as a caption.
 
+## Write the beat to fill the shot
+
+Every shot is `shot_seconds` long. If a beat runs out of things to do before the
+shot ends, the model has seconds it was told nothing about — and the cheapest way to
+fill them is to **carry on with the action**. Shears that cut a garment off keep
+cutting into what is underneath.
+
+```
+Dan cuts off her bra and throws it away.               ~7s of content
+Dan cuts off her bra and throws it away, then sets     ~12s
+the shears down and steps back.
+```
+
+At a 10s shot the first leaves three unaccounted seconds; the second does not.
+`info` flags beats where the shot outlasts the beat, by shot number. Two fixes:
+say what happens *after* the action, or lower `shot_seconds`.
+
+This is why the node does not size shots from their content: it would have to guess
+how long your prose takes, and guessing wrong in the long direction produces exactly
+this artifact. You know the pacing; it tells you when the arithmetic looks wrong.
+
 ## Clothing, and layers
 
 **Describe what is visible.** A scene that lists every layer at once — jacket, shirt,
