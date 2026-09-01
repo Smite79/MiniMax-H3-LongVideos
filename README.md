@@ -72,12 +72,15 @@ tokenizer registers dedicated tokens for dialogue (`<d>`, `</d>`), captions
 meant to *draw*. Text in plain quotes is not marked as any of them, and a model with
 a caption channel is entitled to read it as a caption.
 
-## Write the beat to fill the shot
+## Shot length
 
-Every shot is `shot_seconds` long. If a beat runs out of things to do before the
-shot ends, the model has seconds it was told nothing about — and the cheapest way to
-fill them is to **carry on with the action**. Shears that cut a garment off keep
-cutting into what is underneath.
+**`shot_length` = "from the beat"** (default) sizes each shot from what its own line
+stages — capped by `shot_seconds`, floored at one action's worth. A beat with one
+action stops getting a shot with room for two.
+
+That matters because a shot which runs longer than its beat leaves the model seconds
+it was told nothing about, and the cheapest way to fill them is to **carry on with
+the action**: shears that cut a garment off keep cutting into what is underneath.
 
 ```
 Dan cuts off her bra and throws it away.               ~7s of content
@@ -85,13 +88,18 @@ Dan cuts off her bra and throws it away, then sets     ~12s
 the shears down and steps back.
 ```
 
-At a 10s shot the first leaves three unaccounted seconds; the second does not.
-`info` flags beats where the shot outlasts the beat, by shot number. Two fixes:
-say what happens *after* the action, or lower `shot_seconds`.
+So the first gets a ~7s shot and the second a ~10s one. The estimate leans **short**
+on purpose: a shot that ends before its action does hands a mid-motion frame to the
+next shot, which the chain continues from, while a shot that outlasts its action has
+to invent the remainder.
 
-This is why the node does not size shots from their content: it would have to guess
-how long your prose takes, and guessing wrong in the long direction produces exactly
-this artifact. You know the pacing; it tells you when the arithmetic looks wrong.
+**`shot_length` = "fixed"** gives every shot `shot_seconds` instead. The reason to
+want that: uniform lengths mean uniform latent *shapes*, and noise is drawn to the
+shape — so one seed gives the whole chain one noise field and surface detail does not
+reset at each cut. That consistency is what you trade for pacing, and `info` says so
+whenever the lengths differ.
+
+Either way `info` flags any beat its shot still outlasts, by shot number.
 
 ## Clothing, and layers
 
