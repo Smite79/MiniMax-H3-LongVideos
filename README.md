@@ -133,6 +133,32 @@ shot 2  ... Mara is 30, red hair. Her white shirt is now visible.
 shot 3  ... Mara is 30, red hair. Her white shirt is now visible.
 ```
 
+**Removals are read from your beats.** `auto_remove` (on by default) takes the
+garment off when the beat says so — no directive needed:
+
+```
+A hallway, cold light. Mara is 30, red hair, a wet grey coat, a navy jumper.
+
+Mara pulls off her coat and hangs it up, showing the navy jumper underneath.
+
+She folds her arms.
+```
+
+```
+shot 1  ... red hair, a navy jumper.   Mara pulls off her coat...
+shot 2  ... red hair, a navy jumper.   She folds her arms.
+```
+
+Two conditions are both required, because a wrong removal is worse than a missed
+one: the beat must contain a **removal verb**, and the thing named must be something
+the **scene already says is worn**. Only the verb's own object counts — the span up
+to the next clause boundary — so *"pulls off her coat, showing the jumper"* takes the
+coat and leaves the jumper. `info` reports every removal it reads, by shot.
+
+`remove:` still works and is added to whatever is inferred — use it when the wording
+is unusual enough that the beat is not read correctly, or when something comes off
+that the prose does not name as a removal.
+
 `remove:` drops any part of the scene naming that item, from that shot onward.
 `add:` (or `wear:`) appends your phrase to the scene, in your words, from that shot
 onward — and retires automatically when a later `remove:` names it.
