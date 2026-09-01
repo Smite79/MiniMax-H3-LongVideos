@@ -1203,13 +1203,29 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     """
     latent, fc = _empty_av_latent(width, height, length, H3_FPS)
     refs = [r for r in (refs or []) if r is not None]
-    items, blocks = [], []
-    if refs:
-        items, blocks = _build_ref_images(vae, refs, width, height, ref_image_size)
 
     hand_img = None
     if handoff is not None:
         hand_img = _resize(handoff[:1], width, height, "disabled")
+
+    # ONE aug covers every visual condition row -- references AND the keyframe.
+    # comfy/ldm/minimax/model.py: _cond_video_rows() noises the keyframe latent by
+    # (1 - aug), and seg_t["cond"] labels it max(t_v, aug) instead of 0.999. So
+    # softening references below KEYFRAME_SAFE_AUG does not just soften them: it
+    # noises and mis-timesteps the ANCHOR of every shot after the first, which shows
+    # up as those shots degrading during sampling.
+    #
+    # When that would happen, the handoff stops being a keyframe and rides as an
+    # extra reference instead. Weaker continuity, but nothing is pretending to be an
+    # anchor while carrying noise.
+    keyframe_ok = ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG
+    carry_as_ref = bool(hand_img is not None and refs and not keyframe_ok)
+
+    enc_refs = refs + ([hand_img] if carry_as_ref else [])
+    items, blocks = ([], [])
+    if enc_refs:
+        items, blocks = _build_ref_images(vae, enc_refs, width, height, ref_image_size)
+    if hand_img is not None and not carry_as_ref:
         # Appended AFTER the references so <Picture N> numbering is untouched.
         items = items + [{"type": "image", "data": hand_img}]
 
@@ -1229,7 +1245,7 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
             vals["minimax_visual_cond_noise_aug"] = float(ref_noise_aug)
 
     kfs = []
-    if hand_img is not None:
+    if hand_img is not None and not carry_as_ref:
         kfs.append({"resolved_frame_index": 0,
                     "latent": _keyframe_latent(vae, hand_img)})
     # Silence on the audio branch for a shot with no scripted line. H3 is joint:
@@ -1245,7 +1261,7 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
         vals["minimax_keyframes"] = kfs
     if vals:
         cond = node_helpers.conditioning_set_values(cond, vals)
-    return cond, latent, fc
+    return cond, latent, fc, carry_as_ref
 
 
 def sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
@@ -1520,6 +1536,7 @@ class H3LongVideos:
         # and which side wins depends on `steps`. Reported so the trade is a
         # measurement rather than an argument.
         t_sample = t_decode = 0.0
+        _aug_warned = False
         t_start = time.perf_counter()
         vid_out, aud_out, sr = [], [], 44100
         _deep_cleanup()
@@ -1534,10 +1551,19 @@ class H3LongVideos:
                         notes.append(msg)
             silent = bool(silence_nonspeech and not speech[i])
 
-            cond, latent, fc = build_conditioning(
+            cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, frames,
                 handoff=handoff, refs=shot_refs,
                 ref_noise_aug=ref_noise_aug, silent=silent)
+            if demoted and not _aug_warned:
+                _aug_warned = True
+                notes.append(
+                    f"ref_noise_aug is {float(ref_noise_aug):g}, below {KEYFRAME_SAFE_AUG:g} -- "
+                    f"one aug covers references AND the keyframe, so at this value the "
+                    f"anchor would be noised and mis-timestepped, and every shot after the "
+                    f"first degrades while sampling. The handoff is riding as an extra "
+                    f"reference instead: continuity is weaker but nothing is corrupted. "
+                    f"Raise it to {KEYFRAME_SAFE_AUG:g}+ for a real keyframe")
             _evict_all_but(model)
             try:
                 _t0 = time.perf_counter()

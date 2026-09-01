@@ -149,8 +149,15 @@ degrades every shot after the first.
   deliberate: they are the only fixed anchor a long chain has against drift.
 - **`ref_noise_aug`** is how *clean* a reference is shown. At the default 0.999 the
   model tends to reproduce the reference — its pose and background included — in
-  the opening frames. Lower it (0.95, then 0.90) if a reference is fighting your
-  staging.
+  the opening frames. Lowering it says "approximate".
+
+  **But one aug covers every visual condition row — references *and* the keyframe.**
+  Below **0.99** the keyframe latent would be noised and labelled at the wrong
+  timestep, which corrupts the anchor of every shot after the first and shows up as
+  those shots degrading *during sampling*. So below 0.99 the node stops sending the
+  handoff as a keyframe and rides it as an extra reference instead: continuity is
+  weaker, but nothing is corrupted. `info` says when this happens. If you want a
+  real keyframe, keep `ref_noise_aug` at 0.99 or above.
 
 ## Speed
 
