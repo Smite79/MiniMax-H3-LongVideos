@@ -916,11 +916,29 @@ _ADD_LINE = re.compile(r"^[ \t]*(?:add|wear|wearing)[ \t]*:[ \t]*(.+?)[ \t]*$", 
 # removals from prose is what made the old node unpredictable. It is used only to
 # notice that a beat looks like a removal while the scene still describes the
 # garment, and to say so, because that combination is a garment that comes back.
+# Verbs that mean REMOVAL only with a particle. On their own, "cuts the rope",
+# "takes her hand", "pulls her closer" and "throws the bag on the floor" are
+# ordinary actions -- and reading one as a removal deletes that garment's entry
+# from the scene, after which it is still worn but UNDESCRIBED. An undescribed
+# garment is one the model invents, and what it invents is plain and pale. That
+# is how a black shiny latex crop top comes back white.
+#
+# The particle's POSITION settles the ambiguous case. Straight after the verb it
+# is a removal ("pulls down her shorts"); trailing after the object, only "off"
+# and "away" are -- "takes her coat off" removes it, "pulls her crop top down"
+# only adjusts it, and adjusting a garment must not cost it its description.
+_STRIP_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
+               r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|"
+               r"slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
+               r"toss(?:es|ed)?|throw[s]?|threw")
+# ...and verbs that are a removal on their own, needing no particle.
+_UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
+              r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?")
+
 _REMOVAL_PROSE = re.compile(
-    r"\b(?:take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|strip(?:s|ped|ping)?|"
-    r"cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|slip(?:s|ped)?|shrug(?:s|ged)?|"
-    r"remove[sd]?|removing|unzip(?:s|ped)?|unbutton(?:s|ed)?|undo(?:es)?|undid|"
-    r"unhook(?:s|ed)?|unclasp(?:s|ed)?|yank(?:s|ed)?|toss(?:es|ed)?|throw[s]?|threw)\b",
+    r"\b(?:" + _UNDO_VERB + r")\b"
+    r"|\b(?:" + _STRIP_VERB + r")\s+(?:off|away|out\s+of|down)\b"
+    r"|\b(?:" + _STRIP_VERB + r")\b(?=[^.;!?]{0,40}?\b(?:off|away)\b)",
     re.I)
 
 

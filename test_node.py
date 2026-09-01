@@ -232,6 +232,37 @@ def test_inferred_removals():
     check("...and reads cleanly", ",black" not in _s and "  " not in _s)
 
 
+def test_removal_needs_a_particle():
+    print("\n=== an ordinary action is not a removal ===")
+    # Reported: a described garment rendering plain and pale. The verb pattern
+    # fired on a BARE verb, so "pulls her crop top down" read as a removal and
+    # scrubbed the entry -- leaving the garment still worn but undescribed, and
+    # an undescribed garment is one the model invents. Colour and material are
+    # lost with the entry, so the invented one comes back plain.
+    sc = ("A bare basement. Kate, 20, blonde, black shiny latex crop top, "
+          "white cotton shorts, brown leather boots, a grey coat.")
+    for _b in ("Dan cuts off her shorts.", "Dan pulls off her boots.",
+               "Dan pulls down her shorts.", "Dan removes her coat.",
+               "Dan unzips her coat.", "Dan strips off her coat.",
+               "Dan throws her coat away."):
+        check(f"a removal still fires: {_b[:32]!r}", S.infer_removals(_b, sc))
+    # The particle's POSITION settles the ambiguous case: straight after the verb
+    # it removes, trailing after the object only "off" and "away" do.
+    check("'takes her coat off' removes it",
+          S.infer_removals("Dan takes her coat off.", sc) == ["coat"])
+    check("...but 'pulls her crop top down' only adjusts it",
+          S.infer_removals("Dan pulls her crop top down.", sc) == [])
+    for _b in ("Dan cuts the rope from her wrists.", "Dan takes her hand.",
+               "Dan pulls her closer.", "Dan throws the bag on the floor.",
+               "Dan cuts the tape on the box.", "Dan takes a step back.",
+               "Kate pulls at her sleeve.", "Dan straightens her coat."):
+        check(f"not a removal: {_b[:34]!r}", S.infer_removals(_b, sc) == [])
+    # The point of all of it: what is still worn keeps its full description.
+    kept = S.scrub_removed(sc, S.infer_removals("Dan pulls her crop top down.", sc))
+    check("the garment keeps its colour and material",
+          "black shiny latex crop top" in kept)
+
+
 def test_removal_completes():
     print("\n=== a removal has to finish inside its shot ===")
     # Scrubbing stops a garment being DESCRIBED. It does not tell the model to
@@ -547,6 +578,7 @@ def main():
     test_speech_and_refs()
     test_removals()
     test_inferred_removals()
+    test_removal_needs_a_particle()
     test_layers()
     test_removal_completes()
     test_restraints_hold()
