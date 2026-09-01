@@ -139,6 +139,19 @@ def align_frame_count(n):
     return min(n, MAX_FRAMES)
 
 
+def align_frame_count_nearest(n):
+    """The NEAREST 17k+5 grid point, not the next one up.
+
+    align_frame_count always rounds up, which is right for a length you asked for
+    -- never give back less than requested. It is wrong for an ESTIMATE: the grid
+    steps 17 frames (~0.7s), and rounding an estimate up lengthens the shot in the
+    one direction that causes trouble."""
+    n = max(5, int(n))
+    lo = n - ((n - 5) % 17)
+    hi = lo + 17
+    return min(MAX_FRAMES, lo if (n - lo) <= (hi - n) else hi)
+
+
 def video_latent_t(fc):
     return 2 if fc <= 5 else ((fc - 5) // 17) * 5 + 2
 
@@ -228,6 +241,37 @@ def beat_seconds(beat):
     spoken = sum(len(q.split()) for q in _QUOTED.findall(beat or "")) \
         + sum(len(q.split()) for q in _DIALOGUE_TAG.findall(beat or ""))
     return max(action, (spoken / WORDS_PER_SEC + 1.0) if spoken else 0.0)
+
+
+MIN_AUTO_FRAMES = 73           # ~3.0s: the shortest shot that can hold one action
+
+
+def plan_lengths(beats, ceiling_frames, from_beat):
+    """Frames for each shot. Returns (lengths, note).
+
+    'fixed' gives every shot the ceiling. 'from the beat' sizes each shot from what
+    its own line stages, capped by that same ceiling and floored at one action's
+    worth -- so a beat with one action stops getting a shot with room for two, which
+    is what makes an action carry on past its end.
+
+    The estimate leans SHORT deliberately. A shot that ends before its action does
+    hands a mid-motion frame to the next shot, and the chain is built to continue
+    from exactly that. A shot that outlasts its action has to invent the remainder."""
+    if not from_beat:
+        return [ceiling_frames] * len(beats), ""
+    lens = []
+    for b in beats:
+        need = beat_seconds(b)
+        want = align_frame_count_nearest(int(round(need * H3_FPS))) if need else MIN_AUTO_FRAMES
+        lens.append(max(MIN_AUTO_FRAMES, min(want, ceiling_frames)))
+    note = ""
+    if len(set(lens)) > 1:
+        note = ("shot lengths are sized from each beat ("
+                + ", ".join(f"{n}f/{n / H3_FPS:.1f}s" for n in lens)
+                + "). They differ, so one seed does not give them one noise field -- "
+                  "noise is drawn to the latent's shape -- and surface detail resets at "
+                  "each cut. Set shot_length to 'fixed' if that matters more than pacing")
+    return lens, note
 
 
 def thin_beats(beats, seconds):
@@ -1435,6 +1479,23 @@ class H3LongVideos:
                 "upscale_batch": ("INT", {"default": 4, "min": 1, "max": 64,
                     "tooltip": "Frames per chunk for the model upscale. Lower = less VRAM, "
                                "slower."}),
+                "shot_length": (["from the beat", "fixed"], {"default": "from the beat",
+                    "tooltip": "How long each shot is.\n\n"
+                               "'from the beat' sizes every shot from what its own line "
+                               "stages, capped by shot_seconds and floored at one action's "
+                               "worth. A beat with one action stops getting a shot with room "
+                               "for two -- which is what makes an action carry on past its "
+                               "end, the shears that cut a garment off going on to cut what "
+                               "is underneath.\n\n"
+                               "'fixed' gives every shot shot_seconds. Uniform lengths mean "
+                               "uniform latent SHAPES, and noise is drawn to the shape -- so "
+                               "one seed gives the whole chain one noise field and surface "
+                               "detail does not reset at each cut. That consistency is what "
+                               "you trade away for pacing.\n\n"
+                               "The estimate leans short on purpose: a shot that ends before "
+                               "its action does hands a mid-motion frame to the next shot, "
+                               "which the chain continues from. A shot that outlasts its "
+                               "action has to invent the rest."}),
                 "plan_only": ("BOOLEAN", {"default": False,
                     "tooltip": "Report the shot split, lengths and warnings without rendering."}),
             },
@@ -1458,7 +1519,7 @@ class H3LongVideos:
             tiled_decode=True, cleanup_between_shots=True, plan_only=False,
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
-            upscale_batch=4):
+            upscale_batch=4, shot_length="from the beat"):
 
         notes = []
         swap = flush_for_model_change(model)
@@ -1478,7 +1539,7 @@ class H3LongVideos:
                                "paragraph; each paragraph is one shot.")
 
         w, h = scale_to_megapixels(*parse_resolution(resolution), megapixels)
-        frames = align_frame_count(int(round(float(shot_seconds) * H3_FPS)))
+        ceiling = align_frame_count(int(round(float(shot_seconds) * H3_FPS)))
         # 'remove:' lines take their item out of the SCENE from that shot onward, so
         # the scene stops describing a garment a beat has taken off. It applies to
         # the removing shot too: the keyframe already shows the garment on at the
@@ -1516,8 +1577,16 @@ class H3LongVideos:
                     if r is not None]
         tagged = any(picture_tags(s) for s in shots)
 
-        notes.append(f"{len(shots)} shot(s) x {frames}f (~{frames / H3_FPS:.1f}s) at {w}x{h} "
-                     f"= ~{len(shots) * frames / H3_FPS:.1f}s total")
+        lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat")
+        if len(set(lens)) == 1:
+            notes.append(f"{len(shots)} shot(s) x {lens[0]}f (~{lens[0] / H3_FPS:.1f}s) "
+                         f"at {w}x{h} = ~{sum(lens) / H3_FPS:.1f}s total")
+        else:
+            notes.append(f"{len(shots)} shot(s) at {w}x{h}, sized per beat: "
+                         + ", ".join(f"{n}f/{n / H3_FPS:.1f}s" for n in lens)
+                         + f" = ~{sum(lens) / H3_FPS:.1f}s total")
+        if len_note:
+            notes.append(len_note)
         if refs_all:
             notes.append(f"{len(refs_all)} reference image(s), "
                          + ("placed by <Picture N> tags" if tagged else "on every shot")
@@ -1557,7 +1626,11 @@ class H3LongVideos:
             notes.append(f"the prompt names on-screen text ({', '.join(cued)}) -- H3 draws "
                          f"letterforms when asked, and at cfg 1 no negative prompt can take "
                          f"them back. Remove the words if you do not want the text")
-        thin = thin_beats(beats, frames / H3_FPS)
+        # Each beat against ITS OWN shot length; thin_beats numbers from 1, so the
+        # shot number is restored here.
+        thin = [t.replace("shot 1:", f"shot {i + 1}:")
+                for i, b in enumerate(beats)
+                for t in thin_beats([b], lens[i] / H3_FPS)]
         if thin:
             notes.append(
                 "THIN BEATS -- the shot outlasts what the beat gives it to do, and the "
@@ -1575,7 +1648,7 @@ class H3LongVideos:
             empty = torch.zeros((1, h, w, 3))
             return (empty, {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100},
                     "PLAN ONLY -- nothing rendered. " + info, script,
-                    frames, 0, len(shots), 0.0)
+                    lens[0], 0, len(shots), 0.0)
 
         if apply_model_sampling:
             model, ms_note = apply_h3_model_sampling(model, shift_video, shift_audio)
@@ -1605,7 +1678,7 @@ class H3LongVideos:
             silent = bool(silence_nonspeech and not speech[i])
 
             cond, latent, fc, demoted = build_conditioning(
-                clip, vae, audio_vae, shot_prompt, w, h, frames,
+                clip, vae, audio_vae, shot_prompt, w, h, lens[i],
                 handoff=handoff, refs=shot_refs,
                 ref_noise_aug=ref_noise_aug, silent=silent)
             if demoted and not _aug_warned:
@@ -1716,7 +1789,7 @@ class H3LongVideos:
                          "is the wrong way round at this step count. megapixels is the "
                          "lever that lowers both")
         return (video, {"waveform": audio, "sample_rate": sr}, " | ".join(notes), script,
-                frames, total, len(shots), round(total / H3_FPS, 2))
+                lens[0], total, len(shots), round(total / H3_FPS, 2))
 
 
 NODE_CLASS_MAPPINGS = {"H3LongVideos": H3LongVideos}

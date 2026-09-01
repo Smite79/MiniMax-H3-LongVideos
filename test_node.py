@@ -242,6 +242,33 @@ def test_thin_beats():
           S.thin_beats([one], 7.0) == [])
 
 
+def test_auto_length():
+    print("\n=== sizing a shot from its beat ===")
+    one = "Dan cuts off her bra and throws it away."
+    two = ("Dan cuts off her bra and throws it away, then sets the shears down "
+           "and steps back.")
+    still = "Kate lies still."
+    ceil = S.align_frame_count(10 * 24)
+    lens, note = S.plan_lengths([one, two, still], ceil, True)
+    check("a shorter beat gets a shorter shot", lens[0] < lens[1])
+    check("...and the shortest gets the least", lens[2] < lens[0])
+    check("nothing exceeds the ceiling", all(n <= ceil for n in lens))
+    check("nothing falls under one action's worth",
+          all(n >= S.MIN_AUTO_FRAMES for n in lens))
+    check("every length is on the 17k+5 grid", all(n % 17 == 5 for n in lens))
+    check("the seed trade-off is reported", "one noise field" in note)
+    # The whole point: auto sizing leaves no beat with time it was not given
+    # anything to do with, which is what makes an action carry on past its end.
+    thin = [t for b, f in zip([one, two, still], lens) for t in S.thin_beats([b], f / 24)]
+    check("auto sizing leaves no thin beat", thin == [])
+    fixed, fnote = S.plan_lengths([one, two, still], ceil, False)
+    check("fixed mode gives every shot the ceiling", fixed == [ceil] * 3)
+    check("...and says nothing about noise, since the shapes match", fnote == "")
+    # An estimate rounds to the NEAREST grid point; a requested length rounds up.
+    check("an estimate does not round up", S.align_frame_count_nearest(180) == 175)
+    check("...while a request never returns less", S.align_frame_count(180) == 192)
+
+
 def test_text_in_frame():
     print("\n=== watermarks and subtitles ===")
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
@@ -331,6 +358,7 @@ def main():
     test_removals()
     test_layers()
     test_thin_beats()
+    test_auto_length()
     test_text_in_frame()
     test_reference_tags()
     test_schema()
