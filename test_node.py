@@ -194,6 +194,44 @@ def test_removals():
           "jacket" not in final and "shirt" not in final and "black boots" in final)
 
 
+def test_inferred_removals():
+    print("\n=== a removal read out of the beat's own prose ===")
+    # The scene a real run hit: two garments in one entry, and a restraint whose
+    # entry mentions a body part. The first version of this accepted ANY word the
+    # beat shared with the scene, so "cuts the tight top away from her back" took
+    # off "tight", "her" and "back" -- and scrubbing "back" deleted the entry that
+    # described the handcuffs, which took the hardware out of the prompt entirely.
+    sc = ("A bare basement. Kate, 20, in a tight white crop top and black shorts, "
+          "her wrists handcuffed behind her back.")
+    check("the garment is read, and only the garment",
+          S.infer_removals("Dan cuts the tight top away from her back.", sc) == ["top"])
+    check("...not a modifier inside an entry",
+          S.infer_removals("Dan pulls the tight crop top off.", sc) == ["top"])
+    check("...not a pronoun",
+          "her" not in S.infer_removals("Dan cuts off her shorts.", sc))
+    check("...and the plain case still works",
+          S.infer_removals("Dan cuts off her shorts.", sc) == ["shorts"])
+    # Hardware is cleared by an explicit remove: and by nothing else. A beat that
+    # cuts a rope must not silently unlock the cuffs.
+    for _b in ("Dan cuts the rope from her wrists.", "Dan takes off her handcuffs."):
+        check(f"no inferred restraint: {_b[:30]!r}", S.infer_removals(_b, sc) == [])
+    check("an ordinary beat infers nothing",
+          S.infer_removals("Kate lies still.", sc) == [])
+    check("a beat cannot remove what is not worn",
+          S.infer_removals("Dan cuts off her cape.", sc) == [])
+    # And the scrub half: the restraint's entry survives a removal that merely
+    # shares a word with it, because hardware absent from the text renders absent.
+    for _t in (["top"], ["shorts"], ["top", "shorts"]):
+        check(f"the cuffs survive removing {_t}",
+              "handcuffed" in S.scrub_removed(sc, _t))
+    check("...and an explicit remove: still clears them",
+          "handcuffed" not in S.scrub_removed(sc, ["handcuffed"]))
+    # The and-joined entry keeps its innocent half.
+    _s = S.scrub_removed(sc, ["top"])
+    check("the neighbour in the same entry stays", "black shorts" in _s)
+    check("...and reads cleanly", ",black" not in _s and "  " not in _s)
+
+
 def test_removal_completes():
     print("\n=== a removal has to finish inside its shot ===")
     # Scrubbing stops a garment being DESCRIBED. It does not tell the model to
@@ -508,6 +546,7 @@ def main():
     test_sizing()
     test_speech_and_refs()
     test_removals()
+    test_inferred_removals()
     test_layers()
     test_removal_completes()
     test_restraints_hold()

@@ -1112,6 +1112,50 @@ def names_any(text, tokens):
 _OBJECT_END = re.compile(r"(?:,|;|\.|\bexposing\b|\brevealing\b|\bshowing\b|\bleaving\b|"
                          r"\bto\s+expose\b|\bto\s+reveal\b|\bthen\b|\buntil\b)", re.I)
 
+# Words that sit in a removal's object span but are never the thing that comes off:
+# grammar, the prepositions that place a garment, and the body it is placed on.
+# "cuts the tight top away from her back" names ONE garment; the rest is syntax and
+# anatomy. Without this, every word the beat happened to share with the scene was
+# taken off -- "the tight and the her and the back come off during this shot".
+_NOT_A_GARMENT = frozenset("""
+the a an and or her his its their our your this that these those
+off from over under onto into out down up away through across behind
+front side left right rest way bit end edge
+back neck chest waist hips hip wrist wrists ankle ankles arm arms hand hands
+leg legs thigh thighs knee knees foot feet shoulder shoulders head face mouth
+lips hair skin body torso stomach belly chin jaw eyes ear ears
+floor ground wall room air
+""".split())
+
+# Where a scene's wardrobe entry ENDS. A garment word is the HEAD of its phrase --
+# "black shorts," "grey coat and", "lace thong." -- while a modifier is followed by
+# more of the phrase ("tight white crop top": tight, white and crop all fail this,
+# top passes). Adjectives cannot be listed, so test position instead of vocabulary.
+_ENTRY_END = re.compile(r"^\s*(?:[,;.!?]|$|(?:and|over|under|beneath|above|with|plus)\b)",
+                        re.I)
+
+# Hardware, not clothing. Inference never takes a restraint off: the standing rule is
+# that once one goes on it stays on, and an explicit `remove:` is the only thing that
+# clears it. A beat that cuts a rope must not silently unlock the cuffs as well.
+_RESTRAINT_WORD = re.compile(
+    r"^(?:handcuffs?|cuffs?|shackles?|manacles?|chains?|ropes?|cords?|straps?|"
+    r"collars?|gags?|blindfolds?|restraints?|bindings?|tape|ties?|harness|"
+    r"straitjacket|spreader|hogtie)$", re.I)
+
+
+def _is_entry_head(word, scene):
+    """Is `word` the head of a wardrobe entry in the scene, rather than a modifier
+    inside one or a fragment of a hyphenated compound?"""
+    for m in re.finditer(r"\b" + re.escape(word) + r"\b", scene, re.I):
+        # "tight" inside "skin-tight" is half a word, not a garment.
+        if m.start() and scene[m.start() - 1] == "-":
+            continue
+        if m.end() < len(scene) and scene[m.end()] == "-":
+            continue
+        if _ENTRY_END.match(scene[m.end():]):
+            return True
+    return False
+
 
 def infer_removals(beat, scene):
     """Garments this beat takes off, read from its own prose. [] when none.
@@ -1132,12 +1176,20 @@ def infer_removals(beat, scene):
         cut = _OBJECT_END.search(tail)
         span = tail[:cut.start()] if cut else tail
         for word in re.findall(r"\b[\w-]{3,}\b", span):
-            low = word.lower()
-            if low in found:
+            low = word.lower().strip("-")
+            if not low or low in found:
                 continue
-            # It has to be worn: named in the scene, and not a person or a place.
-            if not re.search(r"\b" + re.escape(word) + r"\b", scene, re.I):
+            # Grammar, prepositions and anatomy are not garments.
+            if low in _NOT_A_GARMENT:
                 continue
+            # Hardware is cleared by an explicit `remove:` and by nothing else.
+            if _RESTRAINT_WORD.match(low):
+                continue
+            # It has to be worn: the HEAD of something the scene lists, not a
+            # modifier inside it and not half of a hyphenated compound.
+            if not _is_entry_head(word, scene):
+                continue
+            # ...and not a person or a place.
             if re.search(r"\b" + re.escape(word) + r"\b\s*(?:is|was|walks|stands|sits|=)",
                          scene, re.I):
                 continue
@@ -1154,10 +1206,13 @@ def missing_removals(beat, scene, already):
         return []
     hits = []
     for word in re.findall(r"\b[\w-]{4,}\b", beat or ""):
-        low = word.lower()
-        if low in already or low in hits:
+        low = word.lower().strip("-")
+        if not low or low in already or low in hits or low in _NOT_A_GARMENT:
             continue
-        if re.search(r"\b" + re.escape(word) + r"\b", scene, re.I):
+        # Same discipline as the inference: the head of an entry, not a modifier
+        # inside one. Reporting "back" and "her" as unremoved garments is noise
+        # that buries the one line that matters.
+        if _is_entry_head(word, scene):
             hits.append(low)
     # Words that are in the scene because they are the PERSON or the place, not
     # something worn. A name or a room is not a garment.
@@ -1230,13 +1285,34 @@ def scrub_removed(text, tokens):
         out_frags = []
         for frag in frags:
             if any(p.search(frag) for p in pats) and not _HAS_VERB.search(frag):
+                # Restraint hardware is not clothing. An entry describing it goes
+                # only when a token NAMES it: dropping "wrists handcuffed behind
+                # her back" whole because a removal named "back" takes the cuffs
+                # out of the prompt entirely, and hardware absent from the text
+                # renders absent. Keep the fragment; the surgical pass below still
+                # trims the token's own words out of it.
+                if restraint_present(frag) and not any(_RESTRAINT_WORD.match(t)
+                                                       for t in live):
+                    out_frags.append(frag)
+                    continue
+                # One entry can carry two garments joined by "and" -- "a grey coat
+                # and black boots". Dropping it whole takes the innocent one with
+                # it, and an undescribed garment is one the model re-invents. So
+                # drop only the side that names the removed item.
+                sides = re.split(r"\s+\band\b\s+", frag, flags=re.I)
+                gone = [s for s in sides if any(p.search(s) for p in pats)]
+                keep = [s for s in sides if s not in gone] if len(sides) > 1 else []
                 # A <Picture N> tag is not clothing and must never leave with a
                 # garment that happened to share its fragment -- losing it costs
                 # that shot its identity reference.
-                tags = _PICTURE_TAG.findall(frag)
+                tags = [n for s in (gone or [frag]) for n in _PICTURE_TAG.findall(s)]
+                piece = " and ".join(k for k in keep if k.strip())
                 if tags:
-                    out_frags.append(" ".join(f"<Picture {n}>" for n in tags))
-                continue                      # a bare wardrobe entry: drop it whole
+                    piece = ((piece + " ") if piece.strip() else "") + \
+                            " ".join(f"<Picture {n}>" for n in tags)
+                if piece.strip():
+                    out_frags.append(piece)
+                continue                      # the rest of the entry goes
             out_frags.append(frag)
         kept.append(",".join(out_frags))
     out = " ".join(k for k in kept if k.strip())
@@ -1263,6 +1339,9 @@ def scrub_removed(text, tokens):
         out = re.sub(r",\s*(?=,)", "", out)
         out = re.sub(r"\s*,\s*(?=[.!?])", "", out)
         out = re.sub(r"\s+([.,;!?])", r"\1", out)
+        # A dropped entry can leave its comma flush against the next one. Not
+        # before a digit, so a thousands separator survives ("1,500").
+        out = re.sub(r",(?=[^\s,\d])", ", ", out)
     out = re.sub(r"\s{2,}", " ", out)
     # Drop a sentence the deletion emptied, and one it reduced to a bare subject
     # ("She wears a red coat." -> "She.") -- which describes nobody and is one more
