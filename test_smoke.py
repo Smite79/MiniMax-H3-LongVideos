@@ -334,9 +334,16 @@ def test_auto_removal():
          "Kate lies still.")
     script = run_node(P)[3]
     sh = script.split("\n---\n")
-    check("shot 1 still lists the scarf it exposes", "wool scarf" in sh[0])
-    check("...and no longer the boots", "black boots" not in sh[0])
-    check("shot 2 has lost the scarf too", "wool scarf" not in sh[1])
+    # Shot 1 takes the boots off and has NO keyframe, so the text is the only thing
+    # saying they were on to start with and it keeps saying so. Gone from shot 2.
+    check("the removing shot still says the boots are on", "black boots" in sh[0])
+    check("...and shot 2 has lost them", "black boots" not in sh[1])
+    # The scarf is under the boots -- read from "showing the wool scarf" -- so it is
+    # not described as visible until they come off. Only the scene text counts here;
+    # the beat names it either way, because beats go to the model word for word.
+    _scene1 = sh[0].split("Dan pulls")[0]
+    check("the covered scarf is not described yet", "wool scarf" not in _scene1)
+    check("...and is once the boots are off", "wool scarf" in sh[1])
     check("shot 3 keeps neither", "boots" not in sh[2] and "scarf" not in sh[2])
     check("...and keeps what was never taken off", "grey jumper" in sh[2])
     info = run_node(P)[2]
@@ -388,7 +395,9 @@ def test_anchor_is_the_scene():
     check("the anchor leads every shot", all("Wide lens, night." in s for s in sh))
     check("...and the character sheet follows it",
           all(s.index("Wide lens") < s.index("Maya: 27") for s in sh))
-    check("the removal sticks", all("grey scarf" not in s for s in sh))
+    # Shot 1 removes the scarf and has no keyframe, so it still says the scarf is on
+    # -- otherwise the shot reads "it is not worn, take it off". Gone after that.
+    check("the removal sticks", all("grey scarf" not in s for s in sh[1:]))
     check("...and what was never removed is still described",
           all("black boots" in s for s in sh))
     # With no anchor, paragraph 1 is the scene exactly as before.
@@ -428,6 +437,39 @@ def test_guard_and_layers_end_to_end():
            character_guard=False)[3]) if x.strip()]
     check("guard off puts everyone in every shot",
           all("Jon: 34" in s and "Maya: 27" in s for s in off))
+
+
+def test_removing_shot_without_a_keyframe():
+    print("\n=== a removal in a shot that has no keyframe ===")
+    # Reported: the garment rendering half-off -- opened up, with the layer under it
+    # showing. The scrub applies to the removing shot too, which is right when that
+    # shot has a KEYFRAME: the picture already shows the garment on at the start, so
+    # text saying it is worn would put it back at the end. Shot 1 has no keyframe.
+    # Scrubbing there left the shot saying: it is not worn, take it off, and the
+    # thing under it is already showing -- and the model rendered the contradiction.
+    P = ("A basement.\n\n"
+         "Maya: 27, grey wool scarf, black quilted jacket, brown boots.\n\n"
+         "Jon cuts off her jacket to expose the scarf.\n\n"
+         "Maya lies still.\n\n"
+         "Jon pulls off her scarf.")
+    sh = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3]) if x.strip()]
+    check("the removing shot still says the garment is worn",
+          "quilted jacket" in sh[0])
+    check("...and the layer under it is not yet showing",
+          "grey wool scarf" not in sh[0])
+    check("...and it is still told to come off",
+          "jacket comes off during this shot" in sh[0])
+    check("the next shot has lost it", "quilted jacket" not in sh[1])
+    check("...and shows what was under it", "grey wool scarf" in sh[1])
+    check("info explains the exception", "no keyframe" in run_node(P, plan_only=True)[2])
+    # A removing shot that DOES have a keyframe still scrubs in place -- the picture
+    # carries the starting state there, so the text does not have to.
+    check("a later removing shot still scrubs itself", "grey wool scarf" not in sh[2])
+    # With a first_frame wired, shot 1 has a keyframe and behaves like the rest.
+    sh_ff = [x for x in re.split(r"(?=\[Shot )", run_node(
+        P, plan_only=True, first_frame=torch.rand(1, H, W, 3))[3]) if x.strip()]
+    check("a wired first_frame restores the normal rule",
+          "quilted jacket" not in sh_ff[0])
 
 
 def test_detail_trend():
@@ -516,6 +558,7 @@ def main():
     test_fall_keeps_the_hardware()
     test_anchor_is_the_scene()
     test_guard_and_layers_end_to_end()
+    test_removing_shot_without_a_keyframe()
     test_detail_trend()
     test_timing_report()
     print()

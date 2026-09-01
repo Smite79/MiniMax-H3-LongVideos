@@ -2282,11 +2282,31 @@ class H3LongVideos:
                                  f"describes is a person the model draws")
             else:
                 shot_sheet = sheet
+            # The scrub applies to the removing shot too -- but only because that
+            # shot's KEYFRAME already shows the garment on at the start, so the text
+            # saying it is worn would put it back at the end.
+            #
+            # A shot with no keyframe has no such picture. Scrubbing there deletes the
+            # only statement that the garment was ever on, and the shot then says: it
+            # is not worn, take it off, and the thing under it is already showing.
+            # The model renders that contradiction as a garment half present -- open,
+            # or partly cut -- with the layer beneath it on display.
+            i_shot = len(shots)
+            has_keyframe = ((i_shot > 0 or first_frame is not None)
+                            and not (restart_after_removal
+                                     and (i_shot - 1) in stripped_shots))
+            visible = gone if has_keyframe else [g for g in gone if g not in toks]
+            if toks and not has_keyframe:
+                notes.append(f"shot {i_shot + 1} takes something off and has no keyframe, "
+                             f"so {', '.join(toks)} stays described as worn HERE -- the "
+                             f"text is the only thing saying it was on to start with. It "
+                             f"is scrubbed from the next shot on")
             # A garment still underneath something stays out of the text: described,
             # it gets drawn, and it is drawn through whatever is over it.
-            covered = hidden_layers(covers, gone)
+            covered = hidden_layers(covers, visible)
             shot_scene = scrub_removed(
-                "\n".join(p for p in (static, shot_sheet) if p.strip()), gone + covered)
+                "\n".join(p for p in (static, shot_sheet) if p.strip()),
+                visible + covered)
             # An added layer is subject to removal too: once the shirt comes off, the
             # phrase that introduced it has to go with it, or the scene keeps
             # describing a garment that is no longer there.
