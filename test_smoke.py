@@ -251,6 +251,32 @@ def test_first_frame():
     check("...and without one, shot 1 encodes nothing", bare.encodes == 1, f"{bare.encodes}")
 
 
+def test_aug_protects_the_keyframe():
+    print("\n=== ref_noise_aug must not corrupt the keyframe ===")
+    # comfy/ldm/minimax/model.py applies visual_cond_noise_aug to BOTH the
+    # reference rows and the keyframe rows: below 1.0 it noises the keyframe
+    # latent and labels it max(t_v, aug) instead of 0.999. Softening references
+    # would therefore corrupt the anchor of every shot after the first, and that
+    # shows up during SAMPLING.
+    P = "A room.\n\nOne.\n\nTwo."
+    ref = torch.rand(1, 64, 64, 3)
+    vae_hi = FakeVAE()
+    info_hi = run_node(P, vae=vae_hi, ref_image_1=ref, ref_noise_aug=0.999)[2]
+    check("at a safe aug the handoff is a real keyframe",
+          "riding as an extra reference" not in info_hi)
+    check("...and it is encoded", vae_hi.encodes >= 1, f"{vae_hi.encodes}")
+    info_lo = run_node(P, ref_image_1=ref, ref_noise_aug=0.90)[2]
+    check("at a soft aug the keyframe is not sent noised",
+          "riding as an extra reference" in info_lo)
+    check("...and the reason is named", "degrades while sampling" in info_lo)
+    check("...naming the value to restore", "0.99" in info_lo)
+    # With no references at all there is no aug in the payload, so the keyframe
+    # is safe whatever the widget says.
+    info_noref = run_node(P, ref_noise_aug=0.90)[2]
+    check("no references means the keyframe is never demoted",
+          "riding as an extra reference" not in info_noref)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -300,6 +326,7 @@ def main():
     test_references_and_silence()
     test_first_frame()
     test_upscale_paths()
+    test_aug_protects_the_keyframe()
     test_timing_report()
     print()
     if _fails:
