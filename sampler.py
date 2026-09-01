@@ -199,12 +199,17 @@ def split_beats(prompt):
     -- binding descriptions, collapsing repeated names, scrubbing the scene, adding
     continuity clauses -- and the result was a shot whose own action was a few
     percent of what the model was told. What you type is what the shot gets."""
-    paras = [p.strip() for p in re.split(r"\n\s*\n", (prompt or "").strip()) if p.strip()]
+    paras = paragraphs(prompt)
     if not paras:
         return "", []
     if len(paras) == 1:
         return "", paras
     return paras[0], paras[1:]
+
+
+def paragraphs(text):
+    """Non-empty paragraphs, separated by a BLANK line."""
+    return [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip()) if p.strip()]
 
 
 # A line of a character sheet: `Name: attributes`. The directive lines are excluded
@@ -1377,7 +1382,15 @@ def scrub_removed(text, tokens):
                     out_frags.append(piece)
                 continue                      # the rest of the entry goes
             out_frags.append(frag)
-        kept.append(",".join(out_frags))
+        rebuilt = ",".join(out_frags)
+        # A sentence's full stop lives on its LAST fragment. Dropping that fragment
+        # -- which is exactly what removing the last-listed garment does -- takes the
+        # full stop with it and runs the sentence into the next one: "blue eyes
+        # Wrists cuffed behind back." Put the terminator back.
+        end = re.search(r"([.!?])\s*$", sent)
+        if end and rebuilt.strip() and not re.search(r"[.!?]\s*$", rebuilt):
+            rebuilt = rebuilt.rstrip().rstrip(",;") + end.group(1)
+        kept.append(rebuilt)
     out = " ".join(k for k in kept if k.strip())
     for t in live:
         # The item and the words that belong to it -- an article and up to two
@@ -1892,12 +1905,15 @@ class H3LongVideos:
                 # this shifts every later value in every workflow already saved.
                 "anchor": ("STRING", {"multiline": True, "default": "",
                     "tooltip": "Framing that belongs to the whole film -- look, camera, "
-                               "lighting, location. Carried at the FRONT of every shot, "
-                               "ahead of the opening paragraph.\n\n"
-                               "Same job as the first paragraph of the prompt; this is "
-                               "the socket version, for when the framing comes from "
-                               "somewhere else or you want it apart from the script. "
-                               "Use either, or both."}),
+                               "lighting, location. Carried at the FRONT of every shot.\n\n"
+                               "FILLING THIS IN MAKES EVERY PARAGRAPH OF THE PROMPT A "
+                               "BEAT. The anchor is then the scene, so the prompt is "
+                               "pure action and nothing is taken out of it to serve as "
+                               "scene text.\n\n"
+                               "Leave it empty and the first paragraph of the prompt is "
+                               "the scene instead, as before. Use one or the other: with "
+                               "both, put ALL the framing here, because the prompt's "
+                               "first paragraph will be rendered as a shot."}),
                 "character_memory": ("STRING", {"multiline": True, "default": "",
                     "tooltip": "Who is in the film and what they are wearing, re-stamped "
                                "into EVERY shot.\n\n"
@@ -1952,7 +1968,15 @@ class H3LongVideos:
                          f"version of this node (overall_soundscape:, [Generation N] and the "
                          f"like) -- your text now goes to the model verbatim, and a label like "
                          f"that is read as text to put ON the picture")
-        scene, beats = split_beats(prompt)
+        if (anchor or "").strip():
+            # The anchor IS the scene, so nothing has to be taken out of the prompt to
+            # be one, and every paragraph is a beat. Otherwise the first ACTION becomes
+            # the scene: prepended to every shot, repeated to the end of the film, and
+            # never given a shot of its own. A removal written in it can never stick
+            # either, because the scene restates the garment on every later shot.
+            scene, beats = "", paragraphs(prompt)
+        else:
+            scene, beats = split_beats(prompt)
         # A character sheet is not a beat. Pulled out of the beat list and folded into
         # the scene, so it is re-stamped into EVERY shot -- which is what makes a
         # removal stick and what stops a later shot describing no clothing at all.

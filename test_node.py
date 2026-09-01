@@ -136,6 +136,23 @@ def test_removals():
           S.scrub_removed("A room. She wears a red coat. Dan waits.", ["red coat"])
           == "A room. Dan waits.")
     check("no tokens means no edit", S.scrub_removed(sc, []) == sc)
+    # A sentence's full stop lives on its LAST fragment. Removing the garment that
+    # is listed last took the full stop with it and ran the sentence into the next
+    # one -- "blue eyes Wrists cuffed behind back." In a strip sequence the item
+    # coming off is usually the last one listed, so this fired on most removals.
+    _end = "Maya: 27, blue eyes, grey scarf, black shorts. Wrists cuffed behind back."
+    check("removing the last-listed item keeps the full stop",
+          S.scrub_removed(_end, ["shorts"])
+          == "Maya: 27, blue eyes, grey scarf. Wrists cuffed behind back.")
+    check("...and so does removing the last two",
+          S.scrub_removed(_end, ["scarf", "shorts"])
+          == "Maya: 27, blue eyes. Wrists cuffed behind back.")
+    check("...in either order",
+          S.scrub_removed(_end, ["shorts", "scarf"])
+          == S.scrub_removed(_end, ["scarf", "shorts"]))
+    check("a sentence that keeps its last fragment is untouched",
+          S.scrub_removed(_end, ["scarf"])
+          == "Maya: 27, blue eyes, black shorts. Wrists cuffed behind back.")
     # Surgical: only the named garment goes. Deleting the whole comma fragment
     # took neighbours with it, and an undescribed garment is one the model
     # re-invents -- which looks like the clothing changing by itself.
