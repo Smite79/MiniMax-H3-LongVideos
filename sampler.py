@@ -242,6 +242,96 @@ def pull_character_sheets(beats):
     return [b for b in beats if not is_character_sheet(b)], "\n".join(sheets)
 
 
+def sheet_lines(sheet):
+    """[(name or None, line)] for a character sheet, in order. A line with no
+    `Name:` label belongs to everyone and is never dropped."""
+    out = []
+    for ln in (sheet or "").splitlines():
+        if not ln.strip():
+            continue
+        m = re.match(r"\s*([A-Z][\w'’-]{0,24})\s*:\s*\S", ln)
+        out.append((m.group(1) if m else None, ln.strip()))
+    return out
+
+
+def sheet_for_beat(sheet, beat, previous=None):
+    """(the sheet lines for the people this beat involves, the names kept).
+
+    The sheet is re-stamped into every shot so clothing holds -- but describing
+    EVERYONE in every shot puts everyone in every shot. A beat about one person
+    renders two, because the text standing beside it says the other one is there,
+    and a described person is a person the model draws.
+
+    A PRONOUN counts as naming someone: "Jon takes her jacket off" is about both of
+    them, and dropping Maya there would leave the garment being removed undescribed
+    in the very shot that removes it. Who "her" refers to is not resolvable from the
+    sentence, so it keeps whoever the last beat kept.
+
+    A beat that names nobody at all keeps the last beat's people too, so "She lies
+    still." does not empty the frame."""
+    rows = sheet_lines(sheet)
+    named = [n for n, _ in rows
+             if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "", re.I)]
+    if _PRONOUN.search(beat or ""):
+        named += [n for n in (previous or []) if n not in named]
+    if not named:
+        named = list(previous) if previous else [n for n, _ in rows if n]
+    keep = [ln for n, ln in rows if n is None or n in named]
+    return "\n".join(keep), named
+
+
+_PRONOUN = re.compile(r"\b(?:she|he|her|hers|his|him|they|them|their|theirs)\b", re.I)
+
+
+# Where a beat says something becomes VISIBLE. The other half of a removal: "cuts
+# off her coat to expose the jumper" names the coat as coming off AND the jumper as
+# what was under it.
+_EXPOSE_CUE = re.compile(r"\b(?:to\s+expose|to\s+reveal|to\s+show|exposing|revealing|"
+                         r"showing|uncovering|baring)\b", re.I)
+
+
+def exposed_by(beat, scene):
+    """Garments this beat says become visible. [] when none."""
+    out = []
+    for m in _EXPOSE_CUE.finditer(beat or ""):
+        tail = beat[m.end():]
+        cut = re.search(r"[,;.]|\band\s+(?:then|he|she|they)\b", tail, re.I)
+        span = tail[:cut.start()] if cut else tail
+        for word in re.findall(r"\b[\w-]{3,}\b", span):
+            low = word.lower().strip("-")
+            if not low or low in out or low in _NOT_A_GARMENT:
+                continue
+            if _RESTRAINT_WORD.match(low) or not _is_entry_head(word, scene):
+                continue
+            out.append(low)
+    return out
+
+
+def infer_layers(bodies, scene):
+    """{under: over} -- which garment covers which, read from the script's own words.
+
+    A sheet lists every layer at once, which tells the model all of them are on show
+    simultaneously. Nothing says which is hidden, so the under layer bleeds through
+    the top one -- and by the last frame, where only the text governs, it is simply
+    drawn on top.
+
+    The script already says what covers what: a beat that takes A off "to expose B"
+    has stated that B was under A. Read it from there rather than asking for it."""
+    covers = {}
+    for body in bodies or []:
+        off = infer_removals(body, scene)
+        for under in exposed_by(body, scene):
+            for over in off:
+                if under != over:
+                    covers.setdefault(under, over)
+    return covers
+
+
+def hidden_layers(covers, gone):
+    """Garments still underneath something that has not come off yet."""
+    return [u for u, o in (covers or {}).items() if o not in gone and u not in gone]
+
+
 def build_scene(anchor, first_para, character_memory, sheet):
     """The text every shot carries, in reading order: the anchor frames the film,
     the opening paragraph sets the scene, and the character sheet says who is in it
@@ -714,6 +804,32 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         return unit.repeat(1, 1, 1, want_t).clone()
     except Exception:
         return None                         # never fail a render for a nicety
+
+
+_POSTURE = re.compile(
+    r"\b(?:lying|laying|lies|lays|kneel(?:s|ing)?|knelt|sit(?:s|ting)?|sat|"
+    r"crouch(?:es|ing|ed)?|curled|sprawled|slumped|face[- ]?down|face[- ]?up|"
+    r"on (?:her|his|their) (?:side|back|front|knees|stomach|belly))\b", re.I)
+
+
+def posture_note(scene, has_first_frame):
+    """Warn when shot 1's opening pose is left to the text alone.
+
+    Shot 1 is the only shot with no keyframe -- there is no previous frame to
+    continue from -- so its opening pose comes from the text and from nothing else.
+    A posture sentence sitting at the end of a long sheet is the least-weighted
+    thing the model reads, and text cannot outrank a picture anyway. This does not
+    reorder anything: the node sends what you wrote, in the order you wrote it."""
+    if has_first_frame or not (scene or "").strip():
+        return ""
+    sents = [s for s in re.split(r"(?<=[.!?])\s+", scene.strip()) if s.strip()]
+    where = [i for i, s in enumerate(sents) if _POSTURE.search(s)]
+    if not where:
+        return ""
+    return (f"shot 1 has no keyframe, so its opening pose comes from the text alone -- "
+            f"and the sentence describing the pose is {where[0] + 1} of {len(sents)}. "
+            f"Wire first_frame to pin the opening frame; a picture is the only thing "
+            f"that outranks the rest of the text")
 
 
 def frame_detail(img):
@@ -1981,6 +2097,17 @@ class H3LongVideos:
                                "A `Name: ...` paragraph in the prompt itself is folded in "
                                "here automatically -- a sheet is not a beat, and spending "
                                "a shot rendering a description is the visible symptom."}),
+                "character_guard": ("BOOLEAN", {"default": True,
+                    "tooltip": "Describe only the people a beat actually involves.\n\n"
+                               "The sheet has to be in every shot for clothing to hold. "
+                               "But describing EVERYONE in every shot puts everyone in "
+                               "every shot: a beat about one person renders two, because "
+                               "the text standing beside it says the other one is there, "
+                               "and a described person is a person the model draws.\n\n"
+                               "A beat naming nobody keeps whoever the last one kept, so "
+                               "'She lies still.' does not empty the frame. Off, every "
+                               "sheet line goes into every shot. info names who each shot "
+                               "kept."}),
             },
         }
 
@@ -2003,7 +2130,8 @@ class H3LongVideos:
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
-            restart_after_removal=True, auto_remove=True, anchor="", character_memory=""):
+            restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
+            character_guard=True):
 
         notes = []
         swap = flush_for_model_change(model)
@@ -2030,7 +2158,12 @@ class H3LongVideos:
         # the scene, so it is re-stamped into EVERY shot -- which is what makes a
         # removal stick and what stops a later shot describing no clothing at all.
         beats, sheet = pull_character_sheets(beats)
-        scene = build_scene(anchor, scene, character_memory, sheet)
+        # The sheet is kept APART from the rest of the scene: it is the part that
+        # varies per shot, because only the people a beat involves should be
+        # described in it. Everything else is stamped on every shot unchanged.
+        sheet = "\n".join(p for p in ((character_memory or "").strip(), sheet) if p)
+        static = build_scene(anchor, scene, "", "")
+        scene = build_scene(anchor, scene, "", sheet)      # the whole of it, for inference
         if sheet:
             notes.append(f"folded {sheet.count(chr(10)) + 1} character-sheet line(s) into "
                          f"the scene instead of spending a shot on them -- a sheet "
@@ -2057,6 +2190,20 @@ class H3LongVideos:
         cast = re.findall(r"^\s*([A-Z][\w'’-]{1,24})\s*:", sheet or "", re.M)
         if not cast:
             cast = re.findall(r"\b[A-Z][a-z]{2,}\b", scene or "")
+        # Which garment is under which, read from the script's own "takes A off to
+        # expose B". A sheet lists every layer at once, and a layer the model is told
+        # about is a layer it draws -- through the one on top of it.
+        covers = infer_layers([extract_directives(b)[0] for b in beats], scene)
+        if covers:
+            notes.append("read as layers, from the script's own wording: "
+                         + "; ".join(f"{u} under {o}" for u, o in covers.items())
+                         + " -- each is left out of the scene text until the thing "
+                           "over it comes off, so it is not described as visible "
+                           "while it is covered")
+        _pose = posture_note(scene, first_frame is not None)
+        if _pose:
+            notes.append(_pose)
+        active = []                 # the people the previous beat involved
         for b in beats:
             body, toks, adds = extract_directives(b)
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
@@ -2094,7 +2241,22 @@ class H3LongVideos:
                 shown.extend(a for a in adds if a not in shown)
                 notes.append(f"added to the scene from shot {len(shots) + 1} on: "
                              + "; ".join(adds))
-            shot_scene = scrub_removed(scene, gone)
+            # Only the people this beat involves. Describing everyone in every shot
+            # is what puts the other character in a scene they are not in.
+            if character_guard:
+                shot_sheet, active = sheet_for_beat(sheet, body, active)
+                if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
+                    notes.append(f"shot {len(shots) + 1} describes only "
+                                 f"{', '.join(active) or 'the scene'} -- the rest of the "
+                                 f"sheet is held back, because a person the text "
+                                 f"describes is a person the model draws")
+            else:
+                shot_sheet = sheet
+            # A garment still underneath something stays out of the text: described,
+            # it gets drawn, and it is drawn through whatever is over it.
+            covered = hidden_layers(covers, gone)
+            shot_scene = scrub_removed(
+                "\n".join(p for p in (static, shot_sheet) if p.strip()), gone + covered)
             # An added layer is subject to removal too: once the shirt comes off, the
             # phrase that introduced it has to go with it, or the scene keeps
             # describing a garment that is no longer there.

@@ -284,6 +284,76 @@ def test_character_sheet():
           "Wide lens, night." in S.scrub_removed(built, ["jacket"]))
 
 
+def test_character_guard():
+    print("\n=== only the people a beat involves are described ===")
+    # Reported: the other character turning up in scenes they are not in. The sheet
+    # has to be in every shot for clothing to hold -- but describing EVERYONE in
+    # every shot puts everyone in every shot, because a described person is a person
+    # the model draws.
+    sheet = "Maya: 27, grey scarf, black jacket\nJon: 34, navy overalls"
+    keep, who = S.sheet_for_beat(sheet, "Maya lies still on the floor.")
+    check("a beat naming one person keeps one", who == ["Maya"])
+    check("...and drops the other's line", "Jon" not in keep and "Maya" in keep)
+    keep, who = S.sheet_for_beat(sheet, "Jon walks out and shuts the door.", ["Maya"])
+    check("a beat naming the other keeps the other", who == ["Jon"])
+    check("...and lets the first go", "Maya" not in keep)
+    # A PRONOUN names someone too. Dropping Maya from "Jon takes her jacket off"
+    # would leave the garment being removed undescribed in the shot removing it.
+    keep, who = S.sheet_for_beat(sheet, "Jon takes her jacket off.", ["Maya"])
+    check("a pronoun keeps whoever the last beat kept", sorted(who) == ["Jon", "Maya"])
+    check("...so the garment coming off is still described", "grey scarf" in keep)
+    # A beat naming nobody keeps the last beat's people rather than emptying the frame.
+    keep, who = S.sheet_for_beat(sheet, "The camera pushes in.", ["Maya"])
+    check("a beat naming nobody holds the last cast", who == ["Maya"])
+    check("with no history it keeps everyone",
+          sorted(S.sheet_for_beat(sheet, "The camera pushes in.")[1]) == ["Jon", "Maya"])
+    # An unlabelled line belongs to the scene, not to a person, and never drops.
+    keep, _ = S.sheet_for_beat("The room is cold.\nMaya: 27, grey scarf",
+                               "Jon walks in.", ["Jon"])
+    check("an unlabelled line is kept for everyone", "The room is cold." in keep)
+
+
+def test_layers_from_prose():
+    print("\n=== a layer stays out of the text until it is uncovered ===")
+    # Reported: the under layer showing through the top one. A sheet lists every
+    # layer at once, which says all of them are on show; nothing says which is
+    # hidden, so the model draws the under layer through the one over it.
+    sc = "Maya: 27, grey wool scarf, black quilted jacket, brown boots."
+    check("what a removal exposes is read",
+          S.exposed_by("Jon takes her jacket off to expose the scarf.", sc) == ["scarf"])
+    check("...with 'exposing' too",
+          S.exposed_by("Jon cuts off the jacket, exposing the scarf.", sc) == ["scarf"])
+    check("...and nothing when nothing is exposed",
+          S.exposed_by("Jon walks in.", sc) == [])
+    check("...ignoring what is not worn",
+          S.exposed_by("Jon takes her jacket off to expose the wall.", sc) == [])
+    covers = S.infer_layers(["Jon takes her jacket off to expose the scarf."], sc)
+    check("the script says what covers what", covers == {"scarf": "jacket"})
+    # Hidden while covered, described again the moment the cover goes.
+    check("covered while the jacket is on", S.hidden_layers(covers, []) == ["scarf"])
+    check("...visible once it comes off", S.hidden_layers(covers, ["jacket"]) == [])
+    check("...and not resurrected after it is removed itself",
+          S.hidden_layers(covers, ["scarf"]) == [])
+    check("no layers read, nothing hidden", S.hidden_layers({}, []) == [])
+
+
+def test_opening_pose():
+    print("\n=== shot 1 has no keyframe ===")
+    # Shot 1 is the only shot with no previous frame to continue from, so its
+    # opening pose comes from the text and nothing else. This reports; it does not
+    # reorder the text, because what you write is what the shot gets.
+    sc = ("A basement. Maya: 27, grey scarf, black jacket. Wrists cuffed behind back. "
+          "She stays lying on her side on the floor.")
+    note = S.posture_note(sc, False)
+    check("a posture sentence is found", "opening pose" in note)
+    check("...and its position reported", "4 of 4" in note)
+    check("...pointing at the mechanism that pins it", "first_frame" in note)
+    check("nothing said when a first_frame is wired", S.posture_note(sc, True) == "")
+    check("...or when no posture is described",
+          S.posture_note("A basement. Maya walks to the window.", False) == "")
+    check("...or with no scene at all", S.posture_note("", False) == "")
+
+
 def test_removal_needs_a_particle():
     print("\n=== an ordinary action is not a removal ===")
     # Reported: a described garment rendering plain and pale. The verb pattern
@@ -607,15 +677,17 @@ def test_schema():
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
     # 17 core + 6 upscale + shot_length, hold_restraints, restart_after_removal,
-    # auto_remove + anchor, character_memory. A ceiling, not a target: the old node
-    # had 38 and nobody could find anything.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 30)
-    # Both text channels are present, and last -- saved workflows restore widget
-    # values by position, so anything inserted above them shifts every later value.
-    check("the anchor is offered", "anchor" in opt)
-    check("...and the character sheet", "character_memory" in opt)
-    check("...both at the end of the list",
-          list(opt)[-2:] == ["anchor", "character_memory"])
+    # auto_remove + anchor, character_memory, character_guard. A ceiling, not a
+    # target: the old node had 38 and nobody could find anything.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 32)
+    # Present, and in the order they were ADDED -- saved workflows restore widget
+    # values by position with no names stored, so a widget inserted above an
+    # existing one shifts every later value in every workflow already saved. New
+    # ones go on the end, and stay in the order they arrived.
+    for _w in ("anchor", "character_memory", "character_guard"):
+        check(f"{_w} is offered", _w in opt)
+    check("...and they sit at the end, in the order they were added",
+          list(opt)[-3:] == ["anchor", "character_memory", "character_guard"])
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
                "latent_upscale", "latent_upscale_scale"):
         check(f"{_u} is on the node", _u in opt)
@@ -634,6 +706,9 @@ def main():
     test_removals()
     test_inferred_removals()
     test_character_sheet()
+    test_character_guard()
+    test_layers_from_prose()
+    test_opening_pose()
     test_removal_needs_a_particle()
     test_layers()
     test_removal_completes()
