@@ -397,6 +397,26 @@ def test_restraints_hold():
           and "fastened exactly as it was put on" in S.RESTRAINT_HOLD)
 
 
+def test_turning_around():
+    print("\n=== turning shows a surface the keyframe never pinned ===")
+    # The keyframe pins the FRONT. Once the body rotates, the model fills the
+    # unseen side from its prior -- and its prior for an undescribed body is a
+    # CLOTHED one. That is a removed garment coming back, often stacked wrongly,
+    # and hardware on the far side re-invented as it rotates into view.
+    for _t in ("She turned around.", "Kate turns to face him.",
+               "She looks back over her shoulder.", "Kate rolls onto her side.",
+               "The camera moves round to show her back."):
+        check(f"turn seen: {_t[:32]!r}", S.turns_in(_t))
+    for _t in ("Kate walks to the window.", "She lies still.", "Dan cuts off her bra."):
+        check(f"no turn: {_t[:32]!r}", not S.turns_in(_t))
+    check("the clause covers what is worn", "all that is on it" in S.TURN_HOLD)
+    check("...and what is fastened", "stays fastened and closed" in S.TURN_HOLD)
+    check("...from every side", "front, side and behind" in S.TURN_HOLD)
+    check("...naming no garment and no person",
+          not re.search(r"(?:she|he|her|his|bra|top|shirt|jacket)",
+                        S.TURN_HOLD, re.I))
+
+
 def test_schema():
     print("\n=== node schema ===")
     schema = S.H3LongVideos.INPUT_TYPES()
@@ -440,6 +460,7 @@ def main():
     test_layers()
     test_removal_completes()
     test_restraints_hold()
+    test_turning_around()
     test_thin_beats()
     test_auto_length()
     test_text_in_frame()

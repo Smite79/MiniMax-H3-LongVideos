@@ -169,6 +169,17 @@ drifted, it is the scene ceasing to make sense. Ambiguous hardware needs a bindi
 verb or a body part alongside it, so a chain-link fence and a leather belt do not
 arm it.
 
+**Turning is handled too.** The keyframe pins the *front* of the body. When a beat
+turns someone — or brings the camera round behind them — the model is filling in a
+surface it has never been shown, and its prior for an undescribed body is a
+**clothed** one. That is a removed garment coming back, often stacked in the wrong
+order, and hardware on the far side re-inventing itself as it rotates into view.
+
+On shots that turn, and only once there is state worth holding, one sentence is
+added: *the body reads the same from every angle — what is on it now is all that is
+on it, front, side and behind, and whatever is fastened stays fastened.* It names no
+garment and no person.
+
 Everything else that has to hold across the chain goes in the **scene paragraph**,
 which reaches every shot:
 
