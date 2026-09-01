@@ -122,7 +122,7 @@ def test_removals():
     check("...and the beat itself is untouched", body == "Dan cuts off her jacket.")
     check("the item is captured", toks == ["jacket"])
     check("several items on one line",
-          S.extract_removals("x\nremove: bra, shirt")[1] == ["bra", "shirt"])
+          S.extract_removals("x\nremove: coat, shirt")[1] == ["coat", "shirt"])
     check("'off:' works too", S.extract_removals("x\noff: hat")[1] == ["hat"])
     check("a beat with no directive is unchanged",
           S.extract_removals("She walks in.") == ("She walks in.", []))
@@ -155,20 +155,20 @@ def test_removals():
     # the front left orphans behind -- "skin-tight shiny black" after removing
     # "shorts" -- and an orphan description sitting in a garment list is read as
     # some garment, which is a garment coming back.
-    _long = ("A basement. Kate is 20, blonde, shiny white bra, shiny white lace thong, "
-             "skin-tight shiny black micro volleyball shorts, black crop top.")
-    _r1 = S.scrub_removed(_long, ["shorts"])
+    _long = ("A basement. Kate is 20, blonde, pale blue cotton shirt, long grey wool scarf, "
+             "heavy black waxed canvas jacket, brown leather boots.")
+    _r1 = S.scrub_removed(_long, ["jacket"])
     check("a long list entry is removed whole",
-          "shorts" not in _r1 and "skin-tight" not in _r1 and "micro" not in _r1)
+          "jacket" not in _r1 and "waxed" not in _r1 and "canvas" not in _r1)
     check("...and its neighbours are intact",
-          "shiny white bra" in _r1 and "shiny white lace thong" in _r1
-          and "black crop top" in _r1)
-    _r2 = S.scrub_removed(_long, ["thong"])
+          "pale blue cotton shirt" in _r1 and "long grey wool scarf" in _r1
+          and "brown leather boots" in _r1)
+    _r2 = S.scrub_removed(_long, ["scarf"])
     check("no orphan adjective is left behind",
-          "lace" not in _r2 and ", shiny," not in _r2)
-    _r3 = S.scrub_removed(_long, ["crop top", "shorts", "thong"])
+          "wool" not in _r2 and ", long," not in _r2)
+    _r3 = S.scrub_removed(_long, ["scarf", "jacket", "boots"])
     check("three removals leave only what is still worn",
-          _r3 == "A basement. Kate is 20, blonde, shiny white bra.")
+          _r3 == "A basement. Kate is 20, blonde, pale blue cotton shirt.")
     check("a picture tag is never dropped with a garment",
           S.picture_tags(S.scrub_removed(
               "A basement. Kate is 20, <Picture 1> blonde crop top, boots.",
@@ -238,50 +238,50 @@ def test_removal_completes():
     # finish taking it off -- and the last frame is the next shot's keyframe, so
     # a cut still in progress hands on a garment still half worn. The next beat
     # has moved on and never contradicts the picture, so it stays.
-    one = S.off_by_last_frame(["bra"])
+    one = S.off_by_last_frame(["coat"])
     check("the removing shot is told to finish it", "by the last frame" in one)
     check("...and that nothing is left on the body", "no longer on the body" in one)
     check("...and where it ends up", "out of frame" in one)
     check("a plural garment agrees",
-          "shorts come off" in S.off_by_last_frame(["shorts"])
-          and " are away" in S.off_by_last_frame(["shorts"]))
+          "boots come off" in S.off_by_last_frame(["boots"])
+          and " are away" in S.off_by_last_frame(["boots"]))
     check("a singular one does too",
-          "bra comes off" in one and " is away" in one)
+          "coat comes off" in one and " is away" in one)
     # The sentence is capitalised, so the first "the" is "The".
-    check("two items are joined", "The bra and the shorts come off"
-          in S.off_by_last_frame(["bra", "shorts"]))
+    check("two items are joined", "The coat and the boots come off"
+          in S.off_by_last_frame(["coat", "boots"]))
     check("no removal, no sentence", S.off_by_last_frame([]) == "")
     # Saying what comes off does not say where to STOP. An action with time left
-    # runs on to whatever is next: shears that finish the shorts go on to the
-    # thong, or the body under it.
-    _b = S.off_by_last_frame(["shorts"])
+    # runs on to whatever is next: a hand that finishes one garment starts on the
+    # next one, or on the body under it.
+    _b = S.off_by_last_frame(["scarf"])
     check("the action is bounded", "Everything else on the body stays exactly as it is" in _b)
     check("...covering hardware as well", "whole and closed as it was put on" in _b)
-    check("...naming no other garment", "thong" not in _b and "bra" not in _b)
+    check("...naming no other garment", "jumper" not in _b and "coat" not in _b)
     # The BOUND sentence carries no negation: at cfg 1 the negative prompt is
     # never evaluated, so a negation in the positive only names what it forbids.
     # ("no longer on the body" belongs to the removal half, and is the wording the
     # previous node proved safe in the removing shot.)
     _bound = _b.split("dropped out of frame.")[1]
     check("...and the bound is stated positively",
-          not re.search(r"no|not|never|nothing", _bound, re.I))
-    check("it reads as a sentence", one.strip().startswith("The bra"))
+          not re.search(r"\bno\b|\bnot\b|\bnever\b|\bnothing\b", _bound, re.I))
+    check("it reads as a sentence", one.strip().startswith("The coat"))
     # Said ONCE. Naming the garment on a later shot is a presence cue, and that
     # phrasing put garments back on in the previous version of this node.
-    scene = "A basement. Kate is 20, blonde, shiny white bra, black crop top."
-    beats = ["Dan cuts off her crop top.\nremove: crop top",
-             "Dan cuts off her bra.\nremove: bra",
+    scene = "A basement. Kate is 20, blonde, grey wool coat, black jumper."
+    beats = ["Dan pulls off her coat.\nremove: coat",
+             "Dan pulls off her jumper.\nremove: jumper",
              "Kate looks up at him."]
     gone, lines = [], []
     for b in beats:
         body, toks, _ = S.extract_directives(b)
         gone.extend(t for t in toks if t not in gone)
         lines.append(f"{S.scrub_removed(scene, gone)} {body}{S.off_by_last_frame(toks)}")
-    check("shot 1 orders the crop top off", "crop top comes off during this shot" in lines[0])
-    check("...and shot 2 never mentions it again", "crop top" not in lines[1])
-    check("...nor shot 3", "crop top" not in lines[2] and "bra" not in lines[2])
+    check("shot 1 orders the coat off", "coat comes off during this shot" in lines[0])
+    check("...and shot 2 never mentions it again", "coat" not in lines[1])
+    check("...nor shot 3", "coat" not in lines[2] and "jumper" not in lines[2])
     check("the scene loses each garment as it goes",
-          "bra" in lines[0] and "bra" not in lines[2])
+          "jumper" in lines[0] and "jumper" not in lines[2])
 
 
 def test_layers():
@@ -305,24 +305,24 @@ def test_layers():
           S.extract_removals("x\nremove: hat") == ("x", ["hat"]))
     # An added layer retires when it is itself removed.
     gone, shown = ["white shirt"], ["her white shirt is now visible",
-                                    "her black bra is now visible"]
+                                    "her grey vest is now visible"]
     live = [a for a in shown if not S.names_any(a, gone)]
-    check("a removed layer stops being described", live == ["her black bra is now visible"])
+    check("a removed layer stops being described", live == ["her grey vest is now visible"])
     check("...and one that was not removed stays", S.names_any("a red coat", ["coat"]))
 
 
 def test_thin_beats():
     print("\n=== a shot longer than its beat ===")
     # A shot that outlasts its action leaves the model seconds it was told
-    # nothing about, and the cheapest way to fill them is to CARRY ON: shears
-    # that cut a garment off keep cutting into what is underneath.
-    one = "Dan cuts off her bra and throws it away."
-    two = ("Dan cuts off her bra and throws it away, then sets the shears down "
+    # nothing about, and the cheapest way to fill them is to CARRY ON: an action
+    # repeats itself on whatever is nearest.
+    one = "Dan pulls off her coat and throws it away."
+    two = ("Dan pulls off her coat and throws it away, then sets the hanger down "
            "and steps back.")
     check("a two-clause beat asks for about 7s", 6.0 <= S.beat_seconds(one) <= 8.0)
     check("adding what happens next asks for more", S.beat_seconds(two) > S.beat_seconds(one))
     check("directive lines do not count as content",
-          S.beat_seconds(one) == S.beat_seconds(one + "\nremove: bra"))
+          S.beat_seconds(one) == S.beat_seconds(one + "\nremove: coat"))
     check("dialogue is timed by words", S.beat_seconds('She says: "one two three four five."') > 0)
     check("an empty beat asks for nothing", S.beat_seconds("") == 0)
     check("the reported beat is flagged in a 10s shot",
@@ -335,8 +335,8 @@ def test_thin_beats():
 
 def test_auto_length():
     print("\n=== sizing a shot from its beat ===")
-    one = "Dan cuts off her bra and throws it away."
-    two = ("Dan cuts off her bra and throws it away, then sets the shears down "
+    one = "Dan pulls off her coat and throws it away."
+    two = ("Dan pulls off her coat and throws it away, then sets the hanger down "
            "and steps back.")
     still = "Kate lies still."
     ceil = S.align_frame_count(10 * 24)
@@ -428,9 +428,9 @@ def test_restraints_hold():
         check(f"not a restraint: {_t[:34]!r}", not S.restraint_present(_t))
     check("the hold is one sentence", S.RESTRAINT_HOLD.count(".") == 1)
     check("...impersonal, so it summons nobody",
-          not re.search(r"(?:she|he|her|his|they)", S.RESTRAINT_HOLD, re.I))
+          not re.search(r"\b(?:she|he|her|his|they)\b", S.RESTRAINT_HOLD, re.I))
     check("...and positive, since cfg 1 has no negative prompt",
-          not re.search(r"no|not|never", S.RESTRAINT_HOLD, re.I))
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", S.RESTRAINT_HOLD, re.I))
     check("...saying what holds", "whole and closed" in S.RESTRAINT_HOLD
           and "fastened exactly as it was put on" in S.RESTRAINT_HOLD)
 
@@ -478,7 +478,7 @@ def test_turning_around():
                "She looks back over her shoulder.", "Kate rolls onto her side.",
                "The camera moves round to show her back."):
         check(f"turn seen: {_t[:32]!r}", S.turns_in(_t))
-    for _t in ("Kate walks to the window.", "She lies still.", "Dan cuts off her bra."):
+    for _t in ("Kate walks to the window.", "She lies still.", "Dan pulls off her coat."):
         check(f"no turn: {_t[:32]!r}", not S.turns_in(_t))
     # Being MOVED does the same damage as turning: the keyframe pinned one pose
     # from one side, and lifting or dragging someone puts the body where that
@@ -489,7 +489,7 @@ def test_turning_around():
                "Dan hauls her upright.", "Dan pulls her off the table."):
         check(f"moved body seen: {_t[:32]!r}", S.turns_in(_t, _N))
     # An object is not a body, a limb is not a body, and a garment is not a body.
-    for _t in ("Dan lifts the crate.", "Dan picks up the shears.",
+    for _t in ("Dan lifts the crate.", "Dan picks up the scissors.",
                "Dan positions her legs behind her back.", "Dan grabs her ankles.",
                "Dan pulls her shorts off.", "Dan drops the keys."):
         check(f"not a moved body: {_t[:32]!r}", not S.turns_in(_t, _N))
@@ -498,7 +498,7 @@ def test_turning_around():
     check("...from every side", "front, side and behind" in S.TURN_HOLD)
     check("...and in every position", "in every position" in S.TURN_HOLD)
     check("...naming no garment and no person",
-          not re.search(r"(?:she|he|her|his|bra|top|shirt|jacket)",
+          not re.search(r"\b(?:she|he|her|his|coat|top|shirt|jacket)\b",
                         S.TURN_HOLD, re.I))
 
 
