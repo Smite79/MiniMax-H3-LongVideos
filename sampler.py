@@ -207,6 +207,49 @@ def split_beats(prompt):
     return paras[0], paras[1:]
 
 
+# A line of a character sheet: `Name: attributes`. The directive lines are excluded
+# by name -- they are instructions to this node, not people.
+_SHEET_LINE = re.compile(r"^\s*(?!(?:remove|off|add|wear|wardrobe)\s*:)"
+                         r"[A-Z][\w'’-]{0,24}\s*:\s*\S", re.I)
+
+
+def is_character_sheet(par):
+    """A paragraph that DESCRIBES people rather than staging an action.
+
+    Every line reads `Name: attributes` -- "McKenna: 22, blonde, grey coat." Handed
+    to the model as a beat, a sheet spends a whole shot rendering a static
+    description. Worse, the wardrobe then lives in ONE shot instead of being
+    re-stamped into all of them: later shots describe no clothing at all, so the
+    model invents it, and a removal has nothing to scrub because what it would
+    scrub was never in the scene.
+
+    A line with speech in it is a beat -- 'Dan: "Hello."' stages something."""
+    lines = [ln for ln in (par or "").splitlines() if ln.strip()]
+    if not lines or _QUOTED.search(par) or _DIALOGUE_TAG.search(par):
+        return False
+    return all(_SHEET_LINE.match(ln) for ln in lines)
+
+
+def pull_character_sheets(beats):
+    """(the beats that stage something, the sheet paragraphs joined)."""
+    beats = beats or []
+    sheets = [b for b in beats if is_character_sheet(b)]
+    return [b for b in beats if not is_character_sheet(b)], "\n".join(sheets)
+
+
+def build_scene(anchor, first_para, character_memory, sheet):
+    """The text every shot carries, in reading order: the anchor frames the film,
+    the opening paragraph sets the scene, and the character sheet says who is in it
+    and what they are wearing.
+
+    One string on purpose -- a removal scrubs all of it. The previous node kept the
+    anchor immutable, and clothing written there could never be taken off: the
+    anchor put it back on every shot, under a beat that had just removed it."""
+    parts = [(anchor or "").strip(), (first_para or "").strip(),
+             (character_memory or "").strip(), (sheet or "").strip()]
+    return "\n".join(p for p in parts if p)
+
+
 _QUOTED = re.compile(r'["“][^"”]+["”]')
 # H3's OWN dialogue delimiter. comfy/text_encoders/minimax.py registers <d> and </d>
 # as special tokens, alongside a caption channel (<|caption_start|>...) and a lyrics
@@ -1844,6 +1887,35 @@ class H3LongVideos:
                                "write."}),
                 "plan_only": ("BOOLEAN", {"default": False,
                     "tooltip": "Report the shot split, lengths and warnings without rendering."}),
+                # Appended LAST on purpose. Saved workflows restore widget values by
+                # POSITION, with no names stored, so inserting a widget anywhere above
+                # this shifts every later value in every workflow already saved.
+                "anchor": ("STRING", {"multiline": True, "default": "",
+                    "tooltip": "Framing that belongs to the whole film -- look, camera, "
+                               "lighting, location. Carried at the FRONT of every shot, "
+                               "ahead of the opening paragraph.\n\n"
+                               "Same job as the first paragraph of the prompt; this is "
+                               "the socket version, for when the framing comes from "
+                               "somewhere else or you want it apart from the script. "
+                               "Use either, or both."}),
+                "character_memory": ("STRING", {"multiline": True, "default": "",
+                    "tooltip": "Who is in the film and what they are wearing, re-stamped "
+                               "into EVERY shot.\n\n"
+                               "Write it as a sheet, one person per line:\n"
+                               "  Maya: 27, silver hair, grey shorts, red jacket\n"
+                               "  Jon: 34, navy overalls\n\n"
+                               "This is what makes clothing hold across a chain. A "
+                               "garment described in one beat is described in ONE shot; "
+                               "every later shot then says nothing about it, and what "
+                               "the model is not told, it invents -- which is a garment "
+                               "changing colour, or coming back after it came off.\n\n"
+                               "It is also what a removal scrubs. `remove:` and the "
+                               "automatic inference take the item out of this sheet from "
+                               "that shot onward, so the text stops describing what the "
+                               "beat took off.\n\n"
+                               "A `Name: ...` paragraph in the prompt itself is folded in "
+                               "here automatically -- a sheet is not a beat, and spending "
+                               "a shot rendering a description is the visible symptom."}),
             },
         }
 
@@ -1866,7 +1938,7 @@ class H3LongVideos:
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
-            restart_after_removal=True, auto_remove=True):
+            restart_after_removal=True, auto_remove=True, anchor="", character_memory=""):
 
         notes = []
         swap = flush_for_model_change(model)
@@ -1881,9 +1953,20 @@ class H3LongVideos:
                          f"like) -- your text now goes to the model verbatim, and a label like "
                          f"that is read as text to put ON the picture")
         scene, beats = split_beats(prompt)
+        # A character sheet is not a beat. Pulled out of the beat list and folded into
+        # the scene, so it is re-stamped into EVERY shot -- which is what makes a
+        # removal stick and what stops a later shot describing no clothing at all.
+        beats, sheet = pull_character_sheets(beats)
+        scene = build_scene(anchor, scene, character_memory, sheet)
+        if sheet:
+            notes.append(f"folded {sheet.count(chr(10)) + 1} character-sheet line(s) into "
+                         f"the scene instead of spending a shot on them -- a sheet "
+                         f"describes people, it does not stage anything, and it has to "
+                         f"be in EVERY shot for a removal to have something to scrub")
         if not beats:
-            raise RuntimeError("H3 Long Videos: the prompt is empty. Write at least one "
-                               "paragraph; each paragraph is one shot.")
+            raise RuntimeError("H3 Long Videos: no beat to render. Every paragraph after "
+                               "the first is one shot; a character sheet ('Name: ...') "
+                               "is folded into the scene and does not count as one.")
 
         w, h = scale_to_megapixels(*parse_resolution(resolution), megapixels)
         ceiling = align_frame_count(int(round(float(shot_seconds) * H3_FPS)))
@@ -1894,9 +1977,13 @@ class H3LongVideos:
         shots, speech, gone, shown = [], [], [], []
         restrained = False
         stripped_shots = set()      # 0-based shots that took something off
-        # Names from the scene, so "lifts Kate onto the table" reads as moving a
-        # person rather than an object.
-        cast = re.findall(r"\b[A-Z][a-z]{2,}\b", scene or "")
+        # Names, so "lifts Kate onto the table" reads as moving a person rather than
+        # an object. A sheet LABELS them, which beats scanning prose for capitals --
+        # that way "Medium shadows" is not a member of the cast, and a name with an
+        # inner capital (McKenna) is not missed.
+        cast = re.findall(r"^\s*([A-Z][\w'’-]{1,24})\s*:", sheet or "", re.M)
+        if not cast:
+            cast = re.findall(r"\b[A-Z][a-z]{2,}\b", scene or "")
         for b in beats:
             body, toks, adds = extract_directives(b)
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
