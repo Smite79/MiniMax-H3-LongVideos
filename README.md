@@ -152,6 +152,12 @@ mention the garment: naming it again — even to say it is gone — is a presenc
 and "no longer wearing the red jacket" is what put garments back on in the previous
 version of this node.
 
+**The same applies to your own beats.** They go to the model word for word, so a
+later beat that says *"her crop top"* puts the crop top back — the scene is clean and
+the removal was honoured, and then the beat asks for it. In a ten-beat script that
+reads as the removal failing at random. `info` names the beat and the garment when it
+happens; the removing beat itself is not flagged, since it has to name it.
+
 This is the only place the node edits your text, and it does exactly what you tell
 it — no removals are inferred from your prose.
 
