@@ -603,6 +603,60 @@ def test_restraints_hold():
           and "fastened exactly as it was put on" in S.RESTRAINT_HOLD)
 
 
+def test_chain_is_rigid():
+    print("\n=== steel does not behave like rope ===")
+    # A model with no reason to think otherwise draws a chain as a soft cord: it
+    # sags, stretches to wherever a limb is going, and allows movement the hardware
+    # does not allow. The restraint hold says the metal stays WHOLE -- it says
+    # nothing about how it behaves while whole.
+    for _t in ("Jon locks a chain around her waist.", "padlocked at the back",
+               "Wrists handcuffed behind back.", "ankles shackled together",
+               "steel cuffs", "a spreader bar", "hogcuffed on the floor"):
+        check(f"rigid hardware: {_t[:32]!r}", S.rigid_hardware(_t))
+    # Rope, tape and straps DO flex -- claiming they hold a straight line is wrong.
+    for _t in ("a rope around her wrists", "her mouth taped shut",
+               "a leather strap", "Maya lies still."):
+        check(f"not rigid: {_t[:32]!r}", not S.rigid_hardware(_t))
+    check("the clause is one sentence", S.CHAIN_HOLD.count(".") == 1)
+    check("...it keeps the links the same size", "every link keeps its size" in S.CHAIN_HOLD)
+    check("...holds the run straight", "straight and taut" in S.CHAIN_HOLD)
+    check("...and bounds the movement", "only as far as the metal allows" in S.CHAIN_HOLD)
+    check("...impersonal and positive",
+          not re.search(r"\b(?:she|he|her|his|they|no|not|never)\b", S.CHAIN_HOLD, re.I))
+
+
+def test_saved_defaults():
+    print("\n=== a preference outlives an edit to this file ===")
+    # Every widget added changes INPUT_TYPES, and a node added afresh comes up with
+    # the built-in defaults -- so a setting has to be put back by hand after every
+    # edit. defaults.json is read at load and replaces them.
+    def _schema():
+        return {"required": {"steps": ("INT", {"default": 8}),
+                             "sampler_name": (["euler", "res_multistep"], {}),
+                             "model": ("MODEL",)},
+                "optional": {"upscale": (["off", "lanczos"], {"default": "off"})}}
+    sch = S.apply_saved_defaults(_schema(), {"steps": 6, "upscale": "lanczos"})
+    check("a saved default replaces the built-in",
+          sch["required"]["steps"][1]["default"] == 6)
+    check("...in the optional group too",
+          sch["optional"]["upscale"][1]["default"] == "lanczos")
+    # It has to survive a widget being renamed or dropped, and a socket has no default.
+    sch = S.apply_saved_defaults(_schema(), {"gone_widget": 1, "model": "x"})
+    check("an unknown key changes nothing", sch["required"]["steps"][1]["default"] == 8)
+    check("...and a socket is left alone", len(sch["required"]["model"]) == 1)
+    # A combo can only default to one of its own choices: an upscale model that is no
+    # longer installed must not become the default.
+    sch = S.apply_saved_defaults(_schema(), {"sampler_name": "not_installed"})
+    check("a combo rejects a choice it does not have",
+          "default" not in sch["required"]["sampler_name"][1])
+    sch = S.apply_saved_defaults(_schema(), {"sampler_name": "res_multistep"})
+    check("...and accepts one it does",
+          sch["required"]["sampler_name"][1]["default"] == "res_multistep")
+    check("no saved file, no change",
+          S.apply_saved_defaults(_schema(), {})["required"]["steps"][1]["default"] == 8)
+    check("a malformed file is not fatal", isinstance(S.saved_defaults(), dict))
+
+
 def test_falling_bound():
     print("\n=== a bound body goes down without catching itself ===")
     # A falling body puts its hands out. With the hands fastened the model has to
@@ -728,6 +782,8 @@ def main():
     test_layers()
     test_removal_completes()
     test_restraints_hold()
+    test_chain_is_rigid()
+    test_saved_defaults()
     test_falling_bound()
     test_turning_around()
     test_thin_beats()

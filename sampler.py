@@ -24,6 +24,7 @@ Everything about what the video should CONTAIN is yours to write.
 """
 
 import gc
+import json
 import math
 import os
 import re
@@ -1341,6 +1342,30 @@ def falls_in(text):
     return bool(_FALL_CUE.search(text or ""))
 
 
+# Steel does not behave like rope. A model with no reason to think otherwise draws a
+# chain as a soft cord: it sags, stretches to wherever a limb is going, and lets the
+# body move as if nothing were fastened. The restraint hold says the hardware stays
+# WHOLE; it says nothing about how it behaves while whole.
+#
+# Positive and impersonal, like the other holds -- at cfg 1 there is no negative
+# prompt, so "does not stretch" only names stretching.
+CHAIN_HOLD = (" Chain and steel hold their shape: every link keeps its size, the run "
+              "between the fastenings stays straight and taut, and the body reaches only "
+              "as far as the metal allows before it stops.")
+
+# Hardware that is rigid by nature. Only consulted once a restraint is established,
+# so a chain-link fence in the scenery cannot arm it on its own.
+_RIGID_HARDWARE = re.compile(
+    r"\b(?:chain(?:s|ed|ing)?|padlock(?:s|ed|ing)?|shackle[sd]?|manacle[sd]?|"
+    r"handcuff(?:s|ed)?|cuffs?|cuffed|irons|spreader\s+bar|steel|"
+    r"hogcuffed|hog-?cuffed)\b", re.I)
+
+
+def rigid_hardware(text):
+    """Is the hardware here the kind that cannot flex?"""
+    return bool(_RIGID_HARDWARE.search(text or ""))
+
+
 def restraint_present(text):
     """Is a restraint being applied or worn, in this text?
 
@@ -1916,11 +1941,91 @@ def sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
     return out
 
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULTS_FILE = os.path.join(_HERE, "defaults.json")
+DEFAULTS_EXAMPLE = os.path.join(_HERE, "defaults.example.json")
+# Sockets, not widgets: nothing to carry a default.
+_NOT_A_WIDGET = frozenset(("MODEL", "CLIP", "VAE", "IMAGE", "CONDITIONING", "SIGMAS",
+                           "LATENT", "AUDIO", "MASK"))
+
+
+def saved_defaults():
+    """Widget defaults from defaults.json, or {} when there is none.
+
+    Every time this node gains a widget its INPUT_TYPES changes, and a node added
+    afresh comes up with the BUILT-IN defaults -- so a setting has to be put back by
+    hand after every edit. A defaults.json beside this file outlives those edits: it
+    is read when the node loads and any key in it replaces the built-in default for
+    the widget of that name.
+
+    Unknown keys are ignored, so the file survives a widget being renamed or
+    dropped, and a missing or malformed file falls back to the built-ins rather
+    than stopping the node from loading."""
+    try:
+        with open(DEFAULTS_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def apply_saved_defaults(schema, saved=None):
+    """Replace built-in defaults with saved ones, in place. Returns the schema."""
+    saved = saved_defaults() if saved is None else saved
+    if not saved:
+        return schema
+    for group in schema.values():
+        if not isinstance(group, dict):
+            continue
+        for name, spec in group.items():
+            if name not in saved or len(spec) < 2 or not isinstance(spec[1], dict):
+                continue
+            value = saved[name]
+            # A combo can only default to one of its own choices -- an upscale model
+            # that is no longer installed must not become the default.
+            if isinstance(spec[0], (list, tuple)) and value not in spec[0]:
+                continue
+            spec[1]["default"] = value
+    return schema
+
+
+def write_defaults_example(schema):
+    """Write defaults.example.json once, so defaults.json is discoverable."""
+    if os.path.exists(DEFAULTS_EXAMPLE) or os.path.exists(DEFAULTS_FILE):
+        return
+    out = {}
+    for group in schema.values():
+        if not isinstance(group, dict):
+            continue
+        for name, spec in group.items():
+            opts = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+            if opts.get("forceInput"):
+                continue
+            if "default" in opts:
+                out[name] = opts["default"]
+            elif isinstance(spec[0], (list, tuple)) and spec[0]:
+                out[name] = spec[0][0]          # a combo defaults to its first choice
+            elif spec[0] in _NOT_A_WIDGET:
+                continue
+    try:
+        with open(DEFAULTS_EXAMPLE, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, indent=2, sort_keys=True)
+    except Exception:
+        pass                                    # read-only install: not worth failing over
+
+
 class H3LongVideos:
     """One prompt -> a chain of MiniMax-H3 shots, joined into one video."""
 
     @classmethod
     def INPUT_TYPES(cls):
+        schema = cls._schema()
+        write_defaults_example(schema)
+        # Saved defaults last, so a preference outlives every edit to this file.
+        return apply_saved_defaults(schema)
+
+    @classmethod
+    def _schema(cls):
         return {
             "required": {
                 "model": ("MODEL",),
@@ -2159,6 +2264,12 @@ class H3LongVideos:
             character_guard=True):
 
         notes = []
+        _saved = saved_defaults()
+        if _saved:
+            notes.append(f"defaults.json supplies {len(_saved)} widget default(s), so a "
+                         f"node added fresh comes up with those instead of the built-in "
+                         f"ones. It does not touch a node already in a workflow -- that "
+                         f"one keeps whatever was saved with it")
         swap = flush_for_model_change(model)
         if swap:
             notes.append(swap)
@@ -2337,9 +2448,14 @@ class H3LongVideos:
             # Going down with the hands fastened: say what takes the landing, or the
             # model frees the hands to break the fall and the hardware gives way.
             fall = FALL_HOLD if (restrained and falls_in(body)) else ""
+            # Steel is not rope. Without being told, the model draws a chain slack --
+            # sagging, stretching to wherever a limb is going, allowing movement the
+            # hardware does not allow. Only where such hardware is actually named.
+            chain = (CHAIN_HOLD if (restrained and rigid_hardware(f"{body} {shot_scene}"))
+                     else "")
             line = f"{shot_scene} {body}".strip() if shot_scene else body
             shots.append((line + tail + (RESTRAINT_HOLD if restrained else "")
-                          + fall + turn).strip())
+                          + chain + fall + turn).strip())
             speech.append(has_speech(body))
 
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
