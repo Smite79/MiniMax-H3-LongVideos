@@ -409,9 +409,23 @@ def test_turning_around():
         check(f"turn seen: {_t[:32]!r}", S.turns_in(_t))
     for _t in ("Kate walks to the window.", "She lies still.", "Dan cuts off her bra."):
         check(f"no turn: {_t[:32]!r}", not S.turns_in(_t))
+    # Being MOVED does the same damage as turning: the keyframe pinned one pose
+    # from one side, and lifting or dragging someone puts the body where that
+    # frame never showed it.
+    _N = ["Kate", "Dan"]
+    for _t in ("Dan lifts her onto the table.", "Dan drags her across the floor.",
+               "Dan lays her down on the mat.", "Dan picks up Kate.",
+               "Dan hauls her upright.", "Dan pulls her off the table."):
+        check(f"moved body seen: {_t[:32]!r}", S.turns_in(_t, _N))
+    # An object is not a body, a limb is not a body, and a garment is not a body.
+    for _t in ("Dan lifts the crate.", "Dan picks up the shears.",
+               "Dan positions her legs behind her back.", "Dan grabs her ankles.",
+               "Dan pulls her shorts off.", "Dan drops the keys."):
+        check(f"not a moved body: {_t[:32]!r}", not S.turns_in(_t, _N))
     check("the clause covers what is worn", "all that is on it" in S.TURN_HOLD)
     check("...and what is fastened", "stays fastened and closed" in S.TURN_HOLD)
     check("...from every side", "front, side and behind" in S.TURN_HOLD)
+    check("...and in every position", "in every position" in S.TURN_HOLD)
     check("...naming no garment and no person",
           not re.search(r"(?:she|he|her|his|bra|top|shirt|jacket)",
                         S.TURN_HOLD, re.I))
