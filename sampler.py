@@ -965,6 +965,54 @@ _PLURAL_ITEM = re.compile(r"\b(?:s|shorts|trousers|pants|jeans|boots|shoes|glove
                           r"tights|leggings|briefs|knickers|cuffs)$", re.I)
 
 
+# --- restraints ---------------------------------------------------------------
+# The one continuity fact the node asserts on its own, because it is the one that
+# cannot be recovered: a cuff that renders open is not a detail that drifts, it is
+# the scene stopping making sense. Once hardware is on, it stays on.
+#
+# ONE sentence, impersonal, positive. The previous version had a per-limb effect
+# table, pose tracking and a hardware clause, and between them the beat became 4% of
+# the prompt. This is the fact and nothing else.
+# What a `remove:` has to name to switch the hold off again.
+RESTRAINT_HOLD_KEY = "handcuffs cuffs chains rope ropes tape gag collar restraints shackles"
+RESTRAINT_HOLD = (" Every restraint on the body stays whole and closed, fastened exactly as it "
+                  "was put on, holding the same way from the first frame to the last.")
+
+# Hardware that means restraint on its own.
+_RESTRAINT_PLAIN = re.compile(
+    r"\b(?:handcuff(?:s|ed)?|cuffed|shackle[sd]?|manacle[sd]?|hogtied|hog-?tied|"
+    r"hogcuffed|hog-?cuffed|gag(?:ged|s)?|blindfold(?:ed|s)?|zip[- ]ties?|"
+    r"cable[- ]ties?|restrain(?:t|ts|ed)|bound|bindings?|straitjacket|"
+    r"spreader bar)\b", re.I)
+# Hardware that is only a restraint in context -- a chain-link fence, a rope on a
+# boat and a leather belt are none of the node's business.
+_RESTRAINT_MAYBE = re.compile(
+    r"\b(?:chains?|ropes?|cords?|cuffs?|straps?|collars?|tapes?|taped|taping|"
+    r"belts?|harness|hobble)\b", re.I)
+# VERB forms only. An earlier version listed "chain" and "cuff" here as well as in
+# the noun list, so a chain-link fence matched both halves and armed the rule.
+_BINDING_VERB = re.compile(
+    r"\b(?:cuffed|chained|tied|tying|bound|binds?|binding|locked|locks|"
+    r"strapped|taped|taping|gagged|shackled|fastened|fastens|secured|secures|"
+    r"padlocked|trussed|lashed|wrapped)\b", re.I)
+_BODY_PART = re.compile(
+    r"\b(?:wrists?|ankles?|arms?|legs?|hands?|feet|neck|throat|mouth|waist|hips?|"
+    r"thighs?|knees?|elbows?|thumbs?|eyes)\b", re.I)
+
+
+def restraint_present(text):
+    """Is a restraint being applied or worn, in this text?
+
+    Plain hardware counts on its own. Ambiguous hardware needs a binding verb or a
+    body part alongside it, so a chain-link fence and a leather belt do not arm a
+    continuity rule about restraints."""
+    t = text or ""
+    if _RESTRAINT_PLAIN.search(t):
+        return True
+    return bool(_RESTRAINT_MAYBE.search(t)
+                and (_BINDING_VERB.search(t) or _BODY_PART.search(t)))
+
+
 def names_any(text, tokens):
     """Does `text` name any of these items?"""
     return any(re.search(r"\b" + re.escape(t) + r"\b", text or "", re.I)
@@ -1532,6 +1580,16 @@ class H3LongVideos:
                                "its action does hands a mid-motion frame to the next shot, "
                                "which the chain continues from. A shot that outlasts its "
                                "action has to invent the rest."}),
+                "hold_restraints": ("BOOLEAN", {"default": True,
+                    "tooltip": "Once a restraint is put on, keep it whole. From the shot "
+                               "that applies it onward, every shot carries one sentence: "
+                               "every restraint stays whole and closed, fastened exactly as "
+                               "it was put on. Cleared by a 'remove:' naming the hardware.\n\n"
+                               "This is the ONE continuity fact the node asserts by itself, "
+                               "because it is the one that cannot be recovered -- a cuff "
+                               "that renders open is not a detail that drifted, it is the "
+                               "scene ceasing to make sense. Everything else is yours to "
+                               "write."}),
                 "plan_only": ("BOOLEAN", {"default": False,
                     "tooltip": "Report the shot split, lengths and warnings without rendering."}),
             },
@@ -1555,7 +1613,7 @@ class H3LongVideos:
             tiled_decode=True, cleanup_between_shots=True, plan_only=False,
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
-            upscale_batch=4, shot_length="from the beat"):
+            upscale_batch=4, shot_length="from the beat", hold_restraints=True):
 
         notes = []
         swap = flush_for_model_change(model)
@@ -1581,6 +1639,7 @@ class H3LongVideos:
         # the removing shot too: the keyframe already shows the garment on at the
         # start, and a description saying it is still worn is what puts it back.
         shots, speech, gone, shown = [], [], [], []
+        restrained = False
         for b in beats:
             body, toks, adds = extract_directives(b)
             if toks:
@@ -1610,8 +1669,18 @@ class H3LongVideos:
             # the next shot's keyframe. Stated only here; naming the garment again
             # later would put it back.
             tail = off_by_last_frame(toks)
+            # Once hardware is on, it stays on. Latched, not re-detected: a beat that
+            # does not mention the cuffs does not mean they came off, and a cuff that
+            # renders open is not a detail that drifts -- it is the scene ceasing to
+            # make sense. Cleared only by a `remove:` that names the hardware.
+            if hold_restraints:
+                if names_any(RESTRAINT_HOLD_KEY, toks) or any(
+                        restraint_present(t) for t in toks):
+                    restrained = False
+                elif restraint_present(body) or restraint_present(shot_scene):
+                    restrained = True
             line = f"{shot_scene} {body}".strip() if shot_scene else body
-            shots.append((line + tail).strip())
+            shots.append((line + tail + (RESTRAINT_HOLD if restrained else "")).strip())
             speech.append(has_speech(body))
 
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
