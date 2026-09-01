@@ -155,6 +155,39 @@ version of this node.
 This is the only place the node edits your text, and it does exactly what you tell
 it — no removals are inferred from your prose.
 
+## Things that must stay the same
+
+The node writes no continuity guards. The old version did, and the beat ended up as
+4% of the prompt with the rest arguing against it. So anything that has to hold
+across the whole chain goes in the **scene paragraph**, which reaches every shot:
+
+```
+A basement. Kate is 20, blonde, wrists cuffed behind her back. Her cuffs and
+chains stay whole and closed throughout, fastened exactly as they were put on.
+```
+
+That one line is stamped on every shot, which is what stops restraints rendering
+open or snapped during a struggle. Use `add:` if the thing only becomes true partway
+through:
+
+```
+Dan locks the chain around her waist.
+add: the waist chain stays locked and closed, fastened as it was put on
+```
+
+Two rules worth knowing, both learned the hard way:
+
+- **State what IS, not what is not.** At `cfg 1` the negative prompt is never
+  evaluated, so a negation in the positive only names the thing it forbids. *"the
+  cuffs stay whole and closed"* works; *"the cuffs do not break"* names breaking.
+- **Do not re-state a removed garment.** Once something is off, never mention it
+  again — not even to say it is gone. A mention is a presence cue.
+
+`remove:` already covers the removing shot itself: it tells that shot to finish the
+removal by the last frame, and adds that *everything else on the body stays exactly
+as it is, untouched and still fastened, whole and closed as it was put on* — which
+is what stops an action running on into the next garment or into the hardware.
+
 ## Settings
 
 | setting | value |
