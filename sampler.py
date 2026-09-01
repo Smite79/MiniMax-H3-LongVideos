@@ -1666,6 +1666,17 @@ class H3LongVideos:
         restrained = False
         for b in beats:
             body, toks, adds = extract_directives(b)
+            # A beat's own words go to the model verbatim. Naming a garment that came
+            # off in an EARLIER beat puts it back -- the scene is clean, the removal
+            # was honoured, and then the beat itself asks for it. The removing beat
+            # names it legitimately, so only later ones are reported.
+            revived = [t for t in gone if names_any(body, [t])]
+            if revived:
+                notes.append(
+                    f"shot {len(shots) + 1} names {', '.join(revived)} in its own text, and "
+                    f"that came off earlier. Beats are sent to the model word for word, so "
+                    f"naming it puts it back on -- the scene no longer mentions it, but this "
+                    f"beat does. Reword the beat if it should stay off")
             if toks:
                 gone.extend(t for t in toks if t not in gone)
                 notes.append(f"removed from the scene from shot {len(shots) + 1} on: "

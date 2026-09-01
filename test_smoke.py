@@ -277,6 +277,27 @@ def test_aug_protects_the_keyframe():
           "riding as an extra reference" not in info_noref)
 
 
+def test_beat_reviving_a_garment():
+    print("\n=== a later beat that names a removed garment ===")
+    # Beats go to the model word for word. The scene can be perfectly scrubbed
+    # and the removal honoured, and then beat 5 says "her crop top" and it is
+    # back. Ten beats in, that reads as the removal randomly failing.
+    P = ("A basement. Kate is 20, blonde, black crop top, white bra." + "\n\n"
+         "Dan cuts off her crop top.\nremove: crop top" + "\n\n"
+         "Kate lies still." + "\n\n"
+         "Dan pulls at her crop top again." + "\n\n"
+         "Kate turns her head.")
+    info = M_info = run_node(P)[2]
+    check("the reviving beat is named", "shot 3 names crop top" in info)
+    check("...with the reason", "word for word" in info)
+    check("...and the removing beat itself is not flagged",
+          "shot 1 names crop top" not in info)
+    clean = run_node("A basement. Kate is 20." + "\n\n" +
+                     "Dan cuts off her crop top.\nremove: crop top" + "\n\n" +
+                     "Kate lies still.")[2]
+    check("a clean script raises nothing", "in its own text" not in clean)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -327,6 +348,7 @@ def main():
     test_first_frame()
     test_upscale_paths()
     test_aug_protects_the_keyframe()
+    test_beat_reviving_a_garment()
     test_timing_report()
     print()
     if _fails:
