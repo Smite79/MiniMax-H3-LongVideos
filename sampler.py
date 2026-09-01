@@ -1077,6 +1077,46 @@ def names_any(text, tokens):
                for t in (tokens or []) if t)
 
 
+# Where a removal verb's object ENDS. "cuts off her shorts and throws them away,
+# exposing her thong" takes off the shorts; the thong is what becomes visible. The
+# old version of this node matched garment words anywhere in the beat and took both
+# off, which is the failure that made prose inference untrustworthy.
+_OBJECT_END = re.compile(r"(?:,|;|\.|\bexposing\b|\brevealing\b|\bshowing\b|\bleaving\b|"
+                         r"\bto\s+expose\b|\bto\s+reveal\b|\bthen\b|\buntil\b)", re.I)
+
+
+def infer_removals(beat, scene):
+    """Garments this beat takes off, read from its own prose. [] when none.
+
+    Two conditions, both required, because a wrong removal is worse than a missed
+    one: the beat has to contain a REMOVAL verb, and the thing named has to be
+    something the SCENE already says is worn. A beat cannot take off what the
+    character was never described wearing.
+
+    Only the verb's own object counts -- the span from the verb to the next clause
+    boundary. That is what keeps "cuts off her shorts, exposing her thong" to the
+    shorts."""
+    if not beat or not scene:
+        return []
+    found = []
+    for m in _REMOVAL_PROSE.finditer(beat):
+        tail = beat[m.end():]
+        cut = _OBJECT_END.search(tail)
+        span = tail[:cut.start()] if cut else tail
+        for word in re.findall(r"\b[\w-]{3,}\b", span):
+            low = word.lower()
+            if low in found:
+                continue
+            # It has to be worn: named in the scene, and not a person or a place.
+            if not re.search(r"\b" + re.escape(word) + r"\b", scene, re.I):
+                continue
+            if re.search(r"\b" + re.escape(word) + r"\b\s*(?:is|was|walks|stands|sits|=)",
+                         scene, re.I):
+                continue
+            found.append(low)
+    return found
+
+
 def missing_removals(beat, scene, already):
     """Garment words the SCENE still describes, in a beat whose prose takes
     something off and which carries no `remove:` line for them.
@@ -1638,6 +1678,19 @@ class H3LongVideos:
                                "its action does hands a mid-motion frame to the next shot, "
                                "which the chain continues from. A shot that outlasts its "
                                "action has to invent the rest."}),
+                "auto_remove": ("BOOLEAN", {"default": True,
+                    "tooltip": "Read removals out of the beat itself, so a garment comes "
+                               "off without a 'remove:' line.\n\n"
+                               "Two conditions, both required, because a wrong removal is "
+                               "worse than a missed one: the beat has to contain a removal "
+                               "verb, and the thing named has to be something the SCENE "
+                               "already says is worn. Only the verb's own object counts -- "
+                               "the span up to the next clause boundary -- so 'cuts off her "
+                               "shorts, exposing her slip' takes off the shorts and leaves "
+                               "the slip.\n\n"
+                               "info reports every removal it reads, by shot. An explicit "
+                               "'remove:' line still works and is added to whatever is "
+                               "inferred."}),
                 "restart_after_removal": ("BOOLEAN", {"default": True,
                     "tooltip": "After a shot with a 'remove:', start the NEXT shot fresh "
                                "instead of continuing from that shot's last frame.\n\n"
@@ -1685,7 +1738,7 @@ class H3LongVideos:
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
-            restart_after_removal=True):
+            restart_after_removal=True, auto_remove=True):
 
         notes = []
         swap = flush_for_model_change(model)
@@ -1718,6 +1771,15 @@ class H3LongVideos:
         cast = re.findall(r"[A-Z][a-z]{2,}", scene or "")
         for b in beats:
             body, toks, adds = extract_directives(b)
+            # Read the removal out of the beat itself. Explicit 'remove:' lines still
+            # win and are added to whatever is inferred.
+            if auto_remove:
+                inferred = [t for t in infer_removals(body, scene)
+                            if t not in toks and t not in gone]
+                if inferred:
+                    toks = list(toks) + inferred
+                    notes.append(f"shot {len(shots) + 1}: read '{', '.join(inferred)}' as "
+                                 f"coming off, from the beat's own wording")
             # A beat's own words go to the model verbatim. Naming a garment that came
             # off in an EARLIER beat puts it back -- the scene is clean, the removal
             # was honoured, and then the beat itself asks for it. The removing beat
@@ -1734,7 +1796,7 @@ class H3LongVideos:
                 gone.extend(t for t in toks if t not in gone)
                 notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
                              + ", ".join(toks))
-            maybe = missing_removals(body, scene, gone)
+            maybe = missing_removals(body, scene, gone) if not auto_remove else []
             if maybe:
                 notes.append(f"shot {len(shots) + 1} reads as taking something off, but the "
                              f"scene still describes {', '.join(maybe)} and there is no "

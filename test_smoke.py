@@ -323,6 +323,29 @@ def test_restart_after_removal():
           "start fresh" not in run_node("A room.\n\nOne.\n\nTwo.")[2])
 
 
+def test_auto_removal():
+    print("\n=== removals read from the beat, with no directives ===")
+    P = ("A basement. Kate is 20, blonde, white bra, lace thong, black shorts."
+         + "\n\n" +
+         "Dan cuts off her shorts and throws them away, exposing her lace thong."
+         + "\n\n" +
+         "Dan cuts off her thong and throws it away." + "\n\n" +
+         "Kate lies still.")
+    script = run_node(P)[3]
+    sh = script.split("\n---\n")
+    check("shot 1 still lists the thong it exposes", "lace thong" in sh[0])
+    check("...and no longer the shorts", "black shorts" not in sh[0])
+    check("shot 2 has lost the thong too", "lace thong" not in sh[1])
+    check("shot 3 keeps neither", "shorts" not in sh[2] and "thong" not in sh[2])
+    check("...and keeps what was never taken off", "white bra" in sh[2])
+    info = run_node(P)[2]
+    check("info says what it read", "read 'shorts' as coming off" in info)
+    # Off, nothing is inferred and the warning comes back instead.
+    info_off = run_node(P, auto_remove=False)[2]
+    check("auto_remove off infers nothing", "as coming off" not in info_off)
+    check("...and warns instead", "no 'remove:' line" in info_off)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -375,6 +398,7 @@ def main():
     test_aug_protects_the_keyframe()
     test_beat_reviving_a_garment()
     test_restart_after_removal()
+    test_auto_removal()
     test_timing_report()
     print()
     if _fails:

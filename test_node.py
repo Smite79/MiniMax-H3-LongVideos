@@ -444,6 +444,8 @@ def test_schema():
           opt["shift_video"][1]["default"] == 12.0 and opt["shift_audio"][1]["default"] == 3.0)
     check("silence on non-speech shots is on", opt["silence_nonspeech"][1]["default"] is True)
     check("restraints are held by default", opt["hold_restraints"][1]["default"] is True)
+    check("removals are read from the beat by default",
+          opt["auto_remove"][1]["default"] is True)
     check("shot length is read from the beat by default",
           opt["shot_length"][1]["default"] == "from the beat")
     check("first_frame is offered", "first_frame" in opt)
@@ -454,7 +456,9 @@ def test_schema():
     # to read; the old node had 38 and nobody could find anything.
     # 17 core + 6 upscale + shot_length + hold_restraints. The number matters only
     # as a ceiling: the old node had 38 and nobody could find anything.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 26)
+    # 17 core + 6 upscale + shot_length, hold_restraints, restart_after_removal,
+    # auto_remove. A ceiling, not a target: the old node had 38.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 28)
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
                "latent_upscale", "latent_upscale_scale"):
         check(f"{_u} is on the node", _u in opt)
