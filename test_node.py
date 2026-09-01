@@ -193,6 +193,44 @@ def test_removals():
           "jacket" not in final and "shirt" not in final and "black boots" in final)
 
 
+def test_removal_completes():
+    print("\n=== a removal has to finish inside its shot ===")
+    # Scrubbing stops a garment being DESCRIBED. It does not tell the model to
+    # finish taking it off -- and the last frame is the next shot's keyframe, so
+    # a cut still in progress hands on a garment still half worn. The next beat
+    # has moved on and never contradicts the picture, so it stays.
+    one = S.off_by_last_frame(["bra"])
+    check("the removing shot is told to finish it", "by the last frame" in one)
+    check("...and that nothing is left on the body", "no longer on the body" in one)
+    check("...and where it ends up", "out of frame" in one)
+    check("a plural garment agrees",
+          "shorts come off" in S.off_by_last_frame(["shorts"])
+          and " are away" in S.off_by_last_frame(["shorts"]))
+    check("a singular one does too",
+          "bra comes off" in one and " is away" in one)
+    # The sentence is capitalised, so the first "the" is "The".
+    check("two items are joined", "The bra and the shorts come off"
+          in S.off_by_last_frame(["bra", "shorts"]))
+    check("no removal, no sentence", S.off_by_last_frame([]) == "")
+    check("it reads as a sentence", one.strip().startswith("The bra"))
+    # Said ONCE. Naming the garment on a later shot is a presence cue, and that
+    # phrasing put garments back on in the previous version of this node.
+    scene = "A basement. Kate is 20, blonde, shiny white bra, black crop top."
+    beats = ["Dan cuts off her crop top.\nremove: crop top",
+             "Dan cuts off her bra.\nremove: bra",
+             "Kate looks up at him."]
+    gone, lines = [], []
+    for b in beats:
+        body, toks, _ = S.extract_directives(b)
+        gone.extend(t for t in toks if t not in gone)
+        lines.append(f"{S.scrub_removed(scene, gone)} {body}{S.off_by_last_frame(toks)}")
+    check("shot 1 orders the crop top off", "crop top comes off during this shot" in lines[0])
+    check("...and shot 2 never mentions it again", "crop top" not in lines[1])
+    check("...nor shot 3", "crop top" not in lines[2] and "bra" not in lines[2])
+    check("the scene loses each garment as it goes",
+          "bra" in lines[0] and "bra" not in lines[2])
+
+
 def test_layers():
     print("\n=== layers appear when they become visible ===")
     # A scene listing every layer at once tells the model the character wears
@@ -357,6 +395,7 @@ def main():
     test_speech_and_refs()
     test_removals()
     test_layers()
+    test_removal_completes()
     test_thin_beats()
     test_auto_length()
     test_text_in_frame()

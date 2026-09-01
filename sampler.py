@@ -929,6 +929,35 @@ _HAS_VERB = re.compile(
     r"cuts?|pulls?|takes?|steps?|turns?|looks?|comes?|goes)\b", re.I)
 
 
+def off_by_last_frame(items):
+    """State that a removal FINISHES inside this shot. Empty when nothing came off.
+
+    Scrubbing the scene stops a garment being described. It does not tell the model
+    to complete the removal, and the last frame is what the next shot inherits as
+    its keyframe -- so a cut still in progress hands on a garment still half worn,
+    and the next beat has moved on and never contradicts the picture. The garment
+    stays. That is a garment "coming back" even though the text was right.
+
+    Said ONCE, in the removing shot, and never again. A later shot that says "no
+    longer wearing the bra" names the bra, and to a video model a mention is a
+    presence cue -- that phrasing put garments back on in the previous version of
+    this node. Afterwards the item is simply absent from the text."""
+    items = [i.strip() for i in (items or []) if i and i.strip()]
+    if not items:
+        return ""
+    what = " and ".join(f"the {i}" for i in items)
+    plural = len(items) > 1 or bool(_PLURAL_ITEM.search(items[-1]))
+    verb, are = ("come", "are") if plural else ("comes", "is")
+    sentence = (f"{what} {verb} off during this shot and {are} away by the last frame, "
+                f"fully removed and no longer on the body, dropped out of frame.")
+    return " " + sentence[0].upper() + sentence[1:]
+
+
+# Garments that are grammatically plural, so the sentence above agrees with them.
+_PLURAL_ITEM = re.compile(r"\b(?:s|shorts|trousers|pants|jeans|boots|shoes|gloves|"
+                          r"tights|leggings|briefs|knickers|cuffs)$", re.I)
+
+
 def names_any(text, tokens):
     """Does `text` name any of these items?"""
     return any(re.search(r"\b" + re.escape(t) + r"\b", text or "", re.I)
@@ -1570,7 +1599,12 @@ class H3LongVideos:
                 tail = ". ".join(a.rstrip(".") for a in live) + "."
                 tail = tail[0].upper() + tail[1:]
                 shot_scene = f"{shot_scene} {tail}".strip() if shot_scene else tail
-            shots.append(f"{shot_scene} {body}".strip() if shot_scene else body)
+            # The removal has to FINISH inside this shot, because its last frame is
+            # the next shot's keyframe. Stated only here; naming the garment again
+            # later would put it back.
+            tail = off_by_last_frame(toks)
+            line = f"{shot_scene} {body}".strip() if shot_scene else body
+            shots.append((line + tail).strip())
             speech.append(has_speech(body))
 
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)

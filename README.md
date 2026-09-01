@@ -141,6 +141,17 @@ Both take effect on their own shot: the keyframe already shows the previous stat
 the start, and it is the *description* claiming a garment is still worn that puts it
 back. The directive lines never reach the model.
 
+`remove:` also tells that shot to **finish the job**: it appends one sentence saying
+the item comes off during this shot and is away by the last frame, fully removed and
+out of frame. That matters because the last frame becomes the next shot's keyframe —
+a cut still in progress hands on a garment still half worn, and the next beat has
+moved on and never contradicts the picture, so it stays on.
+
+That sentence is said **once**, in the removing shot. Later shots simply never
+mention the garment: naming it again — even to say it is gone — is a presence cue,
+and "no longer wearing the red jacket" is what put garments back on in the previous
+version of this node.
+
 This is the only place the node edits your text, and it does exactly what you tell
 it — no removals are inferred from your prose.
 
