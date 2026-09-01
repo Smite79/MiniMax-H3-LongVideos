@@ -1058,6 +1058,34 @@ def turns_in(text, names=()):
     return bool(_TURN_CUE.search(text or "")) or body_moved(text, names)
 
 
+# A falling body's reflex is to put its hands out. When the hands are fastened, the
+# model has to resolve that conflict, and the cheapest resolution is to free them --
+# which renders as the cuffs opening or the chain snapping mid-fall. Nothing in the
+# restraint hold covers it, because the hold says the hardware is whole and says
+# nothing about what the body does on the way down.
+#
+# So say what DOES take the landing. Positive, and it names no person: at cfg 1
+# there is no negative prompt, and "does not catch itself" names catching.
+FALL_HOLD = (" A bound body falls as one piece: the fastened limbs stay fastened and travel "
+             "with it, the arms staying in the hold, and the shoulder, hip or side takes "
+             "the landing.")
+
+_FALL_CUE = re.compile(
+    r"\b(?:falls?|fell|falling|drops?\s+to|dropped\s+to|collapse[sd]?|collapsing|"
+    r"topple[sd]?|topples|tips?\s+over|tipped\s+over|keels?\s+over|goes\s+down|"
+    r"went\s+down|slumps?|slumped|stumbles?|stumbled|overbalance[sd]?|"
+    r"loses?\s+(?:her|his|their)\s+balance|lost\s+(?:her|his|their)\s+balance|"
+    # ...and being put down by someone else: "pushes her over", "knocked him down".
+    r"(?:push|knock|shove|pull|drag|throw|thr[eo]w)(?:es|s|ed|n)?\s+"
+    r"(?:her|him|them|\w+\s+)?(?:over|down|to\s+the\s+(?:floor|ground))|"
+    r"hits?\s+the\s+(?:floor|ground|deck))\b", re.I)
+
+
+def falls_in(text):
+    """Does a body go down in this beat?"""
+    return bool(_FALL_CUE.search(text or ""))
+
+
 def restraint_present(text):
     """Is a restraint being applied or worn, in this text?
 
@@ -1834,8 +1862,12 @@ class H3LongVideos:
             # is something to hold -- a removal already made, or hardware on.
             turn = TURN_HOLD if (turns_in(body, cast)
                                  and (gone or shown or restrained)) else ""
+            # Going down with the hands fastened: say what takes the landing, or the
+            # model frees the hands to break the fall and the hardware gives way.
+            fall = FALL_HOLD if (restrained and falls_in(body)) else ""
             line = f"{shot_scene} {body}".strip() if shot_scene else body
-            shots.append((line + tail + (RESTRAINT_HOLD if restrained else "") + turn).strip())
+            shots.append((line + tail + (RESTRAINT_HOLD if restrained else "")
+                          + fall + turn).strip())
             speech.append(has_speech(body))
 
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)

@@ -397,6 +397,39 @@ def test_restraints_hold():
           and "fastened exactly as it was put on" in S.RESTRAINT_HOLD)
 
 
+def test_falling_bound():
+    print("\n=== a bound body goes down without catching itself ===")
+    # A falling body puts its hands out. With the hands fastened the model has to
+    # resolve that, and freeing them is cheaper than landing on a shoulder -- so
+    # the cuffs open or the chain snaps on the way down. The restraint hold does
+    # not cover it: it speaks about the hardware, not about the fall.
+    for _t in ("She falls forward onto the floor.", "Kate collapses.",
+               "She loses her balance and goes down.", "Kate topples sideways.",
+               "She stumbles and hits the floor.", "Kate slumps against the wall.",
+               "Dan pushes her over.", "Dan knocks her down.",
+               "Dan throws her to the ground.", "Dan pulls her down."):
+        check(f"fall seen: {_t[:34]!r}", S.falls_in(_t))
+    # Only a body going down counts. Light falls, gazes fall, and a dropped
+    # object is not a dropped person.
+    for _t in ("Kate walks to the window.", "She lies still.",
+               "Dan drops the keys.", "Dan sets the crate down.",
+               "Kate turns her head."):
+        check(f"not a fall: {_t[:34]!r}", not S.falls_in(_t))
+    check("the clause is one sentence", S.FALL_HOLD.count(".") == 1)
+    check("...keeping the fastening through the fall",
+          "fastened limbs stay fastened" in S.FALL_HOLD)
+    check("...keeping the arms in the hold",
+          "arms staying in the hold" in S.FALL_HOLD)
+    # The hands are the whole problem, so the clause has to say what lands
+    # INSTEAD of them. Saying "does not catch itself" would name catching, and
+    # at cfg 1 there is no negative prompt to cancel it.
+    check("...and naming what takes the landing",
+          "shoulder, hip or side takes the landing" in S.FALL_HOLD)
+    check("...impersonal and positive",
+          not re.search(r"\b(?:she|he|her|his|they|no|not|never)\b",
+                        S.FALL_HOLD, re.I))
+
+
 def test_turning_around():
     print("\n=== turning shows a surface the keyframe never pinned ===")
     # The keyframe pins the FRONT. Once the body rotates, the model fills the
@@ -478,6 +511,7 @@ def main():
     test_layers()
     test_removal_completes()
     test_restraints_hold()
+    test_falling_bound()
     test_turning_around()
     test_thin_beats()
     test_auto_length()

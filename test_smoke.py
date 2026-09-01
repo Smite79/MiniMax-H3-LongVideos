@@ -15,6 +15,7 @@ Run: python test_smoke.py
 import importlib.util
 import io
 import os
+import re
 import sys
 import types
 
@@ -346,6 +347,29 @@ def test_auto_removal():
     check("...and warns instead", "no 'remove:' line" in info_off)
 
 
+def test_fall_keeps_the_hardware():
+    print("\n=== a fall does not open the cuffs ===")
+    P = ("A bare cellar. Kate, 24, in a grey coat.\n\n"
+         "Dan cuffs her wrists behind her back.\n\n"
+         "Kate loses her balance and falls onto the floor.\n\n"
+         "Kate lies still while Dan walks out.")
+    blocks = [b for b in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3])
+              if b.strip()]
+    check("three shots planned", len(blocks) == 3)
+    hold, fall = S.RESTRAINT_HOLD.strip(), S.FALL_HOLD.strip()
+    # The hold latches: once a restraint goes on it is held for the rest of the run.
+    for i, b in enumerate(blocks, 1):
+        check(f"shot {i} holds the restraint", hold in b)
+    # The fall clause is per-beat -- it only earns its tokens where a body goes down.
+    check("the fall beat says what takes the landing", fall in blocks[1])
+    check("...the beat that puts them on does not", fall not in blocks[0])
+    check("...and neither does lying still afterwards", fall not in blocks[2])
+    # No restraint anywhere in the prompt: a fall is just a fall, nothing to protect.
+    loose = run_node("A bare cellar. Kate, 24.\n\nKate trips and falls.",
+                     plan_only=True)[3]
+    check("an unbound fall adds nothing", fall not in loose)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -399,6 +423,7 @@ def main():
     test_beat_reviving_a_garment()
     test_restart_after_removal()
     test_auto_removal()
+    test_fall_keeps_the_hardware()
     test_timing_report()
     print()
     if _fails:
