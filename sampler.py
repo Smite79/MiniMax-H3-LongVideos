@@ -1000,6 +1000,30 @@ _BODY_PART = re.compile(
     r"thighs?|knees?|elbows?|thumbs?|eyes)\b", re.I)
 
 
+# A turn shows a surface the shot has never shown. The keyframe pins the FRONT, so
+# once the body rotates the model is filling in from its prior -- and its prior for
+# an undescribed body is a CLOTHED one. That is a removed garment coming back, often
+# stacked in the wrong order because nothing said which layer was where, and hardware
+# on the far side being re-invented as it rotates into view.
+#
+# One sentence, only on shots that turn, and only once there is state worth holding.
+# It names no garment and no person, so it summons neither.
+TURN_HOLD = (" The body reads the same from every angle: what is on it now is all that is on "
+             "it, front, side and behind, and whatever is fastened stays fastened and closed "
+             "as the view comes round.")
+
+_TURN_CUE = re.compile(
+    r"\b(?:turn(?:s|ed|ing)?|rotat(?:es?|ed|ing)|spin(?:s|ning)?|swivel(?:s|led)?|"
+    r"roll(?:s|ed|ing)?\s+(?:over|onto)|faces?\s+away|face[sd]?\s+the\s+other|"
+    r"over\s+(?:her|his|their)\s+shoulder|from\s+behind|back\s+to\s+the\s+camera|"
+    r"shows?\s+(?:her|his|their)\s+back|other\s+side)\b", re.I)
+
+
+def turns_in(text):
+    """Does this beat rotate a body or the view around one?"""
+    return bool(_TURN_CUE.search(text or ""))
+
+
 def restraint_present(text):
     """Is a restraint being applied or worn, in this text?
 
@@ -1679,8 +1703,12 @@ class H3LongVideos:
                     restrained = False
                 elif restraint_present(body) or restraint_present(shot_scene):
                     restrained = True
+            # A turn shows a surface the keyframe never pinned, and the model fills
+            # it from a clothed prior. Only on shots that turn, and only once there
+            # is something to hold -- a removal already made, or hardware on.
+            turn = TURN_HOLD if (turns_in(body) and (gone or shown or restrained)) else ""
             line = f"{shot_scene} {body}".strip() if shot_scene else body
-            shots.append((line + tail + (RESTRAINT_HOLD if restrained else "")).strip())
+            shots.append((line + tail + (RESTRAINT_HOLD if restrained else "") + turn).strip())
             speech.append(has_speech(body))
 
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
