@@ -374,6 +374,29 @@ def test_reference_tags():
           S.resolve_tags("Kate, <Picture 1>, walks in.", [])[1] == [])
 
 
+def test_restraints_hold():
+    print("\n=== a restraint, once on, stays whole ===")
+    for _t in ("Kate is cuffed at the wrists.", "Dan handcuffs her.",
+               "Her mouth is taped shut.", "Dan locks a chain around her waist.",
+               "Kate is hogtied on the floor.", "Dan gags her.",
+               "Dan ties a rope around her ankles.",
+               "Wrists handcuffed behind back, ankles cuffed together."):
+        check(f"restraint seen: {_t[:34]!r}", S.restraint_present(_t))
+    # Ambiguous hardware needs a binding verb or a body part. An earlier version
+    # listed "chain" as both noun and verb, so a chain-link fence armed the rule.
+    for _t in ("A chain-link fence runs along the yard.", "He wears a leather belt.",
+               "Kate walks to the window.", "The rope hangs from the rafters.",
+               "Dan tapes the box shut."):
+        check(f"not a restraint: {_t[:34]!r}", not S.restraint_present(_t))
+    check("the hold is one sentence", S.RESTRAINT_HOLD.count(".") == 1)
+    check("...impersonal, so it summons nobody",
+          not re.search(r"(?:she|he|her|his|they)", S.RESTRAINT_HOLD, re.I))
+    check("...and positive, since cfg 1 has no negative prompt",
+          not re.search(r"no|not|never", S.RESTRAINT_HOLD, re.I))
+    check("...saying what holds", "whole and closed" in S.RESTRAINT_HOLD
+          and "fastened exactly as it was put on" in S.RESTRAINT_HOLD)
+
+
 def test_schema():
     print("\n=== node schema ===")
     schema = S.H3LongVideos.INPUT_TYPES()
@@ -386,13 +409,18 @@ def test_schema():
     check("the shifts default to 12/3",
           opt["shift_video"][1]["default"] == 12.0 and opt["shift_audio"][1]["default"] == 3.0)
     check("silence on non-speech shots is on", opt["silence_nonspeech"][1]["default"] is True)
+    check("restraints are held by default", opt["hold_restraints"][1]["default"] is True)
+    check("shot length is read from the beat by default",
+          opt["shot_length"][1]["default"] == "from the beat")
     check("first_frame is offered", "first_frame" in opt)
     n_widgets = sum(1 for d in (req, opt) for k, v in d.items()
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
     # 17 core + 6 upscale. The point of the number is that it stays small enough
     # to read; the old node had 38 and nobody could find anything.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 24)
+    # 17 core + 6 upscale + shot_length + hold_restraints. The number matters only
+    # as a ceiling: the old node had 38 and nobody could find anything.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 26)
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
                "latent_upscale", "latent_upscale_scale"):
         check(f"{_u} is on the node", _u in opt)
@@ -411,6 +439,7 @@ def main():
     test_removals()
     test_layers()
     test_removal_completes()
+    test_restraints_hold()
     test_thin_beats()
     test_auto_length()
     test_text_in_frame()

@@ -157,9 +157,20 @@ it — no removals are inferred from your prose.
 
 ## Things that must stay the same
 
-The node writes no continuity guards. The old version did, and the beat ended up as
-4% of the prompt with the rest arguing against it. So anything that has to hold
-across the whole chain goes in the **scene paragraph**, which reaches every shot:
+**Restraints are handled for you.** `hold_restraints` (on by default) watches for
+hardware going on — cuffs, chains, rope, tape, a gag, a collar — and from that shot
+onward every shot carries one sentence: *every restraint stays whole and closed,
+fastened exactly as it was put on*. It latches: a beat that does not mention the
+cuffs does not mean they came off. A `remove:` naming the hardware clears it.
+
+This is the **only** continuity fact the node asserts on its own, because it is the
+one that cannot be recovered — a cuff that renders open is not a detail that
+drifted, it is the scene ceasing to make sense. Ambiguous hardware needs a binding
+verb or a body part alongside it, so a chain-link fence and a leather belt do not
+arm it.
+
+Everything else that has to hold across the chain goes in the **scene paragraph**,
+which reaches every shot:
 
 ```
 A basement. Kate is 20, blonde, wrists cuffed behind her back. Her cuffs and
