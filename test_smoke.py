@@ -399,6 +399,37 @@ def test_anchor_is_the_scene():
     check("...and the scene still leads", all("A basement." in s for s in sh2))
 
 
+def test_guard_and_layers_end_to_end():
+    print("\n=== the guard and the layers, through the whole path ===")
+    P = ("Medium shadows. A basement workshop.\n\n"
+         "Maya: 27, blonde hair, grey wool scarf, black quilted jacket, brown boots. "
+         "Wrists cuffed behind back. She stays lying on her side on the floor.\n"
+         "Jon: 34, navy overalls.\n\n"
+         "Maya lies still on the floor, eyes closed.\n\n"
+         "Jon walks in and takes her jacket off to expose the scarf.\n\n"
+         "Maya lies still.\n\n"
+         "Jon walks out and shuts the door.")
+    imgs, audio, info, script = run_node(P, plan_only=True)[:4]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("four beats, four shots", len(sh) == 4)
+    check("Jon is absent from the shot he is not in", "Jon: 34" not in sh[0])
+    check("...and present in the one he is", "Jon: 34" in sh[1])
+    check("...and alone once he leaves her behind", "Maya: 27" not in sh[3])
+    check("Maya is kept where a pronoun refers to her", "Maya: 27" in sh[1])
+    # The scarf is under the jacket, read from the script's own wording.
+    check("the covered layer is not described", "grey wool scarf" not in sh[0])
+    check("...and appears once the jacket is off", "grey wool scarf" in sh[2])
+    check("the jacket is described while it is on", "quilted jacket" in sh[0])
+    check("...and gone after it comes off", "quilted jacket" not in sh[2])
+    check("info names the layering", "scarf under jacket" in info)
+    check("...and the opening-pose warning", "opening pose comes from the text" in info)
+    # Off, every sheet line goes into every shot, as before.
+    off = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True,
+           character_guard=False)[3]) if x.strip()]
+    check("guard off puts everyone in every shot",
+          all("Jon: 34" in s and "Maya: 27" in s for s in off))
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -484,6 +515,7 @@ def main():
     test_auto_removal()
     test_fall_keeps_the_hardware()
     test_anchor_is_the_scene()
+    test_guard_and_layers_end_to_end()
     test_detail_trend()
     test_timing_report()
     print()
