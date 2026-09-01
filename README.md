@@ -181,10 +181,16 @@ surface it has never been shown, and its prior for an undescribed body is a
 **clothed** one. That is a removed garment coming back, often stacked in the wrong
 order, and hardware on the far side re-inventing itself as it rotates into view.
 
-On shots that turn, and only once there is state worth holding, one sentence is
-added: *the body reads the same from every angle — what is on it now is all that is
-on it, front, side and behind, and whatever is fastened stays fastened.* It names no
-garment and no person.
+**Being moved counts too** — lifted, dragged, rolled, laid down. Same reason: the
+keyframe pinned one pose seen from one side, and moving the body puts it where that
+frame never showed it. The verb needs a *person* as its object and somewhere to go,
+so *"lifts her onto the table"* counts while *"lifts the crate"*, *"positions her
+legs"* and *"pulls her shorts off"* do not.
+
+On those shots, and only once there is state worth holding, one sentence is added:
+*the body reads the same from every angle and in every position — what is on it now
+is all that is on it, front, side and behind, and whatever is fastened stays
+fastened.* It names no garment and no person.
 
 Everything else that has to hold across the chain goes in the **scene paragraph**,
 which reaches every shot:

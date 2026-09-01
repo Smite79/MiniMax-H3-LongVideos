@@ -1008,9 +1008,9 @@ _BODY_PART = re.compile(
 #
 # One sentence, only on shots that turn, and only once there is state worth holding.
 # It names no garment and no person, so it summons neither.
-TURN_HOLD = (" The body reads the same from every angle: what is on it now is all that is on "
-             "it, front, side and behind, and whatever is fastened stays fastened and closed "
-             "as the view comes round.")
+TURN_HOLD = (" The body reads the same from every angle and in every position: what is on it "
+             "now is all that is on it, front, side and behind, and whatever is fastened stays "
+             "fastened and closed as it moves and the view comes round.")
 
 _TURN_CUE = re.compile(
     r"\b(?:turn(?:s|ed|ing)?|rotat(?:es?|ed|ing)|spin(?:s|ning)?|swivel(?:s|led)?|"
@@ -1019,9 +1019,43 @@ _TURN_CUE = re.compile(
     r"shows?\s+(?:her|his|their)\s+back|other\s+side)\b", re.I)
 
 
-def turns_in(text):
-    """Does this beat rotate a body or the view around one?"""
-    return bool(_TURN_CUE.search(text or ""))
+# Being MOVED does the same damage as turning, for the same reason: the keyframe
+# pinned one pose seen from one side, and lifting, dragging or rolling someone puts
+# the body somewhere that frame never showed. The verb needs a PERSON as its object
+# -- "lifts her onto the table" moves her, "lifts the crate" does not, and
+# "positions her legs" moves a limb, not the body.
+_MOVE_VERB = re.compile(
+    r"\b(?:lifts?|lifted|carr(?:ies|ied)|drags?|dragged|hauls?|hauled|hoists?|hoisted|"
+    r"picks?\s+up|picked\s+up|sets?\s+down|set\s+down|lays?|laid|"
+    r"lowers?|lowered|rolls?|rolled|flips?|flipped|props?|propped|"
+    r"moves?|moved|repositions?|repositioned|pulls?|pulled|pushes|pushed|"
+    r"shoves?|shoved|throws?|threw|drops?|dropped|turns?|turned)\s+", re.I)
+_PERSON_OBJ = r"(?:the\s+|a\s+)?(?:her|him|them"
+
+
+def body_moved(text, names=()):
+    """Is a PERSON being moved in this beat, rather than an object or a limb?"""
+    toks = [re.escape(n) for n in (names or []) if n]
+    obj = re.compile(_PERSON_OBJ + (("|" + "|".join(toks)) if toks else "") + r")\b"
+                     # ...not a possessive, and not a LIMB: "positions her legs" moves
+                     # the legs, not the body. An earlier guard rejected any following
+                     # word ending in "s", which threw out "drags her across the floor".
+                     r"(?!\s*['’]s)"
+                     r"(?!\s+(?:legs?|arms?|wrists?|ankles?|hands?|feet|foot|head|hair|"
+                     r"hips?|shoulders?|knees?|elbows?|thighs?|face|chin)\b)"
+                     # A moved BODY goes somewhere: the object is followed by a word
+                     # of motion, or the clause simply ends. Without this, "pulls her
+                     # shorts off" reads as moving her rather than the shorts.
+                     r"(?=\s*(?:[.,;!?]|$)"
+                     r"|\s+(?:onto|into|on|in|to|across|down|up|over|under|back|out|"
+                     r"away|upright|off|against|toward|towards|through|round|around|"
+                     r"beside|behind|clear)\b)", re.I)
+    return any(obj.match(text[m.end():]) for m in _MOVE_VERB.finditer(text or ""))
+
+
+def turns_in(text, names=()):
+    """Does this beat rotate a body, move one, or bring the view around it?"""
+    return bool(_TURN_CUE.search(text or "")) or body_moved(text, names)
 
 
 def restraint_present(text):
@@ -1664,6 +1698,9 @@ class H3LongVideos:
         # start, and a description saying it is still worn is what puts it back.
         shots, speech, gone, shown = [], [], [], []
         restrained = False
+        # Names from the scene, so "lifts Kate onto the table" reads as moving a
+        # person rather than an object.
+        cast = re.findall(r"[A-Z][a-z]{2,}", scene or "")
         for b in beats:
             body, toks, adds = extract_directives(b)
             # A beat's own words go to the model verbatim. Naming a garment that came
@@ -1717,7 +1754,8 @@ class H3LongVideos:
             # A turn shows a surface the keyframe never pinned, and the model fills
             # it from a clothed prior. Only on shots that turn, and only once there
             # is something to hold -- a removal already made, or hardware on.
-            turn = TURN_HOLD if (turns_in(body) and (gone or shown or restrained)) else ""
+            turn = TURN_HOLD if (turns_in(body, cast)
+                                 and (gone or shown or restrained)) else ""
             line = f"{shot_scene} {body}".strip() if shot_scene else body
             shots.append((line + tail + (RESTRAINT_HOLD if restrained else "") + turn).strip())
             speech.append(has_speech(body))
