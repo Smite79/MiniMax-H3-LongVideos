@@ -215,6 +215,23 @@ that drifted, it is the scene ceasing to make sense. Ambiguous items need a
 fastening verb or a body part alongside them, so a chain-link fence and a leather
 belt do not arm it.
 
+Three refinements ride along with it, each only where it applies:
+
+- **Rigid hardware stays rigid.** Steel is not rope, but a model with no reason to
+  think otherwise draws a chain as a soft cord — sagging, stretching to wherever a
+  limb is going, allowing movement the hardware does not allow. Where a chain,
+  padlock, cuffs or a bar are named, the shot adds that the links keep their size,
+  the run between the fastenings stays straight and taut, and the body reaches only
+  as far as the metal allows. Rope, tape and straps do flex, so nothing claims
+  otherwise for them.
+- **A bound body falls as one piece.** A falling body puts its hands out; with the
+  hands fastened, the cheapest way for the model to resolve that is to free them,
+  which renders as the hardware giving way. Where a beat has someone go down, the
+  shot says what takes the landing instead.
+- **A turn shows a side the keyframe never pinned**, and the model fills it from a
+  clothed prior. Where a beat turns or moves a body, the shot says what is on it now
+  is all that is on it, from every side.
+
 **Turning is handled too.** The keyframe pins the *front* of the body. When a beat
 turns someone — or brings the camera round behind them — the model is filling in a
 surface it has never been shown, and its prior for an undescribed body is a
@@ -261,6 +278,34 @@ into whatever is next.
 | `steps` | 6–8 with a turbo/distill LoRA, 20+ without |
 | `megapixels` | 1.0 is H3's native budget; lower is faster and leaner |
 | `shot_seconds` | length of **every** shot (see below) |
+
+### Keeping your own defaults
+
+Adding a widget changes the node's inputs, and a node added afresh comes up with the
+built-in defaults — so a preference has to be set again after every update. To make
+one stick, put it in **`defaults.json`** beside `sampler.py`:
+
+```json
+{
+  "steps": 6,
+  "megapixels": 0.75,
+  "shot_seconds": 8.0,
+  "upscale": "lanczos"
+}
+```
+
+It is read when the node loads and replaces the built-in default for any widget of
+that name. `defaults.example.json` is written on first load with every current
+default in it — copy it, cut it down to the ones you care about, and rename.
+
+Unknown keys are ignored, so the file survives a widget being renamed or removed,
+and a combo will not accept a value it does not offer (an upscale model you have
+since uninstalled cannot become the default). A malformed file falls back to the
+built-ins rather than stopping the node from loading.
+
+This changes what a **new** node starts with. A node already in a saved workflow
+keeps whatever was saved with it. `defaults.json` is gitignored, so pulling an
+update never overwrites it.
 
 **Why every shot is the same length:** noise is drawn to the latent's *shape*, so
 shots of different frame counts get unrelated noise from the same seed, and grain

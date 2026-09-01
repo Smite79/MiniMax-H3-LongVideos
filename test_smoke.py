@@ -472,6 +472,29 @@ def test_removing_shot_without_a_keyframe():
           "quilted jacket" not in sh_ff[0])
 
 
+def test_chain_hold_end_to_end():
+    print("\n=== a chain holds its shape through the whole run ===")
+    P = ("A basement.\n\n"
+         "Maya: 27, grey coat. Wrists cuffed behind back.\n\n"
+         "Jon locks a chain around her waist and padlocks it at the back.\n\n"
+         "Maya pulls against the chain.\n\n"
+         "Maya lies still.")
+    sh = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3]) if x.strip()]
+    chain = S.CHAIN_HOLD.strip()
+    check("every shot with the hardware holds it rigid", all(chain in s for s in sh))
+    check("...alongside the restraint hold",
+          all(S.RESTRAINT_HOLD.strip() in s for s in sh))
+    # Rope flexes. Saying it holds a straight line would be wrong, so it does not.
+    soft = run_node("A basement.\n\nMaya: 27, a rope around her wrists.\n\n"
+                    "Maya lies still.", plan_only=True)[3]
+    check("rope is not claimed to be rigid", chain not in soft)
+    check("...but it is still held whole", S.RESTRAINT_HOLD.strip() in soft)
+    # Hardware with nothing restrained by it is scenery, not a restraint.
+    loose = run_node("A yard with a chain-link fence.\n\nMaya walks past it.",
+                     plan_only=True)[3]
+    check("scenery does not arm it", chain not in loose)
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -559,6 +582,7 @@ def main():
     test_anchor_is_the_scene()
     test_guard_and_layers_end_to_end()
     test_removing_shot_without_a_keyframe()
+    test_chain_hold_end_to_end()
     test_detail_trend()
     test_timing_report()
     print()
