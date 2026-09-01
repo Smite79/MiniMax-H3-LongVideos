@@ -348,10 +348,25 @@ def test_opening_pose():
     check("a posture sentence is found", "opening pose" in note)
     check("...and its position reported", "4 of 4" in note)
     check("...pointing at the mechanism that pins it", "first_frame" in note)
+    # first_frame pins the WHOLE frame. Telling someone with an identity portrait to
+    # wire it there makes shot 1 a portrait -- worse than the pose they wanted.
+    check("...saying it must be a composed frame", "composed frame" in note)
+    check("...and where a portrait actually goes", "ref_image_1" in note)
     check("nothing said when a first_frame is wired", S.posture_note(sc, True) == "")
     check("...or when no posture is described",
           S.posture_note("A basement. Maya walks to the window.", False) == "")
     check("...or with no scene at all", S.posture_note("", False) == "")
+    # ONE aug covers every visual conditioning row. At 0.999 a reference is handed
+    # over near-clean, and near-clean means "reproduce this" -- framing included. A
+    # portrait reference therefore pulls the shot towards portrait framing.
+    rn = S.reference_note(1, 0.999, False)
+    check("a near-clean reference is explained", "reproduce them" in rn)
+    check("...naming framing as what carries over", "FRAMING included" in rn)
+    check("...and that shot 1 has no anchor to protect", "no keyframe" in rn)
+    check("with a first_frame, shot 1 does have one",
+          "no keyframe" not in S.reference_note(1, 0.999, True))
+    check("no references, nothing to say", S.reference_note(0, 0.999, False) == "")
+    check("already softened, nothing to say", S.reference_note(1, 0.90, False) == "")
 
 
 def test_removal_needs_a_particle():

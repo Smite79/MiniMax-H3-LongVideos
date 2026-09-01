@@ -828,8 +828,30 @@ def posture_note(scene, has_first_frame):
         return ""
     return (f"shot 1 has no keyframe, so its opening pose comes from the text alone -- "
             f"and the sentence describing the pose is {where[0] + 1} of {len(sents)}. "
-            f"Wire first_frame to pin the opening frame; a picture is the only thing "
-            f"that outranks the rest of the text")
+            f"first_frame pins it, but it pins the WHOLE opening frame, so it has to be "
+            f"a composed frame of the shot you want: a head-and-shoulders picture wired "
+            f"there makes the first frame a head-and-shoulders picture. An identity "
+            f"portrait belongs on ref_image_1 instead")
+
+
+def reference_note(n_refs, aug, has_first_frame):
+    """What a near-clean reference actually asks the model to do.
+
+    ONE aug covers every visual conditioning row. At H3's default of 0.999 a
+    reference is handed over essentially noise-free, and a noise-free image is an
+    invitation to REPRODUCE it -- its framing along with its subject. A portrait
+    reference therefore pulls the shot towards portrait framing, which is at odds
+    with a full-body pose no matter what the text says."""
+    if not n_refs or aug is None or float(aug) < KEYFRAME_SAFE_AUG:
+        return ""
+    note = (f"{n_refs} reference image(s) at ref_noise_aug {float(aug):.3f}, which is "
+            f"near-clean -- that asks the model to reproduce them, FRAMING included. A "
+            f"head-and-shoulders reference pulls every shot towards head-and-shoulders "
+            f"framing, whatever the text says about the body")
+    if not has_first_frame:
+        note += (". Shot 1 has no keyframe, so on that shot the aug only touches the "
+                 "references -- there is no anchor there for a lower value to damage")
+    return note
 
 
 def frame_detail(img):
@@ -1936,8 +1958,11 @@ class H3LongVideos:
             "optional": {
                 "first_frame": ("IMAGE", {"tooltip":
                     "Pins the opening frame of shot 1 -- the only shot with no previous frame to "
-                    "continue from. If shot 1 has to start in a particular pose or position, this "
-                    "is the mechanism; text cannot outrank a picture."}),
+                    "continue from.\n\n"
+                    "It pins the WHOLE frame, so give it a composed frame of the shot you want: "
+                    "subject, pose, framing, background. A head-and-shoulders portrait wired here "
+                    "makes shot 1 a head-and-shoulders portrait. An identity portrait belongs on "
+                    "ref_image_1, which says who the person is without dictating the frame."}),
                 "ref_image_1": ("IMAGE", {"tooltip":
                     "Identity reference, applied to every shot unless the prompt places it with a "
                     "<Picture 1> tag. Kept on every shot on purpose: it is the only fixed anchor a "
@@ -2203,6 +2228,11 @@ class H3LongVideos:
         _pose = posture_note(scene, first_frame is not None)
         if _pose:
             notes.append(_pose)
+        _ref = reference_note(len([r for r in (ref_image_1, ref_image_2, ref_image_3,
+                                               ref_image_4) if r is not None]),
+                              ref_noise_aug, first_frame is not None)
+        if _ref:
+            notes.append(_ref)
         active = []                 # the people the previous beat involved
         for b in beats:
             body, toks, adds = extract_directives(b)
