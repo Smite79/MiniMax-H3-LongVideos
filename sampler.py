@@ -716,6 +716,55 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         return None                         # never fail a render for a nicety
 
 
+def frame_detail(img):
+    """(detail, contrast) for one frame in 0..1, HWC.
+
+    Detail is mean absolute neighbour difference -- a cheap stand-in for how much
+    fine structure survives. Contrast is the luminance spread. Neither is an
+    absolute measure of anything; what matters is the TREND across shots.
+
+    Every shot boundary decodes a latent to pixels, takes the last frame and
+    re-encodes it as the next shot's keyframe. That round trip is lossy, and the
+    frame it runs on is the model's own output, so shot 11 is sampled from a
+    picture that has been through ten decode/encode cycles. Softening that
+    compounds is invisible shot to shot and obvious end to end -- so measure it."""
+    x = img.float()
+    if x.dim() == 3 and x.shape[-1] >= 3:
+        x = x[..., :3].mean(dim=-1)
+    elif x.dim() == 3:
+        x = x[..., 0]
+    if x.dim() != 2 or x.shape[0] < 2 or x.shape[1] < 2:
+        return 0.0, 0.0
+    gx = (x[:, 1:] - x[:, :-1]).abs().mean()
+    gy = (x[1:, :] - x[:-1, :]).abs().mean()
+    return float((gx + gy) * 0.5), float(x.std())
+
+
+def detail_report(per_shot):
+    """One line saying whether the chain is softening, and by how much.
+
+    per_shot is [(detail, contrast), ...] measured on each shot's last frame."""
+    vals = [d for d, _ in per_shot if d > 0]
+    if len(vals) < 2:
+        return ""
+    first, last = vals[0], vals[-1]
+    drop = (first - last) / first * 100.0 if first else 0.0
+    trend = " ".join(f"{d:.4f}" for d, _ in per_shot)
+    line = f"detail per shot (last frame): {trend}"
+    if drop >= 10.0:
+        line += (f" -- DOWN {drop:.0f}% from shot 1 to shot {len(vals)}. Each boundary "
+                 f"decodes a shot, takes its LAST frame and re-encodes it as the next "
+                 f"shot's keyframe, so the loss of one round trip is carried into the "
+                 f"next and compounds. Break the chain to stop it accumulating: "
+                 f"restart_after_removal starts a shot from the text instead of the "
+                 f"previous frame, at the cost of a visible cut there")
+    elif drop <= -10.0:
+        line += f" -- UP {-drop:.0f}%, so the chain is not softening"
+    else:
+        line += f" -- flat within {abs(drop):.0f}%"
+    return line
+
+
 def _keyframe_latent(vae, hand_img):
     """The keyframe latent for this shot: an ENCODE of the previous shot's last frame.
 
@@ -2174,6 +2223,7 @@ class H3LongVideos:
         fresh = []
         t_start = time.perf_counter()
         vid_out, aud_out, sr = [], [], 44100
+        shot_detail = []            # (detail, contrast) per shot, on its last frame
         _deep_cleanup()
 
         for i, shot_prompt in enumerate(shots):
@@ -2277,6 +2327,13 @@ class H3LongVideos:
             if trim_seam and i > 0:
                 imgs = imgs[1:]
                 wav["waveform"] = wav["waveform"][..., max(0, round(sr / H3_FPS)):]
+            # Measured on the frame that becomes the next shot's keyframe, because
+            # that is the one whose losses are inherited.
+            try:
+                if imgs is not None and imgs.shape[0]:
+                    shot_detail.append(frame_detail(imgs[-1]))
+            except Exception:
+                pass
             vid_out.append(imgs.to("cpu", copy=True) if cleanup_between_shots else imgs)
             aud_out.append(wav["waveform"].to("cpu", copy=True) if cleanup_between_shots
                            else wav["waveform"])
@@ -2311,6 +2368,9 @@ class H3LongVideos:
             f"decode {t_decode:.0f}s ({100 * t_decode / wall:.0f}%), "
             f"other {other:.0f}s ({100 * other / wall:.0f}%); "
             f"per shot {t_sample / n:.1f}s + {t_decode / n:.1f}s")
+        _detail = detail_report(shot_detail)
+        if _detail:
+            notes.append(_detail)
         if t_decode > t_sample:
             notes.append("decode is costing more than sampling here -- latent_upscale "
                          "trades cheaper sampling for a 4x more expensive decode, so it "
