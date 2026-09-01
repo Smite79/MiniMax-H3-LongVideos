@@ -206,6 +206,50 @@ _DIALOGUE_TAG = re.compile(r"<\s*d\s*>(.+?)<\s*/\s*d\s*>", re.I | re.S)
 _CAPTION_TOKEN = re.compile(r"<\|(?:caption|lyrics)_(?:start|end)\|>", re.I)
 
 
+BEAT_BASE_SEC = 2.0            # setup and settle, whatever the beat says
+SECONDS_PER_ACTION = 2.5       # screen time one staged action clause needs
+WORDS_PER_SEC = 2.5            # spoken delivery
+# A new coordinated verb phrase starts a new action.
+_CLAUSE_SPLIT = re.compile(
+    r"(?:[.!?;]+|,?\s+(?:and then|then|and|before|after|while|as|until)\s+|,\s+(?=\w+ing\b))")
+
+
+def beat_seconds(beat):
+    """Roughly how much screen time this beat's content asks for.
+
+    Action and dialogue OVERLAP -- people talk while they move -- so it is the
+    larger of the two, not the sum. Deliberately rough: the point is not to size
+    the shot (the node does not), it is to notice when a shot is much longer than
+    anything the beat gives it to do."""
+    text = _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", beat or ""))
+    text = _REMOVE_LINE.sub("", _ADD_LINE.sub("", text))
+    clauses = [p for p in _CLAUSE_SPLIT.split(text) if p and len(p.split()) >= 2]
+    action = (BEAT_BASE_SEC + SECONDS_PER_ACTION * len(clauses)) if clauses else 0.0
+    spoken = sum(len(q.split()) for q in _QUOTED.findall(beat or "")) \
+        + sum(len(q.split()) for q in _DIALOGUE_TAG.findall(beat or ""))
+    return max(action, (spoken / WORDS_PER_SEC + 1.0) if spoken else 0.0)
+
+
+def thin_beats(beats, seconds):
+    """Beats with far less content than the shot they are given.
+
+    A shot that outlasts its action leaves the model seconds it was told nothing
+    about, and the cheapest way to fill them is to CARRY ON: the shears that cut a
+    garment off keep cutting. Pure arithmetic -- it cannot know whether "walks
+    across the room" is two seconds or ten, but it can see one action sitting in a
+    ten second shot and say so before the render."""
+    out = []
+    for i, b in enumerate(beats or [], 1):
+        need = beat_seconds(b)
+        # The GAP matters more than the ratio: "cuts off her bra and throws it away"
+        # asks for about 7s, and in a 10s shot the three spare seconds are enough for
+        # the shears to carry on into whatever is underneath. A small ratio guard
+        # keeps it quiet when the shot only slightly outlasts a long beat.
+        if need and (seconds - need) >= 2.5 and seconds > need * 1.25:
+            out.append(f"shot {i}: ~{need:.0f}s of content in a {seconds:.0f}s shot")
+    return out
+
+
 def has_speech(beat):
     """Does this beat contain a scripted line?
 
@@ -1513,6 +1557,15 @@ class H3LongVideos:
             notes.append(f"the prompt names on-screen text ({', '.join(cued)}) -- H3 draws "
                          f"letterforms when asked, and at cfg 1 no negative prompt can take "
                          f"them back. Remove the words if you do not want the text")
+        thin = thin_beats(beats, frames / H3_FPS)
+        if thin:
+            notes.append(
+                "THIN BEATS -- the shot outlasts what the beat gives it to do, and the "
+                "cheapest way for the model to fill the rest is to CARRY ON with the "
+                "action (shears that cut a garment off keep cutting): "
+                + "; ".join(thin)
+                + ". Give the beat a second action -- what happens after it -- or lower "
+                "shot_seconds")
         if float(cfg) != 1.0:
             notes.append(f"cfg is {float(cfg):g}; H3 is CFG-free and expects 1.0")
 
