@@ -370,6 +370,35 @@ def test_fall_keeps_the_hardware():
     check("an unbound fall adds nothing", fall not in loose)
 
 
+def test_anchor_is_the_scene():
+    print("\n=== an anchor makes every paragraph a beat ===")
+    # Reported as "the character memory is not being passed" and "the first line is
+    # ignored". One cause: with the framing moved into the anchor, the prompt starts
+    # with an ACTION -- and paragraph 1 was still being taken as the scene. That beat
+    # was then prepended to every shot, repeated to the end of the film, never given
+    # a shot of its own, and any removal in it could never stick because the scene
+    # restated the garment on every later shot.
+    P = "Jon walks in and takes her scarf off.\n\nMaya lies still.\n\nJon leaves."
+    sh = [x for x in re.split(r"(?=\[Shot )", run_node(
+        P, plan_only=True, anchor="Wide lens, night.",
+        character_memory="Maya: 27, grey scarf, black boots.")[3]) if x.strip()]
+    check("every paragraph gets its own shot", len(sh) == 3)
+    check("the first action is not stolen as the scene",
+          "Jon walks in" in sh[0] and "Jon walks in" not in sh[1])
+    check("the anchor leads every shot", all("Wide lens, night." in s for s in sh))
+    check("...and the character sheet follows it",
+          all(s.index("Wide lens") < s.index("Maya: 27") for s in sh))
+    check("the removal sticks", all("grey scarf" not in s for s in sh))
+    check("...and what was never removed is still described",
+          all("black boots" in s for s in sh))
+    # With no anchor, paragraph 1 is the scene exactly as before.
+    sh2 = [x for x in re.split(r"(?=\[Shot )", run_node(
+        "A basement.\n\nJon walks in.\n\nMaya lies still.", plan_only=True)[3])
+        if x.strip()]
+    check("no anchor, no change", len(sh2) == 2)
+    check("...and the scene still leads", all("A basement." in s for s in sh2))
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -424,6 +453,7 @@ def main():
     test_restart_after_removal()
     test_auto_removal()
     test_fall_keeps_the_hardware()
+    test_anchor_is_the_scene()
     test_timing_report()
     print()
     if _fails:
