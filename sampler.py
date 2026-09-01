@@ -950,7 +950,14 @@ def off_by_last_frame(items):
     verb, are = ("come", "are") if plural else ("comes", "is")
     sentence = (f"{what} {verb} off during this shot and {are} away by the last frame, "
                 f"fully removed and no longer on the body, dropped out of frame.")
-    return " " + sentence[0].upper() + sentence[1:]
+    # BOUND the action. Saying what comes off does not say where to STOP, and an
+    # action with time left over runs on to whatever is next: shears that finish the
+    # shorts go on to cut the thong, or the body under it. Said as what STAYS -- at
+    # cfg 1 there is no negative prompt, and a negation in the positive names the
+    # thing it forbids. It also names no garment, so it summons none.
+    bound = ("Everything else on the body stays exactly as it is for the whole shot, "
+             "untouched and still fastened, whole and closed as it was put on.")
+    return " " + sentence[0].upper() + sentence[1:] + " " + bound
 
 
 # Garments that are grammatically plural, so the sentence above agrees with them.

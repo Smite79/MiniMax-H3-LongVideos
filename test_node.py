@@ -9,6 +9,7 @@ Run: python test_node.py
 """
 
 import importlib.util
+import re
 import io
 import os
 import sys
@@ -212,6 +213,20 @@ def test_removal_completes():
     check("two items are joined", "The bra and the shorts come off"
           in S.off_by_last_frame(["bra", "shorts"]))
     check("no removal, no sentence", S.off_by_last_frame([]) == "")
+    # Saying what comes off does not say where to STOP. An action with time left
+    # runs on to whatever is next: shears that finish the shorts go on to the
+    # thong, or the body under it.
+    _b = S.off_by_last_frame(["shorts"])
+    check("the action is bounded", "Everything else on the body stays exactly as it is" in _b)
+    check("...covering hardware as well", "whole and closed as it was put on" in _b)
+    check("...naming no other garment", "thong" not in _b and "bra" not in _b)
+    # The BOUND sentence carries no negation: at cfg 1 the negative prompt is
+    # never evaluated, so a negation in the positive only names what it forbids.
+    # ("no longer on the body" belongs to the removal half, and is the wording the
+    # previous node proved safe in the removing shot.)
+    _bound = _b.split("dropped out of frame.")[1]
+    check("...and the bound is stated positively",
+          not re.search(r"no|not|never|nothing", _bound, re.I))
     check("it reads as a sentence", one.strip().startswith("The bra"))
     # Said ONCE. Naming the garment on a later shot is a presence cue, and that
     # phrasing put garments back on in the previous version of this node.
