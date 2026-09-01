@@ -298,6 +298,31 @@ def test_beat_reviving_a_garment():
     check("a clean script raises nothing", "in its own text" not in clean)
 
 
+def test_restart_after_removal():
+    print("\n=== a shot after a removal starts fresh ===")
+    # Every shot is anchored to the previous shot's last frame. If the model
+    # does not finish taking the garment off inside its own shot, that frame
+    # still shows it -- and a keyframe is a PICTURE, which outvotes any
+    # sentence. Inherit it once and every later shot inherits it too.
+    P = ("A basement. Kate is 20, blonde, black crop top, white bra." + "\n\n"
+         "Dan cuts off her crop top.\nremove: crop top" + "\n\n"
+         "Kate lies still." + "\n\n"
+         "Kate breathes.")
+    vae_on = FakeVAE()
+    info_on = run_node(P, vae=vae_on, restart_after_removal=True)[2]
+    check("the shot after the removal is named", "shot(s) 2 start fresh" in info_on)
+    check("...with the reason", "picture outvotes the text" in info_on)
+    check("...and the cost", "costs a cut" in info_on)
+    vae_off = FakeVAE()
+    info_off = run_node(P, vae=vae_off, restart_after_removal=False)[2]
+    check("off, nothing restarts", "start fresh" not in info_off)
+    # A dropped keyframe is one fewer frame to encode.
+    check("the fresh shot encodes no keyframe", vae_on.encodes < vae_off.encodes,
+          f"{vae_on.encodes} vs {vae_off.encodes}")
+    check("a script with no removals is unaffected",
+          "start fresh" not in run_node("A room.\n\nOne.\n\nTwo.")[2])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -349,6 +374,7 @@ def main():
     test_upscale_paths()
     test_aug_protects_the_keyframe()
     test_beat_reviving_a_garment()
+    test_restart_after_removal()
     test_timing_report()
     print()
     if _fails:

@@ -152,6 +152,20 @@ mention the garment: naming it again — even to say it is gone — is a presenc
 and "no longer wearing the red jacket" is what put garments back on in the previous
 version of this node.
 
+**If a garment still comes back with the text clean, the picture is doing it.** Every
+shot is anchored to the previous shot's last frame. If the model does not finish
+taking the garment off inside its own shot, that frame still shows it — and a
+keyframe is a *picture*, which outvotes any sentence. Inherit it once and every later
+shot inherits it too, with no wording able to undo it.
+
+`restart_after_removal` (on by default) breaks that inheritance: the shot after a
+`remove:` starts fresh instead of continuing from that frame. The cost is a visible
+cut there, and that shot re-deriving its pose and framing from the text — which is
+why it is one boundary and not every boundary. `info` names the shots it applies to.
+
+Check the `script` output first. If the garment is absent from the text and still on
+screen, it is coming through the keyframe and this is the setting that stops it.
+
 **The same applies to your own beats.** They go to the model word for word, so a
 later beat that says *"her crop top"* puts the crop top back — the scene is clean and
 the removal was honoured, and then the beat asks for it. In a ten-beat script that

@@ -1638,6 +1638,19 @@ class H3LongVideos:
                                "its action does hands a mid-motion frame to the next shot, "
                                "which the chain continues from. A shot that outlasts its "
                                "action has to invent the rest."}),
+                "restart_after_removal": ("BOOLEAN", {"default": True,
+                    "tooltip": "After a shot with a 'remove:', start the NEXT shot fresh "
+                               "instead of continuing from that shot's last frame.\n\n"
+                               "Every shot is anchored to the previous shot's last frame. If "
+                               "the model does not finish taking the garment off inside its "
+                               "own shot, that frame still shows it -- and a keyframe is a "
+                               "PICTURE, which outvotes any sentence. Inherit it once and every "
+                               "later shot inherits it too, with no wording able to undo it. "
+                               "This breaks that inheritance at the one boundary where the "
+                               "state changes.\n\n"
+                               "The cost is a visible cut there, and that shot re-deriving its "
+                               "pose and framing from the text. Turn it off if your removals do "
+                               "complete on screen and you would rather keep the continuity."}),
                 "hold_restraints": ("BOOLEAN", {"default": True,
                     "tooltip": "Once a restraint is put on, keep it whole. From the shot "
                                "that applies it onward, every shot carries one sentence: "
@@ -1671,7 +1684,8 @@ class H3LongVideos:
             tiled_decode=True, cleanup_between_shots=True, plan_only=False,
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
-            upscale_batch=4, shot_length="from the beat", hold_restraints=True):
+            upscale_batch=4, shot_length="from the beat", hold_restraints=True,
+            restart_after_removal=True):
 
         notes = []
         swap = flush_for_model_change(model)
@@ -1698,6 +1712,7 @@ class H3LongVideos:
         # start, and a description saying it is still worn is what puts it back.
         shots, speech, gone, shown = [], [], [], []
         restrained = False
+        stripped_shots = set()      # 0-based shots that took something off
         # Names from the scene, so "lifts Kate onto the table" reads as moving a
         # person rather than an object.
         cast = re.findall(r"[A-Z][a-z]{2,}", scene or "")
@@ -1715,6 +1730,7 @@ class H3LongVideos:
                     f"naming it puts it back on -- the scene no longer mentions it, but this "
                     f"beat does. Reword the beat if it should stay off")
             if toks:
+                stripped_shots.add(len(shots))
                 gone.extend(t for t in toks if t not in gone)
                 notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
                              + ", ".join(toks))
@@ -1850,6 +1866,7 @@ class H3LongVideos:
         # measurement rather than an argument.
         t_sample = t_decode = 0.0
         _aug_warned = False
+        fresh = []
         t_start = time.perf_counter()
         vid_out, aud_out, sr = [], [], 44100
         _deep_cleanup()
@@ -1864,9 +1881,21 @@ class H3LongVideos:
                         notes.append(msg)
             silent = bool(silence_nonspeech and not speech[i])
 
+            # A shot that follows a removal starts FRESH. Every shot is anchored to
+            # the previous one's last frame, so if the model did not finish taking
+            # the garment off inside its own shot, that frame still shows it -- and a
+            # keyframe is a PICTURE, which outvotes any sentence. Inherit it once and
+            # every later shot inherits it too, with no wording able to undo it.
+            # Breaking the chain at the one boundary where the state changes costs a
+            # cut exactly where a cut belongs.
+            shot_handoff = handoff
+            if restart_after_removal and (i - 1) in stripped_shots:
+                shot_handoff = None
+                fresh.append(i + 1)
+
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
-                handoff=handoff, refs=shot_refs,
+                handoff=shot_handoff, refs=shot_refs,
                 ref_noise_aug=ref_noise_aug, silent=silent)
             if demoted and not _aug_warned:
                 _aug_warned = True
@@ -1961,6 +1990,13 @@ class H3LongVideos:
                 notes.append(up_note)
         audio = torch.cat(aud_out, dim=-1)
         total = video.shape[0]
+        if fresh:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in fresh)} start fresh, because the shot "
+                f"before each took something off -- continuing from a frame that may still "
+                f"show the garment is how it comes back, and a picture outvotes the text. "
+                f"That costs a cut there. Turn restart_after_removal off to keep the "
+                f"continuity instead")
         wall = time.perf_counter() - t_start
         n = max(1, len(shots))
         other = max(0.0, wall - t_sample - t_decode)
