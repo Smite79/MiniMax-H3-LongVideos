@@ -232,6 +232,41 @@ def test_inferred_removals():
     check("...and reads cleanly", ",black" not in _s and "  " not in _s)
 
 
+def test_character_sheet():
+    print("\n=== a character sheet is not a beat ===")
+    # Reported: paragraph 2 of a script rendered as a whole shot of static
+    # description. Worse than the wasted shot -- the wardrobe then lived in ONE
+    # shot, so every later shot described no clothing, the model invented it, and
+    # a removal had nothing to scrub because the garment was never in the scene.
+    sheet = ("Maya: 27, silver hair, grey shorts, red jacket\n"
+             "Jon: 34, navy overalls")
+    check("a sheet is recognised", S.is_character_sheet(sheet))
+    check("...with one person too", S.is_character_sheet("Maya: 27, red jacket"))
+    check("...and an inner capital is fine",
+          S.is_character_sheet("McKenna: 22, grey coat"))
+    # A beat stages something; a line of dialogue stages something.
+    for _p in ("Maya walks in.", 'Jon: "Hello."', "Maya: 27, red jacket\nJon walks in.",
+               "A basement. Maya is 27.", "remove: jacket", ""):
+        check(f"not a sheet: {_p[:30]!r}", not S.is_character_sheet(_p))
+    beats, pulled = S.pull_character_sheets(["Maya walks in.", sheet, "Jon follows."])
+    check("the sheet leaves the beat list", beats == ["Maya walks in.", "Jon follows."])
+    check("...and is kept", pulled == sheet)
+    check("a script with no sheet is untouched",
+          S.pull_character_sheets(["One.", "Two."]) == (["One.", "Two."], ""))
+    # Reading order, and one string so a removal scrubs all of it.
+    built = S.build_scene("Wide lens, night.", "A basement.", "Maya: red jacket", "Jon: 34")
+    check("the anchor comes first", built.startswith("Wide lens, night."))
+    check("...then the scene", built.index("A basement.") < built.index("Maya:"))
+    check("...then the people", built.index("Maya:") < built.index("Jon:"))
+    check("empty channels are skipped", S.build_scene("", "A basement.", "", "")
+          == "A basement.")
+    # The point of folding it in: a removal can now reach the wardrobe.
+    check("a removal scrubs the sheet",
+          "red jacket" not in S.scrub_removed(built, ["jacket"]))
+    check("...and leaves the rest standing",
+          "Wide lens, night." in S.scrub_removed(built, ["jacket"]))
+
+
 def test_removal_needs_a_particle():
     print("\n=== an ordinary action is not a removal ===")
     # Reported: a described garment rendering plain and pale. The verb pattern
@@ -554,13 +589,16 @@ def test_schema():
     n_widgets = sum(1 for d in (req, opt) for k, v in d.items()
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
-    # 17 core + 6 upscale. The point of the number is that it stays small enough
-    # to read; the old node had 38 and nobody could find anything.
-    # 17 core + 6 upscale + shot_length + hold_restraints. The number matters only
-    # as a ceiling: the old node had 38 and nobody could find anything.
     # 17 core + 6 upscale + shot_length, hold_restraints, restart_after_removal,
-    # auto_remove. A ceiling, not a target: the old node had 38.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 28)
+    # auto_remove + anchor, character_memory. A ceiling, not a target: the old node
+    # had 38 and nobody could find anything.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 30)
+    # Both text channels are present, and last -- saved workflows restore widget
+    # values by position, so anything inserted above them shifts every later value.
+    check("the anchor is offered", "anchor" in opt)
+    check("...and the character sheet", "character_memory" in opt)
+    check("...both at the end of the list",
+          list(opt)[-2:] == ["anchor", "character_memory"])
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
                "latent_upscale", "latent_upscale_scale"):
         check(f"{_u} is on the node", _u in opt)
@@ -578,6 +616,7 @@ def main():
     test_speech_and_refs()
     test_removals()
     test_inferred_removals()
+    test_character_sheet()
     test_removal_needs_a_particle()
     test_layers()
     test_removal_completes()
