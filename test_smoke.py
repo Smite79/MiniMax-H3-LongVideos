@@ -281,20 +281,20 @@ def test_aug_protects_the_keyframe():
 def test_beat_reviving_a_garment():
     print("\n=== a later beat that names a removed garment ===")
     # Beats go to the model word for word. The scene can be perfectly scrubbed
-    # and the removal honoured, and then beat 5 says "her crop top" and it is
+    # and the removal honoured, and then beat 5 says "her coat" and it is
     # back. Ten beats in, that reads as the removal randomly failing.
-    P = ("A basement. Kate is 20, blonde, black crop top, white bra." + "\n\n"
-         "Dan cuts off her crop top.\nremove: crop top" + "\n\n"
+    P = ("A basement. Kate is 20, blonde, grey wool coat, black jumper." + "\n\n"
+         "Dan pulls off her coat.\nremove: coat" + "\n\n"
          "Kate lies still." + "\n\n"
-         "Dan pulls at her crop top again." + "\n\n"
+         "Dan pulls at her coat again." + "\n\n"
          "Kate turns her head.")
     info = M_info = run_node(P)[2]
-    check("the reviving beat is named", "shot 3 names crop top" in info)
+    check("the reviving beat is named", "shot 3 names coat" in info)
     check("...with the reason", "word for word" in info)
     check("...and the removing beat itself is not flagged",
-          "shot 1 names crop top" not in info)
+          "shot 1 names coat" not in info)
     clean = run_node("A basement. Kate is 20." + "\n\n" +
-                     "Dan cuts off her crop top.\nremove: crop top" + "\n\n" +
+                     "Dan pulls off her coat.\nremove: coat" + "\n\n" +
                      "Kate lies still.")[2]
     check("a clean script raises nothing", "in its own text" not in clean)
 
@@ -305,8 +305,8 @@ def test_restart_after_removal():
     # does not finish taking the garment off inside its own shot, that frame
     # still shows it -- and a keyframe is a PICTURE, which outvotes any
     # sentence. Inherit it once and every later shot inherits it too.
-    P = ("A basement. Kate is 20, blonde, black crop top, white bra." + "\n\n"
-         "Dan cuts off her crop top.\nremove: crop top" + "\n\n"
+    P = ("A basement. Kate is 20, blonde, grey wool coat, black jumper." + "\n\n"
+         "Dan pulls off her coat.\nremove: coat" + "\n\n"
          "Kate lies still." + "\n\n"
          "Kate breathes.")
     vae_on = FakeVAE()
@@ -326,21 +326,21 @@ def test_restart_after_removal():
 
 def test_auto_removal():
     print("\n=== removals read from the beat, with no directives ===")
-    P = ("A basement. Kate is 20, blonde, white bra, lace thong, black shorts."
+    P = ("A basement. Kate is 20, blonde, grey jumper, wool scarf, black boots."
          + "\n\n" +
-         "Dan cuts off her shorts and throws them away, exposing her lace thong."
+         "Dan pulls off her boots and throws them away, showing the wool scarf."
          + "\n\n" +
-         "Dan cuts off her thong and throws it away." + "\n\n" +
+         "Dan pulls off her scarf and throws it away." + "\n\n" +
          "Kate lies still.")
     script = run_node(P)[3]
     sh = script.split("\n---\n")
-    check("shot 1 still lists the thong it exposes", "lace thong" in sh[0])
-    check("...and no longer the shorts", "black shorts" not in sh[0])
-    check("shot 2 has lost the thong too", "lace thong" not in sh[1])
-    check("shot 3 keeps neither", "shorts" not in sh[2] and "thong" not in sh[2])
-    check("...and keeps what was never taken off", "white bra" in sh[2])
+    check("shot 1 still lists the scarf it exposes", "wool scarf" in sh[0])
+    check("...and no longer the boots", "black boots" not in sh[0])
+    check("shot 2 has lost the scarf too", "wool scarf" not in sh[1])
+    check("shot 3 keeps neither", "boots" not in sh[2] and "scarf" not in sh[2])
+    check("...and keeps what was never taken off", "grey jumper" in sh[2])
     info = run_node(P)[2]
-    check("info says what it read", "read 'shorts' as coming off" in info)
+    check("info says what it read", "read 'boots' as coming off" in info)
     # Off, nothing is inferred and the warning comes back instead.
     info_off = run_node(P, auto_remove=False)[2]
     check("auto_remove off infers nothing", "as coming off" not in info_off)

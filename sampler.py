@@ -278,16 +278,17 @@ def thin_beats(beats, seconds):
     """Beats with far less content than the shot they are given.
 
     A shot that outlasts its action leaves the model seconds it was told nothing
-    about, and the cheapest way to fill them is to CARRY ON: the shears that cut a
-    garment off keep cutting. Pure arithmetic -- it cannot know whether "walks
+    about, and the cheapest way to fill them is to CARRY ON: an action that has
+    finished its object repeats it on whatever is nearest. Pure arithmetic -- it
+    cannot know whether "walks
     across the room" is two seconds or ten, but it can see one action sitting in a
     ten second shot and say so before the render."""
     out = []
     for i, b in enumerate(beats or [], 1):
         need = beat_seconds(b)
-        # The GAP matters more than the ratio: "cuts off her bra and throws it away"
+        # The GAP matters more than the ratio: "takes off her coat and hangs it up"
         # asks for about 7s, and in a 10s shot the three spare seconds are enough for
-        # the shears to carry on into whatever is underneath. A small ratio guard
+        # the action to run on past the thing it was given. A small ratio guard
         # keeps it quiet when the shot only slightly outlasts a long beat.
         if need and (seconds - need) >= 2.5 and seconds > need * 1.25:
             out.append(f"shot {i}: ~{need:.0f}s of content in a {seconds:.0f}s shot")
@@ -939,7 +940,7 @@ def off_by_last_frame(items):
     stays. That is a garment "coming back" even though the text was right.
 
     Said ONCE, in the removing shot, and never again. A later shot that says "no
-    longer wearing the bra" names the bra, and to a video model a mention is a
+    longer wearing the coat" names the coat, and to a video model a mention is a
     presence cue -- that phrasing put garments back on in the previous version of
     this node. Afterwards the item is simply absent from the text."""
     items = [i.strip() for i in (items or []) if i and i.strip()]
@@ -951,8 +952,9 @@ def off_by_last_frame(items):
     sentence = (f"{what} {verb} off during this shot and {are} away by the last frame, "
                 f"fully removed and no longer on the body, dropped out of frame.")
     # BOUND the action. Saying what comes off does not say where to STOP, and an
-    # action with time left over runs on to whatever is next: shears that finish the
-    # shorts go on to cut the thong, or the body under it. Said as what STAYS -- at
+    # action with time left over runs on to whatever is next: a hand that finishes
+    # one garment starts on the next one, or on the body under it. Said as what
+    # STAYS -- at
     # cfg 1 there is no negative prompt, and a negation in the positive names the
     # thing it forbids. It also names no garment, so it summons none.
     bound = ("Everything else on the body stays exactly as it is for the whole shot, "
@@ -1105,10 +1107,10 @@ def names_any(text, tokens):
                for t in (tokens or []) if t)
 
 
-# Where a removal verb's object ENDS. "cuts off her shorts and throws them away,
-# exposing her thong" takes off the shorts; the thong is what becomes visible. The
-# old version of this node matched garment words anywhere in the beat and took both
-# off, which is the failure that made prose inference untrustworthy.
+# Where a removal verb's object ENDS. "pulls off her coat and drops it, showing the
+# jumper" takes off the coat; the jumper is what becomes visible. The old version of
+# this node matched garment words anywhere in the beat and took both off, which is
+# the failure that made prose inference untrustworthy.
 _OBJECT_END = re.compile(r"(?:,|;|\.|\bexposing\b|\brevealing\b|\bshowing\b|\bleaving\b|"
                          r"\bto\s+expose\b|\bto\s+reveal\b|\bthen\b|\buntil\b)", re.I)
 
@@ -1128,7 +1130,7 @@ floor ground wall room air
 """.split())
 
 # Where a scene's wardrobe entry ENDS. A garment word is the HEAD of its phrase --
-# "black shorts," "grey coat and", "lace thong." -- while a modifier is followed by
+# "black boots," "grey coat and", "wool scarf." -- while a modifier is followed by
 # more of the phrase ("tight white crop top": tight, white and crop all fail this,
 # top passes). Adjectives cannot be listed, so test position instead of vocabulary.
 _ENTRY_END = re.compile(r"^\s*(?:[,;.!?]|$|(?:and|over|under|beneath|above|with|plus)\b)",
@@ -1166,8 +1168,8 @@ def infer_removals(beat, scene):
     character was never described wearing.
 
     Only the verb's own object counts -- the span from the verb to the next clause
-    boundary. That is what keeps "cuts off her shorts, exposing her thong" to the
-    shorts."""
+    boundary. That is what keeps "pulls off her coat, showing the jumper" to the
+    coat."""
     if not beat or not scene:
         return []
     found = []
@@ -1224,7 +1226,7 @@ def extract_directives(beat):
     """(beat text with directive lines taken out, [removed tokens], [added phrases]).
 
     `add:` is the other half of `remove:`, and it exists because of a specific
-    failure: a scene that lists every layer at once -- jacket, shirt, underwear --
+    failure: a scene that lists every layer at once -- coat, jumper, shirt --
     tells the model the character is wearing all of them simultaneously, with
     nothing saying which is hidden. The keyframe pins the first frame, so early
     frames look right; by the last frame only the text is governing, and the under
@@ -1272,9 +1274,9 @@ def scrub_removed(text, tokens):
     live = [t for t in tokens if t]
     pats = [re.compile(r"\b" + re.escape(t) + r"\b", re.I) for t in live]
     # A scene lists what someone wears as comma-separated NOUN PHRASES ("blonde,
-    # shiny white bra, skin-tight shiny black micro volleyball shorts"). For those,
-    # the whole entry goes: trimming a fixed number of modifiers off the front left
-    # orphans like "skin-tight shiny black" sitting in the list, and an orphan
+    # pale blue cotton shirt, heavy black waxed canvas jacket"). For those, the
+    # whole entry goes: trimming a fixed number of modifiers off the front left
+    # orphans like "heavy black waxed" sitting in the list, and an orphan
     # description is read as some garment -- which is a garment coming back.
     #
     # A fragment with a VERB in it is prose, not a list entry, and there the entry
@@ -1774,8 +1776,8 @@ class H3LongVideos:
                                "stages, capped by shot_seconds and floored at one action's "
                                "worth. A beat with one action stops getting a shot with room "
                                "for two -- which is what makes an action carry on past its "
-                               "end, the shears that cut a garment off going on to cut what "
-                               "is underneath.\n\n"
+                               "end, repeating itself on whatever is nearest once it has "
+                               "run out of what it was given.\n\n"
                                "'fixed' gives every shot shot_seconds. Uniform lengths mean "
                                "uniform latent SHAPES, and noise is drawn to the shape -- so "
                                "one seed gives the whole chain one noise field and surface "
@@ -1790,11 +1792,12 @@ class H3LongVideos:
                                "off without a 'remove:' line.\n\n"
                                "Two conditions, both required, because a wrong removal is "
                                "worse than a missed one: the beat has to contain a removal "
-                               "verb, and the thing named has to be something the SCENE "
-                               "already says is worn. Only the verb's own object counts -- "
-                               "the span up to the next clause boundary -- so 'cuts off her "
-                               "shorts, exposing her slip' takes off the shorts and leaves "
-                               "the slip.\n\n"
+                               "verb, and the thing named has to be the HEAD of something "
+                               "the SCENE already lists as worn -- not a modifier inside an "
+                               "entry, not a body part, and never restraint hardware. Only "
+                               "the verb's own object counts, the span up to the next clause "
+                               "boundary, so 'pulls off her coat, showing the jumper' takes "
+                               "off the coat and leaves the jumper.\n\n"
                                "info reports every removal it reads, by shot. An explicit "
                                "'remove:' line still works and is added to whatever is "
                                "inferred."}),
@@ -1875,7 +1878,7 @@ class H3LongVideos:
         stripped_shots = set()      # 0-based shots that took something off
         # Names from the scene, so "lifts Kate onto the table" reads as moving a
         # person rather than an object.
-        cast = re.findall(r"[A-Z][a-z]{2,}", scene or "")
+        cast = re.findall(r"\b[A-Z][a-z]{2,}\b", scene or "")
         for b in beats:
             body, toks, adds = extract_directives(b)
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
@@ -2011,7 +2014,7 @@ class H3LongVideos:
             notes.append(
                 "THIN BEATS -- the shot outlasts what the beat gives it to do, and the "
                 "cheapest way for the model to fill the rest is to CARRY ON with the "
-                "action (shears that cut a garment off keep cutting): "
+                "action, repeating it on whatever is nearest: "
                 + "; ".join(thin)
                 + ". Give the beat a second action -- what happens after it -- or lower "
                 "shot_seconds")
