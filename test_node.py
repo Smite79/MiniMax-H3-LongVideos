@@ -445,17 +445,23 @@ def test_opening_pose():
     check("...or when no posture is described",
           S.posture_note("A basement. Maya walks to the window.", False) == "")
     check("...or with no scene at all", S.posture_note("", False) == "")
-    # ref_noise_aug set how clean a REFERENCE was shown, and references have no
-    # channel in fl2va, so the widget governs nothing. Saying so beats leaving
-    # somebody turning it.
+    # A near-clean reference is an invitation to REPRODUCE it, framing included, and
+    # that is a matter of degree rather than a format error. This is the dial, and
+    # shot 1 is where it shows: no keyframe there, so the reference is the only
+    # picture and nothing competes with reproducing it.
     rn = S.reference_note(1, 0.999, False)
-    check("a connected reference is called out", "are not sent" in rn)
-    check("...and the dead widget named", "ref_noise_aug" in rn)
-    check("...pointing at first_frame when shot 1 is unpinned", "first_frame" in rn)
-    check("with a first_frame there is nothing to point at",
-          "first_frame" not in S.reference_note(1, 0.999, True))
+    check("a near-clean reference is explained", "REPRODUCE them" in rn)
+    check("...naming framing as what carries over", "framing and background" in rn)
+    check("...with the values to try", "0.95" in rn and "0.90" in rn)
+    check("...and why shot 1 shows it", "only picture" in rn)
+    check("with a first_frame, shot 1 has a keyframe to compete",
+          "only picture" not in S.reference_note(1, 0.999, True))
     check("no references, nothing to say", S.reference_note(0, 0.999, False) == "")
-    check("a softened aug says the same thing", "are not sent" in S.reference_note(1, 0.90, False))
+    # Softened is the other branch: identity without copying, at the cost of the
+    # handoff riding as a reference rather than anchoring.
+    soft = S.reference_note(1, 0.90, False)
+    check("a softened aug reads differently", "softened" in soft)
+    check("...and states what it costs", "weaker continuity" in soft)
 
 
 def test_removal_needs_a_particle():

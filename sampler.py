@@ -1200,21 +1200,37 @@ def posture_note(scene, has_first_frame):
 
 
 def reference_note(n_refs, aug, has_first_frame):
-    """What `ref_noise_aug` still governs once references are not sent.
+    """What a near-clean reference actually asks the model to do.
 
-    It set how clean a REFERENCE was shown, and references have no channel in fl2va
-    -- see build_conditioning. The one visual condition row left is the keyframe, and
-    that row is handed over at H3's own default because nothing sets the aug any
-    more. So the widget does nothing, and saying so is better than leaving somebody
-    turning it."""
-    if not n_refs:
+    ONE aug covers every visual conditioning row. At H3's default of 0.999 a
+    reference is handed over essentially noise-free, and a noise-free image is an
+    invitation to REPRODUCE it -- its framing and background along with its subject.
+    That is a matter of DEGREE, not a format error, and this is the dial for it: the
+    symptom is a shot that opens on the reference and moves off it, and the answer is
+    to lower the aug until it informs the face without being copied.
+
+    Shot 1 is where it shows most, because it has no keyframe pinning its opening
+    frame -- the reference is the only picture it has, so there is nothing competing
+    with the invitation to reproduce."""
+    if not n_refs or aug is None:
         return ""
-    note = (f"{n_refs} reference image(s) connected, and ref_noise_aug "
-            f"({float(aug):.3f} here) no longer governs anything: it set how clean a "
-            f"REFERENCE was shown, and references are not sent")
+    if float(aug) >= KEYFRAME_SAFE_AUG:
+        note = (f"{n_refs} reference image(s) at ref_noise_aug {float(aug):.3f}, which is "
+                f"near-clean -- that asks the model to REPRODUCE them, framing and "
+                f"background included, in the opening frames. Lower it to say "
+                f"approximate: try 0.95, then 0.90. Below 0.99 the handoff stops being "
+                f"a keyframe and rides as an extra reference, so continuity weakens as "
+                f"identity strengthens")
+    else:
+        note = (f"{n_refs} reference image(s) at ref_noise_aug {float(aug):.3f} -- "
+                f"softened, so they inform the face rather than being copied. Below "
+                f"0.99 one aug would also soften the keyframe, so the handoff rides as "
+                f"an extra reference instead of anchoring: weaker continuity, nothing "
+                f"pretending to anchor while carrying noise")
     if not has_first_frame:
-        note += (". Nothing pins shot 1's opening frame either -- put the picture on "
-                 "first_frame if that is what the reference was for")
+        note += (". Shot 1 has no keyframe, so the reference is its only picture and "
+                 "nothing competes with reproducing it -- that shot is where a "
+                 "near-clean reference shows up as the opening frame")
     return note
 
 
@@ -3382,27 +3398,17 @@ class H3LongVideos:
         # Resolve the <Picture N> tags before `script` is written, so what you read is
         # what the model is given. Which roster they resolve against depends entirely
         # on the format -- see build_conditioning.
-        # A REFERENCE MUST NEVER BE A SHOT'S ONLY PICTURE.
-        #
-        # With a keyframe beside it the roster reads as it should: the keyframe pins
-        # frame 0 through resolved_frame_index, and the reference is just identity.
-        # Alone, there is nothing pinning frame 0 -- and "<Picture 1>: <image>" then
-        # the prompt IS H3's first-frame shape, so the shot opens on the reference and
-        # moves off it. Reported exactly that way: the face as the first frame.
-        #
-        # Shot 1 is the case, since it has no previous frame to hand over, and so is
-        # any shot restart_after_removal has cut loose. The old node dodged this by
-        # having you tag a BEAT, so an establishing shot 1 simply had no tag -- its own
-        # tooltip warned that going by shot number instead "gets a portrait pushed
-        # into" it. Our tag lives in the character sheet, which is stamped into every
-        # shot, so the tag is always there and the rule has to be enforced here.
-        #
-        # Wiring first_frame gives shot 1 a keyframe, and the reference rides with it.
-        def _has_keyframe(i):
-            return ((i > 0 or first_frame is not None)
-                    and not (restart_after_removal and (i - 1) in stripped_shots))
-
-        _no_kf = []
+        # Tags PLACE the references. With none written anywhere, placing by tag would
+        # place them nowhere -- a connected reference that silently does nothing at
+        # all. The old node fell back rather than no-op, and so does this.
+        _tagged = any(picture_tags(s) for s in shots)
+        if refs_all and not _tagged:
+            notes.append(
+                f"{len(refs_all)} reference image(s) connected and no <Picture N> tag "
+                f"anywhere, so they go on EVERY shot -- placing by tag would place them "
+                f"nowhere. To aim them, write the tag on the person they depict: 'Nora: "
+                f"<Picture 1>, 34, she, ...'. Each then travels with that person into "
+                f"the shots she is in, and only those")
         shot_refs_all = []
         for _i, _s in enumerate(shots):
             # The tag is the BINDING between a picture and the subject the prompt
@@ -3411,32 +3417,16 @@ class H3LongVideos:
             # prompting". Renumbered per shot, because the encoder numbers by the
             # order it receives images and a shot carrying only slot 2 receives that
             # image as <Picture 1>.
-            # No keyframe on this shot means a reference would be its only picture, so
-            # the roster is emptied and the tags go with it -- a tag pointing at no
-            # image is what conjures a spare subject.
-            _roster = refs_all if _has_keyframe(_i) else []
-            if refs_all and not _roster and picture_tags(_s):
-                _no_kf.append(_i + 1)
-            _s, _r, _missing = resolve_tags(_s, _roster)
+            if not _tagged:
+                shot_refs_all.append(list(refs_all))
+                continue
+            _s, _r, _missing = resolve_tags(_s, refs_all)
             shots[_i] = _s
             shot_refs_all.append(_r)
-            if _roster:
-                for _n in _missing:
-                    _msg = f"<Picture {_n}> names a slot with no image connected"
-                    if _msg not in notes:
-                        notes.append(_msg)
-        if _no_kf:
-            notes.append(
-                f"shot(s) {', '.join(str(n) for n in _no_kf)} carry NO reference, because "
-                f"they have no keyframe. A reference alone is the only picture the shot "
-                f"has, and '<Picture 1>: <image>' followed by the prompt is H3's "
-                f"first-frame shape -- so the shot would open ON the reference and move "
-                f"off it, which is the face turning up as the first frame. With a "
-                f"keyframe beside it there is no ambiguity: the keyframe pins frame 0 and "
-                f"the reference is only identity. Shot 1 has no previous frame, so wire "
-                f"first_frame if you want the reference there too -- a COMPOSED frame, "
-                f"since it pins framing as well. Their <Picture N> tags were taken out of "
-                f"those shots with the reference")
+            for _n in _missing:
+                _msg = f"<Picture {_n}> names a slot with no image connected"
+                if _msg not in notes:
+                    notes.append(_msg)
         if refs_all:
             _named = sum(1 for s in shots if picture_tags(s))
             notes.append(
