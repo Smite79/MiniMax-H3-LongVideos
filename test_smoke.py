@@ -514,6 +514,30 @@ def test_chain_hold_end_to_end():
                     "Maya lies still.", plan_only=True)[3]
     check("rope is not claimed to be rigid", chain not in soft)
     check("...but it is still held whole", S.RESTRAINT_HOLD.strip() in soft)
+    # Steel locked on in shot 1 is still steel in shot 5. Tested per shot rather than
+    # latched, the shot naming the chain got the rigid clause and every shot after it
+    # fell back to the soft one -- which is where the slack came back from.
+    later = [x for x in re.split(r"(?=\[Shot )", run_node(
+        "A basement.\n\nMaya: 27, grey coat.\n\nJon locks a chain around her waist.\n\n"
+        "Maya walks to the window.\n\nMaya looks down.", plan_only=True)[3]) if x.strip()]
+    check("rigidity latches past the shot that names it",
+          all(chain in s for s in later))
+    check("...and the soft clause is not used instead",
+          all(S.RESTRAINT_HOLD.strip() not in s for s in later))
+    # A position the hardware enforces latches too: the chain that put a body in a
+    # squat is still that length three shots later, so the squat is still the position.
+    posed = [x for x in re.split(r"(?=\[Shot )", run_node(
+        "A basement.\n\nMaya: 27, grey coat. Wrists cuffed behind back.\n\n"
+        "Jon locks a chain from her ankles to her collar, forcing her into a squat.\n\n"
+        "Maya strains against the chain, trying to stand.\n\nMaya breathes hard.",
+        plan_only=True)[3]) if x.strip()]
+    check("a forced position keeps for the rest of the run",
+          all(S.CHAIN_POSE_HOLD.strip() in s for s in posed))
+    check("...replacing the plain chain clause rather than joining it",
+          all(chain not in s for s in posed))
+    # No position forced: the plain clause, so an unposed chain does not freeze anyone.
+    check("a chain with no position forced stays plain",
+          all(S.CHAIN_POSE_HOLD.strip() not in s for s in later))
     # Hardware with nothing restrained by it is scenery, not a restraint.
     loose = run_node("A yard with a chain-link fence.\n\nMaya walks past it.",
                      plan_only=True)[3]

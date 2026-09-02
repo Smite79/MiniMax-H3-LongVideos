@@ -684,6 +684,30 @@ def test_chain_is_rigid():
     check("the chain clause carries the restraint guarantee itself",
           "whole and closed" in S.CHAIN_HOLD and "fastened exactly as it was put on"
           in S.CHAIN_HOLD)
+    # A position hardware was locked to enforce. Saying the metal keeps its shape is
+    # not enough: a chain that keeps its shape can still be drawn with slack, and
+    # slack is room to stand up out of a squat the chain was locked to hold.
+    for _t in ("forcing her into a squat", "chained kneeling on the floor",
+               "hogcuffed on the floor", "bent over the table", "spread-eagled",
+               "locked crouching", "on her knees, chained to the wall"):
+        check(f"a forced position: {_t[:34]!r}", S.forced_pose(_t))
+    for _t in ("Maya walks to the window.", "Jon locks a chain around her waist.",
+               "Maya lies still."):
+        check(f"no position forced: {_t[:34]!r}", not S.forced_pose(_t))
+    check("the pose clause says the metal is at full length",
+          "drawn out to its full length" in S.CHAIN_POSE_HOLD)
+    check("...that the position keeps", "the position that keeps" in S.CHAIN_POSE_HOLD)
+    check("...and carries the restraint guarantee too",
+          "whole and closed" in S.CHAIN_POSE_HOLD)
+    # It must NOT buy the position by freezing the body -- straining against it is
+    # exactly what should happen, and this is the clause most at risk of stasis.
+    check("...while leaving the body free to act",
+          "strains and pulls against it" in S.CHAIN_POSE_HOLD)
+    check("...and telling it to hold still nowhere",
+          not re.search(r"\bstill\b|\bmotionless\b|\bdoes not move\b|\bbefore it stops\b",
+                        S.CHAIN_POSE_HOLD, re.I))
+    check("...positively phrased", not re.search(r"\b(?:no|not|never|without)\b",
+                                                 S.CHAIN_POSE_HOLD, re.I))
 
 
 def test_saved_defaults():
