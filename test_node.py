@@ -356,9 +356,41 @@ def test_character_guard():
     check("...and lets the first go", "Maya" not in keep)
     # A PRONOUN names someone too. Dropping Maya from "Jon takes her jacket off"
     # would leave the garment being removed undescribed in the shot removing it.
-    keep, who = S.sheet_for_beat(sheet, "Jon takes her jacket off.", ["Maya"])
-    check("a pronoun keeps whoever the last beat kept", sorted(who) == ["Jon", "Maya"])
+    _g = "Maya: 27, she, grey scarf, black jacket\nJon: 34, he, navy overalls"
+    keep, who = S.sheet_for_beat(_g, "Jon takes her jacket off.", ["Maya"])
+    check("a pronoun brings in who it refers to", sorted(who) == ["Jon", "Maya"])
     check("...so the garment coming off is still described", "grey scarf" in keep)
+    # ...and only who it refers to. Adding the whole previous cast on ANY pronoun put
+    # someone in a shot they were not in: "behind him" was read as evidence that
+    # somebody else was present.
+    check("a pronoun for the person already named brings in nobody else",
+          S.sheet_for_beat(_g, "Jon walks out and shuts the door behind him.",
+                           ["Maya"])[1] == ["Jon"])
+    check("a lone 'she' finds the she-character",
+          S.sheet_for_beat(_g, "She lies still.", ["Jon"])[1] == ["Maya"])
+    check("...and a lone 'him' the he-character",
+          S.sheet_for_beat(_g, "Maya looks up at him.", ["Maya"])[1] == ["Maya", "Jon"])
+    check("the sheet's declaration is what resolves it",
+          S.sheet_pronoun("Maya: 27, she, grey scarf") == "she"
+          and S.sheet_pronoun("Jon: 34, he, overalls") == "he")
+    check("...they is understood too",
+          S.sheet_pronoun("Ash: 30, they, boots") == "they")
+    check("...and a sheet declaring none says so",
+          S.sheet_pronoun("Maya: 27, grey coat") is None)
+    # With no declaration there is nothing to resolve against, so it falls back to
+    # the last beat's people rather than guessing.
+    check("no declared pronouns falls back to the last cast",
+          S.sheet_for_beat("Maya: 27, grey coat\nJon: 34, overalls",
+                           "She lies still.", ["Maya"])[1] == ["Maya"])
+    # Names are matched CASE-SENSITIVELY. Prose capitalises a name, and matching
+    # without case made the word "will" find a character called Will.
+    _w = "Will: 30, he, grey coat\nGrace: 27, she, red jacket"
+    check("an ordinary word is not a name",
+          S.sheet_for_beat(_w, "She will walk to the window.", [])[1] == ["Grace"])
+    check("...nor is a lowercase one", "Grace" not in
+          S.sheet_for_beat(_w, "He says grace before eating.", [])[1])
+    check("...while the capitalised name still matches",
+          S.sheet_for_beat(_w, "Will walks to the window.", [])[1] == ["Will"])
     # A beat naming nobody keeps the last beat's people rather than emptying the frame.
     keep, who = S.sheet_for_beat(sheet, "The camera pushes in.", ["Maya"])
     check("a beat naming nobody holds the last cast", who == ["Maya"])
