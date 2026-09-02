@@ -550,12 +550,24 @@ def sound_described(text):
 # would put a chain rattling into a shot where nobody moves, because the scene says
 # there is a chain -- the beat is what decides whether anything makes a noise.
 _SOUND_FROM = (
-    (r"\b(?:walk(?:s|ed|ing)?|step(?:s|ped|ping)?|pace[sd]?|enters?|"
-     r"runs?|approach(?:es|ed)?)\b",                "footsteps"),
+    (r"\b(?:walk(?:s|ed|ing)?|step(?:s|ped|ping)?|pace[sd]?|enters?|runs?|"
+     r"approach(?:es|ed)?|creep(?:s|ing)?|crept|sneak(?:s|ing)?|shuffl(?:e|es|ing)|"
+     r"stumbl(?:e|es|ing)|stagger(?:s|ing)?|feet)\b",  "footsteps"),
     (r"\bchains?\b",                                "chain links dragging"),
     (r"\b(?:handcuff(?:s|ed)?|cuffs?|cuffed|shackle[sd]?|manacle[sd]?)\b",
                                                     "cuffs knocking"),
-    (r"\b(?:padlock(?:s|ed)?|locks?|locked|locking)\b", "a lock snapping shut"),
+    # NOT "locks eyes with her" -- that is a look, and it was giving the shot the
+    # sound of a padlock closing.
+    (r"\b(?:padlock(?:s|ed)?|locks?|locked|locking)\b(?!\s+(?:eyes|gaze|horns|onto))",
+                                                    "a lock snapping shut"),
+    (r"\b(?:drag(?:s|ged|ging)?|haul(?:s|ed|ing)?|shov(?:e|es|ing)|slid(?:e|es|ing))\b",
+                                                    "something dragging on the floor"),
+    (r"\b(?:buckle(?:s|d)?|unbuckle(?:s|d)?|clasp(?:s|ed)?|strap(?:s|ped)?|harness)\b",
+                                                    "a buckle and leather creaking"),
+    (r"\b(?:pour(?:s|ed|ing)?|water|splash(?:es|ed)?|wet|puddle)\b",
+                                                    "water"),
+    (r"\b(?:van|car|engine|truck|motor)\b",         "an engine outside"),
+    (r"\b(?:fabric|cloth|coat|jacket|shirt|dress|skirt)\b", "fabric rustling"),
     (r"\b(?:scissors|shears|cut(?:s|ting)?)\b",     "blades through fabric"),
     (r"\bdoors?\b",                                 "a door on its hinges"),
     (r"\b(?:drops?|dropped|throw(?:s|n)?|threw|toss(?:es|ed)?)\b",
