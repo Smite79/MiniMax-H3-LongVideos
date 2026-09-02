@@ -405,19 +405,21 @@ those: a shot the character guard trims them out of carries no reference at all.
 picture the prompt never refers to is read as *another* subject, which is why
 `info` reports any shot that carries one it does not name.
 
-**A reference is never a shot's only picture.** With the keyframe beside it the roster
-is unambiguous — the keyframe pins frame 0, the reference is only identity. Alone,
-nothing pins frame 0, and one picture followed by the prompt is exactly H3's
-first-frame shape: the shot opens *on* the reference and moves off it, which is the
-face turning up as the first frame.
+**With no tag anywhere, references go on every shot.** Placing by tag would otherwise
+place them nowhere, which is a connected input silently doing nothing.
 
-So a shot with no keyframe carries no reference, and its tags come out with it. That
-is **shot 1** — it has no previous frame to hand over — and any shot
-`restart_after_removal` has cut loose. `info` names them.
+### If the reference turns up as the opening frame
 
-**Wire `first_frame` if you want the reference on shot 1 too.** That gives shot 1 a
-keyframe, and the reference rides with it like everywhere else. Use a *composed*
-frame, not a portrait crop, because `first_frame` pins framing as well as content.
+**Lower `ref_noise_aug`.** That is the dial for it, and the symptom is a matter of
+degree rather than a format error. At the default **0.999** a reference is handed over
+essentially noise-free, and a noise-free image is an invitation to *reproduce* it —
+framing and background along with the face. Try **0.95**, then **0.90**: the reference
+then informs the face without being copied.
+
+It shows most on **shot 1**, which has no previous frame and therefore no keyframe
+competing with that invitation. Below 0.99 the handoff stops being a keyframe and
+rides as an extra reference instead, so continuity weakens as identity strengthens —
+`info` says when that happens.
 
 **Which image is the first frame is not decided by a label's number.** It is
 `resolved_frame_index` in the keyframe payload. The `<Picture N>` labels are only how

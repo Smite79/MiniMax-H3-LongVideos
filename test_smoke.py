@@ -228,12 +228,12 @@ def test_references_and_silence():
              ref_image_1=torch.rand(1, 64, 64, 3))
     # seen[0] is the empty negative prompt, encoded once before the loop.
     shots_seen = clip.seen[1:]
-    # A reference is NOT given to any shot: on fl2va a numbered picture is a frame of
-    # this video, so a reference there is read as where the shot begins. Shot 1 has no
-    # keyframe either, so it carries no picture at all; the rest carry exactly one,
-    # their keyframe.
-    check("no shot is given the reference",
-          [len(i) for _, i in shots_seen] == [0, 1],
+    # No <Picture N> tag anywhere, so placing by tag would place the reference on no
+    # shot at all -- a connected input that silently does nothing. It falls back to
+    # every shot instead. Shot 1 carries the reference alone (no previous frame yet);
+    # shot 2 carries the reference AND its keyframe.
+    check("an untagged reference still reaches every shot",
+          [len(i) for _, i in shots_seen] == [1, 2],
           str([len(i) for _, i in shots_seen]))
     clip2 = FakeCLIP()
     run_node("A room.\n\nHe walks in.\n\nShe says: \"Now.\"", clip=clip2)
@@ -287,15 +287,18 @@ def test_aug_protects_the_keyframe():
     check("at a safe aug the handoff is a real keyframe",
           "riding as an extra reference" not in info_hi)
     check("...and it is encoded", vae_hi.encodes >= 1, f"{vae_hi.encodes}")
-    # The demotion path is gone along with the references it demoted to. Nothing sets
-    # the aug now, so the keyframe rides at H3's own default whatever the widget says.
+    # One aug covers every visual condition row. Below KEYFRAME_SAFE_AUG it would
+    # noise the keyframe too, so there the handoff stops anchoring and rides as an
+    # extra reference: weaker continuity, but nothing pretending to anchor.
     info_lo = run_node(P, ref_image_1=ref, ref_noise_aug=0.90)[2]
-    check("a soft aug can no longer demote the keyframe",
-          "riding as an extra reference" not in info_lo)
-    check("...and the dead widget is called out", "no longer governs anything" in info_lo)
+    check("a soft aug demotes the keyframe rather than noising it",
+          "riding as an extra reference" in info_lo)
+    check("...and the note says what it costs", "weaker continuity" in info_lo)
+    # With nothing connected there is no reference to soften, so the keyframe is safe
+    # whatever the widget says.
     info_noref = run_node(P, ref_noise_aug=0.90)[2]
-    check("with nothing connected there is nothing to say",
-          "no longer governs anything" not in info_noref)
+    check("no references means the keyframe is never demoted",
+          "riding as an extra reference" not in info_noref)
 
 
 def test_beat_reviving_a_garment():
@@ -695,32 +698,14 @@ def test_references_ride_with_the_keyframe():
                  anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
         shots = seen[1:]                     # seen[0] is the negative
-        # shot 1: NOTHING. No previous frame to hand over, so a reference would be the
-        #         shot's only picture -- and one picture followed by the prompt is
-        #         H3's first-frame shape, which is the face turning up as frame 1.
+        # shot 1: the reference only -- no previous frame to hand over yet.
         # shot 2: the reference AND the keyframe. This is the pairing I forbade.
         # shot 3: the guard drops Kate, so no tag, so no reference; keyframe only.
         check("the roster is ref + keyframe, not one or the other",
-              [p for p, _ in shots] == [0, 2, 1], str([p for p, _ in shots]))
+              [p for p, _ in shots] == [1, 2, 1], str([p for p, _ in shots]))
         check("the shot carrying both still names exactly one picture",
               shots[1] == (2, 1), str(shots[1]))
         check("a shot the guard trimmed carries no reference", shots[2][1] == 0)
-        # A reference is never a shot's ONLY picture.
-        check("a keyframeless shot carries no reference", shots[0] == (0, 0), str(shots[0]))
-        check("...and its tag goes with it, pointing at nothing otherwise",
-              shots[0][1] == 0)
-        # first_frame gives shot 1 a keyframe, and the reference rides with it again.
-        seen.clear()
-        run_node("Kate walks in.\n\nKate sits beside Mike.\n\nMike stands up.",
-                 anchor="A room.", character_memory=mem,
-                 ref_image_1=torch.rand(1, H, W, 3),
-                 first_frame=torch.rand(1, H, W, 3))
-        check("first_frame lets shot 1 carry the reference too",
-              [p for p, _ in seen[1:]] == [2, 2, 1], str([p for p, _ in seen[1:]]))
-        seen.clear()
-        run_node("Kate walks in.\n\nKate sits beside Mike.\n\nMike stands up.",
-                 anchor="A room.", character_memory=mem,
-                 ref_image_1=torch.rand(1, H, W, 3))
         # The tag stays IN the prompt: it is the binding between the picture and the
         # person, which comfy_extras/nodes_minimax_h3.py tells you to write there.
         info, script = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
