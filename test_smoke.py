@@ -593,6 +593,28 @@ def test_person_described_once_end_to_end():
     check("...once", " ".join(s3.split()).count("Maya: 27") == 1)
 
 
+def test_sound_survives_silencing():
+    print("\n=== a described sound is not silenced away ===")
+    P = ("A cold concrete basement, a low hum off the strip light.\n\n"
+         "Maya: 27, grey coat.\n\n"
+         "Maya lies still on the floor.\n\n"
+         "The chain drags and rattles across the concrete.\n\n"
+         'Jon says: "Get up."')
+    vae = FakeAudioVAE()
+    info = run_node(P, audio_vae=vae)[2]
+    check("the beat with a sound keeps its audio", "describe a sound" in info)
+    check("...and is counted", "1 shot(s) have no line but describe" in info)
+    check("the beat with none is silenced", "1 shot(s) have no quoted line and no sound"
+          in info)
+    check("...and the guidance says what silence actually is",
+          "not 'no speech', it is 'no sound at all'" in info)
+    check("...and how to score a scene", "DESCRIBE it in the prose" in info)
+    check("...and warns off a label", "read as text to draw" in info)
+    # With silencing off, nothing is silenced and nothing is claimed about it.
+    off = run_node(P, silence_nonspeech=False)[2]
+    check("silencing off silences nothing", "conditioned on real silence" not in off)
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -708,6 +730,7 @@ def main():
     test_every_paragraph_accounted_for()
     test_av_stays_in_sync()
     test_person_described_once_end_to_end()
+    test_sound_survives_silencing()
     test_detail_trend()
     test_timing_report()
     print()

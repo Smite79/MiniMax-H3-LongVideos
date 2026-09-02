@@ -524,6 +524,25 @@ def exertion_in(beat):
     return bool(_EXERTION.search(beat or ""))
 
 
+# Sound the text asks for. H3 is joint, so the same prose conditions the audio
+# branch -- a scene is scored by describing it, not by a setting.
+_SOUND_CUE = re.compile(
+    r"\b(?:sounds?|noises?|echo(?:e?s|ing)?|silence|rattl(?:e|es|ing)|clank(?:s|ing)?|"
+    r"clink(?:s|ing)?|creak(?:s|ing)?|scrap(?:e|es|ing)|thud(?:s|ding)?|bang(?:s|ing)?|"
+    r"slam(?:s|ming)?|clatter(?:s|ing)?|jingl(?:e|es|ing)|squeak(?:s|ing)?|"
+    r"footsteps?|breath(?:s|es|ing)?|pant(?:s|ing)?|gasp(?:s|ing)?|sigh(?:s|ing)?|"
+    r"whimper(?:s|ing)?|moan(?:s|ing)?|groan(?:s|ing)?|sob(?:s|bing)?|"
+    r"scream(?:s|ing)?|shout(?:s|ing)?|whisper(?:s|ing)?|laugh(?:s|ing|ter)?|"
+    r"hum(?:s|ming)?|buzz(?:es|ing)?|hiss(?:es|ing)?|drip(?:s|ping)?|"
+    r"rustl(?:e|es|ing)|click(?:s|ing)?|snap(?:s|ping)?|zip(?:s|ping)?|"
+    r"rings?|ringing|wind|rain|thunder|traffic|music|hollow|muffled|reverb)\b", re.I)
+
+
+def sound_described(text):
+    """Does this beat ask for a sound the audio branch should make?"""
+    return bool(_SOUND_CUE.search(text or ""))
+
+
 def has_speech(beat):
     """Does this beat contain a scripted line?
 
@@ -2596,6 +2615,7 @@ class H3LongVideos:
         # the removing shot too: the keyframe already shows the garment on at the
         # start, and a description saying it is still worn is what puts it back.
         shots, speech, gone, shown = [], [], [], []
+        sounded = []                # beats that ask for a sound of their own
         restrained = posed = rigid_latched = False
         stripped_shots = set()      # 0-based shots that took something off
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
@@ -2772,6 +2792,11 @@ class H3LongVideos:
             total_words += len(shot_text.split())
             shots.append(shot_text)
             speech.append(has_speech(body))
+            # Silence exists to stop an unconditioned branch inventing a VOICE. A beat
+            # that asks for a sound is asking for audio on purpose, and conditioning it
+            # on real silence is how a scene ends up with no footsteps, no chain and no
+            # room tone.
+            sounded.append(sound_described(body))
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -2821,9 +2846,23 @@ class H3LongVideos:
                             f"{' -- near-clean, so the reference tends to be reproduced in the '
                               'opening frames, pose and background included'
                               if float(ref_noise_aug) >= 0.99 else ''}"))
-        n_silent = sum(1 for s in speech if not s)
+        n_silent = sum(1 for s, snd in zip(speech, sounded) if not s and not snd)
+        n_kept = sum(1 for s, snd in zip(speech, sounded) if not s and snd)
+        if silence_nonspeech and n_kept:
+            notes.append(
+                f"{n_kept} shot(s) have no line but describe a sound, so their audio is "
+                f"left free to make it. Silence is there to stop an unconditioned branch "
+                f"inventing a VOICE -- a beat asking for footsteps or a chain is asking "
+                f"for audio on purpose")
         if silence_nonspeech and n_silent:
-            notes.append(f"{n_silent} shot(s) have no quoted line and are silenced")
+            notes.append(
+                f"{n_silent} shot(s) have no quoted line and no sound described, so they "
+                f"are conditioned on real silence -- which is not 'no speech', it is 'no "
+                f"sound at all': no footsteps, no room tone, nothing. H3 is joint, so the "
+                f"way to score a scene is to DESCRIBE it in the prose: 'boots on concrete, "
+                f"a chain dragging, a low hum off the strip light'. Write it into a beat "
+                f"for that shot, or into the anchor to carry it through the film. Do not "
+                f"use a label like 'sound:' -- a labelled line is read as text to draw")
             # H3 is JOINT: the face follows the audio branch. Conditioning that branch
             # on real silence says this person is making no sound -- and a person
             # making no sound is rendered still. On a beat that stages effort or
@@ -2920,7 +2959,7 @@ class H3LongVideos:
                     msg = f"<Picture {n}> names a slot with no image connected"
                     if msg not in notes:
                         notes.append(msg)
-            silent = bool(silence_nonspeech and not speech[i])
+            silent = bool(silence_nonspeech and not speech[i] and not sounded[i])
 
             # A shot that follows a removal starts FRESH. Every shot is anchored to
             # the previous one's last frame, so if the model did not finish taking

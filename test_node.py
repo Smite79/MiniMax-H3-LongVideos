@@ -741,6 +741,28 @@ def test_hardware_has_somewhere_to_go():
     check("nothing to place, no sentence", S.anchor_clause([]) == "")
 
 
+def test_sound_described():
+    print("\n=== a beat that asks for a sound keeps its audio ===")
+    # Silence is conditioned on encoded silence, which is not "no speech" but "no
+    # sound at all" -- no footsteps, no chain, no room tone. It exists to stop an
+    # unconditioned branch inventing a VOICE, and a beat asking for a sound is
+    # asking for audio on purpose.
+    for _t in ("The chain drags and rattles across the concrete.",
+               "Jon's boots echo on the stone floor.",
+               "She breathes hard through the gag.",
+               "A low hum off the strip light.",
+               "The door slams behind him.",
+               "Rain on the window.",
+               "She gasps."):
+        check(f"sound asked for: {_t[:38]!r}", S.sound_described(_t))
+    for _t in ("Maya lies still on the floor.", "Jon walks to the window.",
+               "Maya looks up at him.", ""):
+        check(f"no sound asked for: {_t[:38]!r}", not S.sound_described(_t))
+    # A quoted line is speech, handled separately -- this is about everything else.
+    check("speech and sound are separate questions",
+          S.has_speech('He says: "Get up."') and not S.sound_described("He nods."))
+
+
 def test_pace():
     print("\n=== a shot longer than its action is filled by slowing it down ===")
     # Reported: the movement looks slow. A video model given more time than the
@@ -1032,6 +1054,7 @@ def main():
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
+    test_sound_described()
     test_pace()
     test_av_grid_alignment()
     test_chain_is_rigid()
