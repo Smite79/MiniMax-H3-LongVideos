@@ -338,6 +338,53 @@ def sheet_pronoun(line):
 _PRONOUN = re.compile(r"\b(?:she|he|her|hers|his|him|they|them|their|theirs)\b", re.I)
 
 
+# A determiner in front means the capitalised word DESCRIBES something rather than
+# doing something: "her Nike leggings" names a garment, not somebody in the room.
+_DETERMINER = frozenset("a an the her his its their our my your this that".split())
+_CAPITALISED = re.compile(r"\b([A-Z][a-z’'-]{1,24})\b")
+
+
+def unknown_people(beats, sheet):
+    """{name: [1-based shot numbers]} -- names the beats use as PEOPLE that the
+    character sheet never describes.
+
+    A person the sheet does not describe is a person no shot describes. The guard
+    keeps the entries for the people a beat names, and there is no entry to keep, so
+    the beat stages somebody the model has been told nothing about -- no age, no
+    clothes, no face -- and it invents them, differently in each shot. Worse, a beat
+    whose ONLY person is undescribed falls back to the previous beat's cast, so the
+    shot describes someone who is not in it and stays silent about the one who is.
+
+    It is also how one person written under two names becomes two people, one of
+    them a stranger.
+
+    A capitalised word only counts once it has appeared MID-sentence somewhere in
+    the script. That is what separates a name from an ordinary word that happens to
+    open a sentence, and it needs no list of ordinary words to do it.
+
+    Reported, never acted on: whether a name is somebody already on the sheet under
+    another name or a third person in the room is not answerable from the text, and
+    guessing would be the node rewriting the script."""
+    known = {n.lower() for n, _ in sheet_lines(sheet) if n}
+    seen, mid_sentence = {}, set()
+    for i, beat in enumerate(beats or [], 1):
+        for m in _CAPITALISED.finditer(beat or ""):
+            # "Jon's kitchen" is Jon. The apostrophe is in the class for O'Neill.
+            word = re.sub(r"['’]s$", "", m.group(1))
+            before = (beat[:m.start()]).rstrip()
+            prev = re.search(r"([\w’'-]+)\W*$", before)
+            if prev and prev.group(1).lower() in _DETERMINER:
+                continue
+            # Opening a sentence -- or a quoted line -- capitalises anything, so
+            # only a mid-sentence appearance is evidence of a name.
+            if before and before[-1] not in ".!?:\"”":
+                mid_sentence.add(word)
+            if i not in seen.setdefault(word, []):
+                seen[word].append(i)
+    return {w: s for w, s in seen.items()
+            if w in mid_sentence and w.lower() not in known}
+
+
 # Where a beat says something becomes VISIBLE. The other half of a removal: "cuts
 # off her coat to expose the jumper" names the coat as coming off AND the jumper as
 # what was under it.
@@ -2797,6 +2844,21 @@ class H3LongVideos:
                          f"the scene instead of spending a shot on them -- a sheet "
                          f"describes people, it does not stage anything, and it has to "
                          f"be in EVERY shot for a removal to have something to scrub")
+        # Somebody the beats stage and the sheet never describes. Nothing in the shot
+        # says who they are, so the model invents them -- and a beat whose only person
+        # is undescribed falls back to the previous beat's cast, which describes
+        # someone who is not in the shot and says nothing about the one who is.
+        for _who, _in in unknown_people([extract_directives(b)[0] for b in beats],
+                                        sheet).items():
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in _in)} name {_who}, who has no entry "
+                f"in the character sheet. {_who} is IN those shots and nothing describes "
+                f"them -- no age, no clothes, no face -- so the model invents them, "
+                f"differently each time. Where that is the ONLY person a beat names, the "
+                f"shot falls back to the previous beat's people, and then it describes "
+                f"someone who is not in it and nobody who is. If {_who} is already on the "
+                f"sheet under another name, use one name throughout; otherwise add "
+                f"'{_who}: ...' to character_memory")
         # Account for every paragraph, so a beat that quietly went somewhere else is
         # visible. Two ways one disappears: it reads as a character sheet and is folded
         # into the scene, or it was never a separate paragraph to begin with.

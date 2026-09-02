@@ -600,6 +600,28 @@ def test_person_described_once_end_to_end():
     check("...once", " ".join(s3.split()).count("Maya: 27") == 1)
 
 
+def test_a_name_with_no_entry_end_to_end():
+    print("\n=== a person the sheet never describes ===")
+    P = "\n\n".join(["Maya walks in.", "Alex says hello to Maya.",
+                     "Alex walks to the window.",
+                     "Maya stands up and Alex takes her hand."])
+    mem = "Maya: she, 27, grey coat.\nJon: he, 35, jeans."
+    info, script = run_node(P, plan_only=True, anchor="A room.",
+                            character_memory=mem)[2:4]
+    check("the run reports the undescribed person", "Alex, who has no entry" in info)
+    check("...naming the shots", "shot(s) 2, 3, 4 name Alex" in info)
+    check("...and what to do about it", "use one name throughout" in info)
+    # Nothing is acted on: whether Alex is Jon under another name or a third person
+    # is not answerable from the text, and guessing would rewrite the script.
+    shots = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("the script is not rewritten", "Alex says hello to Maya." in shots[1])
+    check("...and no entry is invented for them", "Alex:" not in script)
+    # A sheet that covers everyone says nothing.
+    clean = run_node("Maya walks in.\n\nJon greets Maya.", plan_only=True,
+                     anchor="A room.", character_memory=mem)[2]
+    check("a complete sheet is not reported", "has no entry" not in clean)
+
+
 def test_keyframe_is_not_a_cast_member():
     print("\n=== the handoff is a continuation, not another subject ===")
     # Reported as doubles in the frame. comfy/text_encoders/minimax.py labels every
@@ -835,6 +857,7 @@ def main():
     test_av_stays_in_sync()
     test_person_described_once_end_to_end()
     test_keyframe_is_not_a_cast_member()
+    test_a_name_with_no_entry_end_to_end()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
