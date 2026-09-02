@@ -667,6 +667,24 @@ def test_hardware_has_somewhere_to_go():
         check(f"already placed: {_t[:36]!r}", S.unanchored_hardware(_t) == [])
     check("no hardware, nothing to place",
           S.unanchored_hardware("Maya walks to the window.") == [])
+    # A chastity belt is not a waistband. The generic belt phrase said nothing about
+    # where it fastens, so the lock went where locks usually go on a strap -- behind.
+    _cb = S.unanchored_hardware("Jon shows her a chastity belt.")
+    check("a chastity belt gets its own placement", len(_cb) == 1)
+    check("...with the lock at the front", "locks at the front" in _cb[0])
+    check("...and the shield between the legs", "between the legs" in _cb[0])
+    check("the plugged variant is the same belt",
+          S.unanchored_hardware("Jon shows her a plugged chastity belt.") == _cb)
+    # The plain belt entry must not ALSO match inside "chastity belt", or the shot
+    # states two different placements for one object.
+    check("...and the plain belt phrase does not double up",
+          not any("closes around the waist" in p for p in _cb))
+    check("an ordinary belt still gets the ordinary phrase",
+          S.unanchored_hardware("Jon shows her a leather belt.")
+          == ["a belt closes around the waist and hips"])
+    check("naming the position yourself wins",
+          S.unanchored_hardware("Jon locks the chastity belt at the front, over her hips.")
+          == [])
     # The sentence itself.
     cl = S.anchor_clause(["a collar closes around the neck"])
     check("the clause reads as one sentence", cl.count(".") == 1)
