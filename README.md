@@ -432,6 +432,39 @@ line has an unconditioned audio stream, which invents a voice that the picture t
 lip-syncs to. `silence_nonspeech` anchors that stream to real encoded silence
 instead — conditioning the stream rather than asking the prompt to stop it.
 
+### Scoring a scene
+
+Because the model is joint, **the same prose conditions the audio branch**. A
+soundscape is written, not configured — there is no sound field, and there should
+not be one:
+
+```
+A cold concrete basement, a low hum off the strip light and a drip somewhere behind
+the wall.
+
+Jon's boots echo on the stone floor as he walks in.
+
+The chain drags and rattles across the concrete as she shifts her weight.
+```
+
+Sound in the **anchor** or first paragraph carries through every shot — room tone,
+the space, the ambience. Sound in a **beat** belongs to that shot — footsteps,
+a door, a chain, breath.
+
+Two things to know:
+
+- **Silence is not "no speech", it is "no sound at all".** `silence_nonspeech`
+  conditions the audio branch on encoded silence, so a shot it silences has no
+  footsteps, no room tone, nothing. A beat that *describes* a sound is exempt — it
+  is asking for audio on purpose — but a beat that describes none is scored as
+  silent. `info` says which shots were which, every run.
+- **Never label it.** `sound:` or `soundscape:` at the start of a line is read as
+  text to *draw*, and turns up on screen. Write it as prose, in the sentence.
+
+Turning `silence_nonspeech` off gives every shot a free audio branch: full ambience
+everywhere, at the risk that a shot with no line invents speech and the mouth
+follows it.
+
 ## Outputs
 
 | slot | what it is |
