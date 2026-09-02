@@ -296,6 +296,51 @@ def test_character_sheet():
           "Wide lens, night." in S.scrub_removed(built, ["jacket"]))
 
 
+def test_no_one_is_described_twice():
+    print("\n=== one person, described once ===")
+    # Reported: two heads in a shot. character_memory and a `Name:` paragraph in the
+    # prompt are the same channel by two routes, and using both -- the natural thing
+    # to do once the widget exists -- put the person in every shot TWICE. A model
+    # told about one person twice renders two of them.
+    merged, dupes = S.merge_sheets("Maya: 27, silver hair, grey coat.",
+                                   "Maya: 27, silver hair, grey coat.")
+    check("the second description is dropped", merged.count("Maya:") == 1)
+    check("...and named", dupes == ["Maya"])
+    # The earlier source wins, so character_memory overrides a sheet in the prompt.
+    merged, _ = S.merge_sheets("Maya: 27, silver hair, grey coat.", "Maya: 27, red coat.")
+    check("character_memory wins", "silver hair" in merged and "red coat" not in merged)
+    # Different people are not duplicates.
+    merged, dupes = S.merge_sheets("Maya: 27, grey coat", "Jon: 34, overalls")
+    check("two people both survive", "Maya:" in merged and "Jon:" in merged)
+    check("...and nothing is reported", dupes == [])
+    check("one source alone is unchanged",
+          S.merge_sheets("Maya: 27, grey coat")[0] == "Maya: 27, grey coat")
+    check("nothing at all is empty", S.merge_sheets("", "") == ("", []))
+    # An unlabelled line belongs to the scene, and is kept -- but not twice.
+    merged, _ = S.merge_sheets("The room is cold.", "The room is cold.\nJon: 34")
+    check("a repeated unlabelled line is said once", merged.count("The room is cold.") == 1)
+
+
+def test_sheet_lines_are_terminated():
+    print("\n=== a sheet line does not run into the beat ===")
+    # The sheet is assembled ahead of the beat, so a line ending "grey coat" welds
+    # onto it as "grey coat Maya lies still" -- and a name fused to the end of an
+    # attribute list reads as one more item in the list, which is another person.
+    check("a missing full stop is added",
+          S.terminate_lines("Maya: 27, grey coat") == "Maya: 27, grey coat.")
+    check("a trailing comma becomes one",
+          S.terminate_lines("Maya: 27, grey coat,") == "Maya: 27, grey coat.")
+    check("...and a semicolon", S.terminate_lines("Maya: 27;") == "Maya: 27.")
+    check("an existing full stop is left alone",
+          S.terminate_lines("Maya: 27, grey coat.") == "Maya: 27, grey coat.")
+    check("...and so is a question mark", S.terminate_lines("Who?") == "Who?")
+    check("every line gets one",
+          S.terminate_lines("Maya: 27\nJon: 34") == "Maya: 27.\nJon: 34.")
+    check("blank lines are dropped", S.terminate_lines("Maya: 27\n\n\nJon: 34")
+          == "Maya: 27.\nJon: 34.")
+    check("nothing in, nothing out", S.terminate_lines("") == "")
+
+
 def test_character_guard():
     print("\n=== only the people a beat involves are described ===")
     # Reported: the other character turning up in scenes they are not in. The sheet
@@ -977,6 +1022,8 @@ def main():
     test_removals()
     test_inferred_removals()
     test_character_sheet()
+    test_no_one_is_described_twice()
+    test_sheet_lines_are_terminated()
     test_character_guard()
     test_layers_from_prose()
     test_opening_pose()

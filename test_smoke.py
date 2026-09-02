@@ -572,6 +572,27 @@ def test_every_paragraph_accounted_for():
     check("a clean script is not nagged", "carry more than one line" not in clean)
 
 
+def test_person_described_once_end_to_end():
+    print("\n=== two heads: one person described twice ===")
+    P = "A basement.\n\nMaya: 27, silver hair, grey coat.\n\nMaya lies still on the floor."
+    imgs, audio, info, script = run_node(
+        P, plan_only=True, character_memory="Maya: 27, silver hair, grey coat.")[:4]
+    shot = " ".join([x for x in re.split(r"(?=\[Shot )", script) if x.strip()][0].split())
+    check("the person is described once", shot.count("Maya:") == 1)
+    check("...and the duplicate is reported", "described more than once" in info)
+    check("...naming who", "Maya described" in info)
+    # No terminator on a sheet line welds it onto the beat: "grey coat Maya lies
+    # still", which reads as one more item in the attribute list.
+    s2 = run_node("A basement.\n\nMaya lies still on the floor.", plan_only=True,
+                  character_memory="Maya: 27, silver hair, grey coat")[3]
+    check("the sheet does not run into the beat", "grey coat Maya" not in s2)
+    check("...it is ended properly", "grey coat. Maya" in s2)
+    # Using one channel only is unaffected.
+    s3 = run_node(P, plan_only=True)[3]
+    check("one channel alone still describes the person", "Maya: 27" in s3)
+    check("...once", " ".join(s3.split()).count("Maya: 27") == 1)
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -686,6 +707,7 @@ def main():
     test_chain_hold_end_to_end()
     test_every_paragraph_accounted_for()
     test_av_stays_in_sync()
+    test_person_described_once_end_to_end()
     test_detail_trend()
     test_timing_report()
     print()
