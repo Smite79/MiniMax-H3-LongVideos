@@ -665,14 +665,20 @@ def test_a_name_with_no_entry_end_to_end():
     check("a complete sheet is not reported", "has no entry" not in clean)
 
 
-def test_keyframe_is_not_a_cast_member():
-    print("\n=== the handoff is a continuation, not another subject ===")
-    # Reported as doubles in the frame. comfy/text_encoders/minimax.py labels every
-    # image item "<Picture N>: " by item order, and in the ref2va format a numbered
-    # picture is a SUBJECT -- which is what a `Name: <Picture 1>, ...` sheet line
-    # points at. Appending the previous shot's last frame there gave the model a
-    # second numbered subject that no word of the prompt accounted for, looking
-    # exactly like the person already described, and it drew both.
+def test_references_ride_with_the_keyframe():
+    print("\n=== a reference and the keyframe ride together ===")
+    # I broke this, then removed it, on the conclusion that fl2va could not carry an
+    # identity reference at all. Wrong, and the old node's own comment said so:
+    # ComfyUI packs both channels in AGREEING orders -- model_base.py:2183-2191 builds
+    # cond_video_latents as keyframe latents then ref latents, and PackedLayout emits
+    # keyframe "cond" segments then ref "ref_img" ones -- so a shot takes references
+    # AND a real keyframe. The keyframe anchors the first frame; a reference only
+    # says who somebody is. They were never alternatives.
+    #
+    # Which image is the first frame is decided by resolved_frame_index in
+    # minimax_keyframes, NOT by a label's number. The labels only have to line up with
+    # the <Picture N> tags in the prompt, so references keep slots 1..N and the
+    # handoff is appended after them where it disturbs no numbering.
     seen = []
     orig = FakeCLIP.tokenize
 
@@ -683,63 +689,34 @@ def test_keyframe_is_not_a_cast_member():
 
     FakeCLIP.tokenize = spy
     try:
-        P = ("Kate stands by the window.\n\nMike walks in.\n\n"
-             "Kate turns to him.\n\nMike leaves.")
-        mem = "Kate: <picture 1>, she, 27, blonde hair, grey coat.\nMike: he, 35, jeans"
-        seen.clear()
-        run_node(P, anchor="A room.", character_memory=mem,
-                 ref_image_1=torch.rand(1, H, W, 3))
-        # ONE picture per shot, and it is slot 1. The formats disagree about what a
-        # numbered picture means -- fl2va: this video's first frame; ref2va: a
-        # subject -- so a roster of two cannot be read correctly under either. A shot
-        # with a keyframe is fl2va and the keyframe is <Picture 1>; references are
-        # dropped there, which leaves only shot 1 able to carry one.
-        check("no shot is given more than one picture",
-              all(pics <= 1 for pics, _ in seen))
-        check("...and every shot after the first has its keyframe as that picture",
-              all(pics == 1 for pics, _ in seen[2:]))
-        # `script` has to show the RENUMBERED text -- what the model is given -- or
-        # `script` has to show what the model is given. A <Picture N> tag points at a
-        # reference, references are not sent, and a tag pointing at nothing is what
-        # conjures a subject -- so the tags come out, and the script shows that.
-        info, script = run_node(P, plan_only=True, anchor="A room.",
-                                character_memory=mem,
-                                ref_image_1=torch.rand(1, H, W, 3))[2:4]
-        check("no tag is left pointing at nothing", "Picture" not in script)
-        check("...and the sheet still reads", "Kate: she, 27, blonde hair" in script)
-        check("the run says the reference is not sent", "NONE is being sent" in info)
-        check("...and points at first_frame", "first_frame" in info)
-        # With no reference anywhere there is no ref2va numbering to collide with,
-        # and "<Picture 1>: <first frame> <prompt>" is H3's own fl2v shape -- what
-        # comfy_extras/nodes_minimax_h3.py emits. That case is left alone.
-        seen.clear()
-        run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
-        check("a chain with no reference keeps the fl2v keyframe picture",
-              any(pics == 1 for pics, _ in seen))
-        # ref2va is the other format, and the only variant that does identity at all.
-        # There the pictures ARE the subjects: the reference goes to the shots whose
-        # text claims it by tag, and the keyframe stays OUT of the roster -- a picture
-        # ref2va did not ask for is one more subject. Never conditioned on whether
-        # this shot happens to have a reference: a shot the guard trimmed Kate out of
-        # would otherwise let the keyframe take the empty roster, putting an unclaimed
-        # picture into exactly the shots the guard was thinning.
+        mem = "Kate: <picture 1>, 22, she, blonde hair.\nMike: he, 35, jeans"
         seen.clear()
         run_node("Kate walks in.\n\nKate sits beside Mike.\n\nMike stands up.",
-                 anchor="A room.", reference_mode="ref2va",
-                 character_memory="Kate: <picture 1>, 22, she, blonde hair.\nMike: he, 35",
+                 anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
-        shots_seen = seen[1:]           # seen[0] is the negative
-        check("ref2va gives the reference to the shots that claim it",
-              [p for p, _ in shots_seen] == [1, 1, 0],
-              str([p for p, _ in shots_seen]))
-        check("...and every picture is one the text names",
-              all(p == t for p, t in shots_seen), str(shots_seen))
-        info = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
-                        anchor="A room.", reference_mode="ref2va",
-                        character_memory="Kate: <picture 1>, 22, she, blonde hair.",
-                        ref_image_1=torch.rand(1, H, W, 3))[2]
-        check("the mode is reported", "reference_mode is ref2va" in info)
-        check("...with the checkpoint it needs", "ref2va checkpoint" in info)
+        shots = seen[1:]                     # seen[0] is the negative
+        # shot 1: the reference only -- no previous frame to hand over yet.
+        # shot 2: the reference AND the keyframe. This is the pairing I forbade.
+        # shot 3: the guard drops Kate, so no tag, so no reference; keyframe only.
+        check("the roster is ref + keyframe, not one or the other",
+              [p for p, _ in shots] == [1, 2, 1], str([p for p, _ in shots]))
+        check("the shot carrying both still names exactly one picture",
+              shots[1] == (2, 1), str(shots[1]))
+        check("a shot the guard trimmed carries no reference", shots[2][1] == 0)
+        # The tag stays IN the prompt: it is the binding between the picture and the
+        # person, which comfy_extras/nodes_minimax_h3.py tells you to write there.
+        info, script = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
+                                anchor="A room.", character_memory=mem,
+                                ref_image_1=torch.rand(1, H, W, 3))[2:4]
+        check("the binding survives into the script", "<Picture 1>" in script)
+        check("...on the person it depicts", "Kate: <Picture 1>, 22" in script)
+        check("the run explains the pairing", "ride alongside the keyframe" in info)
+        # No reference connected: the handoff is the only picture, which is H3's own
+        # first-frame shape.
+        seen.clear()
+        run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
+        check("a chain with no reference keeps the keyframe picture",
+              any(pics == 1 for pics, _ in seen))
     finally:
         FakeCLIP.tokenize = orig
 
@@ -1010,7 +987,7 @@ def main():
     test_every_paragraph_accounted_for()
     test_av_stays_in_sync()
     test_person_described_once_end_to_end()
-    test_keyframe_is_not_a_cast_member()
+    test_references_ride_with_the_keyframe()
     test_undressing_completely_end_to_end()
     test_a_name_with_no_entry_end_to_end()
     test_sound_survives_silencing()
