@@ -1951,6 +1951,69 @@ def infer_removals(beat, scene):
     return found
 
 
+# Clothing, for the one case that names no garment at all: "strips out of their
+# clothes". A vocabulary is the wrong tool for reading a removal out of prose -- which
+# is why infer_removals tests POSITION instead -- but here the beat says nothing about
+# WHAT comes off, so the only place left to read it from is the wardrobe itself.
+#
+# Anything this misses stays described, and the note says which entries were cleared,
+# so a gap is visible rather than silent.
+_GARMENT_WORD = re.compile(
+    r"^(?:shirt|t-shirt|tshirt|top|blouse|jumper|sweater|sweatshirt|hoodie|cardigan|"
+    r"jacket|coat|blazer|vest|waistcoat|gilet|dress|gown|skirt|trousers|pants|jeans|"
+    r"leggings|shorts|tights|stockings|socks|boots|shoes|trainers|sneakers|sandals|"
+    r"heels|slippers|hat|cap|beanie|scarf|gloves|mittens|tie|apron|overalls|dungarees|"
+    r"uniform|robe|dressing-gown|pyjamas|pajamas|nightdress|nightie|swimsuit|bikini|"
+    r"trunks|briefs|boxers|underwear|undershirt|underclothes|bra|knickers|panties|"
+    r"thong|lingerie|camisole|slip|corset|romper|jumpsuit|tracksuit|anorak|parka|"
+    r"poncho|kilt|sari|kimono|cloak|clothes|clothing|outfit)s?$", re.I)
+
+
+def garments_in(text):
+    """Every garment word the given wardrobe text names, in order.
+
+    Restraints are excluded on purpose: taking clothes off does not unlock anything,
+    and the standing rule is that hardware is cleared by an explicit `remove:` and by
+    nothing else."""
+    out = []
+    for word in re.findall(r"\b[\w-]{3,}\b", text or ""):
+        low = word.lower().strip("-")
+        if low in out or _RESTRAINT_WORD.match(low):
+            continue
+        if _GARMENT_WORD.match(low):
+            out.append(low)
+    return out
+
+
+# A beat that undresses somebody completely without naming one garment. Every other
+# removal path needs the thing to be named; this is the case where the SCRIPT does not
+# name it, so nothing came off and the scene went on listing the whole wardrobe --
+# which is re-stamped into every later shot, so the clothes came back on.
+#
+# "naked eye" and "naked flame" are not people.
+_NAKED_CUE = re.compile(
+    r"\bnaked\b(?!\s+(?:eye|flame))"
+    r"|\bnude\b|\bin\s+the\s+nude\b"
+    r"|\bundress(?:es|ed|ing)?\b"
+    r"|\bstrips?\s+(?:out\s+of|off|down|naked|bare)\b|\bstripp(?:ed|ing)\s+"
+    r"(?:out\s+of|off|down|naked|bare)\b"
+    r"|\btakes?\s+(?:everything|it\s+all|all\s+of\s+it|the\s+lot)\s+off\b"
+    r"|\bwearing\s+nothing\b|\bwith\s+no\s+clothes\b|\bbare\s+skin\b", re.I)
+
+
+def strips_bare(text):
+    """Does this beat say somebody ends up with no clothes on?"""
+    return bool(_NAKED_CUE.search(text or ""))
+
+
+# Said once, in place of listing every garment separately. Restraints are named
+# because they do NOT come off here, and a sentence about everything coming off would
+# otherwise be read as including them.
+BARE_HOLD = (" Everything worn comes off during this shot and is away by the last "
+             "frame, leaving bare skin from the shoulders down; whatever is fastened "
+             "to the body stays fastened exactly as it was.")
+
+
 def missing_removals(beat, scene, already):
     """Garment words the SCENE still describes, in a beat whose prose takes
     something off and which carries no `remove:` line for them.
@@ -2947,6 +3010,19 @@ class H3LongVideos:
         guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
             body, toks, adds = extract_directives(b)
+            # Who this beat involves, decided BEFORE the removals: a beat that
+            # undresses somebody names no garment, so the wardrobe to clear is read
+            # off their sheet entries -- and only theirs. Undressing one person must
+            # not take the other one's clothes off.
+            if character_guard:
+                shot_sheet, active = sheet_for_beat(sheet, body, active)
+                if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
+                    notes.append(f"shot {len(shots) + 1} describes only "
+                                 f"{', '.join(active) or 'the scene'} -- the rest of the "
+                                 f"sheet is held back, because a person the text "
+                                 f"describes is a person the model draws")
+            else:
+                shot_sheet = sheet
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
             # win and are added to whatever is inferred.
             if auto_remove:
@@ -2956,6 +3032,29 @@ class H3LongVideos:
                     toks = list(toks) + inferred
                     notes.append(f"shot {len(shots) + 1}: read '{', '.join(inferred)}' as "
                                  f"coming off, from the beat's own wording")
+            # "...strip out of their clothes, becoming naked" names nothing, so every
+            # other path had nothing to take off and the scene went on listing the
+            # whole wardrobe -- in every later shot, which is how the clothes came
+            # back on. Here the garments are read off the sheet instead of the beat.
+            bare = auto_remove and strips_bare(body)
+            if bare:
+                stripped = [g for g in garments_in(shot_sheet)
+                            if g not in toks and g not in gone]
+                if stripped:
+                    toks = list(toks) + stripped
+                    notes.append(
+                        f"shot {len(shots) + 1} reads as undressing "
+                        f"{', '.join(active) if character_guard and active else 'the cast'}"
+                        f" completely, and the beat names no garment -- so the wardrobe was "
+                        f"read off the character sheet and all of it taken off: "
+                        f"{', '.join(stripped)}. Anything worn that is not in that list is "
+                        f"still described as on; name it in a 'remove:' line if so")
+                elif not gone:
+                    notes.append(
+                        f"shot {len(shots) + 1} reads as undressing completely, but no "
+                        f"garment was recognised in the character sheet, so nothing was "
+                        f"taken off and every later shot still describes the clothes. Add "
+                        f"a 'remove:' line naming them")
             # A beat's own words go to the model verbatim. Naming a garment that came
             # off in an EARLIER beat puts it back -- the scene is clean, the removal
             # was honoured, and then the beat itself asks for it. The removing beat
@@ -2982,17 +3081,6 @@ class H3LongVideos:
                 shown.extend(a for a in adds if a not in shown)
                 notes.append(f"added to the scene from shot {len(shots) + 1} on: "
                              + "; ".join(adds))
-            # Only the people this beat involves. Describing everyone in every shot
-            # is what puts the other character in a scene they are not in.
-            if character_guard:
-                shot_sheet, active = sheet_for_beat(sheet, body, active)
-                if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
-                    notes.append(f"shot {len(shots) + 1} describes only "
-                                 f"{', '.join(active) or 'the scene'} -- the rest of the "
-                                 f"sheet is held back, because a person the text "
-                                 f"describes is a person the model draws")
-            else:
-                shot_sheet = sheet
             # The scrub applies to the removing shot too -- but only because that
             # shot's KEYFRAME already shows the garment on at the start, so the text
             # saying it is worn would put it back at the end.
@@ -3032,7 +3120,11 @@ class H3LongVideos:
             # The removal has to FINISH inside this shot, because its last frame is
             # the next shot's keyframe. Stated only here; naming the garment again
             # later would put it back.
-            tail = off_by_last_frame(toks)
+            #
+            # A full strip says it once rather than reciting the wardrobe: listing
+            # eight garments coming off is eight more mentions of clothing in a shot
+            # whose point is that there is none.
+            tail = BARE_HOLD if (bare and toks) else off_by_last_frame(toks)
             # Once hardware is on, it stays on. Latched, not re-detected: a beat that
             # does not mention the cuffs does not mean they came off, and a cuff that
             # renders open is not a detail that drifts -- it is the scene ceasing to

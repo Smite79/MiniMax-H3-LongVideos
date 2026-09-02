@@ -185,6 +185,33 @@ verb in front of it, so *"kicks the chair and walks off"* is not one, and in the
 trailing form the particle ends the object: *"takes her coat off and drops it on the
 chair"* takes the coat and leaves the chair alone.
 
+**Undressing completely is the one case read from the *wardrobe* rather than the
+beat.** *"strips out of their clothes"*, *"undresses"*, *"is naked"* name no garment,
+so nothing else has anything to take off — and the scene goes on listing the whole
+wardrobe, restamped into every later shot, which is how the clothes come back on. So
+the garments are read off the character sheet instead and all of them come off:
+
+```
+Nora: 34, she, red hair, green canvas jacket, grey wool jumper, white t-shirt,
+black jeans, brown leather boots.
+
+Nora undresses completely and steps into the shower.
+```
+
+```
+shot 1  ... red hair, green canvas jacket, grey wool jumper, ... brown leather boots.
+shot 2  ... red hair.   Nora undresses completely...
+shot 3  ... red hair.   Nora reaches for a towel.
+```
+
+It is scoped to the people the beat names, so undressing one character does not take
+the other one's clothes off, and it says so in **one** sentence rather than reciting
+five garments back at a shot whose point is that there are none. **Restraints are not
+clothing** — taking clothes off unlocks nothing, and hardware is still cleared only by
+an explicit `remove:`. `info` lists exactly which entries were cleared, so anything
+the wardrobe vocabulary missed is visible rather than silent; name those in a
+`remove:` line.
+
 `remove:` still works and is added to whatever is inferred — use it when the wording
 is unusual enough that the beat is not read correctly, or when something comes off
 that the prose does not name as a removal.
