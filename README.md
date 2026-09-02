@@ -517,9 +517,28 @@ while a chain standing in the scene must not rattle where nobody moves.
 
 Room tone is what separates a recording from a sound effect: real footage has a bed
 under the events, and digital silence between them is what makes a scene sound
-staged. **It also means no shot is silenced any more** — the audio branch is free
-throughout, which is what makes the sound continuous and also what lets a shot with
-no line invent one. `auto_sound` off puts the silence guard back.
+staged.
+
+**Room tone does not count as the shot asking for audio.** That distinction is what
+stops the mouth moving. H3 is joint, so the audio branch drives the face: leave it
+free on a shot with no line and it fills itself with a **voice**, and the face
+lip-syncs to whatever it invented. Silence is the guard against that — and while the
+room counted as sound, the room being under *every* shot meant **nothing was ever
+silenced**, so the guard was switched on and doing nothing in every shot of every
+film.
+
+So a shot with no line and no sound of its own is silenced, and gets no room tone
+either — the clause would be describing an acoustic the audio is conditioned not to
+have. A shot that *does* have sound of its own keeps the room, and where there is no
+line it is told these are the **only** sounds:
+
+> *The only sounds are footsteps and a large room with a long tail.*
+
+That leaves nothing for a voice to fill. It is phrased positively on purpose: at
+cfg 1 H3 is CFG-free and no negative prompt is evaluated, so *"nobody speaks"* is not
+a prohibition — it is the word *speaks* in the prompt. A shot that has a line keeps
+the open form (*"It sounds like…"*), because closing the list there would be telling
+the model the line is not among the sounds.
 
 Write it yourself when you want something neither the action nor the space implies —
 weather, a noise off-screen, a machine, a specific quality of hum.
