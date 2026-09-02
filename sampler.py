@@ -1405,7 +1405,22 @@ _ADD_LINE = re.compile(r"^[ \t]*(?:add|wear|wearing)[ \t]*:[ \t]*(.+?)[ \t]*$", 
 _STRIP_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
                r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|"
                r"slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
-               r"toss(?:es|ed)?|throw[s]?|threw")
+               r"toss(?:es|ed)?|throw[s]?|threw|"
+               # How clothes actually come off, in the words people write it in.
+               # Without these a beat took the garment off on screen while the scene
+               # kept saying it was worn -- and the scene is re-stamped into every
+               # later shot, so it came back on and stayed on.
+               r"kick(?:s|ed|ing)?|step(?:s|ped|ping)?|lift(?:s|ed|ing)?|"
+               r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?|work(?:s|ed)?")
+# The verbs above that stay a removal when the particle TRAILS the object -- "kicks
+# her boots off". The rest are removals only with the particle straight after them:
+# "steps out of her leggings" is one, "steps back" while a light goes off later in
+# the sentence is not, and the trailing form would read that as a removal.
+_TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
+                  r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|"
+                  r"tore|slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
+                  r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
+                  r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
 # ...and verbs that are a removal on their own, needing no particle.
 _UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
               r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?")
@@ -1413,7 +1428,13 @@ _UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
 _REMOVAL_PROSE = re.compile(
     r"\b(?:" + _UNDO_VERB + r")\b"
     r"|\b(?:" + _STRIP_VERB + r")\s+(?:off|away|out\s+of|down)\b"
-    r"|\b(?:" + _STRIP_VERB + r")\b(?=[^.;!?]{0,40}?\b(?:off|away)\b)",
+    r"|\b(?:" + _TRAILING_VERB + r")\b(?=[^.;!?]{0,40}?\b(?:off|away)\b)"
+    # Over the head is off. The only way a garment goes over a head is coming off
+    # or going on, and the strip verbs are one-directional. A LOOKAHEAD, because
+    # the garment sits between the verb and the particle -- "lifts her top over her
+    # head" -- and the object span is read forward from the end of the match.
+    r"|\b(?:" + _STRIP_VERB + r")\b"
+    r"(?=[^.;!?]{0,40}?\bover\s+(?:her|his|their|the)\s+head\b)",
     re.I)
 
 
@@ -1804,6 +1825,25 @@ def infer_removals(beat, scene):
         tail = beat[m.end():]
         cut = _OBJECT_END.search(tail)
         span = tail[:cut.start()] if cut else tail
+        # In the TRAILING form the object sits between the verb and the particle --
+        # "takes her jacket off" -- so the particle ends the object, and what comes
+        # after it is a new clause: in "takes her jacket off and drops it on the
+        # chair" the chair is furniture the beat mentions, not something worn.
+        #
+        # A verb before the particle means the particle is not ours. "kicks the
+        # chair and Mike walks off" ends in "off", but it is the walking that is off,
+        # and reading that as a removal deleted the chair from the scene.
+        #
+        # Neither test applies to a verb that already swallowed its particle
+        # ("pulls off her coat") or needs none ("unzips her jacket and pulls it
+        # off"), where the object follows the verb and the sentence runs on.
+        if not (re.fullmatch(_UNDO_VERB, m.group(0), re.I)
+                or re.search(r"\b(?:off|away|out\s+of|down)$", m.group(0), re.I)):
+            part = re.search(r"\b(?:off|away)\b", span, re.I)
+            if part:
+                if _HAS_VERB.search(span[:part.start()]):
+                    continue
+                span = span[:part.start()]
         for word in re.findall(r"\b[\w-]{3,}\b", span):
             low = word.lower().strip("-")
             if not low or low in found:
@@ -2206,14 +2246,24 @@ def latent_upscaler_node():
 
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                        handoff=None, refs=None,
-                       ref_noise_aug=0.999, silent=False, ref_image_size="match"):
+                       ref_noise_aug=0.999, silent=False, ref_image_size="match",
+                       refs_in_use=False):
     """Text + references + keyframe for a single shot.
 
     THE ONE RULE from H3's layout: a shot's conditioning rows are packed in the
     order the tokenizer is given them, and tokenize_with_weights is either/or --
-    passing minimax_ref_items makes it ignore `images` outright. So the handoff
-    frame has to go through the SAME channel as the references or the text encoder
-    never sees where the shot left off.
+    passing minimax_ref_items makes it ignore `images` outright. So a reference and
+    a keyframe cannot be handed over separately; whatever the encoder is to see goes
+    in one list, numbered by position.
+
+    Which is the reason the keyframe is kept OUT of that list once a reference is in
+    it: a numbered picture there introduces a SUBJECT, and the handoff is not one.
+    See the comment at the append below. Its latent still reaches the model through
+    minimax_keyframes, which is what anchors the shot.
+
+    `refs_in_use` is about the FILM, not this shot -- a shot whose references were
+    all held back by the character guard is still part of a film that numbers
+    pictures, and switching format halfway through the chain is its own problem.
     """
     latent, fc = _empty_av_latent(width, height, length, H3_FPS)
     refs = [r for r in (refs or []) if r is not None]
@@ -2239,8 +2289,26 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     items, blocks = ([], [])
     if enc_refs:
         items, blocks = _build_ref_images(vae, enc_refs, width, height, ref_image_size)
-    if hand_img is not None and not carry_as_ref:
-        # Appended AFTER the references so <Picture N> numbering is untouched.
+    # The keyframe is a CONTINUATION, not a member of the cast.
+    #
+    # comfy/text_encoders/minimax.py labels every image item "<Picture N>: " by item
+    # order, and in the ref2va format a numbered picture is a SUBJECT the shot is
+    # being introduced to -- which is exactly what a `Name: <Picture 1>, ...` sheet
+    # line points at. Appending the previous shot's last frame there handed the model
+    # a SECOND numbered subject, unexplained by any word of the prompt and looking
+    # exactly like the person already described. It drew both. That is where the
+    # doubles came from, and with two people in the outgoing frame it is where two of
+    # them came from.
+    #
+    # Leaving it out costs nothing: the keyframe reaches the model as a LATENT
+    # through minimax_keyframes, which is the channel that actually anchors the shot.
+    # comfy_extras/nodes_minimax_h3.py's own AddGuide node adds a keyframe that way
+    # without touching the tokenizer at all.
+    #
+    # With no reference anywhere in the film there is no ref2va numbering to collide
+    # with, and "<Picture 1>: <first frame> <prompt>" is H3's own fl2v shape -- what
+    # the MiniMaxH3Conditioning node emits -- so that case is left alone.
+    if hand_img is not None and not carry_as_ref and not refs_in_use:
         items = items + [{"type": "image", "data": hand_img}]
 
     if items:
@@ -3159,7 +3227,8 @@ class H3LongVideos:
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
                 handoff=shot_handoff, refs=shot_refs,
-                ref_noise_aug=ref_noise_aug, silent=silent)
+                ref_noise_aug=ref_noise_aug, silent=silent,
+                refs_in_use=bool(refs_all))
             if demoted and not _aug_warned:
                 _aug_warned = True
                 notes.append(

@@ -489,6 +489,46 @@ def test_removal_needs_a_particle():
           "black shiny latex crop top" in kept)
 
 
+def test_how_clothes_actually_come_off():
+    print("\n=== the verbs people write removals in ===")
+    # Reported as "clothing removals are bugged". These phrasings took the garment
+    # off ON SCREEN while the scene kept saying it was worn -- and the scene is
+    # re-stamped into every later shot, so it came back on and stayed on.
+    sc = ("Kate: she, 27, white crop top, black leggings, grey jacket, black boots. "
+          "A wooden chair, a bare light, a door, a table.")
+    for _b, _want in (("Kate kicks off her boots.", "boots"),
+                      ("Kate kicks her boots off.", "boots"),
+                      ("Kate steps out of her leggings.", "leggings"),
+                      ("Kate wriggles out of her leggings.", "leggings"),
+                      ("Kate slides the jacket off.", "jacket"),
+                      # Over a head is off. A garment goes over a head coming off or
+                      # going on, and every strip verb is one-directional.
+                      ("Mike lifts her top over her head.", "top")):
+        check(f"{_b[:34]!r} -> {_want}", S.infer_removals(_b, sc) == [_want])
+    # A particle belongs to the NEAREST verb before it. "kicks the chair and Mike
+    # walks off" ends in "off", but it is the walking that is off -- and reading it
+    # as a removal deleted the chair from the scene.
+    for _b in ("Kate steps back and the light goes off.",
+               "Kate kicks the chair and Mike walks off.",
+               "Mike lifts the table and carries it off.",
+               "Kate steps through the door.",
+               "Kate lifts her chin and looks away.",
+               "Kate slides the chair over.",
+               "Mike works at the table until the light goes off."):
+        check(f"not a removal: {_b[:36]!r}", S.infer_removals(_b, sc) == [])
+    # ...and in the trailing form the particle ENDS the object, so the clause after
+    # it is not part of what came off.
+    check("what follows the particle is a new clause",
+          S.infer_removals("Mike takes her jacket off and drops it on the chair.",
+                           sc) == ["jacket"])
+    # The exceptions to both rules: a verb that swallowed its particle, and one that
+    # needs none. There the object follows the verb and the sentence runs on.
+    check("'pulls off her boots' still reads",
+          S.infer_removals("Mike pulls off her boots.", sc) == ["boots"])
+    check("'unzips her jacket and pulls it off' still reads",
+          S.infer_removals("Mike unzips her jacket and pulls it off.", sc) == ["jacket"])
+
+
 def test_removal_completes():
     print("\n=== a removal has to finish inside its shot ===")
     # Scrubbing stops a garment being DESCRIBED. It does not tell the model to
@@ -1142,6 +1182,7 @@ def main():
     test_layers_from_prose()
     test_opening_pose()
     test_removal_needs_a_particle()
+    test_how_clothes_actually_come_off()
     test_layers()
     test_removal_completes()
     test_restraints_hold()

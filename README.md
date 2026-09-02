@@ -160,6 +160,13 @@ the **scene already says is worn**. Only the verb's own object counts — the sp
 to the next clause boundary — so *"pulls off her coat, showing the jumper"* takes the
 coat and leaves the jumper. `info` reports every removal it reads, by shot.
 
+The verb can sit either side of its particle — *"kicks off her boots"* and *"kicks
+her boots off"* both read — and *"steps out of"*, *"wriggles out of"*, *"slides off"*
+and *"lifts it over her head"* are removals too. A particle belongs to the nearest
+verb in front of it, so *"kicks the chair and walks off"* is not one, and in the
+trailing form the particle ends the object: *"takes her coat off and drops it on the
+chair"* takes the coat and leaves the chair alone.
+
 `remove:` still works and is added to whatever is inferred — use it when the wording
 is unusual enough that the beat is not read correctly, or when something comes off
 that the prose does not name as a removal.
@@ -356,6 +363,27 @@ degrades every shot after the first.
   handoff as a keyframe and rides it as an extra reference instead: continuity is
   weaker, but nothing is corrupted. `info` says when this happens. If you want a
   real keyframe, keep `ref_noise_aug` at 0.99 or above.
+
+### The handoff is not a member of the cast
+
+H3's text encoder labels every image it is given `<Picture 1>: `, `<Picture 2>: `
+and so on, **numbered by the order it receives them**, and in the reference format a
+numbered picture is a *subject* — the thing a `Name: <Picture 1>, …` sheet line
+points at.
+
+The handoff frame between shots used to be appended to that list. It came out as one
+more numbered subject, unexplained by any word of the prompt and looking exactly like
+the person already described — so the model drew both. With two people in the
+outgoing frame, it drew two extra.
+
+So once a reference image is connected anywhere in the film, the handoff is kept out
+of the picture channel entirely. It still anchors the shot: it goes through as a
+keyframe *latent*, which is the channel that actually does the anchoring, and which
+ComfyUI's own `MiniMaxH3AddGuide` uses without touching the text encoder at all.
+
+With no reference connected there is no numbering to collide with, and
+`<Picture 1>: <first frame>` followed by the prompt is H3's own first-frame format.
+That case is unchanged.
 
 ## Speed
 

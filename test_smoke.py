@@ -600,6 +600,45 @@ def test_person_described_once_end_to_end():
     check("...once", " ".join(s3.split()).count("Maya: 27") == 1)
 
 
+def test_keyframe_is_not_a_cast_member():
+    print("\n=== the handoff is a continuation, not another subject ===")
+    # Reported as doubles in the frame. comfy/text_encoders/minimax.py labels every
+    # image item "<Picture N>: " by item order, and in the ref2va format a numbered
+    # picture is a SUBJECT -- which is what a `Name: <Picture 1>, ...` sheet line
+    # points at. Appending the previous shot's last frame there gave the model a
+    # second numbered subject that no word of the prompt accounted for, looking
+    # exactly like the person already described, and it drew both.
+    seen = []
+    orig = FakeCLIP.tokenize
+
+    def spy(self, text, minimax_ref_items=None, **kw):
+        n = sum(1 for it in (minimax_ref_items or []) if it["type"] == "image")
+        seen.append((n, len(set(re.findall(r"<Picture (\d+)>", text)))))
+        return orig(self, text, minimax_ref_items=minimax_ref_items, **kw)
+
+    FakeCLIP.tokenize = spy
+    try:
+        P = ("Kate stands by the window.\n\nMike walks in.\n\n"
+             "Kate turns to him.\n\nMike leaves.")
+        mem = "Kate: <picture 1>, she, 27, blonde hair, grey coat.\nMike: he, 35, jeans"
+        seen.clear()
+        run_node(P, anchor="A room.", character_memory=mem,
+                 ref_image_1=torch.rand(1, H, W, 3))
+        check("no shot carries a picture its text does not name",
+              all(pics == tags for pics, tags in seen))
+        check("...and the shot that names one still gets it",
+              any(pics == 1 for pics, _ in seen))
+        # With no reference anywhere there is no ref2va numbering to collide with,
+        # and "<Picture 1>: <first frame> <prompt>" is H3's own fl2v shape -- what
+        # comfy_extras/nodes_minimax_h3.py emits. That case is left alone.
+        seen.clear()
+        run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
+        check("a chain with no reference keeps the fl2v keyframe picture",
+              any(pics == 1 for pics, _ in seen))
+    finally:
+        FakeCLIP.tokenize = orig
+
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -795,6 +834,7 @@ def main():
     test_every_paragraph_accounted_for()
     test_av_stays_in_sync()
     test_person_described_once_end_to_end()
+    test_keyframe_is_not_a_cast_member()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
