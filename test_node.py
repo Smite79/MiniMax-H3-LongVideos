@@ -731,25 +731,24 @@ def test_text_in_frame():
 
 def test_reference_tags():
     print("\n=== <Picture N> tags ===")
-    # A tag is PLACEMENT, not prose. comfy/text_encoders/minimax.py writes the
-    # "<Picture N>: " label itself, directly ahead of the image, so a tag left in the
-    # text is a SECOND <Picture N> with no image behind it -- and in a sheet line,
-    # "Kate: <Picture 1>, 22, she, ...", that is another subject being declared. The
-    # model draws it. The tag lives in character_memory, so it declared a spare
-    # person in every shot of the film.
+    # The tag is the BINDING between an image and the subject the prompt describes,
+    # and it belongs IN the prompt: comfy_extras/nodes_minimax_h3.py says "the prompt
+    # refers to them as <Picture i>" and "Use the same tags when prompting". A picture
+    # the prompt refers to is that subject; a picture it does not refer to is ANOTHER
+    # subject. Stripping the tag does not remove a spare person, it creates one.
     refs = ["A", "B", "C", "D"]
     out, imgs, dropped = S.resolve_tags("Kate, <Picture 2>, walks in.", refs)
-    check("the tag chooses the image", imgs == ["B"])
-    check("...and is taken out of the text", "Picture" not in out)
-    check("...leaving readable prose", out == "Kate, walks in.")
+    check("the tag survives into the prompt", "<Picture 1>" in out)
+    check("...renumbered to what the shot carries", "<Picture 2>" not in out)
+    check("...and carrying the right image", imgs == ["B"])
     out2, imgs2, _ = S.resolve_tags("Kate <Picture 2> and Dan <Picture 4> meet.", refs)
-    check("two slots resolve in order", imgs2 == ["B", "D"])
-    check("...with both tags gone", "Picture" not in out2)
-    # The shape this actually appears in: a character-sheet line.
+    check("two slots renumber in order",
+          "<Picture 1>" in out2 and "<Picture 2>" in out2 and imgs2 == ["B", "D"])
+    # The shape it actually appears in: a character-sheet line naming who the
+    # picture is.
     out4, imgs4, _ = S.resolve_tags("Kate: <Picture 1>, 22, she, blonde hair.", refs)
-    check("a sheet line loses its tag", "Picture" not in out4)
-    check("...and reads correctly afterwards",
-          out4 == "Kate: 22, she, blonde hair.")
+    check("a sheet line keeps its binding", out4 == "Kate: <Picture 1>, 22, she, blonde hair.")
+    check("...and carries that image", imgs4 == ["A"])
     out3, imgs3, drop3 = S.resolve_tags("Kate, <Picture 9>, walks in.", refs)
     check("a tag with no image is removed", "Picture" not in out3 and drop3 == [9])
     check("...leaving readable text", out3 == "Kate, walks in.")
