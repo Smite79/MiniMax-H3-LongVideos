@@ -423,8 +423,13 @@ def test_removal_completes():
     # runs on to whatever is next: a hand that finishes one garment starts on the
     # next one, or on the body under it.
     _b = S.off_by_last_frame(["scarf"])
-    check("the action is bounded", "Everything else on the body stays exactly as it is" in _b)
-    check("...covering hardware as well", "whole and closed as it was put on" in _b)
+    check("the action is bounded", "Everything else worn stays exactly as it is" in _b)
+    check("...covering hardware as well", "still fastened" in _b)
+    # It bounds what is WORN, not the body. "Everything else on the body stays exactly
+    # as it is for the whole shot" reads as an instruction to hold still, and enough
+    # of those render a shot where nothing happens.
+    check("...without telling the body to hold still",
+          not re.search(r"\bbody stays\b|\bfor the whole shot\b|\bmotionless\b", _b, re.I))
     check("...naming no other garment", "jumper" not in _b and "coat" not in _b)
     # The BOUND sentence carries no negation: at cfg 1 the negative prompt is
     # never evaluated, so a negation in the positive only names what it forbids.
@@ -650,11 +655,23 @@ def test_chain_is_rigid():
                "a leather strap", "Maya lies still."):
         check(f"not rigid: {_t[:32]!r}", not S.rigid_hardware(_t))
     check("the clause is one sentence", S.CHAIN_HOLD.count(".") == 1)
-    check("...it keeps the links the same size", "every link keeps its size" in S.CHAIN_HOLD)
+    check("...it keeps the links the same size", "links keep their size" in S.CHAIN_HOLD)
     check("...holds the run straight", "straight and taut" in S.CHAIN_HOLD)
-    check("...and bounds the movement", "only as far as the metal allows" in S.CHAIN_HOLD)
     check("...impersonal and positive",
           not re.search(r"\b(?:she|he|her|his|they|no|not|never)\b", S.CHAIN_HOLD, re.I))
+    # It constrains the METAL. An earlier wording had the body reaching "only as far
+    # as the metal allows before it stops" -- read plainly that is an instruction to
+    # stop moving, and the holds stacked up to 64% of a shot whose beat was 11%.
+    for _c, _n in ((S.CHAIN_HOLD, "chain"), (S.RESTRAINT_HOLD, "restraint"),
+                   (S.TURN_HOLD, "turn"), (S.FALL_HOLD, "fall")):
+        check(f"the {_n} clause does not tell the body to stop",
+              not re.search(r"\bbefore it stops\b|\bthe body stays\b|\bholds? still\b|"
+                            r"\bmotionless\b|\bdoes not move\b|\bstays put\b", _c, re.I))
+    # It subsumes the restraint hold rather than joining it: two clauses saying "whole
+    # and closed" is twice the stasis for one guarantee.
+    check("the chain clause carries the restraint guarantee itself",
+          "whole and closed" in S.CHAIN_HOLD and "fastened exactly as it was put on"
+          in S.CHAIN_HOLD)
 
 
 def test_saved_defaults():
@@ -750,7 +767,7 @@ def test_turning_around():
     check("the clause covers what is worn", "all that is on it" in S.TURN_HOLD)
     check("...and what is fastened", "stays fastened and closed" in S.TURN_HOLD)
     check("...from every side", "front, side and behind" in S.TURN_HOLD)
-    check("...and in every position", "in every position" in S.TURN_HOLD)
+    check("...as the view comes round", "as the view comes round" in S.TURN_HOLD)
     check("...naming no garment and no person",
           not re.search(r"\b(?:she|he|her|his|coat|top|shirt|jacket)\b",
                         S.TURN_HOLD, re.I))

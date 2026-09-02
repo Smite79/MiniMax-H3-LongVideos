@@ -434,6 +434,22 @@ def thin_beats(beats, seconds):
     return out
 
 
+# Effort and reaction: the beats where a face has something to do.
+_EXERTION = re.compile(
+    r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
+    r"strain(?:s|ing|ed)?|fight(?:s|ing)?|kick(?:s|ing|ed)?|jerk(?:s|ing|ed)?|"
+    r"gasp(?:s|ing|ed)?|pant(?:s|ing|ed)?|cr(?:y|ies|ying)|sob(?:s|bing|bed)?|"
+    r"scream(?:s|ing|ed)?|shout(?:s|ing|ed)?|yell(?:s|ing|ed)?|moan(?:s|ing|ed)?|"
+    r"whimper(?:s|ing|ed)?|laugh(?:s|ing|ed)?|flinch(?:es|ing|ed)?|"
+    r"trembl(?:e|es|ing|ed)|shak(?:e|es|ing)|shiver(?:s|ing|ed)?|"
+    r"freak(?:s|ing)?\s+out|wakes?\s+up|woke\s+up|panic(?:s|king|ked)?)\b", re.I)
+
+
+def exertion_in(beat):
+    """Does this beat stage effort or reaction -- something a face performs?"""
+    return bool(_EXERTION.search(beat or ""))
+
+
 def has_speech(beat):
     """Does this beat contain a scripted line?
 
@@ -1211,8 +1227,9 @@ def off_by_last_frame(items):
     # STAYS -- at
     # cfg 1 there is no negative prompt, and a negation in the positive names the
     # thing it forbids. It also names no garment, so it summons none.
-    bound = ("Everything else on the body stays exactly as it is for the whole shot, "
-             "untouched and still fastened, whole and closed as it was put on.")
+    # About what is WORN, not about the body. "Everything else on the body stays
+    # exactly as it is for the whole shot" reads as an instruction to hold still.
+    bound = "Everything else worn stays exactly as it is, untouched and still fastened."
     return " " + sentence[0].upper() + sentence[1:] + " " + bound
 
 
@@ -1231,8 +1248,14 @@ _PLURAL_ITEM = re.compile(r"\b(?:s|shorts|trousers|pants|jeans|boots|shoes|glove
 # the prompt. This is the fact and nothing else.
 # What a `remove:` has to name to switch the hold off again.
 RESTRAINT_HOLD_KEY = "handcuffs cuffs chains rope ropes tape gag collar restraints shackles"
-RESTRAINT_HOLD = (" Every restraint on the body stays whole and closed, fastened exactly as it "
-                  "was put on, holding the same way from the first frame to the last.")
+# Every one of these constrains the HARDWARE, never the body. An earlier wording said
+# the restraint held "the same way from the first frame to the last" and the chain let
+# the body reach "only as far as the metal allows before it stops" -- read plainly,
+# that is an instruction to hold still, and stacked together the holds came to 64% of
+# a shot whose beat was 11%. The performance died under its own continuity guards.
+# Say what the metal does; leave the body to the beat.
+RESTRAINT_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
+                  "on, and still fastened at the last frame.")
 
 # Hardware that means restraint on its own.
 _RESTRAINT_PLAIN = re.compile(
@@ -1264,9 +1287,8 @@ _BODY_PART = re.compile(
 #
 # One sentence, only on shots that turn, and only once there is state worth holding.
 # It names no garment and no person, so it summons neither.
-TURN_HOLD = (" The body reads the same from every angle and in every position: what is on it "
-             "now is all that is on it, front, side and behind, and whatever is fastened stays "
-             "fastened and closed as it moves and the view comes round.")
+TURN_HOLD = (" What is on the body now is all that is on it, front, side and behind, and "
+             "whatever is fastened stays fastened and closed as the view comes round.")
 
 _TURN_CUE = re.compile(
     r"\b(?:turn(?:s|ed|ing)?|rotat(?:es?|ed|ing)|spin(?:s|ning)?|swivel(?:s|led)?|"
@@ -1349,9 +1371,12 @@ def falls_in(text):
 #
 # Positive and impersonal, like the other holds -- at cfg 1 there is no negative
 # prompt, so "does not stretch" only names stretching.
-CHAIN_HOLD = (" Chain and steel hold their shape: every link keeps its size, the run "
-              "between the fastenings stays straight and taut, and the body reaches only "
-              "as far as the metal allows before it stops.")
+# REPLACES the restraint hold rather than joining it -- the two said "stays whole and
+# closed" twice, and two clauses saying the same thing is twice the stasis for one
+# guarantee.
+CHAIN_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put on, "
+              "and still fastened at the last frame; its links keep their size and the run "
+              "between them stays straight and taut.")
 
 # Hardware that is rigid by nature. Only consulted once a restraint is established,
 # so a chain-link fence in the scenery cannot arm it on its own.
@@ -2399,6 +2424,7 @@ class H3LongVideos:
         if _ref:
             notes.append(_ref)
         active = []                 # the people the previous beat involved
+        guard_words = beat_words = total_words = 0
         for b in beats:
             body, toks, adds = extract_directives(b)
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
@@ -2517,10 +2543,31 @@ class H3LongVideos:
                              f"it, so the shot says where it sits: "
                              f"{anchors.split(': ', 1)[1].rstrip('.')}")
             line = f"{shot_scene} {body}".strip() if shot_scene else body
-            shots.append((line + tail + anchors + (RESTRAINT_HOLD if restrained else "")
-                          + chain + fall + turn).strip())
+            # The chain clause SUBSUMES the restraint hold -- it says "whole and closed"
+            # itself. Emitting both said it twice, which is twice the stasis for one
+            # guarantee.
+            hold = chain if chain else (RESTRAINT_HOLD if restrained else "")
+            shot_text = (line + tail + anchors + hold + fall + turn).strip()
+            guard_words += len(shot_text.split()) - len(f"{shot_scene} {body}".split())
+            beat_words += len(body.split())
+            total_words += len(shot_text.split())
+            shots.append(shot_text)
             speech.append(has_speech(body))
 
+        # What share of a shot is the node talking rather than the script. Continuity
+        # clauses all say some version of "this stays as it is", and enough of them
+        # drown the one sentence describing what HAPPENS -- which renders as a shot
+        # where nothing does. The previous node reached 96%; this is here so the creep
+        # is visible before it gets there again.
+        if total_words:
+            notes.append(
+                f"prompt balance: the beat is {100 * beat_words / total_words:.0f}% of "
+                f"what each shot is told, continuity clauses {100 * guard_words / total_words:.0f}%, "
+                f"scene and sheet the rest"
+                + (" -- the guards are outweighing the action, which reads as a shot "
+                   "where nothing happens. Fewer restraints named, or a beat with more "
+                   "in it, shifts the balance back"
+                   if guard_words > beat_words * 3 else ""))
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
                     if r is not None]
         tagged = any(picture_tags(s) for s in shots)
@@ -2545,6 +2592,21 @@ class H3LongVideos:
         n_silent = sum(1 for s in speech if not s)
         if silence_nonspeech and n_silent:
             notes.append(f"{n_silent} shot(s) have no quoted line and are silenced")
+            # H3 is JOINT: the face follows the audio branch. Conditioning that branch
+            # on real silence says this person is making no sound -- and a person
+            # making no sound is rendered still. On a beat that stages effort or
+            # reaction that is the wrong instruction, and it reads as a flat face.
+            n_effort = sum(1 for b, sp in zip(beats, speech)
+                           if not sp and exertion_in(b))
+            if n_effort:
+                notes.append(
+                    f"{n_effort} of those stage effort or reaction with no line to speak. "
+                    f"H3 is joint -- the face follows the audio branch -- so conditioning "
+                    f"it on silence says the person makes no sound, and a person making no "
+                    f"sound is rendered still. That is the flat, unreacting face. Turning "
+                    f"silence_nonspeech OFF lets the branch generate breath and effort, "
+                    f"which the face performs to; the cost is that an unconditioned branch "
+                    f"can also invent speech, and the mouth will follow that too")
         if first_frame is None:
             notes.append("no first_frame: shot 1 has nothing pinning its opening frame, so its "
                          "starting pose and framing come from the text and any reference")
