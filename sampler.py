@@ -2794,6 +2794,7 @@ class H3LongVideos:
         fresh = []
         t_start = time.perf_counter()
         vid_out, aud_out, sr = [], [], 44100
+        av_fix = 0                  # samples of A/V drift corrected across the chain
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         _deep_cleanup()
 
@@ -2898,6 +2899,28 @@ class H3LongVideos:
             if trim_seam and i > 0:
                 imgs = imgs[1:]
                 wav["waveform"] = wav["waveform"][..., max(0, round(sr / H3_FPS)):]
+            # Make the sound exactly as long as the picture it belongs to.
+            #
+            # The audio latent count is round(frames / 24 * 40), which lands exactly
+            # only when the frame count divides by 3 -- so most of H3's 17k+5 grid
+            # leaves a shot's audio 8.3 ms longer or shorter than its video. On its own
+            # that is inaudible. Concatenated it is not: with shots of equal length the
+            # error carries the same sign every time and adds up, and eleven 73-frame
+            # shots finish 92 ms out, which is plainly visible on a mouth.
+            #
+            # Correcting per shot rather than once at the end keeps every cut aligned
+            # too, instead of only the final duration.
+            want = int(round(imgs.shape[0] * sr / H3_FPS))
+            have = int(wav["waveform"].shape[-1])
+            if have > want:
+                wav["waveform"] = wav["waveform"][..., :want]
+            elif have < want:
+                shape = list(wav["waveform"].shape)
+                shape[-1] = want - have
+                wav["waveform"] = torch.cat(
+                    [wav["waveform"], torch.zeros(shape, dtype=wav["waveform"].dtype,
+                                                  device=wav["waveform"].device)], dim=-1)
+            av_fix += have - want
             # Measured on the frame that becomes the next shot's keyframe, because
             # that is the one whose losses are inherited.
             try:
@@ -2939,6 +2962,19 @@ class H3LongVideos:
             f"decode {t_decode:.0f}s ({100 * t_decode / wall:.0f}%), "
             f"other {other:.0f}s ({100 * other / wall:.0f}%); "
             f"per shot {t_sample / n:.1f}s + {t_decode / n:.1f}s")
+        if av_fix:
+            per_shot = abs(av_fix) / sr * 1000 / max(1, len(shots))
+            notes.append(
+                f"audio realigned to the picture by ~{abs(av_fix) / sr * 1000:.0f} ms "
+                f"across {len(shots)} shot(s), {per_shot:.1f} ms each. H3's audio latent "
+                f"runs at {AUDIO_LATENT_FPS}/s against {H3_FPS} fps video, so a shot's "
+                f"sound lands exactly only when its frame count divides by 3 -- otherwise "
+                f"it is up to 8.3 ms out, with the same sign every time when the shots "
+                f"are the same length, which is how a chain drifts out of sync"
+                + (". That is far more than the 8.3 ms the grid accounts for, so the "
+                   "audio VAE is not returning the length its latent implies -- check "
+                   "that the audio VAE is H3's own converted one"
+                   if per_shot > 50 else ""))
         _detail = detail_report(shot_detail)
         if _detail:
             notes.append(_detail)
