@@ -603,6 +603,38 @@ def test_restraints_hold():
           and "fastened exactly as it was put on" in S.RESTRAINT_HOLD)
 
 
+def test_hardware_has_somewhere_to_go():
+    print("\n=== hardware named with nowhere to sit ===")
+    # Reported: a collar and leash being shown, and the collar ending up on top of
+    # the head. A collar with no neck beside it is a band with no place to be, and a
+    # model handed a band-shaped object and no anatomy puts it where bands sit most
+    # often in its training data. Naming the part invents nothing: it is what the
+    # object IS. It happens whether the item is being fastened or only held up.
+    got = S.unanchored_hardware("Jon shows her a collar and leash.")
+    check("a collar is put at the neck", "a collar closes around the neck" in got)
+    check("...and the leash on the collar",
+          any("leash clips to the collar" in g for g in got))
+    check("a gag goes in the mouth",
+          S.unanchored_hardware("Jon holds up a gag.") == ["a gag sits in the mouth"])
+    check("handcuffs go on the wrists",
+          "handcuffs close around the wrists"
+          in S.unanchored_hardware("Jon shows her handcuffs."))
+    # What you wrote wins. If the text already says where it goes, nothing is added.
+    for _t in ("Jon buckles the collar around her neck.",
+               "Jon fits the blindfold over her eyes.",
+               "Jon clips the leash to the collar at her neck.",
+               "Wrists handcuffed behind back."):
+        check(f"already placed: {_t[:36]!r}", S.unanchored_hardware(_t) == [])
+    check("no hardware, nothing to place",
+          S.unanchored_hardware("Maya walks to the window.") == [])
+    # The sentence itself.
+    cl = S.anchor_clause(["a collar closes around the neck"])
+    check("the clause reads as one sentence", cl.count(".") == 1)
+    check("...and is impersonal",
+          not re.search(r"\b(?:she|he|her|his|they)\b", cl, re.I))
+    check("nothing to place, no sentence", S.anchor_clause([]) == "")
+
+
 def test_chain_is_rigid():
     print("\n=== steel does not behave like rope ===")
     # A model with no reason to think otherwise draws a chain as a soft cord: it
@@ -782,6 +814,7 @@ def main():
     test_layers()
     test_removal_completes()
     test_restraints_hold()
+    test_hardware_has_somewhere_to_go()
     test_chain_is_rigid()
     test_saved_defaults()
     test_falling_bound()

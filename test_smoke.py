@@ -472,6 +472,24 @@ def test_removing_shot_without_a_keyframe():
           "quilted jacket" not in sh_ff[0])
 
 
+def test_hardware_anchor_end_to_end():
+    print("\n=== a shown collar still belongs on a neck ===")
+    P = ("A basement.\n\nMaya: 27, grey coat.\n\n"
+         "Jon shows her a collar and leash.\n\n"
+         "Jon buckles the collar around her neck.\n\n"
+         "Maya walks to the window.")
+    imgs, audio, info, script = run_node(P, plan_only=True)[:4]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("the shot that shows it says where it goes",
+          "a collar closes around the neck" in sh[0])
+    check("...and where the leash goes", "leash clips to the collar" in sh[0])
+    check("the shot that places it is left alone",
+          "closes around the neck" not in sh[1])
+    check("an ordinary beat gets nothing",
+          "sits where it belongs" not in sh[2])
+    check("info says it stepped in", "no body part beside it" in info)
+
+
 def test_chain_hold_end_to_end():
     print("\n=== a chain holds its shape through the whole run ===")
     P = ("A basement.\n\n"
@@ -582,6 +600,7 @@ def main():
     test_anchor_is_the_scene()
     test_guard_and_layers_end_to_end()
     test_removing_shot_without_a_keyframe()
+    test_hardware_anchor_end_to_end()
     test_chain_hold_end_to_end()
     test_detail_trend()
     test_timing_report()
