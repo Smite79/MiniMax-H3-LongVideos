@@ -1148,22 +1148,21 @@ def posture_note(scene, has_first_frame):
 
 
 def reference_note(n_refs, aug, has_first_frame):
-    """What a near-clean reference actually asks the model to do.
+    """What `ref_noise_aug` still governs once references are not sent.
 
-    ONE aug covers every visual conditioning row. At H3's default of 0.999 a
-    reference is handed over essentially noise-free, and a noise-free image is an
-    invitation to REPRODUCE it -- its framing along with its subject. A portrait
-    reference therefore pulls the shot towards portrait framing, which is at odds
-    with a full-body pose no matter what the text says."""
-    if not n_refs or aug is None or float(aug) < KEYFRAME_SAFE_AUG:
+    It set how clean a REFERENCE was shown, and references have no channel in fl2va
+    -- see build_conditioning. The one visual condition row left is the keyframe, and
+    that row is handed over at H3's own default because nothing sets the aug any
+    more. So the widget does nothing, and saying so is better than leaving somebody
+    turning it."""
+    if not n_refs:
         return ""
-    note = (f"{n_refs} reference image(s) at ref_noise_aug {float(aug):.3f}, which is "
-            f"near-clean -- that asks the model to reproduce them, FRAMING included. A "
-            f"head-and-shoulders reference pulls every shot towards head-and-shoulders "
-            f"framing, whatever the text says about the body")
+    note = (f"{n_refs} reference image(s) connected, and ref_noise_aug "
+            f"({float(aug):.3f} here) no longer governs anything: it set how clean a "
+            f"REFERENCE was shown, and references are not sent")
     if not has_first_frame:
-        note += (". Shot 1 has no keyframe, so on that shot the aug only touches the "
-                 "references -- there is no anchor there for a lower value to damage")
+        note += (". Nothing pins shot 1's opening frame either -- put the picture on "
+                 "first_frame if that is what the reference was for")
     return note
 
 
@@ -2340,35 +2339,7 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     if handoff is not None:
         hand_img = _resize(handoff[:1], width, height, "disabled")
 
-    # ONE aug covers every visual condition row -- references AND the keyframe.
-    # comfy/ldm/minimax/model.py: _cond_video_rows() noises the keyframe latent by
-    # (1 - aug), and seg_t["cond"] labels it max(t_v, aug) instead of 0.999. So
-    # softening references below KEYFRAME_SAFE_AUG does not just soften them: it
-    # noises and mis-timesteps the ANCHOR of every shot after the first, which shows
-    # up as those shots degrading during sampling.
-    #
-    # When that would happen, the handoff stops being a keyframe and rides as an
-    # extra reference instead. Weaker continuity, but nothing is pretending to be an
-    # anchor while carrying noise.
-    keyframe_ok = ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG
-    carry_as_ref = bool(hand_img is not None and refs and not keyframe_ok)
-
-    # A keyframe and reference images cannot share the picture roster.
-    #
-    # The two formats use the same labels for different things: on fl2va <Picture 1>
-    # is this video's FIRST frame and <Picture 2> its LAST; on ref2va they are
-    # subjects. Send both and there is no numbering that reads correctly under either
-    # -- the handoff and a reference are competing for slot 1, and whichever loses
-    # becomes a frame the shot was never meant to have, or a person who was never in
-    # it. The keyframe wins, because it is the thing that makes this a chain.
-    if hand_img is not None and not carry_as_ref:
-        refs = []
-
-    enc_refs = refs + ([hand_img] if carry_as_ref else [])
-    items, blocks = ([], [])
-    if enc_refs:
-        items, blocks = _build_ref_images(vae, enc_refs, width, height, ref_image_size)
-    # THE KEYFRAME IS <Picture 1>, and it goes FIRST.
+    # THE PICTURE CHANNEL CARRIES FRAMES, NOT PEOPLE.
     #
     # comfy/text_encoders/minimax.py states the two formats, and they mean different
     # things by the same label:
@@ -2376,16 +2347,22 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     #   fl2va:  "<Picture 1>: " <first frame> ["<Picture 2>: " <last frame>] <prompt>
     #   ref2va: "<Picture i>: " <subject reference> ... <prompt>
     #
-    # On fl2va weights a numbered picture is a FRAME OF THIS VIDEO. On ref2va weights
-    # it is a SUBJECT. The released checkpoints are separate, and ComfyUI loads either
-    # under one MiniMaxH3 class, so nothing here can tell them apart -- but the format
-    # the keyframe belongs to is fl2va, and there it is Picture 1 by definition.
+    # A shot chain IS fl2va -- every shot after the first begins on the previous
+    # shot's last frame -- so here a numbered picture is A FRAME OF THIS VIDEO, and
+    # <Picture 1> is the frame the shot STARTS on.
     #
-    # Ordering matters for exactly that reason: appended AFTER references the handoff
-    # became <Picture 2>, which on fl2va is the LAST frame -- the model was being told
-    # the shot ENDS on the frame it should START from.
-    items = ([{"type": "image", "data": hand_img}]
-             if hand_img is not None and not carry_as_ref else []) + items
+    # Which is why reference images are not sent at all. A reference in that channel
+    # is not read as "this is who she is", it is read as "this is where the shot
+    # begins": the shot opened on the reference and then moved to where the character
+    # was supposed to be, showing her twice. There is nowhere else to put it -- slot 2
+    # is the LAST frame, which is worse -- so a subject reference simply has no
+    # channel in this format. run() says so and points at first_frame, which is
+    # fl2va's own way to pin an opening frame.
+    #
+    # The keyframe therefore owns slot 1, and nothing can push it to slot 2.
+    items = [{"type": "image", "data": hand_img}] if hand_img is not None else []
+    blocks = []
+    carry_as_ref = False        # ref2va demotion: nothing to demote to any more
 
     if items:
         tokens = clip.tokenize(prompt, minimax_ref_items=items)
@@ -3031,7 +3008,6 @@ class H3LongVideos:
                    if guard_words > beat_words * 3 else ""))
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
                     if r is not None]
-        tagged = any(picture_tags(s) for s in shots)
 
         lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat", pace)
         # Seconds of shot per staged action -- the number that decides whether the
@@ -3056,13 +3032,6 @@ class H3LongVideos:
                          + f" = ~{sum(lens) / H3_FPS:.1f}s total")
         if len_note:
             notes.append(len_note)
-        if refs_all:
-            notes.append(f"{len(refs_all)} reference image(s), "
-                         + ("placed by <Picture N> tags" if tagged else "on every shot")
-                         + (f", ref_noise_aug {float(ref_noise_aug):g}"
-                            f"{' -- near-clean, so the reference tends to be reproduced in the '
-                              'opening frames, pose and background included'
-                              if float(ref_noise_aug) >= 0.99 else ''}"))
         if inferred_sound:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in inferred_sound)} were given the "
@@ -3148,53 +3117,27 @@ class H3LongVideos:
         if float(cfg) != 1.0:
             notes.append(f"cfg is {float(cfg):g}; H3 is CFG-free and expects 1.0")
 
-        # Resolve the <Picture N> tags BEFORE the script is written, so `script` shows
-        # what the model is actually given rather than the instruction that chose it.
-        shot_refs_all = []
-        unbound = []
+        # <Picture N> tags come OUT of the prose: there is no longer a picture for
+        # them to point at, and a tag pointing at nothing is the exact thing that
+        # conjures a subject. resolve_tags with an EMPTY roster does precisely that --
+        # every tag names a slot with no image, so every tag is removed and the text
+        # tidied. Before `script` is written, so what you read is what is sent.
         for _i, _s in enumerate(shots):
-            if tagged:
-                _s, _r, _missing = resolve_tags(_s, refs_all)
-                for _n in _missing:
-                    _msg = f"<Picture {_n}> names a slot with no image connected"
-                    if _msg not in notes:
-                        notes.append(_msg)
-                shots[_i] = _s
-            else:
-                _r = refs_all
-                if _r:
-                    unbound.append(_i + 1)
-            shot_refs_all.append(_r)
-        # A reference the shot's own text never names. H3 binds an image to a subject
-        # by NAMING it -- ComfyUI's reference node: "Use the same tags when prompting"
-        # -- so an unnamed picture is not a likeness of anybody in the shot, it is one
-        # more subject, and the model renders it as a second person.
-        # Reference images belong to ref2va. Every shot but the first has a keyframe,
-        # and a keyframe means fl2va, where a numbered picture is a FRAME OF THIS
-        # VIDEO rather than somebody to put in it. The two cannot share the roster,
-        # so the keyframe keeps it -- and a reference connected against fl2va weights
-        # is being read as a frame, which is why it renders as an extra person.
+            shots[_i] = resolve_tags(_s, [])[0]
         if refs_all:
             notes.append(
-                f"{len(refs_all)} reference image(s) are connected. Those are a ref2va "
-                f"feature: on ref2va weights <Picture N> is a SUBJECT, but on fl2va "
-                f"weights -- the ones whose filenames say FL2VA -- <Picture 1> is this "
-                f"video's FIRST frame and <Picture 2> its LAST. A headshot handed to fl2va "
-                f"as a picture is therefore read as a frame of the shot, and comes out as "
-                f"a person who is in it. Every shot after the first has a keyframe, which "
-                f"IS <Picture 1>, so references are dropped there and only shot 1 can "
-                f"carry them. On fl2va weights: disconnect ref_image_* and use first_frame "
-                f"to pin identity, which is the same channel the chain already runs on")
-        if unbound:
-            notes.append(
-                f"shot(s) {', '.join(str(n) for n in unbound)} carry {len(refs_all)} "
-                f"reference image(s) that nothing in their text refers to. H3's reference "
-                f"format binds an image to a subject by NAMING it -- ComfyUI's own "
-                f"reference node says 'use the same tags when prompting' -- so a picture "
-                f"the prompt never mentions is read as ANOTHER subject, and renders as a "
-                f"second person. Put the tag in the sheet entry for whoever it depicts: "
-                f"'Nora: <Picture 1>, 34, she, red hair, ...'. The tag then travels with "
-                f"that person into every shot they are in, and only those shots")
+                f"{len(refs_all)} reference image(s) are connected and NONE is being sent. "
+                f"On fl2va -- the format a shot chain is built on, because a chain is a "
+                f"first frame per shot -- every numbered picture is A FRAME OF THIS VIDEO: "
+                f"<Picture 1> is the frame the shot STARTS on, <Picture 2> the one it ends "
+                f"on. A reference handed over there is not read as who somebody is, it is "
+                f"read as where the shot begins -- so the shot opened on the reference and "
+                f"then moved to where the character was supposed to be, which is the same "
+                f"person twice. There is no other slot to use: a subject reference has no "
+                f"channel in this format. Disconnect ref_image_* and put the picture on "
+                f"first_frame instead -- that is fl2va's own way to pin an opening frame, "
+                f"and the channel the chain already runs on. Their <Picture N> tags have "
+                f"been taken out of the prompt with them")
 
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
         info = " | ".join(notes)
@@ -3225,7 +3168,6 @@ class H3LongVideos:
         _deep_cleanup()
 
         for i, shot_prompt in enumerate(shots):
-            shot_refs = shot_refs_all[i]
             silent = bool(silence_nonspeech and not speech[i] and not sounded[i])
 
             # A shot that follows a removal starts FRESH. Every shot is anchored to
@@ -3242,7 +3184,7 @@ class H3LongVideos:
 
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
-                handoff=shot_handoff, refs=shot_refs,
+                handoff=shot_handoff, refs=None,
                 ref_noise_aug=ref_noise_aug, silent=silent)
             if demoted and not _aug_warned:
                 _aug_warned = True
