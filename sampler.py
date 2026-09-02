@@ -2432,102 +2432,6 @@ def sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULTS_FILE = os.path.join(_HERE, "defaults.json")
-DEFAULTS_EXAMPLE = os.path.join(_HERE, "defaults.example.json")
-# Sockets, not widgets: nothing to carry a default.
-_NOT_A_WIDGET = frozenset(("MODEL", "CLIP", "VAE", "IMAGE", "CONDITIONING", "SIGMAS",
-                           "LATENT", "AUDIO", "MASK"))
-
-
-def saved_defaults():
-    """Widget defaults from defaults.json, or {} when there is none.
-
-    Every time this node gains a widget its INPUT_TYPES changes, and a node added
-    afresh comes up with the BUILT-IN defaults -- so a setting has to be put back by
-    hand after every edit. A defaults.json beside this file outlives those edits: it
-    is read when the node loads and any key in it replaces the built-in default for
-    the widget of that name.
-
-    Unknown keys are ignored, so the file survives a widget being renamed or
-    dropped, and a missing or malformed file falls back to the built-ins rather
-    than stopping the node from loading."""
-    try:
-        with open(DEFAULTS_FILE, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def apply_saved_defaults(schema, saved=None):
-    """Replace built-in defaults with saved ones, in place. Returns the schema."""
-    saved = saved_defaults() if saved is None else saved
-    if not saved:
-        return schema
-    for group in schema.values():
-        if not isinstance(group, dict):
-            continue
-        for name, spec in group.items():
-            if name not in saved or len(spec) < 2 or not isinstance(spec[1], dict):
-                continue
-            value = saved[name]
-            # A combo can only default to one of its own choices -- an upscale model
-            # that is no longer installed must not become the default.
-            if isinstance(spec[0], (list, tuple)) and value not in spec[0]:
-                continue
-            spec[1]["default"] = value
-    return schema
-
-
-# What gets written when save_defaults is on. Sockets are excluded -- there is no
-# value to keep -- and save_defaults itself is excluded, or a saved True would arm
-# every fresh node to re-save on its next run.
-_SAVEABLE = ("resolution", "megapixels", "shot_seconds", "steps", "cfg", "sampler_name",
-             "scheduler", "seed", "shift_video", "shift_audio", "apply_model_sampling",
-             "silence_nonspeech", "trim_seam", "ref_noise_aug", "tiled_decode",
-             "cleanup_between_shots", "latent_upscale", "latent_upscale_scale", "upscale",
-             "upscale_model", "upscale_target_short_edge", "upscale_batch", "shot_length",
-             "auto_remove", "restart_after_removal", "hold_restraints", "plan_only",
-             "anchor", "character_memory", "character_guard")
-
-
-def write_defaults(values):
-    """Persist the current widget values as this node's defaults. Returns a note."""
-    keep = {k: v for k, v in values.items() if k in _SAVEABLE and v is not None}
-    try:
-        with open(DEFAULTS_FILE, "w", encoding="utf-8") as fh:
-            json.dump(keep, fh, indent=2, sort_keys=True)
-    except Exception as exc:
-        return (f"could not write {DEFAULTS_FILE}: {exc}. The values in this node are "
-                f"unaffected; only saving them as defaults failed")
-    return (f"saved {len(keep)} widget value(s) to defaults.json. Every node added from "
-            f"now on starts with these, through a restart and through an update -- the "
-            f"file is gitignored. Turn save_defaults back OFF, or every run rewrites it")
-
-
-def write_defaults_example(schema):
-    """Write defaults.example.json once, so defaults.json is discoverable."""
-    if os.path.exists(DEFAULTS_EXAMPLE) or os.path.exists(DEFAULTS_FILE):
-        return
-    out = {}
-    for group in schema.values():
-        if not isinstance(group, dict):
-            continue
-        for name, spec in group.items():
-            opts = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
-            if opts.get("forceInput"):
-                continue
-            if "default" in opts:
-                out[name] = opts["default"]
-            elif isinstance(spec[0], (list, tuple)) and spec[0]:
-                out[name] = spec[0][0]          # a combo defaults to its first choice
-            elif spec[0] in _NOT_A_WIDGET:
-                continue
-    try:
-        with open(DEFAULTS_EXAMPLE, "w", encoding="utf-8") as fh:
-            json.dump(out, fh, indent=2, sort_keys=True)
-    except Exception:
-        pass                                    # read-only install: not worth failing over
 
 
 class H3LongVideos:
@@ -2535,13 +2439,6 @@ class H3LongVideos:
 
     @classmethod
     def INPUT_TYPES(cls):
-        schema = cls._schema()
-        write_defaults_example(schema)
-        # Saved defaults last, so a preference outlives every edit to this file.
-        return apply_saved_defaults(schema)
-
-    @classmethod
-    def _schema(cls):
         return {
             "required": {
                 "model": ("MODEL",),
@@ -2754,18 +2651,6 @@ class H3LongVideos:
                                "'She lies still.' does not empty the frame. Off, every "
                                "sheet line goes into every shot. info names who each shot "
                                "kept."}),
-                "save_defaults": ("BOOLEAN", {"default": False,
-                    "tooltip": "Write this node's CURRENT widget values to defaults.json, "
-                               "so every node added from now on starts with them.\n\n"
-                               "Set the node up the way you want it, turn this on, run "
-                               "once, then turn it off. The values survive a restart and "
-                               "an update to this node: the file is gitignored, and a "
-                               "widget added later cannot shift them, because they are "
-                               "matched by NAME rather than by position.\n\n"
-                               "It does not touch nodes already in a workflow -- those "
-                               "keep whatever was saved with them. It covers the widgets "
-                               "only, not the images or the model, and not ComfyUI's own "
-                               "'control after generate', which belongs to the editor."}),
                 "pace": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 2.0, "step": 0.05,
                     "tooltip": "Scales how much screen time each beat is given, when "
                                "shot_length is 'from the beat'.\n\n"
@@ -2817,17 +2702,11 @@ class H3LongVideos:
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
-            character_guard=True, pace=1.0, auto_sound=True, save_defaults=False):
+            character_guard=True, pace=1.0, auto_sound=True, **_removed):
+        # **_removed: a workflow saved with the old `save_defaults` widget still sends
+        # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
         notes = []
-        if save_defaults:
-            notes.append(write_defaults(locals()))
-        _saved = saved_defaults()
-        if _saved:
-            notes.append(f"defaults.json supplies {len(_saved)} widget default(s), so a "
-                         f"node added fresh comes up with those instead of the built-in "
-                         f"ones. It does not touch a node already in a workflow -- that "
-                         f"one keeps whatever was saved with it")
         swap = flush_for_model_change(model)
         if swap:
             notes.append(swap)

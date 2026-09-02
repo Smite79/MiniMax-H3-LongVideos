@@ -1,5 +1,3 @@
 __pycache__/
 *.py[cod]
 
-# Your own widget defaults. Never tracked: a pull must not overwrite your settings.
-defaults.json
