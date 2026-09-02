@@ -652,6 +652,36 @@ def test_hardware_has_somewhere_to_go():
     check("nothing to place, no sentence", S.anchor_clause([]) == "")
 
 
+def test_av_grid_alignment():
+    print("\n=== the audio grid does not land on the video grid ===")
+    # H3's audio latent runs at 40/s against 24 fps video, so a shot's audio latent
+    # count is round(frames / 24 * 40) -- exact only when the frame count divides by
+    # 3. Every other length on the 17k+5 grid is up to 8.3 ms out, and with shots of
+    # equal length the error carries the same sign every time and ACCUMULATES.
+    worst, exact = 0.0, 0
+    for k in range(0, 22):
+        fc = 17 * k + 5
+        if fc > S.MAX_FRAMES:
+            break
+        _f, _lt, at = S.temporal_shape(fc)
+        drift = abs(at / S.AUDIO_LATENT_FPS - fc / S.H3_FPS) * 1000
+        worst = max(worst, drift)
+        exact += drift < 1e-9
+    check("most grid lengths do not land exactly", exact < 8)
+    check("...and the ones that miss, miss by ~8.3 ms", 8.0 < worst < 8.7)
+    check("a length divisible by 3 is exact",
+          abs(S.temporal_shape(39)[2] / S.AUDIO_LATENT_FPS - 39 / S.H3_FPS) < 1e-9)
+    # The fix is per shot, not once at the end: correcting only the total would leave
+    # every interior cut misaligned even with the final duration right.
+    for fc in (73, 124, 226):
+        want = int(round(fc * 44100 / S.H3_FPS))
+        check(f"{fc}f wants {want} samples at 44.1k", want > 0)
+    # temporal_shape must key the audio to 24 fps whatever fps is passed, or the
+    # sound is stretched against the picture.
+    check("the audio grid ignores a different fps",
+          S.temporal_shape(73, 30) == S.temporal_shape(73, 24))
+
+
 def test_chain_is_rigid():
     print("\n=== steel does not behave like rope ===")
     # A model with no reason to think otherwise draws a chain as a soft cord: it
@@ -881,6 +911,7 @@ def main():
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
+    test_av_grid_alignment()
     test_chain_is_rigid()
     test_saved_defaults()
     test_falling_bound()

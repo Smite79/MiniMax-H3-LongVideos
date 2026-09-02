@@ -602,6 +602,29 @@ def test_detail_trend():
           "detail per shot" not in run_node("A room.\n\nOne.\n\nTwo.", plan_only=True)[2])
 
 
+def test_av_stays_in_sync():
+    print("\n=== the sound is as long as the picture ===")
+    # Reported: video and audio out of sync. Each shot's audio latent is
+    # round(frames / 24 * 40), exact only when the frame count divides by 3, so most
+    # lengths leave the sound up to 8.3 ms off its own picture -- and concatenated
+    # with equal shot lengths that error has the same sign every time and adds up.
+    for n_beats in (2, 3, 5):
+        P = "A room.\n\n" + "\n\n".join(f"Beat {i}." for i in range(n_beats))
+        imgs, audio, info, script, fps_shot, total, shots, secs = run_node(P)
+        sr = audio["sample_rate"]
+        v = total / S.H3_FPS
+        a = audio["waveform"].shape[-1] / sr
+        drift_ms = abs(a - v) * 1000
+        check(f"{n_beats} beats: sound matches picture within a sample "
+              f"({drift_ms:.3f} ms)", drift_ms < 1.0)
+        check(f"...and the frame count is what the video reports",
+              imgs.shape[0] == total)
+    # It is corrected per shot, so every interior cut lands too -- not just the
+    # total duration at the end.
+    check("the correction is reported", "realigned to the picture" in
+          run_node("A room.\n\nOne.\n\nTwo.")[2])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -662,6 +685,7 @@ def main():
     test_hardware_anchor_end_to_end()
     test_chain_hold_end_to_end()
     test_every_paragraph_accounted_for()
+    test_av_stays_in_sync()
     test_detail_trend()
     test_timing_report()
     print()
