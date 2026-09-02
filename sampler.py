@@ -2425,6 +2425,62 @@ def sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+# (default, min, max, cast) for every numeric widget, so a value that cannot be used
+# as a number can be replaced by the one the widget was built with.
+_WIDGET_RANGE = {
+    "megapixels": (1.0, 0.0, 2.0, float),
+    "shot_seconds": (10.0, 1.0, 15.0, float),
+    "steps": (8, 1, 100, int),
+    "cfg": (1.0, 1.0, 20.0, float),
+    "shift_video": (12.0, 1.0, 20.0, float),
+    "shift_audio": (3.0, 1.0, 20.0, float),
+    "ref_noise_aug": (0.999, 0.5, 1.0, float),
+    "latent_upscale_scale": (2.0, 1.0, 4.0, float),
+    "upscale_target_short_edge": (0, 0, 4096, int),
+    "upscale_batch": (4, 1, 64, int),
+    "pace": (1.0, 0.25, 2.0, float),
+}
+
+
+def sane_widgets(values):
+    """(repaired values, notes) for the numeric widgets.
+
+    Saved workflows restore widget values BY POSITION, with no names stored. Remove or
+    reorder a widget and every later value shifts up one, so a boolean can land in a
+    FLOAT slot -- which is where a widget reading NaN comes from, and a NaN pace makes
+    NaN shot lengths and a render that never starts.
+
+    A value that will not become a finite number falls back to the widget's built-in
+    default; one that is merely out of range is clamped. Reported either way, because
+    silently substituting a number the user did not choose is how a wrong render looks
+    like a broken node."""
+    out, notes = dict(values), []
+    for name, (default, lo, hi, cast) in _WIDGET_RANGE.items():
+        if name not in out:
+            continue
+        raw = out[name]
+        try:
+            if isinstance(raw, bool):
+                raise TypeError("a boolean is not a setting for this widget")
+            num = float(raw)
+            if num != num or num in (float("inf"), float("-inf")):
+                raise ValueError("not a finite number")
+        except (TypeError, ValueError):
+            out[name] = default
+            notes.append(f"{name} came in as {raw!r}, which is not a usable number, so "
+                         f"the built-in default {default} was used. A saved workflow "
+                         f"restores widget values by POSITION, so this usually means the "
+                         f"node gained or lost a widget above this one -- open the node, "
+                         f"set the values you want, and save the workflow again")
+            continue
+        clamped = min(max(num, lo), hi)
+        if clamped != num:
+            notes.append(f"{name} was {num:g}, outside {lo:g}..{hi:g}, so it was clamped "
+                         f"to {clamped:g}")
+        out[name] = cast(clamped)
+    return out, notes
+
+
 class H3LongVideos:
     """One prompt -> a chain of MiniMax-H3 shots, joined into one video."""
 
@@ -2534,7 +2590,10 @@ class H3LongVideos:
                                "'model' = an upscale model from upscale_models; 'lanczos' = a "
                                "plain resize. These ENLARGE; for real detail reconstruction from a "
                                "low-res render use a separate pass."}),
-                "upscale_model": (_upscale_model_list(), {
+                # Explicit, not left to fall back to the list's first entry: the list
+                # is built from what is installed, so leaving it implicit makes the
+                # default depend on the machine.
+                "upscale_model": (_upscale_model_list(), {"default": "none",
                     "tooltip": "Which model, when upscale = model. From models/upscale_models."}),
                 "upscale_target_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096,
                     "step": 32,
@@ -2720,6 +2779,23 @@ class H3LongVideos:
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
         notes = []
+        # Before anything reads them. A widget value that arrives as NaN -- which is
+        # what a positional shift in a saved workflow produces -- would otherwise flow
+        # into the frame arithmetic and come out as a shot length of nan.
+        _fixed, _fixnotes = sane_widgets(dict(
+            megapixels=megapixels, shot_seconds=shot_seconds, steps=steps, cfg=cfg,
+            shift_video=shift_video, shift_audio=shift_audio,
+            ref_noise_aug=ref_noise_aug, latent_upscale_scale=latent_upscale_scale,
+            upscale_target_short_edge=upscale_target_short_edge,
+            upscale_batch=upscale_batch, pace=pace))
+        megapixels, shot_seconds = _fixed["megapixels"], _fixed["shot_seconds"]
+        steps, cfg = _fixed["steps"], _fixed["cfg"]
+        shift_video, shift_audio = _fixed["shift_video"], _fixed["shift_audio"]
+        ref_noise_aug = _fixed["ref_noise_aug"]
+        latent_upscale_scale = _fixed["latent_upscale_scale"]
+        upscale_target_short_edge = _fixed["upscale_target_short_edge"]
+        upscale_batch, pace = _fixed["upscale_batch"], _fixed["pace"]
+        notes.extend(_fixnotes)
         swap = flush_for_model_change(model)
         if swap:
             notes.append(swap)
