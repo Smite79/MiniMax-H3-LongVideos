@@ -1069,48 +1069,6 @@ def test_chain_is_rigid():
                                                  S.CHAIN_POSE_HOLD, re.I))
 
 
-def test_saved_defaults():
-    print("\n=== a preference outlives an edit to this file ===")
-    # Every widget added changes INPUT_TYPES, and a node added afresh comes up with
-    # the built-in defaults -- so a setting has to be put back by hand after every
-    # edit. defaults.json is read at load and replaces them.
-    def _schema():
-        return {"required": {"steps": ("INT", {"default": 8}),
-                             "sampler_name": (["euler", "res_multistep"], {}),
-                             "model": ("MODEL",)},
-                "optional": {"upscale": (["off", "lanczos"], {"default": "off"})}}
-    sch = S.apply_saved_defaults(_schema(), {"steps": 6, "upscale": "lanczos"})
-    check("a saved default replaces the built-in",
-          sch["required"]["steps"][1]["default"] == 6)
-    check("...in the optional group too",
-          sch["optional"]["upscale"][1]["default"] == "lanczos")
-    # It has to survive a widget being renamed or dropped, and a socket has no default.
-    sch = S.apply_saved_defaults(_schema(), {"gone_widget": 1, "model": "x"})
-    check("an unknown key changes nothing", sch["required"]["steps"][1]["default"] == 8)
-    check("...and a socket is left alone", len(sch["required"]["model"]) == 1)
-    # A combo can only default to one of its own choices: an upscale model that is no
-    # longer installed must not become the default.
-    sch = S.apply_saved_defaults(_schema(), {"sampler_name": "not_installed"})
-    check("a combo rejects a choice it does not have",
-          "default" not in sch["required"]["sampler_name"][1])
-    sch = S.apply_saved_defaults(_schema(), {"sampler_name": "res_multistep"})
-    check("...and accepts one it does",
-          sch["required"]["sampler_name"][1]["default"] == "res_multistep")
-    check("no saved file, no change",
-          S.apply_saved_defaults(_schema(), {})["required"]["steps"][1]["default"] == 8)
-    check("a malformed file is not fatal", isinstance(S.saved_defaults(), dict))
-    # save_defaults captures what the node currently HAS, which beats transcribing
-    # widget values by hand.
-    vals = {"steps": 6, "scheduler": "beta", "seed": 42, "character_guard": True,
-            "save_defaults": True, "model": object(), "prompt": "x", "clip": object()}
-    keep = {k: v for k, v in vals.items() if k in S._SAVEABLE and v is not None}
-    check("widgets are captured", keep["steps"] == 6 and keep["scheduler"] == "beta")
-    # A saved True would arm every fresh node to re-save on its next run.
-    check("save_defaults never saves itself", "save_defaults" not in keep)
-    check("sockets are not saved",
-          not any(k in keep for k in ("model", "clip", "prompt")))
-
-
 def test_falling_bound():
     print("\n=== a bound body goes down without catching itself ===")
     # A falling body puts its hands out. With the hands fastened the model has to
@@ -1180,11 +1138,11 @@ def test_turning_around():
 
 def test_schema():
     print("\n=== node schema ===")
-    # The BUILT-IN schema, not INPUT_TYPES(). INPUT_TYPES applies whatever is in
-    # defaults.json, which is the user's live settings file -- so reading it here
-    # made the suite pass or fail on local configuration. A test that moves with the
-    # machine it runs on is worse than no test.
-    schema = S.H3LongVideos._schema()
+    # INPUT_TYPES is the schema, full stop. It used to apply defaults.json on top --
+    # the user's live settings file -- so this suite passed or failed on local
+    # configuration, and did fail once defaults were saved. A test that moves with
+    # the machine it runs on is worse than no test, and that file is gone.
+    schema = S.H3LongVideos.INPUT_TYPES()
     req, opt = schema["required"], schema["optional"]
     for name in ("model", "clip", "vae", "audio_vae", "prompt"):
         check(f"{name} is required", name in req)
@@ -1204,9 +1162,9 @@ def test_schema():
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
     # 17 core + 6 upscale + shot_length, hold_restraints, restart_after_removal,
-    # auto_remove + anchor, character_memory, character_guard, save_defaults, pace,
-    # auto_sound. A ceiling, not a target: the old node had 38 and nobody could find
-    # anything. Every one added since the rebuild answers a reported failure.
+    # auto_remove + anchor, character_memory, character_guard, pace, auto_sound.
+    # A ceiling, not a target: the old node had 38 and nobody could find anything.
+    # Every one added since the rebuild answers a reported failure.
     check(f"the node stays small: {n_widgets} widgets", n_widgets <= 34)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
@@ -1215,10 +1173,11 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-6:] == ["anchor", "character_memory", "character_guard",
-                             "save_defaults", "pace", "auto_sound"])
-    check("save_defaults is offered", "save_defaults" in opt)
-    check("...and is off unless asked for", opt["save_defaults"][1]["default"] is False)
+          list(opt)[-5:] == ["anchor", "character_memory", "character_guard",
+                             "pace", "auto_sound"])
+    # save_defaults was removed. A workflow saved with it still sends the value, so
+    # run() swallows unknown keyword arguments rather than raising on load.
+    check("save_defaults is gone", "save_defaults" not in opt and "save_defaults" not in req)
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
                "latent_upscale", "latent_upscale_scale"):
         check(f"{_u} is on the node", _u in opt)
@@ -1254,7 +1213,6 @@ def main():
     test_pace()
     test_av_grid_alignment()
     test_chain_is_rigid()
-    test_saved_defaults()
     test_falling_bound()
     test_turning_around()
     test_thin_beats()

@@ -318,38 +318,6 @@ into whatever is next.
 | `megapixels` | 1.0 is H3's native budget; lower is faster and leaner |
 | `shot_seconds` | length of **every** shot (see below) |
 
-### Keeping your own defaults
-
-Adding a widget changes the node's inputs, and a node added afresh comes up with the
-built-in defaults — so a preference has to be set again after every update. To make
-one stick, put it in **`defaults.json`** beside `sampler.py`:
-
-```json
-{
-  "steps": 6,
-  "megapixels": 0.75,
-  "shot_seconds": 8.0,
-  "upscale": "lanczos"
-}
-```
-
-It is read when the node loads and replaces the built-in default for any widget of
-that name.
-
-Easier than writing it by hand: set the node up the way you want it, turn
-**`save_defaults`** on, run once, then turn it off. That writes every current widget
-value to the file — no transcribing, and nothing missed. `defaults.example.json` is
-also written on first load with every default in it, if you would rather start there.
-
-Unknown keys are ignored, so the file survives a widget being renamed or removed,
-and a combo will not accept a value it does not offer (an upscale model you have
-since uninstalled cannot become the default). A malformed file falls back to the
-built-ins rather than stopping the node from loading.
-
-This changes what a **new** node starts with. A node already in a saved workflow
-keeps whatever was saved with it. `defaults.json` is gitignored, so pulling an
-update never overwrites it.
-
 **Why every shot is the same length:** noise is drawn to the latent's *shape*, so
 shots of different frame counts get unrelated noise from the same seed, and grain
 and surface detail reset at every cut. Uniform lengths are what make one seed hold
