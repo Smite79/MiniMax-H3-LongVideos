@@ -229,11 +229,27 @@ def is_character_sheet(par):
     model invents it, and a removal has nothing to scrub because what it would
     scrub was never in the scene.
 
-    A line with speech in it is a beat -- 'Dan: "Hello."' stages something."""
+    A sheet lists ATTRIBUTES. A line that stages an action is a beat, however it is
+    labelled -- "McKenna: thrashes in her restraints" and "Camera: pushes in slowly"
+    are shots, not descriptions. Getting that wrong is expensive in one direction
+    only: a sheet mistaken for a beat costs one visible shot, while a beat mistaken
+    for a sheet never renders AND has its words stamped onto every other shot. So
+    anything that opens with a verb is treated as a beat.
+
+    A line with speech in it is a beat too -- 'Dan: "Hello."' stages something."""
     lines = [ln for ln in (par or "").splitlines() if ln.strip()]
     if not lines or _QUOTED.search(par) or _DIALOGUE_TAG.search(par):
         return False
-    return all(_SHEET_LINE.match(ln) for ln in lines)
+    return all(_SHEET_LINE.match(ln) and not _ACTION_AFTER_LABEL.search(ln)
+               for ln in lines)
+
+
+# What follows `Name:` in a sheet is an attribute -- a pronoun, an age, a colour, a
+# <Picture N> tag. An inflected verb there means the line stages something instead.
+# The participles excepted below introduce attributes rather than actions.
+_ACTION_AFTER_LABEL = re.compile(
+    r":\s*(?!(?:wearing|dressed|carrying|holding|sporting|wrapped|covered)\b)"
+    r"(?:is|are|was|were|has|have|had|does|do|[\w-]+(?:s|es|ed|ing))\b", re.I)
 
 
 def pull_character_sheets(beats):
@@ -2384,6 +2400,25 @@ class H3LongVideos:
                          f"the scene instead of spending a shot on them -- a sheet "
                          f"describes people, it does not stage anything, and it has to "
                          f"be in EVERY shot for a removal to have something to scrub")
+        # Account for every paragraph, so a beat that quietly went somewhere else is
+        # visible. Two ways one disappears: it reads as a character sheet and is folded
+        # into the scene, or it was never a separate paragraph to begin with.
+        _given = len(paragraphs(prompt))
+        _sheets = len(sheet_lines(sheet)) if sheet else 0
+        notes.append(f"{_given} paragraph(s) in the prompt: {len(beats)} rendered as "
+                     f"shots" + (f", {_sheets} folded in as character sheet(s)"
+                                 if _sheets else "")
+                     + ("" if (anchor or "").strip() else ", 1 kept as the scene"))
+        # Paragraphs are separated by a BLANK line. Lines joined by a single newline
+        # are ONE beat, so three actions written on three lines become one shot with
+        # three actions in it, and two of them look like they were absorbed.
+        _multi = [i for i, b in enumerate(beats, 1) if "\n" in b]
+        if _multi:
+            notes.append(
+                f"shot(s) {', '.join(str(i) for i in _multi)} carry more than one line. "
+                f"Paragraphs are separated by a BLANK line, so lines with only a single "
+                f"newline between them are one beat and share one shot. If those were "
+                f"meant to be separate shots, put an empty line between them")
         if not beats:
             raise RuntimeError("H3 Long Videos: no beat to render. Every paragraph after "
                                "the first is one shot; a character sheet ('Name: ...') "

@@ -520,6 +520,34 @@ def test_chain_hold_end_to_end():
     check("scenery does not arm it", chain not in loose)
 
 
+def test_every_paragraph_accounted_for():
+    print("\n=== no beat quietly goes missing ===")
+    # Two ways a beat disappears: it reads as a character sheet and is folded into
+    # the scene, or it was never a separate paragraph. Both look like beats being
+    # absorbed into other beats, and both were silent.
+    P = ("A basement.\n\n"
+         "Maya: 27, grey coat\nJon: 34, navy overalls\n\n"
+         "Maya walks in.\nMaya sits down.\nMaya stands up.\n\n"
+         "Jon: pushes the door shut.\n\n"
+         "Maya leaves.")
+    imgs, audio, info, script = run_node(P, plan_only=True)[:4]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("a labelled ACTION still gets its own shot", len(sh) == 3)
+    check("...and is not folded into the scene",
+          "pushes the door shut" in sh[1] and "pushes the door shut" not in sh[0])
+    check("every paragraph is accounted for", "5 paragraph(s) in the prompt" in info)
+    check("...naming what became shots", "3 rendered as shots" in info)
+    check("...what was folded in", "2 folded in as character sheet(s)" in info)
+    check("...and what became the scene", "1 kept as the scene" in info)
+    # Lines joined by a single newline are ONE beat. That is not changed -- it is
+    # reported, because three actions in one shot look like two were absorbed.
+    check("a merged beat is flagged", "carry more than one line" in info)
+    check("...naming the shot", "shot(s) 1 carry" in info)
+    check("...and saying what to do", "put an empty line between them" in info)
+    clean = run_node("A room.\n\nOne.\n\nTwo.", plan_only=True)[2]
+    check("a clean script is not nagged", "carry more than one line" not in clean)
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -609,6 +637,7 @@ def main():
     test_removing_shot_without_a_keyframe()
     test_hardware_anchor_end_to_end()
     test_chain_hold_end_to_end()
+    test_every_paragraph_accounted_for()
     test_detail_trend()
     test_timing_report()
     print()
