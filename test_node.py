@@ -740,6 +740,16 @@ def test_saved_defaults():
     check("no saved file, no change",
           S.apply_saved_defaults(_schema(), {})["required"]["steps"][1]["default"] == 8)
     check("a malformed file is not fatal", isinstance(S.saved_defaults(), dict))
+    # save_defaults captures what the node currently HAS, which beats transcribing
+    # widget values by hand.
+    vals = {"steps": 6, "scheduler": "beta", "seed": 42, "character_guard": True,
+            "save_defaults": True, "model": object(), "prompt": "x", "clip": object()}
+    keep = {k: v for k, v in vals.items() if k in S._SAVEABLE and v is not None}
+    check("widgets are captured", keep["steps"] == 6 and keep["scheduler"] == "beta")
+    # A saved True would arm every fresh node to re-save on its next run.
+    check("save_defaults never saves itself", "save_defaults" not in keep)
+    check("sockets are not saved",
+          not any(k in keep for k in ("model", "clip", "prompt")))
 
 
 def test_falling_bound():
@@ -841,7 +851,10 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-3:] == ["anchor", "character_memory", "character_guard"])
+          list(opt)[-4:] == ["anchor", "character_memory", "character_guard",
+                             "save_defaults"])
+    check("save_defaults is offered", "save_defaults" in opt)
+    check("...and is off unless asked for", opt["save_defaults"][1]["default"] is False)
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
                "latent_upscale", "latent_upscale_scale"):
         check(f"{_u} is on the node", _u in opt)
