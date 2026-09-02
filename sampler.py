@@ -2111,6 +2111,32 @@ def apply_saved_defaults(schema, saved=None):
     return schema
 
 
+# What gets written when save_defaults is on. Sockets are excluded -- there is no
+# value to keep -- and save_defaults itself is excluded, or a saved True would arm
+# every fresh node to re-save on its next run.
+_SAVEABLE = ("resolution", "megapixels", "shot_seconds", "steps", "cfg", "sampler_name",
+             "scheduler", "seed", "shift_video", "shift_audio", "apply_model_sampling",
+             "silence_nonspeech", "trim_seam", "ref_noise_aug", "tiled_decode",
+             "cleanup_between_shots", "latent_upscale", "latent_upscale_scale", "upscale",
+             "upscale_model", "upscale_target_short_edge", "upscale_batch", "shot_length",
+             "auto_remove", "restart_after_removal", "hold_restraints", "plan_only",
+             "anchor", "character_memory", "character_guard")
+
+
+def write_defaults(values):
+    """Persist the current widget values as this node's defaults. Returns a note."""
+    keep = {k: v for k, v in values.items() if k in _SAVEABLE and v is not None}
+    try:
+        with open(DEFAULTS_FILE, "w", encoding="utf-8") as fh:
+            json.dump(keep, fh, indent=2, sort_keys=True)
+    except Exception as exc:
+        return (f"could not write {DEFAULTS_FILE}: {exc}. The values in this node are "
+                f"unaffected; only saving them as defaults failed")
+    return (f"saved {len(keep)} widget value(s) to defaults.json. Every node added from "
+            f"now on starts with these, through a restart and through an update -- the "
+            f"file is gitignored. Turn save_defaults back OFF, or every run rewrites it")
+
+
 def write_defaults_example(schema):
     """Write defaults.example.json once, so defaults.json is discoverable."""
     if os.path.exists(DEFAULTS_EXAMPLE) or os.path.exists(DEFAULTS_FILE):
@@ -2360,6 +2386,18 @@ class H3LongVideos:
                                "'She lies still.' does not empty the frame. Off, every "
                                "sheet line goes into every shot. info names who each shot "
                                "kept."}),
+                "save_defaults": ("BOOLEAN", {"default": False,
+                    "tooltip": "Write this node's CURRENT widget values to defaults.json, "
+                               "so every node added from now on starts with them.\n\n"
+                               "Set the node up the way you want it, turn this on, run "
+                               "once, then turn it off. The values survive a restart and "
+                               "an update to this node: the file is gitignored, and a "
+                               "widget added later cannot shift them, because they are "
+                               "matched by NAME rather than by position.\n\n"
+                               "It does not touch nodes already in a workflow -- those "
+                               "keep whatever was saved with them. It covers the widgets "
+                               "only, not the images or the model, and not ComfyUI's own "
+                               "'control after generate', which belongs to the editor."}),
             },
         }
 
@@ -2383,9 +2421,11 @@ class H3LongVideos:
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
-            character_guard=True):
+            character_guard=True, save_defaults=False):
 
         notes = []
+        if save_defaults:
+            notes.append(write_defaults(locals()))
         _saved = saved_defaults()
         if _saved:
             notes.append(f"defaults.json supplies {len(_saved)} widget default(s), so a "

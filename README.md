@@ -304,8 +304,12 @@ one stick, put it in **`defaults.json`** beside `sampler.py`:
 ```
 
 It is read when the node loads and replaces the built-in default for any widget of
-that name. `defaults.example.json` is written on first load with every current
-default in it — copy it, cut it down to the ones you care about, and rename.
+that name.
+
+Easier than writing it by hand: set the node up the way you want it, turn
+**`save_defaults`** on, run once, then turn it off. That writes every current widget
+value to the file — no transcribing, and nothing missed. `defaults.example.json` is
+also written on first load with every default in it, if you would rather start there.
 
 Unknown keys are ignored, so the file survives a widget being renamed or removed,
 and a combo will not accept a value it does not offer (an upscale model you have
