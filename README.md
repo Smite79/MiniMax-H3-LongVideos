@@ -546,26 +546,51 @@ Room tone is what separates a recording from a sound effect: real footage has a 
 under the events, and digital silence between them is what makes a scene sound
 staged.
 
-**Room tone does not count as the shot asking for audio.** That distinction is what
-stops the mouth moving. H3 is joint, so the audio branch drives the face: leave it
-free on a shot with no line and it fills itself with a **voice**, and the face
-lip-syncs to whatever it invented. Silence is the guard against that — and while the
-room counted as sound, the room being under *every* shot meant **nothing was ever
-silenced**, so the guard was switched on and doing nothing in every shot of every
-film.
+### Nothing the node infers can open the audio branch
 
-So a shot with no line and no sound of its own is silenced, and gets no room tone
-either — the clause would be describing an acoustic the audio is conditioned not to
-have. A shot that *does* have sound of its own keeps the room, and where there is no
-line it is told these are the **only** sounds:
+This is the rule that stops the mouth moving, and it is worth stating on its own.
+
+H3 is **joint**: the picture follows the audio. Leave the audio branch free on a shot
+with no line and it fills itself with a **voice** — and the face lip-syncs to the
+babble. No wording suppresses that. *"The only sounds are footsteps"* was tried, and
+the mouth still moved. The only thing that settles the branch is **conditioning** it,
+and the silent keyframe pins the shot's whole length, not just its opening.
+
+So the branch is opened by **what you wrote**, and by nothing this file worked out:
+
+| | opens the branch |
+|---|---|
+| a quoted line, or `<d>…</d>` | **yes** |
+| a sound *you* described in the beat | **yes** |
+| footsteps `auto_sound` inferred from "walks in" | no |
+| room tone read from the location | no |
+
+A shot with neither is pinned to silence and is told **nothing** about sound — a
+sound sentence there would describe an acoustic the conditioning removes.
+
+`auto_sound` is therefore **text only**. It adds the sound an action implies to shots
+that are already open, and it can never unsilence one. On a shot that is open but has
+no line, it closes the list —
 
 > *The only sounds are footsteps and a large room with a long tail.*
 
-That leaves nothing for a voice to fill. It is phrased positively on purpose: at
+— which shapes a branch that is legitimately free. Phrased positively on purpose: at
 cfg 1 H3 is CFG-free and no negative prompt is evaluated, so *"nobody speaks"* is not
-a prohibition — it is the word *speaks* in the prompt. A shot that has a line keeps
-the open form (*"It sounds like…"*), because closing the list there would be telling
-the model the line is not among the sounds.
+a prohibition, it is the word *speaks* in the prompt. A shot with a line keeps the
+open form (*"It sounds like…"*), since closing the list there would say the line is
+not among the sounds.
+
+**The trade this makes.** A shot with no dialogue gets no ambience unless you write
+it. That is the cost of a hard guarantee, and on a joint model there is no third
+option — either the audio is pinned, or it can talk. To score a silent shot, describe
+it yourself and the branch opens for it:
+
+```
+Nora walks to the window, her boots loud on the concrete,
+a low hum off the strip light.
+```
+
+`info` counts both groups every run, so you can see which shots are silent and why.
 
 Write it yourself when you want something neither the action nor the space implies —
 weather, a noise off-screen, a machine, a specific quality of hum.
