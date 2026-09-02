@@ -1263,7 +1263,8 @@ _PLURAL_ITEM = re.compile(r"\b(?:s|shorts|trousers|pants|jeans|boots|shoes|glove
 # table, pose tracking and a hardware clause, and between them the beat became 4% of
 # the prompt. This is the fact and nothing else.
 # What a `remove:` has to name to switch the hold off again.
-RESTRAINT_HOLD_KEY = "handcuffs cuffs chains rope ropes tape gag collar restraints shackles"
+RESTRAINT_HOLD_KEY = ("handcuffs cuffs chains rope ropes tape gag collar restraints "
+                      "shackles clamp clamps clip clips")
 # Every one of these constrains the HARDWARE, never the body. An earlier wording said
 # the restraint held "the same way from the first frame to the last" and the chain let
 # the body reach "only as far as the metal allows before it stops" -- read plainly,
@@ -1281,15 +1282,23 @@ _RESTRAINT_PLAIN = re.compile(
     r"spreader bar)\b", re.I)
 # Hardware that is only a restraint in context -- a chain-link fence, a rope on a
 # boat and a leather belt are none of the node's business.
+# A clamp belongs here rather than in the list above: clamped to a bench it is a
+# tool, clamped to a body it is hardware, and only the context tells them apart.
 _RESTRAINT_MAYBE = re.compile(
     r"\b(?:chains?|ropes?|cords?|cuffs?|straps?|collars?|tapes?|taped|taping|"
-    r"belts?|harness|hobble)\b", re.I)
+    r"belts?|harness|hobble|clamps?|clips?)\b", re.I)
 # VERB forms only. An earlier version listed "chain" and "cuff" here as well as in
 # the noun list, so a chain-link fence matched both halves and armed the rule.
 _BINDING_VERB = re.compile(
     r"\b(?:cuffed|chained|tied|tying|bound|binds?|binding|locked|locks|"
     r"strapped|taped|taping|gagged|shackled|fastened|fastens|secured|secures|"
-    r"padlocked|trussed|lashed|wrapped)\b", re.I)
+    r"padlocked|trussed|lashed|wrapped|clamped|clamping|clipped|clipping|"
+    r"pinned|attached|affixed)\b", re.I)
+# NOTE the bare "clamps" and "clips" are deliberately absent above while "clamp" and
+# "clip" are in the noun list. A word in BOTH lists satisfies both halves of the rule
+# by itself, which is how "clamps the board to the workbench" armed the restraint
+# hold -- the same way a chain-link fence did before "chain" was taken out of the
+# verbs. Same reason "tapes" is a noun here and only "taped"/"taping" are verbs.
 _BODY_PART = re.compile(
     r"\b(?:wrists?|ankles?|arms?|legs?|hands?|feet|neck|throat|mouth|waist|hips?|"
     r"thighs?|knees?|elbows?|thumbs?|eyes)\b", re.I)
@@ -1423,9 +1432,13 @@ def forced_pose(text):
 
 # Hardware that is rigid by nature. Only consulted once a restraint is established,
 # so a chain-link fence in the scenery cannot arm it on its own.
+# Named hardware only. "steel" was in this list, which meant any steel object earned
+# the chain clause -- and that clause talks about LINKS and the RUN between fastenings,
+# which is nonsense said of a steel clamp. A clamp is rigid, but it is not a chain: it
+# gets the plain restraint hold, which is what "it stays on" needs anyway.
 _RIGID_HARDWARE = re.compile(
     r"\b(?:chain(?:s|ed|ing)?|padlock(?:s|ed|ing)?|shackle[sd]?|manacle[sd]?|"
-    r"handcuff(?:s|ed)?|cuffs?|cuffed|irons|spreader\s+bar|steel|"
+    r"handcuff(?:s|ed)?|cuffs?|cuffed|irons|spreader\s+bar|"
     r"hogcuffed|hog-?cuffed)\b", re.I)
 
 
@@ -1542,7 +1555,7 @@ _ENTRY_END = re.compile(r"^\s*(?:[,;.!?]|$|(?:and|over|under|beneath|above|with|
 _RESTRAINT_WORD = re.compile(
     r"^(?:handcuffs?|cuffs?|shackles?|manacles?|chains?|ropes?|cords?|straps?|"
     r"collars?|gags?|blindfolds?|restraints?|bindings?|tape|ties?|harness|"
-    r"straitjacket|spreader|hogtie)$", re.I)
+    r"straitjacket|spreader|hogtie|clamps?|clips?)$", re.I)
 
 
 def _is_entry_head(word, scene):
