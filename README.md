@@ -405,6 +405,20 @@ those: a shot the character guard trims them out of carries no reference at all.
 picture the prompt never refers to is read as *another* subject, which is why
 `info` reports any shot that carries one it does not name.
 
+**A reference is never a shot's only picture.** With the keyframe beside it the roster
+is unambiguous — the keyframe pins frame 0, the reference is only identity. Alone,
+nothing pins frame 0, and one picture followed by the prompt is exactly H3's
+first-frame shape: the shot opens *on* the reference and moves off it, which is the
+face turning up as the first frame.
+
+So a shot with no keyframe carries no reference, and its tags come out with it. That
+is **shot 1** — it has no previous frame to hand over — and any shot
+`restart_after_removal` has cut loose. `info` names them.
+
+**Wire `first_frame` if you want the reference on shot 1 too.** That gives shot 1 a
+keyframe, and the reference rides with it like everywhere else. Use a *composed*
+frame, not a portrait crop, because `first_frame` pins framing as well as content.
+
 **Which image is the first frame is not decided by a label's number.** It is
 `resolved_frame_index` in the keyframe payload. The `<Picture N>` labels are only how
 the images are shown to the text encoder, and the one thing they have to line up with

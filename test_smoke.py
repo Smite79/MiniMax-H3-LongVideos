@@ -695,14 +695,32 @@ def test_references_ride_with_the_keyframe():
                  anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
         shots = seen[1:]                     # seen[0] is the negative
-        # shot 1: the reference only -- no previous frame to hand over yet.
+        # shot 1: NOTHING. No previous frame to hand over, so a reference would be the
+        #         shot's only picture -- and one picture followed by the prompt is
+        #         H3's first-frame shape, which is the face turning up as frame 1.
         # shot 2: the reference AND the keyframe. This is the pairing I forbade.
         # shot 3: the guard drops Kate, so no tag, so no reference; keyframe only.
         check("the roster is ref + keyframe, not one or the other",
-              [p for p, _ in shots] == [1, 2, 1], str([p for p, _ in shots]))
+              [p for p, _ in shots] == [0, 2, 1], str([p for p, _ in shots]))
         check("the shot carrying both still names exactly one picture",
               shots[1] == (2, 1), str(shots[1]))
         check("a shot the guard trimmed carries no reference", shots[2][1] == 0)
+        # A reference is never a shot's ONLY picture.
+        check("a keyframeless shot carries no reference", shots[0] == (0, 0), str(shots[0]))
+        check("...and its tag goes with it, pointing at nothing otherwise",
+              shots[0][1] == 0)
+        # first_frame gives shot 1 a keyframe, and the reference rides with it again.
+        seen.clear()
+        run_node("Kate walks in.\n\nKate sits beside Mike.\n\nMike stands up.",
+                 anchor="A room.", character_memory=mem,
+                 ref_image_1=torch.rand(1, H, W, 3),
+                 first_frame=torch.rand(1, H, W, 3))
+        check("first_frame lets shot 1 carry the reference too",
+              [p for p, _ in seen[1:]] == [2, 2, 1], str([p for p, _ in seen[1:]]))
+        seen.clear()
+        run_node("Kate walks in.\n\nKate sits beside Mike.\n\nMike stands up.",
+                 anchor="A room.", character_memory=mem,
+                 ref_image_1=torch.rand(1, H, W, 3))
         # The tag stays IN the prompt: it is the binding between the picture and the
         # person, which comfy_extras/nodes_minimax_h3.py tells you to write there.
         info, script = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
