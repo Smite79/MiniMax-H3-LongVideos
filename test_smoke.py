@@ -243,8 +243,17 @@ def test_references_and_silence():
     # auto_sound appends a sound sentence -- "He walks in." implies footsteps. Your
     # words are still never rewritten; the node only ever adds after them, and every
     # addition has a switch.
+    # The beat has no line, so the list is CLOSED: the audio branch is free here and
+    # something fills it -- say what, or a voice does and the mouth follows.
     check("...with only the sound sentence added",
-          clip2.seen[1][0] == "A room. He walks in. It sounds like footsteps.")
+          clip2.seen[1][0] == "A room. He walks in. The only sound is footsteps.")
+    # The shot that DOES speak gets the open form: closing the list there would be
+    # telling the model the line is not in it.
+    clip4 = FakeCLIP()
+    run_node("A room.\n\nShe walks in and says: \"Now.\"", clip=clip4)
+    check("a shot with a line is not told that is all there is",
+          clip4.seen[1][0] == 'A room. She walks in and says: "Now." '
+                              'It sounds like footsteps.', clip4.seen[1][0])
     clip3 = FakeCLIP()
     run_node("A room.\n\nHe walks in.", clip=clip3, auto_sound=False)
     check("...and with that off it is exactly what was written",
@@ -768,17 +777,22 @@ def test_room_tone_under_every_shot():
          "Maya looks up at him.")
     imgs, audio, info, script = run_node(P, plan_only=True)[:4]
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
-    check("every shot carries the room",
-          all("hard walls giving the sound back" in s for s in sh))
-    check("...including one where nothing happens", "hard walls" in sh[1])
-    check("the acting shot still gets its events too", "footsteps" in sh[0])
+    check("a shot with events carries the room too",
+          "hard walls giving the sound back" in sh[0])
+    check("the acting shot still gets its events", "footsteps" in sh[0])
     check("info names the acoustic", "room tone read from the scene" in info)
-    # With a bed under every shot nothing is silenced any more. That is the point,
-    # and it is also the cost: the audio branch is free everywhere, including on a
-    # shot with no line, which can therefore invent one.
-    check("nothing is left on digital silence", "conditioned on real silence" not in info)
-    check("...and the cost is stated", "invent one" in info)
-    check("...with the way back", "auto_sound off puts the silence guard back" in info)
+    # Reported: auto_sound was moving the mouth. H3 is joint, so a free audio branch
+    # fills itself with a VOICE and the face lip-syncs to it. Room tone used to count
+    # as "this shot has sound", and since the room is under every shot that silenced
+    # NOTHING, ever -- the guard was on and doing nothing in every shot of every film.
+    check("a shot with no line and no sound of its own is still silenced",
+          "conditioned on real silence" in info)
+    check("...and the room does not go under it", "hard walls" not in sh[1], sh[1][-70:])
+    # Where the branch IS free and there is no line, close the list: something has to
+    # fill it, so say what, or a voice does.
+    check("a free branch with no line is told these are the only sounds",
+          "The only sounds are footsteps and hard walls giving the sound back" in sh[0])
+    check("...and info explains the mouth", "stops the mouth moving" in info)
     # A scene naming no space gets no bed, and the silence guard still applies.
     plain = run_node("Two people talking.\n\nHe waits.\n\nShe waits.", plan_only=True)[2]
     check("no space named, no room tone", "room tone read" not in plain)

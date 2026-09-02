@@ -1136,6 +1136,33 @@ def test_turning_around():
                         S.TURN_HOLD, re.I))
 
 
+def test_sound_clause_closes_the_list():
+    print("\n=== a free audio branch fills itself with a voice ===")
+    # H3 is joint: the audio branch drives the face. On a shot with no line the
+    # branch is free, so SOMETHING fills it -- and left loosely described it fills it
+    # with speech, which the mouth then performs. Closing the list leaves nothing for
+    # a voice to be.
+    check("one sound, closed", S.sound_clause(["footsteps"], only=True)
+          == " The only sound is footsteps.")
+    check("two sounds, closed", S.sound_clause(["footsteps", "a door"], only=True)
+          == " The only sounds are footsteps and a door.")
+    check("three sounds, closed",
+          S.sound_clause(["footsteps", "a door", "rain"], only=True)
+          == " The only sounds are footsteps, a door and rain.")
+    # A shot that speaks keeps the open form: closing it there would be telling the
+    # model the line is not among the sounds.
+    check("a speaking shot is left open",
+          S.sound_clause(["footsteps"]) == " It sounds like footsteps.")
+    check("nothing heard, nothing said", S.sound_clause([], only=True) == "")
+    # Positively phrased. At cfg 1 H3 is CFG-free and no negative prompt is
+    # evaluated, so "nobody speaks" is not a prohibition -- it is the word "speaks"
+    # in the prompt.
+    for _p in (True, False):
+        cl = S.sound_clause(["footsteps", "a door"], only=_p)
+        check(f"positively phrased (only={_p})",
+              not re.search(r"\b(?:no|not|never|without|nobody|silent)\b", cl, re.I))
+
+
 def test_widget_values_are_usable():
     print("\n=== a widget value that is not a number ===")
     # Saved workflows restore widget values BY POSITION, with no names stored. Remove
@@ -1258,6 +1285,7 @@ def main():
     test_auto_length()
     test_text_in_frame()
     test_reference_tags()
+    test_sound_clause_closes_the_list()
     test_widget_values_are_usable()
     test_schema()
     print()
