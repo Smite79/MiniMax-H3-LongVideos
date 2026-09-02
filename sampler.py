@@ -1394,6 +1394,33 @@ CHAIN_HOLD = (" Every restraint stays whole and closed, fastened exactly as it w
               "and still fastened at the last frame; its links keep their size and the run "
               "between them stays straight and taut.")
 
+# When hardware is what PUTS a body in a position, the length of that hardware is the
+# whole reason the position holds. Saying the metal keeps its shape is not enough: a
+# chain that keeps its shape can still be drawn as having slack, and slack is room to
+# stand up out of a squat the chain was locked to enforce.
+#
+# It replaces the clause above rather than joining it, and it is careful to leave the
+# body free to act: straining and pulling is exactly what should happen, and the last
+# thing this should say is that anything holds still.
+CHAIN_POSE_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
+                   "on; the metal is already drawn out to its full length, so the position "
+                   "it fixes is the position that keeps, and the body strains and pulls "
+                   "against it while the fastenings hold at exactly the length they were "
+                   "locked to.")
+
+# A position that hardware can be locked to enforce.
+_FORCED_POSE = re.compile(
+    r"\b(?:squat(?:s|ting|ted)?|kneel(?:s|ing)?|knelt|crouch(?:es|ing|ed)?|"
+    r"hogtied|hog-?tied|hogcuffed|hog-?cuffed|trussed|"
+    r"bent\s+(?:over|double)|doubled\s+over|folded\s+(?:up|forward)|"
+    r"spread[- ]eagled?|curled\s+up|"
+    r"on\s+(?:her|his|their)\s+(?:knees|haunches))\b", re.I)
+
+
+def forced_pose(text):
+    """Does this text put a body into a position that hardware can enforce?"""
+    return bool(_FORCED_POSE.search(text or ""))
+
 # Hardware that is rigid by nature. Only consulted once a restraint is established,
 # so a chain-link fence in the scenery cannot arm it on its own.
 _RIGID_HARDWARE = re.compile(
@@ -2431,7 +2458,7 @@ class H3LongVideos:
         # the removing shot too: the keyframe already shows the garment on at the
         # start, and a description saying it is still worn is what puts it back.
         shots, speech, gone, shown = [], [], [], []
-        restrained = False
+        restrained = posed = rigid_latched = False
         stripped_shots = set()      # 0-based shots that took something off
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
         # an object. A sheet LABELS them, which beats scanning prose for capitals --
@@ -2552,9 +2579,22 @@ class H3LongVideos:
             if hold_restraints:
                 if names_any(RESTRAINT_HOLD_KEY, toks) or any(
                         restraint_present(t) for t in toks):
-                    restrained = False
+                    restrained = posed = rigid_latched = False
                 elif restraint_present(body) or restraint_present(shot_scene):
                     restrained = True
+            # Rigidity latches like the hardware itself. Steel locked on in shot 1 is
+            # still steel in shot 5, and a beat that does not happen to say "chain"
+            # does not mean the chain became rope -- but tested per shot, that is
+            # exactly what happened: the shot naming it got the rigid clause and every
+            # shot after it fell back to the soft one. Which is where the slack came
+            # back from.
+            if restrained and rigid_hardware(f"{body} {shot_scene}"):
+                rigid_latched = True
+            # And a position that hardware was locked to enforce latches too: the chain
+            # that put a body in a squat is still that length three shots later, so the
+            # squat is still the position.
+            if rigid_latched and forced_pose(f"{body} {shot_scene}"):
+                posed = True
             # A turn shows a surface the keyframe never pinned, and the model fills
             # it from a clothed prior. Only on shots that turn, and only once there
             # is something to hold -- a removal already made, or hardware on.
@@ -2566,8 +2606,11 @@ class H3LongVideos:
             # Steel is not rope. Without being told, the model draws a chain slack --
             # sagging, stretching to wherever a limb is going, allowing movement the
             # hardware does not allow. Only where such hardware is actually named.
-            chain = (CHAIN_HOLD if (restrained and rigid_hardware(f"{body} {shot_scene}"))
-                     else "")
+            rigid = restrained and rigid_latched
+            # Where the hardware is holding a POSITION, its length is the reason the
+            # position holds -- and a chain drawn with slack is room to stand out of it.
+            chain = (CHAIN_POSE_HOLD if (rigid and posed)
+                     else CHAIN_HOLD if rigid else "")
             # Hardware named with nowhere to sit. A collar with no neck beside it is a
             # band with no place to be, and it ends up on the head. Only where this
             # beat itself raises the item, and only when the text has not already put
