@@ -778,6 +778,18 @@ def test_sound_is_derived_from_the_action():
     check("...a lock gets a lock", "a lock snapping shut" in S.sounds_for("He locks it."))
     check("a beat that stages nothing audible gets nothing",
           S.sounds_for("Maya lies still.") == [])
+    for _t in ("Jon creeps across the floor.", "Jon drags the crate to the wall.",
+               "He pours a glass of water.", "He unbuckles the harness.",
+               "A van pulls up outside."):
+        check(f"covered: {_t[:34]!r}", S.sounds_for(_t))
+    # "locks eyes with her" is a look. It was giving the shot a padlock closing.
+    check("a look is not a lock", S.sounds_for("He locks eyes with her.") == [])
+    check("...while a padlock still is",
+          "a lock snapping shut" in S.sounds_for("Jon locks the padlock shut."))
+    # The table is a table: an action outside it is silent unless the beat names the
+    # sound itself. That is the honest limit of deriving foley from prose.
+    check("an action outside the table gets nothing",
+          S.sounds_for("The camera pushes in on her face.") == [])
     # A cue, not an inventory: the shot has a word budget and the beat needs most of it.
     many = S.sounds_for("He walks in, unlocks the chain, cuts the tape, throws it down "
                         "and slams the door.")
