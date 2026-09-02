@@ -287,14 +287,52 @@ def sheet_for_beat(sheet, beat, previous=None):
     A beat that names nobody at all keeps the last beat's people too, so "She lies
     still." does not empty the frame."""
     rows = sheet_lines(sheet)
+    # CASE-SENSITIVE. Prose capitalises a name, and matching without case made the
+    # word "will" find a character called Will, and "grace" find Grace.
     named = [n for n, _ in rows
-             if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "", re.I)]
-    if _PRONOUN.search(beat or ""):
-        named += [n for n in (previous or []) if n not in named]
+             if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "")]
+    used = {m.group(0).lower() for m in _PRONOUN.finditer(beat or "")}
+    if used:
+        # Resolve a pronoun to the person whose sheet DECLARES it. Adding the whole
+        # previous cast on any pronoun put someone in a shot they were not in --
+        # "Jon walks out and shuts the door behind him" kept the other character,
+        # because "him" was read as evidence that somebody else was present.
+        matched = False
+        for name, line in rows:
+            if not name or name in named:
+                matched = matched or bool(sheet_pronoun(line) and used
+                                          & _PRONOUN_SET[sheet_pronoun(line)])
+                continue
+            group = sheet_pronoun(line)
+            if group and used & _PRONOUN_SET[group]:
+                named.append(name)
+                matched = True
+        # A sheet that declares no pronouns tells us nothing, so fall back to the
+        # last beat's people rather than guessing.
+        if not matched:
+            named += [n for n in (previous or []) if n not in named]
     if not named:
         named = list(previous) if previous else [n for n, _ in rows if n]
     keep = [ln for n, ln in rows if n is None or n in named]
     return "\n".join(keep), named
+
+
+_PRONOUN_SET = {"she": {"she", "her", "hers"},
+                "he": {"he", "him", "his"},
+                "they": {"they", "them", "their", "theirs"}}
+
+
+def sheet_pronoun(line):
+    """Which pronoun this sheet entry declares for its person, or None.
+
+    Writing the pronoun into the sheet -- "Maya: 27, she, grey coat" -- is what lets
+    "her coat" in a beat be resolved to Maya rather than to whoever was in the last
+    shot."""
+    body = (line or "").split(":", 1)[-1]
+    for group, words in _PRONOUN_SET.items():
+        if any(re.search(r"\b" + w + r"\b", body, re.I) for w in words):
+            return group
+    return None
 
 
 _PRONOUN = re.compile(r"\b(?:she|he|her|hers|his|him|they|them|their|theirs)\b", re.I)
