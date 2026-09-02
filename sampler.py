@@ -922,14 +922,29 @@ def _auto_tile_t(n_latent_frames, requested=None):
     return AUTO_TILE_T if n > AUTO_TILE_T else None
 
 
-def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=None):
-    """Decode the video latent. If `free_first` is the diffusion model, unload it
-    first: sampling is finished, and the ~5GB video VAE needs the room. Leaving the
-    DiT (plus resident bypass-LoRA adapters) on the card while the VAE loads is a
-    second ratchet -- ComfyUI would otherwise evict reactively, after spilling."""
+def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=None,
+                  keep=()):
+    """Decode the video latent.
+
+    `free_first` is the diffusion model: sampling is finished, and the video VAE
+    needs the room for THIS decode -- the free runs immediately before it, not to
+    make room for the next shot. On a card where the DiT is most of the VRAM, the
+    decode does not fit until it goes.
+
+    `keep` is what must NOT be evicted on the way. It was `keep_loaded=[]`, which
+    unloaded every resident model -- including the video VAE, which ComfyUI then
+    reloaded three lines later to run the decode. An evict-and-reload of the thing
+    about to be used, once per shot, on every card. Peak VRAM is identical either
+    way, since the VAE has to be resident to decode; the round trip was pure cost.
+
+    Note what is NOT changed here: memory_required is still 1e30, which skips
+    ComfyUI's partially_unload path (model_management.py:811) and forces a full
+    detach + unpatch of everything else. That is the expensive half on a card with
+    headroom, and it cannot be sized honestly without measuring on real hardware."""
     if free_first is not None:
         try:
-            mm.free_memory(1e30, mm.get_torch_device(), keep_loaded=[])
+            mm.free_memory(1e30, mm.get_torch_device(),
+                           keep_loaded=_resident(keep or (vae,)))
         except Exception:
             pass
     latent = out_latent["samples"]
@@ -978,12 +993,18 @@ def _is_oom(e):
 
 def _deep_cleanup():
     """Release VRAM + RAM between shots so a long chain doesn't accumulate and OOM.
-    Runs a Python GC pass (frees dereferenced tensors / CPU buffers), then hands
-    ComfyUI its aggressive cache purge, then empties the CUDA allocator's cached
-    blocks and IPC handles. Cheap relative to sampling; called once per beat."""
+    Runs a Python GC pass (frees dereferenced tensors / CPU buffers), then empties
+    the CUDA allocator's cached blocks and IPC handles. Cheap relative to sampling;
+    called once per beat.
+
+    It unloads NOTHING. soft_empty_cache(force) ignores `force` in current ComfyUI
+    (model_management.py:2050) -- the body only reaches empty_cache() and
+    ipc_collect() -- so this drops cached blocks, not models. The `True` is kept
+    only for older builds that read it; the older comment here claimed this took an
+    unload_all_models path, and it does not."""
     gc.collect()
     try:
-        mm.soft_empty_cache(True)      # aggressive (unload_all_models path)
+        mm.soft_empty_cache(True)
     except TypeError:
         mm.soft_empty_cache()
     try:
@@ -994,6 +1015,27 @@ def _deep_cleanup():
         pass
 
 
+def _resident(models):
+    """The LoadedModel entries ComfyUI currently holds for `models`.
+
+    That is the form free_memory's keep_loaded wants: it compares against the
+    entries in current_loaded_models, not against the ModelPatcher objects a node
+    is holding. Anything not matched is simply not kept, so a model that is not
+    resident costs nothing here."""
+    out = []
+    for lm in list(getattr(mm, "current_loaded_models", [])):
+        for m in models or ():
+            if m is None:
+                continue
+            try:
+                if lm.model is m or getattr(lm, "model", None) is getattr(m, "model", None):
+                    if lm not in out:
+                        out.append(lm)
+            except Exception:
+                pass
+    return out
+
+
 def _evict_all_but(keep_model):
     """Unload every model EXCEPT the diffusion model from the GPU.
 
@@ -1002,21 +1044,18 @@ def _evict_all_but(keep_model):
     ComfyUI keeps the Qwen3-VL text encoder (~14.6GB) and both VAEs resident in
     current_loaded_models alongside the DiT. Each shot re-encodes the prompt
     (text encoder), encodes the handoff keyframe (video VAE), then samples (DiT),
-    so all three compete for the card; ComfyUI only evicts reactively, i.e. AFTER
-    it has already spilled. With a bypass LoRA also holding 208 bf16 adapters
-    resident there is no room left, and every shot leaves the card fuller.
+    so all three compete for the card.
 
-    Freeing them explicitly, right after conditioning is built and before
-    sampling, keeps only what the sampler actually needs on the GPU."""
+    ComfyUI does free ahead of each load -- load_models_gpu() calls free_memory()
+    for what it is about to need (model_management.py:975), so the weight path is
+    not purely reactive. What it cannot size for is a long chain's ACTIVATIONS on
+    a card where the DiT is most of the VRAM. Freeing explicitly, right after
+    conditioning is built and before sampling, keeps only what the sampler needs.
+
+    Still 1e30, deliberately: see the note in _decode_video."""
     try:
-        keep = []
-        for lm in list(getattr(mm, "current_loaded_models", [])):
-            try:
-                if lm.model is keep_model or getattr(lm, "model", None) is getattr(keep_model, "model", None):
-                    keep.append(lm)
-            except Exception:
-                pass
-        mm.free_memory(1e30, mm.get_torch_device(), keep_loaded=keep)
+        mm.free_memory(1e30, mm.get_torch_device(),
+                       keep_loaded=_resident([keep_model]))
     except Exception:
         try:
             mm.soft_empty_cache(True)
@@ -3505,7 +3544,10 @@ class H3LongVideos:
                     notes.append(up_note)
 
             _t0 = time.perf_counter()
-            imgs = _decode_video(vae, out, shot_tiled, free_first=model)
+            # The DiT goes so the decode fits; the two VAEs stay, because both are
+            # used in the next two lines and evicting them only buys a reload.
+            imgs = _decode_video(vae, out, shot_tiled, free_first=model,
+                                 keep=(vae, audio_vae))
             wav = _decode_audio(audio_vae, out)
             t_decode += time.perf_counter() - _t0
             sr = wav["sample_rate"]
