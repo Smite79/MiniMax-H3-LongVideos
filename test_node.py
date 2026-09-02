@@ -504,7 +504,10 @@ def test_thin_beats():
     one = "Dan pulls off her coat and throws it away."
     two = ("Dan pulls off her coat and throws it away, then sets the hanger down "
            "and steps back.")
-    check("a two-clause beat asks for about 7s", 6.0 <= S.beat_seconds(one) <= 8.0)
+    # Two clauses at 2.2s each plus a small settle. It used to be 7s, which gave a
+    # two-action beat well over twice the screen time its actions needed -- and the
+    # surplus is spent performing them more slowly, not on anything new.
+    check("a two-clause beat asks for about 5s", 4.5 <= S.beat_seconds(one) <= 5.5)
     check("adding what happens next asks for more", S.beat_seconds(two) > S.beat_seconds(one))
     check("directive lines do not count as content",
           S.beat_seconds(one) == S.beat_seconds(one + "\nremove: coat"))
@@ -691,6 +694,36 @@ def test_hardware_has_somewhere_to_go():
     check("...and is impersonal",
           not re.search(r"\b(?:she|he|her|his|they)\b", cl, re.I))
     check("nothing to place, no sentence", S.anchor_clause([]) == "")
+
+
+def test_pace():
+    print("\n=== a shot longer than its action is filled by slowing it down ===")
+    # Reported: the movement looks slow. A video model given more time than the
+    # action needs does not invent more action -- it performs the same one more
+    # slowly. Measured: "Maya walks to the window" is a few steps, under two seconds
+    # of real movement, and the old constants gave it a 4.5s shot.
+    _ceil = S.align_frame_count(10 * S.H3_FPS)
+    one = "Maya walks to the window."
+    two = "Jon walks in and takes her jacket off."
+    check("a one-action beat no longer asks for four and a half seconds",
+          S.beat_seconds(one) <= 3.2)
+    check("...and a two-action beat is under six", S.beat_seconds(two) <= 5.5)
+    # The base was the larger error: a chained shot opens mid-scene, continuing from
+    # the previous frame, so there is nothing to set up.
+    check("the settle allowance is small", S.BEAT_BASE_SEC < 1.0)
+    # pace scales the whole estimate.
+    slow = S.plan_lengths([two], _ceil, True, 1.5)[0][0]
+    norm = S.plan_lengths([two], _ceil, True, 1.0)[0][0]
+    fast = S.plan_lengths([two], _ceil, True, 0.6)[0][0]
+    check("a lower pace shortens the shot", fast < norm)
+    check("...and a higher one lengthens it", slow > norm)
+    check("the floor still holds at one action's worth",
+          S.plan_lengths([one], _ceil, True, 0.1)[0][0] == S.MIN_AUTO_FRAMES)
+    check("the ceiling still holds", slow <= _ceil)
+    check("a pace of 0 does not divide by zero or empty the shot",
+          S.plan_lengths([two], _ceil, True, 0)[0][0] >= S.MIN_AUTO_FRAMES)
+    check("'fixed' ignores pace entirely",
+          S.plan_lengths([one, two], _ceil, False, 0.5)[0] == [_ceil, _ceil])
 
 
 def test_av_grid_alignment():
@@ -922,8 +955,8 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-4:] == ["anchor", "character_memory", "character_guard",
-                             "save_defaults"])
+          list(opt)[-5:] == ["anchor", "character_memory", "character_guard",
+                             "save_defaults", "pace"])
     check("save_defaults is offered", "save_defaults" in opt)
     check("...and is off unless asked for", opt["save_defaults"][1]["default"] is False)
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
@@ -952,6 +985,7 @@ def main():
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
+    test_pace()
     test_av_grid_alignment()
     test_chain_is_rigid()
     test_saved_defaults()
