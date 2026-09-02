@@ -1361,6 +1361,60 @@ _RIGID_HARDWARE = re.compile(
     r"hogcuffed|hog-?cuffed)\b", re.I)
 
 
+# Where each piece of hardware goes. Not a creative choice -- it is what the object
+# IS. A collar without a neck is a band with no place to be, and a model handed a
+# band-shaped object and no anatomy puts it where bands most often sit in its
+# training data: on the head. That is the reported failure, and it happens whether
+# the item is being fastened or merely held up and shown.
+#
+# (item pattern, the phrase that places it)
+_HARDWARE_ANCHOR = (
+    (r"collar(?:s|ed)?",                 "a collar closes around the neck"),
+    (r"leash(?:es)?|lead\b",             "a leash clips to the collar at the neck and hangs down from it"),
+    (r"gag(?:s|ged)?|ball\s*gag",        "a gag sits in the mouth"),
+    (r"blindfold(?:s|ed)?",              "a blindfold covers the eyes"),
+    (r"handcuff(?:s|ed)?",               "handcuffs close around the wrists"),
+    (r"shackle[sd]?|leg\s+irons",        "shackles close around the ankles"),
+    (r"harness(?:es)?",                  "a harness sits on the torso"),
+    (r"spreader\s+bar",                  "a spreader bar holds the ankles apart"),
+    (r"(?:chastity\s+)?belt(?:s|ed)?",   "a belt closes around the waist and hips"),
+)
+
+# Anatomy that already places something, so the writer's own wording wins.
+_BODY_PART = re.compile(
+    r"\b(?:neck|throat|wrist|wrists|ankle|ankles|mouth|lips|jaw|eyes|face|head|"
+    r"waist|hips?|chest|torso|stomach|belly|shoulders?|arms?|legs?|thighs?|"
+    r"knees?|feet|foot|hands?)\b", re.I)
+
+
+def unanchored_hardware(text):
+    """Phrases placing any hardware that is named with no body part beside it.
+
+    A window of 60 characters either side counts as 'beside'. If the text already
+    says where the thing goes, nothing is added -- what you wrote wins."""
+    out = []
+    t = text or ""
+    for pat, phrase in _HARDWARE_ANCHOR:
+        placed = False
+        found = False
+        for m in re.finditer(r"\b(?:" + pat + r")", t, re.I):
+            found = True
+            window = t[max(0, m.start() - 60):m.end() + 60]
+            if _BODY_PART.search(window):
+                placed = True
+                break
+        if found and not placed and phrase not in out:
+            out.append(phrase)
+    return out
+
+
+def anchor_clause(phrases):
+    """One sentence saying where the named hardware sits."""
+    if not phrases:
+        return ""
+    return " Each piece of hardware sits where it belongs: " + "; ".join(phrases) + "."
+
+
 def rigid_hardware(text):
     """Is the hardware here the kind that cannot flex?"""
     return bool(_RIGID_HARDWARE.search(text or ""))
@@ -2453,8 +2507,17 @@ class H3LongVideos:
             # hardware does not allow. Only where such hardware is actually named.
             chain = (CHAIN_HOLD if (restrained and rigid_hardware(f"{body} {shot_scene}"))
                      else "")
+            # Hardware named with nowhere to sit. A collar with no neck beside it is a
+            # band with no place to be, and it ends up on the head. Only where this
+            # beat itself raises the item, and only when the text has not already put
+            # it somewhere -- what you wrote wins.
+            anchors = anchor_clause(unanchored_hardware(body))
+            if anchors:
+                notes.append(f"shot {i_shot + 1} names hardware with no body part beside "
+                             f"it, so the shot says where it sits: "
+                             f"{anchors.split(': ', 1)[1].rstrip('.')}")
             line = f"{shot_scene} {body}".strip() if shot_scene else body
-            shots.append((line + tail + (RESTRAINT_HOLD if restrained else "")
+            shots.append((line + tail + anchors + (RESTRAINT_HOLD if restrained else "")
                           + chain + fall + turn).strip())
             speech.append(has_speech(body))
 

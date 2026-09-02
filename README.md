@@ -215,7 +215,16 @@ that drifted, it is the scene ceasing to make sense. Ambiguous items need a
 fastening verb or a body part alongside them, so a chain-link fence and a leather
 belt do not arm it.
 
-Three refinements ride along with it, each only where it applies:
+Four refinements ride along with it, each only where it applies:
+
+- **Hardware gets somewhere to sit.** A collar with no neck named beside it is a
+  band with no place to be, and a model handed a band-shaped object and no anatomy
+  puts it where bands usually go — on the head. Where an item is named with no body
+  part within a sentence of it, the shot says where it belongs: a collar at the
+  neck, a gag in the mouth, cuffs at the wrists, a leash clipped to the collar. That
+  is not a creative choice, it is what the object is — and it applies to an item
+  merely held up and shown, not only one being fastened. **Name the part yourself
+  and nothing is added**: what you wrote wins.
 
 - **Rigid hardware stays rigid.** Steel is not rope, but a model with no reason to
   think otherwise draws a chain as a soft cord — sagging, stretching to wherever a
