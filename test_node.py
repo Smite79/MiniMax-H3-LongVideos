@@ -763,6 +763,39 @@ def test_sound_described():
           S.has_speech('He says: "Get up."') and not S.sound_described("He nods."))
 
 
+def test_sound_is_derived_from_the_action():
+    print("\n=== the sound a beat implies, without writing it twice ===")
+    # H3 is joint, so the same prose conditions the audio branch -- and a beat that
+    # says what happens has already said what it sounds like.
+    check("walking gets footsteps",
+          "footsteps" in S.sounds_for("Jon walks in holding a pair of scissors."))
+    check("...scissors get blades",
+          "blades through fabric" in S.sounds_for("Jon cuts off her coat."))
+    check("...a chain gets links",
+          "chain links dragging" in S.sounds_for("Maya thrashes against the chain."))
+    check("...throwing gets something landing",
+          "something landing" in S.sounds_for("He throws it away."))
+    check("...a lock gets a lock", "a lock snapping shut" in S.sounds_for("He locks it."))
+    check("a beat that stages nothing audible gets nothing",
+          S.sounds_for("Maya lies still.") == [])
+    # A cue, not an inventory: the shot has a word budget and the beat needs most of it.
+    many = S.sounds_for("He walks in, unlocks the chain, cuts the tape, throws it down "
+                        "and slams the door.")
+    check("at most three sounds", len(many) <= S.MAX_SOUNDS)
+    check("...and no repeats", len(many) == len(set(many)))
+    # The sentence is prose. A label like "sound:" is read as text to DRAW.
+    cl = S.sound_clause(["footsteps", "a door on its hinges"])
+    check("it reads as a sentence", cl.strip().startswith("It sounds like"))
+    check("...joining them properly", "footsteps and a door on its hinges" in cl)
+    check("...ending as one", cl.count(".") == 1)
+    check("three are joined with commas",
+          "footsteps, blades through fabric and a sharp impact"
+          in S.sound_clause(["footsteps", "blades through fabric", "a sharp impact"]))
+    check("nothing heard, nothing said", S.sound_clause([]) == "")
+    check("...and it is not a labelled line",
+          not re.match(r"\s*\w+\s*:", S.sound_clause(["footsteps"])))
+
+
 def test_pace():
     print("\n=== a shot longer than its action is filled by slowing it down ===")
     # Reported: the movement looks slow. A video model given more time than the
@@ -1012,9 +1045,10 @@ def test_schema():
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
     # 17 core + 6 upscale + shot_length, hold_restraints, restart_after_removal,
-    # auto_remove + anchor, character_memory, character_guard. A ceiling, not a
-    # target: the old node had 38 and nobody could find anything.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 32)
+    # auto_remove + anchor, character_memory, character_guard, save_defaults, pace,
+    # auto_sound. A ceiling, not a target: the old node had 38 and nobody could find
+    # anything. Every one added since the rebuild answers a reported failure.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 34)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -1022,8 +1056,8 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-5:] == ["anchor", "character_memory", "character_guard",
-                             "save_defaults", "pace"])
+          list(opt)[-6:] == ["anchor", "character_memory", "character_guard",
+                             "save_defaults", "pace", "auto_sound"])
     check("save_defaults is offered", "save_defaults" in opt)
     check("...and is off unless asked for", opt["save_defaults"][1]["default"] is False)
     for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
@@ -1055,6 +1089,7 @@ def main():
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
     test_sound_described()
+    test_sound_is_derived_from_the_action()
     test_pace()
     test_av_grid_alignment()
     test_chain_is_rigid()
