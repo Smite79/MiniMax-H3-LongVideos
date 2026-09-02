@@ -243,10 +243,11 @@ def test_references_and_silence():
     # auto_sound appends a sound sentence -- "He walks in." implies footsteps. Your
     # words are still never rewritten; the node only ever adds after them, and every
     # addition has a switch.
-    # The beat has no line, so the list is CLOSED: the audio branch is free here and
-    # something fills it -- say what, or a voice does and the mouth follows.
-    check("...with only the sound sentence added",
-          clip2.seen[1][0] == "A room. He walks in. The only sound is footsteps.")
+    # The beat has no line and no sound of its own, so it is pinned silent and gets no
+    # sound sentence: a clause would describe an acoustic the conditioning removes,
+    # and a free branch there is what put a voice in the mouth.
+    check("...with nothing added to a silenced shot",
+          clip2.seen[1][0] == "A room. He walks in.", clip2.seen[1][0])
     # The shot that DOES speak gets the open form: closing the list there would be
     # telling the model the line is not in it.
     clip4 = FakeCLIP()
@@ -754,8 +755,9 @@ def test_sound_survives_silencing():
          'Jon says: "Get up."')
     vae = FakeAudioVAE()
     info = run_node(P, audio_vae=vae)[2]
-    check("the beat with a sound keeps its audio", "carry sound" in info)
-    check("...and is counted", "have no line but carry sound" in info)
+    check("the beat that describes a sound keeps its audio",
+          "describe a sound IN THE BEAT" in info)
+    check("...and is counted", "1 shot(s) have no line but describe a sound" in info)
     check("the beat with none is silenced", "1 shot(s) have no quoted line and no sound"
           in info)
     check("...and the guidance says what silence actually is",
@@ -771,23 +773,37 @@ def test_auto_sound_end_to_end():
     print("\n=== sound generated from the prompt ===")
     # No space named: this test isolates the sound a beat's own ACTION implies, and
     # room tone would put a bed on every shot including the ones meant to be bare.
+    #
+    # Derived sound is TEXT ONLY and can never unsilence a shot, so it lands only on
+    # shots whose audio branch is already open: ones with a line, or with a sound the
+    # author wrote. A shot with neither stays pinned to silence -- the mouth follows
+    # the audio, and an inference is not reason enough to let it move.
     P = ("Two people, late evening.\n\n"
          "Maya: 27, grey coat. Wrists cuffed behind back.\n\n"
-         "Jon walks in holding a pair of scissors.\n\n"
+         "Jon walks in holding a pair of scissors and says: \"Hold still.\"\n\n"
          "Maya thrashes against the chain, trying to get free.\n\n"
          "Maya lies still.\n\n"
          "The chain drags and rattles beside her.")
     imgs, audio, info, script = run_node(P, plan_only=True)[:4]
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
-    check("walking is heard", "footsteps" in sh[0])
+    # Shot 1 speaks, so its branch is open anyway and the action's sound is added.
+    check("walking is heard on the shot that speaks", "footsteps" in sh[0])
     check("...and the scissors", "blades through fabric" in sh[0])
-    check("thrashing against a chain is heard", "chain links dragging" in sh[1])
-    check("a beat staging nothing audible gets nothing", "It sounds like" not in sh[2])
-    # What you wrote wins: a beat describing its own sound is left alone.
+    check("...in the open form, because it has a line", "It sounds like" in sh[0])
+    # Shots 2 and 3 have no line and no sound of their own: pinned silent, and told
+    # nothing about sound, since the clause would describe an acoustic that is not
+    # there. This is the one that was babbling.
+    check("a shot with no line gets no derived sound",
+          "chain links dragging" not in sh[1])
+    check("...and no sound sentence at all",
+          "sounds like" not in sh[1] and "only sound" not in sh[1])
+    check("a beat staging nothing audible gets nothing", "sounds like" not in sh[2])
+    # What you wrote wins: a beat describing its own sound is left alone AND stays open.
     check("a beat with its own sound is not overwritten", "It sounds like" not in sh[3])
     check("...and it still counts as asking for audio",
-          "have no line but carry sound" in info)
+          "have no line but describe a sound" in info)
     check("info lists the shots it scored", "were given the sound" in info)
+    check("...saying it can never unsilence one", "never unsilence a shot" in info)
     # Sound is counted apart from the continuity guards, which ask for the opposite
     # thing -- for something to stay as it is rather than to happen.
     check("the balance separates sound from guards", "sound " in info.split("balance")[1][:120])
@@ -802,26 +818,31 @@ def test_room_tone_under_every_shot():
     # makes a scene sound staged rather than recorded.
     P = ("A cold concrete basement with bare walls.\n\n"
          "Maya: 27, grey coat.\n\n"
-         "Jon walks in.\n\n"
+         "Jon walks in and says: \"Get up.\"\n\n"
          "Maya lies still.\n\n"
-         "Maya looks up at him.")
+         "Maya breathes hard, the sound of it loud in the room.")
     imgs, audio, info, script = run_node(P, plan_only=True)[:4]
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
-    check("a shot with events carries the room too",
+    check("a shot that speaks carries the room too",
           "hard walls giving the sound back" in sh[0])
     check("the acting shot still gets its events", "footsteps" in sh[0])
     check("info names the acoustic", "room tone read from the scene" in info)
-    # Reported: auto_sound was moving the mouth. H3 is joint, so a free audio branch
-    # fills itself with a VOICE and the face lip-syncs to it. Room tone used to count
-    # as "this shot has sound", and since the room is under every shot that silenced
-    # NOTHING, ever -- the guard was on and doing nothing in every shot of every film.
-    check("a shot with no line and no sound of its own is still silenced",
+    # Reported twice: auto_sound was moving the mouth and babbling. H3 is joint, so a
+    # free audio branch fills itself with a VOICE and the face lip-syncs to it. No
+    # wording suppresses that -- only the silent keyframe does, and it pins the whole
+    # shot. So nothing this node INFERS may open the branch: not room tone, and not a
+    # sound worked out from the action either.
+    check("a shot with no line and no sound of its own is silenced",
           "conditioned on real silence" in info)
     check("...and the room does not go under it", "hard walls" not in sh[1], sh[1][-70:])
-    # Where the branch IS free and there is no line, close the list: something has to
-    # fill it, so say what, or a voice does.
-    check("a free branch with no line is told these are the only sounds",
-          "The only sounds are footsteps and hard walls giving the sound back" in sh[0])
+    check("...and it is told nothing about sound",
+          "sounds like" not in sh[1] and "only sound" not in sh[1])
+    # A sound the AUTHOR wrote is a request for audio, so that shot stays open -- and
+    # with no line it is told these are the only sounds, which shapes a branch that is
+    # legitimately free.
+    check("a sound you wrote yourself keeps the branch open",
+          "hard walls giving the sound back" in sh[2])
+    check("...in the closed form, because it has no line", "The only sound" in sh[2])
     check("...and info explains the mouth", "stops the mouth moving" in info)
     # A scene naming no space gets no bed, and the silence guard still applies.
     plain = run_node("Two people talking.\n\nHe waits.\n\nShe waits.", plan_only=True)[2]

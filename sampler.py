@@ -2996,16 +2996,18 @@ class H3LongVideos:
         _room = room_tone(scene, _opening) if auto_sound else ""
         _room_src = "the scene" if room_tone(scene) else "the opening beat"
         if _room:
-            notes.append(f"room tone read from {_room_src}: {_room}. It goes under every "
-                         f"shot that is not being silenced, so a shot with something "
-                         f"happening in it is not conditioned on digital silence -- "
-                         f"nothing real is that quiet. It does NOT count as the shot "
-                         f"asking for audio: a shot with no line and no sound of its own "
-                         f"is still silenced. That distinction is what stops the mouth "
-                         f"moving -- H3 is joint, so a free audio branch fills itself "
-                         f"with a voice and the face lip-syncs to it. Where the branch "
-                         f"IS free and there is no line, the shot is told these are the "
-                         f"only sounds, which leaves nothing for a voice to fill")
+            notes.append(f"room tone read from {_room_src}: {_room}. It goes under the "
+                         f"shots whose audio branch is already open -- ones with a line, "
+                         f"or with a sound you described yourself -- so those are not "
+                         f"conditioned on digital silence, and nothing real is that "
+                         f"quiet. It can never OPEN a branch: a shot with no line and no "
+                         f"sound of your own stays pinned to silence and carries no room "
+                         f"tone either, because the clause would describe an acoustic the "
+                         f"conditioning says is not there. That is what stops the mouth "
+                         f"moving. H3 is joint, so a free branch fills itself with a "
+                         f"voice and the face lip-syncs to the babble, and no wording "
+                         f"suppresses that -- only the silent keyframe does, and it pins "
+                         f"the whole shot rather than just its opening")
         active = []                 # the people the previous beat involved
         guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
@@ -3180,29 +3182,37 @@ class H3LongVideos:
             hold = chain if chain else (RESTRAINT_HOLD if restrained else "")
             # What you wrote wins: a beat that already describes its own sound is left
             # alone, and only one that describes none gets the sound its action implies.
-            heard = [] if (not auto_sound or sound_described(body)) else sounds_for(body)
-            # Does THIS shot ask for audio of its own? Room tone is deliberately not
-            # part of the answer.
+            # ONLY WHAT THE AUTHOR WROTE OPENS THE AUDIO BRANCH.
             #
-            # Silence is what stops the audio branch inventing a VOICE, and H3 is
-            # joint, so an invented voice is lip-synced: the mouth moves in a shot with
-            # no line in it. Room tone used to count as "this shot has sound", and
-            # since the room is under EVERY shot that silenced nothing, ever -- the
-            # guard was on and doing nothing, in every shot of every film.
+            # H3 is joint: the mouth follows the audio. Leave that branch free on a
+            # shot with no line and it fills itself with a voice, and the face
+            # lip-syncs to the babble. Text cannot stop it -- "the only sounds are
+            # footsteps" was tried and the mouth still moved -- because the only thing
+            # that actually settles the branch is CONDITIONING it, and the silent
+            # keyframe pins the whole shot, not just its opening.
+            #
+            # So nothing this node infers may unsilence a shot. A quoted line is a
+            # request for audio; a sound the AUTHOR described is a request for audio;
+            # footsteps this file worked out from "walks in" is not, and neither is
+            # room tone. That is the whole rule, and it is the only one that holds --
+            # every version that let an inference open the branch babbled.
             _speaks = has_speech(body)
-            _event = sound_described(body) or bool(heard)
-            _will_silence = bool(silence_nonspeech and not _speaks and not _event)
-            # The room goes under every shot that is not being silenced. On one that
-            # is, the clause would describe an acoustic the audio is conditioned not
-            # to have.
-            if auto_sound and _room and not _will_silence:
+            _own = sound_described(body)
+            _will_silence = bool(silence_nonspeech and not _speaks and not _own)
+            heard = [] if (not auto_sound or _own) else sounds_for(body)
+            if _will_silence:
+                # The audio is pinned to silence for this shot's whole length, so a
+                # sentence saying what it sounds like would describe an acoustic the
+                # conditioning says is not there.
+                heard = []
+            elif auto_sound and _room:
                 heard = heard + [_room]
             if heard:
                 inferred_sound.append(len(shots) + 1)
-            # On a shot with no line, name the sound as the ONLY thing heard. The
-            # branch is free there -- something has to be -- so it has to be told what
-            # fills it, or it fills it with a voice and the face performs to that.
-            # Positively phrased: "the only sound is X" excludes speech by saying what
+            # The branch is free on this shot, so SOMETHING fills it. Naming the sound
+            # as the only thing heard leaves nothing for a voice to be -- it is not
+            # the guard, the silence is, but it is what shapes a branch that is
+            # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
             shot_text = (line + tail + anchors + _sound + hold + fall + turn).strip()
@@ -3216,11 +3226,8 @@ class H3LongVideos:
             total_words += len(shot_text.split())
             shots.append(shot_text)
             speech.append(_speaks)
-            # Silence exists to stop an unconditioned branch inventing a VOICE. A beat
-            # that asks for a sound of its OWN is asking for audio on purpose, and
-            # conditioning that on real silence is how a scene ends up with no
-            # footsteps and no chain. Room tone is not such a request -- see above.
-            sounded.append(_event)
+            # What the AUTHOR wrote, and nothing this file worked out. See above.
+            sounded.append(_own)
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -3270,15 +3277,22 @@ class H3LongVideos:
                 f"conditions the audio branch, and a beat that says what happens has "
                 f"said what it sounds like. Read from the beat, never the scene, so a "
                 f"chain standing in the scene does not rattle where nobody moves. A beat "
-                f"that describes its own sound is left alone")
+                f"that describes its own sound is left alone. This is TEXT ONLY and can "
+                f"never unsilence a shot: it is added to shots whose audio branch is "
+                f"already open, meaning ones with a line or with a sound you wrote "
+                f"yourself. A shot with neither stays pinned to silence and gets no "
+                f"sound sentence, because the mouth follows the audio and an inference "
+                f"is not a good enough reason to let it move")
         n_silent = sum(1 for s, snd in zip(speech, sounded) if not s and not snd)
         n_kept = sum(1 for s, snd in zip(speech, sounded) if not s and snd)
         if silence_nonspeech and n_kept:
             notes.append(
-                f"{n_kept} shot(s) have no line but carry sound -- described in the beat "
-                f"or derived from it -- so their audio is left free to make it. Silence "
-                f"is there to stop an unconditioned branch inventing a VOICE, and a shot "
-                f"with footsteps or a chain in it is asking for audio on purpose")
+                f"{n_kept} shot(s) have no line but describe a sound IN THE BEAT, so "
+                f"their audio is left free to make it -- writing the sound yourself is "
+                f"asking for audio on purpose. Those are the only shots without a line "
+                f"where the branch is open, and an open branch on a joint model can "
+                f"still put a voice in the gap. If one of them babbles, that beat's own "
+                f"sound wording is what opened it")
         if silence_nonspeech and n_silent:
             notes.append(
                 f"{n_silent} shot(s) have no quoted line and no sound described, so they "
