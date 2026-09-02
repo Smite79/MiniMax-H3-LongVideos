@@ -635,7 +635,7 @@ def test_keyframe_is_not_a_cast_member():
 
     def spy(self, text, minimax_ref_items=None, **kw):
         n = sum(1 for it in (minimax_ref_items or []) if it["type"] == "image")
-        seen.append((n, len(set(re.findall(r"<Picture (\d+)>", text)))))
+        seen.append((n, len(re.findall(r"<Picture \d+>", text))))
         return orig(self, text, minimax_ref_items=minimax_ref_items, **kw)
 
     FakeCLIP.tokenize = spy
@@ -646,10 +646,23 @@ def test_keyframe_is_not_a_cast_member():
         seen.clear()
         run_node(P, anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
-        check("no shot carries a picture its text does not name",
-              all(pics == tags for pics, tags in seen))
-        check("...and the shot that names one still gets it",
+        # At most one picture per shot -- the reference. The keyframe is not one, and
+        # neither is a leftover tag in the prose.
+        check("no shot is given more than one picture",
+              all(pics <= 1 for pics, _ in seen))
+        check("...and the shot with a reference still gets it",
               any(pics == 1 for pics, _ in seen))
+        check("no <Picture N> survives into the prompt",
+              all(tags == 0 for _, tags in seen))
+        # `script` has to show what the model is given, not the instruction that
+        # chose it, or plan_only reports something the render never sees.
+        info, script = run_node(P, plan_only=True, anchor="A room.",
+                                character_memory=mem,
+                                ref_image_1=torch.rand(1, H, W, 3))[2:4]
+        check("the script shows the resolved text", "Picture" not in script)
+        check("...and the sheet still reads", "Kate: she, 27, blonde hair" in script)
+        check("...and the run says the tags were removed",
+              "taken OUT of the prompt text" in info)
         # With no reference anywhere there is no ref2va numbering to collide with,
         # and "<Picture 1>: <first frame> <prompt>" is H3's own fl2v shape -- what
         # comfy_extras/nodes_minimax_h3.py emits. That case is left alone.
