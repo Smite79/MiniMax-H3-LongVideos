@@ -611,6 +611,29 @@ def test_restraints_hold():
                "Kate walks to the window.", "The rope hangs from the rafters.",
                "Dan tapes the box shut."):
         check(f"not a restraint: {_t[:34]!r}", not S.restraint_present(_t))
+    # A clamp applied to a body is hardware and has to stay on. Clamped to a bench it
+    # is a tool -- only the context separates them, so it needs a fastening verb or a
+    # body part like any other ambiguous item.
+    for _t in ("Jon puts a steel clamp on her arm.", "Jon clamps a ring to her wrist.",
+               "A steel clamp is clipped to her belt.",
+               "Steel clamps fastened to her ankles."):
+        check(f"a clamp on a body: {_t[:36]!r}", S.restraint_present(_t))
+    for _t in ("A steel clamp holds the workpiece on the bench.",
+               "Jon clamps the board to the workbench.",
+               "Jon clips the coupon out of the paper."):
+        check(f"a clamp on a thing: {_t[:36]!r}", not S.restraint_present(_t))
+    # "clamps" is a noun here and a verb there, and a word in BOTH lists satisfies
+    # both halves of the rule by itself -- which is how a chain-link fence used to
+    # arm this, and how "clamps the board to the workbench" did.
+    check("no word sits in both the noun list and the verb list",
+          not (S._RESTRAINT_MAYBE.search("clamps") and S._BINDING_VERB.search("clamps")))
+    check("...the same way tape is handled",
+          not (S._RESTRAINT_MAYBE.search("tapes") and S._BINDING_VERB.search("tapes")))
+    # A clamp is rigid, but it is not a chain: the chain clause speaks of links and
+    # the run between fastenings, which is nonsense said of a clamp.
+    check("a clamp does not earn the chain clause",
+          not S.rigid_hardware("Jon puts a steel clamp on her arm."))
+    check("...while a chain still does", S.rigid_hardware("a chain around her waist"))
     check("the hold is one sentence", S.RESTRAINT_HOLD.count(".") == 1)
     check("...impersonal, so it summons nobody",
           not re.search(r"\b(?:she|he|her|his|they)\b", S.RESTRAINT_HOLD, re.I))
