@@ -849,6 +849,52 @@ def test_room_tone_under_every_shot():
     check("no space named, no room tone", "room tone read" not in plain)
 
 
+def test_the_decode_keeps_the_vae_it_is_about_to_use():
+    print("\n=== eviction does not throw away the VAE it needs ===")
+    # Reported: forced eviction costing 37% of wall-clock on a 3090. The half that is
+    # wrong on EVERY card is this one -- free_memory ran with keep_loaded=[], which
+    # unloads every resident model including the video VAE, and ComfyUI then reloads
+    # it three lines later to run the decode. Peak VRAM is identical either way (the
+    # VAE has to be resident to decode), so the round trip was pure cost.
+    class _LM:                      # stands in for ComfyUI's LoadedModel
+        def __init__(self, m):
+            self.model = m
+
+    calls = []
+    _orig_free = _mm.free_memory
+    model, vae, avae = FakeModel(), FakeVAE(), FakeAudioVAE()
+    _mm.current_loaded_models = [_LM(model), _LM(vae), _LM(avae)]
+
+    def spy(memory_required, device, keep_loaded=(), **kw):
+        calls.append((memory_required, [lm.model for lm in keep_loaded]))
+
+    _mm.free_memory = spy
+    try:
+        run_node("A room.\n\nOne.\n\nTwo.", model=model, vae=vae, audio_vae=avae)
+    finally:
+        _mm.free_memory = _orig_free
+        del _mm.current_loaded_models
+
+    check("eviction still runs", bool(calls))
+    # Two call sites per shot: _evict_all_but before sampling, free_first before decode.
+    pre_sample = [c for c in calls if model in c[1]]
+    pre_decode = [c for c in calls if vae in c[1]]
+    check("before sampling, the DiT is what is kept", bool(pre_sample))
+    check("...and the VAEs are not", all(vae not in c[1] for c in pre_sample))
+    check("before decode, the video VAE is kept", bool(pre_decode))
+    check("...and the audio VAE with it, used on the next line",
+          all(avae in c[1] for c in pre_decode))
+    check("...while the DiT goes, which is what makes the decode fit",
+          all(model not in c[1] for c in pre_decode))
+    # Not changed, and deliberately: sizing the request needs real hardware.
+    check("the request is still unsized", all(c[0] >= 1e29 for c in calls))
+    # A model ComfyUI does not hold cannot be kept, and must not raise.
+    _mm.current_loaded_models = []
+    check("nothing resident, nothing kept", S._resident([model, vae]) == [])
+    del _mm.current_loaded_models
+    check("no current_loaded_models at all is survivable", S._resident([model]) == [])
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -970,6 +1016,7 @@ def main():
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
+    test_the_decode_keeps_the_vae_it_is_about_to_use()
     test_detail_trend()
     test_timing_report()
     print()
