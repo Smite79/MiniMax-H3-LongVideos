@@ -646,13 +646,15 @@ def test_keyframe_is_not_a_cast_member():
         seen.clear()
         run_node(P, anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
-        # Every picture the shot is given has to be one its text names, or the model
-        # reads it as another subject. The keyframe names nothing, so it must not be
-        # one; the reference is named by its tag, so it must be.
-        check("every picture a shot carries is one its text names",
-              all(pics == tags for pics, tags in seen))
-        check("...and the shot with a reference still gets it",
-              any(pics == 1 for pics, _ in seen))
+        # ONE picture per shot, and it is slot 1. The formats disagree about what a
+        # numbered picture means -- fl2va: this video's first frame; ref2va: a
+        # subject -- so a roster of two cannot be read correctly under either. A shot
+        # with a keyframe is fl2va and the keyframe is <Picture 1>; references are
+        # dropped there, which leaves only shot 1 able to carry one.
+        check("no shot is given more than one picture",
+              all(pics <= 1 for pics, _ in seen))
+        check("...and every shot after the first has its keyframe as that picture",
+              all(pics == 1 for pics, _ in seen[2:]))
         # `script` has to show the RENUMBERED text -- what the model is given -- or
         # plan_only reports something the render never sees.
         info, script = run_node(P, plan_only=True, anchor="A room.",

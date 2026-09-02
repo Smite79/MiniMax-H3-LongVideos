@@ -2319,8 +2319,7 @@ def latent_upscaler_node():
 
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                        handoff=None, refs=None,
-                       ref_noise_aug=0.999, silent=False, ref_image_size="match",
-                       refs_in_use=False):
+                       ref_noise_aug=0.999, silent=False, ref_image_size="match"):
     """Text + references + keyframe for a single shot.
 
     THE ONE RULE from H3's layout: a shot's conditioning rows are packed in the
@@ -2329,14 +2328,10 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     a keyframe cannot be handed over separately; whatever the encoder is to see goes
     in one list, numbered by position.
 
-    Which is the reason the keyframe is kept OUT of that list once a reference is in
-    it: a numbered picture there introduces a SUBJECT, and the handoff is not one.
-    See the comment at the append below. Its latent still reaches the model through
-    minimax_keyframes, which is what anchors the shot.
-
-    `refs_in_use` is about the FILM, not this shot -- a shot whose references were
-    all held back by the character guard is still part of a film that numbers
-    pictures, and switching format halfway through the chain is its own problem.
+    So one roster, and it has to be readable under ONE format. A shot with a keyframe
+    is fl2va -- the keyframe is <Picture 1> -- and reference images are dropped for
+    that shot, because on fl2va slot 2 means the LAST frame rather than a second
+    subject. See the comments below.
     """
     latent, fc = _empty_av_latent(width, height, length, H3_FPS)
     refs = [r for r in (refs or []) if r is not None]
@@ -2358,31 +2353,39 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     keyframe_ok = ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG
     carry_as_ref = bool(hand_img is not None and refs and not keyframe_ok)
 
+    # A keyframe and reference images cannot share the picture roster.
+    #
+    # The two formats use the same labels for different things: on fl2va <Picture 1>
+    # is this video's FIRST frame and <Picture 2> its LAST; on ref2va they are
+    # subjects. Send both and there is no numbering that reads correctly under either
+    # -- the handoff and a reference are competing for slot 1, and whichever loses
+    # becomes a frame the shot was never meant to have, or a person who was never in
+    # it. The keyframe wins, because it is the thing that makes this a chain.
+    if hand_img is not None and not carry_as_ref:
+        refs = []
+
     enc_refs = refs + ([hand_img] if carry_as_ref else [])
     items, blocks = ([], [])
     if enc_refs:
         items, blocks = _build_ref_images(vae, enc_refs, width, height, ref_image_size)
-    # The keyframe is a CONTINUATION, not a member of the cast.
+    # THE KEYFRAME IS <Picture 1>, and it goes FIRST.
     #
-    # comfy/text_encoders/minimax.py labels every image item "<Picture N>: " by item
-    # order, and in the ref2va format a numbered picture is a SUBJECT the shot is
-    # being introduced to -- which is exactly what a `Name: <Picture 1>, ...` sheet
-    # line points at. Appending the previous shot's last frame there handed the model
-    # a SECOND numbered subject, unexplained by any word of the prompt and looking
-    # exactly like the person already described. It drew both. That is where the
-    # doubles came from, and with two people in the outgoing frame it is where two of
-    # them came from.
+    # comfy/text_encoders/minimax.py states the two formats, and they mean different
+    # things by the same label:
     #
-    # Leaving it out costs nothing: the keyframe reaches the model as a LATENT
-    # through minimax_keyframes, which is the channel that actually anchors the shot.
-    # comfy_extras/nodes_minimax_h3.py's own AddGuide node adds a keyframe that way
-    # without touching the tokenizer at all.
+    #   fl2va:  "<Picture 1>: " <first frame> ["<Picture 2>: " <last frame>] <prompt>
+    #   ref2va: "<Picture i>: " <subject reference> ... <prompt>
     #
-    # With no reference anywhere in the film there is no ref2va numbering to collide
-    # with, and "<Picture 1>: <first frame> <prompt>" is H3's own fl2v shape -- what
-    # the MiniMaxH3Conditioning node emits -- so that case is left alone.
-    if hand_img is not None and not carry_as_ref and not refs_in_use:
-        items = items + [{"type": "image", "data": hand_img}]
+    # On fl2va weights a numbered picture is a FRAME OF THIS VIDEO. On ref2va weights
+    # it is a SUBJECT. The released checkpoints are separate, and ComfyUI loads either
+    # under one MiniMaxH3 class, so nothing here can tell them apart -- but the format
+    # the keyframe belongs to is fl2va, and there it is Picture 1 by definition.
+    #
+    # Ordering matters for exactly that reason: appended AFTER references the handoff
+    # became <Picture 2>, which on fl2va is the LAST frame -- the model was being told
+    # the shot ENDS on the frame it should START from.
+    items = ([{"type": "image", "data": hand_img}]
+             if hand_img is not None and not carry_as_ref else []) + items
 
     if items:
         tokens = clip.tokenize(prompt, minimax_ref_items=items)
@@ -3166,6 +3169,22 @@ class H3LongVideos:
         # by NAMING it -- ComfyUI's reference node: "Use the same tags when prompting"
         # -- so an unnamed picture is not a likeness of anybody in the shot, it is one
         # more subject, and the model renders it as a second person.
+        # Reference images belong to ref2va. Every shot but the first has a keyframe,
+        # and a keyframe means fl2va, where a numbered picture is a FRAME OF THIS
+        # VIDEO rather than somebody to put in it. The two cannot share the roster,
+        # so the keyframe keeps it -- and a reference connected against fl2va weights
+        # is being read as a frame, which is why it renders as an extra person.
+        if refs_all:
+            notes.append(
+                f"{len(refs_all)} reference image(s) are connected. Those are a ref2va "
+                f"feature: on ref2va weights <Picture N> is a SUBJECT, but on fl2va "
+                f"weights -- the ones whose filenames say FL2VA -- <Picture 1> is this "
+                f"video's FIRST frame and <Picture 2> its LAST. A headshot handed to fl2va "
+                f"as a picture is therefore read as a frame of the shot, and comes out as "
+                f"a person who is in it. Every shot after the first has a keyframe, which "
+                f"IS <Picture 1>, so references are dropped there and only shot 1 can "
+                f"carry them. On fl2va weights: disconnect ref_image_* and use first_frame "
+                f"to pin identity, which is the same channel the chain already runs on")
         if unbound:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in unbound)} carry {len(refs_all)} "
@@ -3224,8 +3243,7 @@ class H3LongVideos:
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
                 handoff=shot_handoff, refs=shot_refs,
-                ref_noise_aug=ref_noise_aug, silent=silent,
-                refs_in_use=bool(refs_all))
+                ref_noise_aug=ref_noise_aug, silent=silent)
             if demoted and not _aug_warned:
                 _aug_warned = True
                 notes.append(
