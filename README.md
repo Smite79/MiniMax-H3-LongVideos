@@ -459,8 +459,20 @@ Three at most, so the shot gets a cue rather than an inventory. It reads the **b
 only**, never the scene, so a chain standing in the scene does not rattle in a shot
 where nobody moves. A beat that already describes its own sound is left alone.
 
-Write it yourself when you want something the action does not imply — a specific
-room tone, weather, a noise off-screen.
+It also reads the **space** from the scene and carries that under every shot — a
+concrete basement gets hard walls giving the sound back, a carpeted room gets little
+echo, outdoors gets no walls close by. That is the one thing read from the scene
+rather than the beat, because a room is hard in every shot whatever happens in it,
+while a chain standing in the scene must not rattle where nobody moves.
+
+Room tone is what separates a recording from a sound effect: real footage has a bed
+under the events, and digital silence between them is what makes a scene sound
+staged. **It also means no shot is silenced any more** — the audio branch is free
+throughout, which is what makes the sound continuous and also what lets a shot with
+no line invent one. `auto_sound` off puts the silence guard back.
+
+Write it yourself when you want something neither the action nor the space implies —
+weather, a noise off-screen, a machine, a specific quality of hum.
 
 Sound in the **anchor** or first paragraph carries through every shot — room tone,
 the space, the ambience. Sound in a **beat** belongs to that shot — footsteps,
