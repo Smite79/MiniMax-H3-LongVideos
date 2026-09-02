@@ -489,6 +489,44 @@ def test_removal_needs_a_particle():
           "black shiny latex crop top" in kept)
 
 
+def test_undressing_completely():
+    print("\n=== a beat that names no garment at all ===")
+    # "strip out of their clothes, becoming naked" names nothing, so every other
+    # removal path had nothing to take off -- and the scene went on listing the whole
+    # wardrobe, re-stamped into every later shot, which is how the clothes came back.
+    for _b in ("Nora undresses completely.", "Both of them strip out of their clothes.",
+               "She strips off and gets in.", "He is naked by the window.",
+               "She takes everything off.", "They are wearing nothing.",
+               "She stands there nude.", "Stripped bare, she waits."):
+        check(f"reads as undressing: {_b[:38]!r}", S.strips_bare(_b))
+    # A naked eye is not a person, and stripping paint is not undressing.
+    for _b in ("He examines it with the naked eye.", "A naked flame in the corner.",
+               "She strips the paint off the door.", "He undoes his coat.",
+               "She takes her coat off.", "He walks in."):
+        check(f"not undressing: {_b[:38]!r}", not S.strips_bare(_b))
+    # The beat says nothing about WHAT comes off, so it is read off the wardrobe.
+    sheet = ("Kate: 27, she, grey coat, black jeans, brown boots, a white shirt, "
+             "handcuffs on her wrists, a steel collar.")
+    got = S.garments_in(sheet)
+    check(f"every garment is found (got {got})",
+          got == ["coat", "jeans", "boots", "shirt"])
+    # Taking clothes off does not unlock anything: hardware is cleared by an explicit
+    # 'remove:' and by nothing else.
+    check("restraints are not clothing",
+          not any(w in got for w in ("handcuffs", "collar")))
+    check("...and neither is anything else in the line",
+          not any(w in got for w in ("she", "wrists", "steel", "white")))
+    check("nothing worn, nothing found", S.garments_in("Kate: 27, she, red hair.") == [])
+    # Said once. Listing eight garments coming off is eight more mentions of clothing
+    # in a shot whose point is that there is none.
+    check("the clause finishes the removal inside the shot",
+          "away by the last frame" in S.BARE_HOLD)
+    check("...and says what is left", "bare skin" in S.BARE_HOLD)
+    check("...while the hardware stays on", "stays fastened" in S.BARE_HOLD)
+    check("...positively phrased",
+          not re.search(r"\b(?:no|not|never|without|nothing)\b", S.BARE_HOLD, re.I))
+
+
 def test_a_name_with_no_entry():
     print("\n=== somebody the sheet never describes ===")
     sheet = "Maya: she, 27, grey coat.\nJon: he, 35, jeans."
@@ -1269,6 +1307,7 @@ def main():
     test_opening_pose()
     test_removal_needs_a_particle()
     test_how_clothes_actually_come_off()
+    test_undressing_completely()
     test_a_name_with_no_entry()
     test_layers()
     test_removal_completes()

@@ -612,6 +612,36 @@ def test_person_described_once_end_to_end():
     check("...once", " ".join(s3.split()).count("Maya: 27") == 1)
 
 
+def test_undressing_completely_end_to_end():
+    print("\n=== undressing takes ALL of it off, and only theirs ===")
+    mem = ("Nora: 34, she, tall, red hair, green canvas jacket, grey wool jumper, "
+           "white t-shirt, black jeans, brown leather boots.\n"
+           "Victor: he, 41, dark hair, navy overalls, tan work shoes")
+    P = "\n\n".join(["Nora walks in and sets a toolbox on the bench.",
+                     "Nora undresses completely and steps into the shower.",
+                     "Nora reaches for a towel.",
+                     "Victor walks in carrying a coil of cable."])
+    info, script = run_node(P, plan_only=True, anchor="A room.",
+                            character_memory=mem)[2:4]
+    sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("she is dressed to begin with", "green canvas jacket" in sh[0])
+    for _g in ("jacket", "jumper", "t-shirt", "jeans", "boots"):
+        check(f"{_g} is gone from the undressing shot", _g not in sh[1])
+    # It has to STAY off: the scene is re-stamped into every later shot, so a garment
+    # left in it is a garment back on.
+    check("...and stays gone afterwards",
+          not any(g in sh[2] for g in ("jacket", "jumper", "jeans", "boots")))
+    # Scoped to the people the beat names. Undressing one person must not take the
+    # other one's clothes off.
+    check("the other character keeps his clothes", "navy overalls" in sh[3])
+    # Said once, rather than reciting the wardrobe back at a shot whose point is that
+    # there is none of it.
+    check("one sentence, not five", sh[1].count("comes off during this shot") == 1)
+    check("...and it is the bare one", "leaving bare skin" in sh[1])
+    check("info names what it cleared", "read off the character sheet" in info)
+    check("...and lists the garments", "jacket, jumper, t-shirt, jeans, boots" in info)
+
+
 def test_a_name_with_no_entry_end_to_end():
     print("\n=== a person the sheet never describes ===")
     P = "\n\n".join(["Maya walks in.", "Alex says hello to Maya.",
@@ -914,6 +944,7 @@ def main():
     test_av_stays_in_sync()
     test_person_described_once_end_to_end()
     test_keyframe_is_not_a_cast_member()
+    test_undressing_completely_end_to_end()
     test_a_name_with_no_entry_end_to_end()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
