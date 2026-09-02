@@ -335,10 +335,12 @@ degrades every shot after the first.
 - **`first_frame`** pins the opening frame of shot 1, the only shot with no
   previous frame. If shot 1 must start in a particular pose or position, this is
   the mechanism — text does not outrank a picture.
-- **`ref_image_1…4`** are **not sent** — a numbered picture in this format is a
-  *frame*, not a person, so a reference there becomes the frame the shot opens on.
-  Use `first_frame`. See
-  [below](#the-picture-channel-carries-frames-not-people).
+- **`ref_image_1…4`** are identity references, and only a **ref2va** checkpoint can
+  use them — set `reference_mode` to match your weights. On fl2va they are not sent
+  at all, because a numbered picture there is a *frame*, not a person. See
+  [below](#two-checkpoints-two-meanings-for-a-picture).
+- **`reference_mode`** says which checkpoint you loaded. `off (fl2va)` is the default
+  and the safe one; `ref2va` turns the reference channel on.
 - **`ref_noise_aug`** is how *clean* a reference is shown. At the default 0.999 the
   model tends to reproduce the reference — its pose and background included — in
   the opening frames. Lowering it says "approximate".
@@ -351,40 +353,59 @@ degrades every shot after the first.
   weaker, but nothing is corrupted. `info` says when this happens. If you want a
   real keyframe, keep `ref_noise_aug` at 0.99 or above.
 
-### The picture channel carries frames, not people
+### Two checkpoints, two meanings for a picture
 
 MiniMax ships H3 as **separate checkpoints for separate tasks**, and ComfyUI loads
-them all under one class. They use the same labels for different things:
+them all under one class — so the node cannot tell which you have. **`reference_mode`
+is where you tell it.** They use the same labels for different things:
 
 ```
 fl2va:  "<Picture 1>: " <FIRST frame>  ["<Picture 2>: " <LAST frame>]  <prompt>
 ref2va: "<Picture i>: " <subject reference> …                          <prompt>
 ```
 
-**A shot chain is fl2va** — every shot after the first begins on the previous shot's
-last frame — so here a numbered picture is *a frame of the video being generated*, and
-`<Picture 1>` is the frame the shot **starts on**.
+#### `off (fl2va)` — the default
 
-**Which is why `ref_image_1…4` are not sent.** A reference in that channel is not read
+Correct for any checkpoint whose filename says **FL2VA**. There a numbered picture is
+*a frame of the video being generated*, and `<Picture 1>` is the frame the shot
+**starts on**.
+
+So **reference images are not sent**. A face handed over in that channel is not read
 as *this is who she is*, it is read as *this is where the shot begins*: the shot opens
-on the reference image, then moves to where the character is supposed to be, and she
-is on screen twice. There is nowhere else to put it — slot 2 is the *last* frame,
-which is worse. A subject reference has no channel in this format.
+on the picture, then moves to where the character belongs, and she is on screen twice.
+There is nowhere else to put it — slot 2 is the *last* frame. Any `<Picture N>` tags
+come out of your text with it, because a tag pointing at nothing is what conjures a
+spare subject.
 
-**Use `first_frame` instead.** That is fl2va's own way to pin an opening frame, and it
-is the channel the chain already runs on. Note that it pins the *whole frame*, framing
-included, so give it a composed shot rather than a portrait crop.
+**To pin a face on fl2va, use `first_frame`** — with a *composed* frame, not a
+portrait crop, because it pins framing along with the face. The chain then carries
+that face forward through every shot's keyframe.
 
-`info` says so whenever a reference is connected, and any `<Picture N>` tags in your
-text are removed with it — a tag pointing at nothing is exactly what conjures a spare
-subject.
+#### `ref2va` — identity references
 
-`ref_noise_aug` set how clean a *reference* was shown. With none being sent it governs
-nothing; the keyframe rides at H3's own default.
+Requires a **ref2va checkpoint** (`minimax_h3_ref2va_*.safetensors`). It is the only
+H3 variant that does reference-driven identity, and setting this mode against fl2va
+weights re-arms the duplicate-character bug on purpose.
 
-**The keyframe owns slot 1.** Ordering matters for the reason above: appended *after* a
-reference the handoff became `<Picture 2>` — the last frame — so the model was being
-told the shot ends on the frame it should start from.
+There the pictures *are* the subjects. Connect the face to `ref_image_1` and **claim
+it on the person it depicts**:
+
+```
+Nora: <Picture 1>, 34, she, tall, red hair tied back, green canvas jacket.
+```
+
+The tag travels with Nora into the shots she is in, and only those. A picture the
+prompt never refers to is read as *another* subject — ComfyUI's own reference node
+says so: *"the prompt refers to them as `<Picture i>`"*, *"Use the same tags when
+prompting."* Tags are renumbered per shot, because the encoder numbers by receipt
+order.
+
+The keyframe stays **out** of the roster in this mode and rides as a latent instead —
+ref2va has no first-frame slot, so a picture it did not ask for is one more subject.
+
+`ref_noise_aug` only governs anything in this mode; it set how clean a *reference* is
+shown.
+
 
 ## Speed
 
