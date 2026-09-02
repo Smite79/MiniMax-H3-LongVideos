@@ -678,19 +678,29 @@ _ROOM_TONE = (
     (r"\b(?:bathroom|shower|tiled?|tiles)\b",       "tiled walls ringing"),
     (r"\b(?:basement|cellar|warehouse|garage|hangar|tunnel|stairwell|"
      r"corridor|concrete|stone|brick|bare walls?)\b", "hard walls giving the sound back"),
-    (r"\b(?:outside|outdoors|street|road|field|yard|garden|forest|beach|park)\b",
-                                                    "open air with no walls close by"),
+    # "shallow depth of field" and "field of view" are the LENS, not a location.
+    # Every anchor written for this node says one of them, so every interior scene
+    # was being told it sounds like open air.
+    (r"\b(?:outside|outdoors|street|road|yard|garden|forest|beach|park)\b"
+     r"|(?<!depth of )\bfield\b(?! of view)",       "open air with no walls close by"),
     (r"\b(?:carpet(?:ed)?|curtains?|bedroom|sofa|cushions?)\b",
                                                     "a soft room with little echo"),
     (r"\b(?:barn|attic|loft|shed|workshop|hall|church)\b", "a large room with a long tail"),
 )
 
 
-def room_tone(scene):
-    """How the space itself sounds. One room, one acoustic -- the first match wins."""
-    for pat, phrase in _ROOM_TONE:
-        if re.search(pat, scene or "", re.I):
-            return phrase
+def room_tone(scene, opening=""):
+    """How the space itself sounds. One room, one acoustic -- the first match wins.
+
+    `opening` is the first beat, and it is read only when the scene names no space at
+    all. With `anchor` set there is no scene PARAGRAPH -- the anchor is the whole of
+    it -- and an anchor describes the CAMERA, not the room. The location is then
+    written in the first beat, so reading nothing but the lens line left the acoustic
+    to be guessed from words like "depth of field"."""
+    for text in (scene, opening):
+        for pat, phrase in _ROOM_TONE:
+            if re.search(pat, text or "", re.I):
+                return phrase
     return ""
 
 
@@ -2924,9 +2934,13 @@ class H3LongVideos:
         if _ref:
             notes.append(_ref)
         # The acoustic of the space, read once: it is the same room in every shot.
-        _room = room_tone(scene) if auto_sound else ""
+        # The opening beat is the fallback: with `anchor` set there is no scene
+        # paragraph, and an anchor describes the camera rather than the room.
+        _opening = extract_directives(beats[0])[0] if beats else ""
+        _room = room_tone(scene, _opening) if auto_sound else ""
+        _room_src = "the scene" if room_tone(scene) else "the opening beat"
         if _room:
-            notes.append(f"room tone read from the scene: {_room}. It is carried under "
+            notes.append(f"room tone read from {_room_src}: {_room}. It is carried under "
                          f"every shot, including the ones where nothing happens -- a shot "
                          f"with no sound at all is conditioned on digital silence, and "
                          f"nothing real is that quiet. Note what this costs: with a bed "
