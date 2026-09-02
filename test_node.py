@@ -918,6 +918,22 @@ def test_sound_is_derived_from_the_action():
           S.room_tone("A tiled bathroom off a concrete hallway.").count(",") == 0)
     check("a scene naming no space gets none", S.room_tone("Two people talking.") == "")
     check("no scene at all is fine", S.room_tone("") == "")
+    # An anchor describes the CAMERA, and every anchor written for this node says
+    # "depth of field". That was read as a location, so an interior scene was told it
+    # sounds like open air -- in every shot, since the room tone rides on all of them.
+    lens = "Medium shadows, shallow depth of field. Medium focus."
+    check("'depth of field' is a lens, not a location", S.room_tone(lens) == "")
+    check("...so is 'field of view'", S.room_tone("Wide lens, deep field of view.") == "")
+    check("a real field is still open air",
+          "open air" in S.room_tone("They cross an open field towards the barn."))
+    # With `anchor` set there is no scene PARAGRAPH, so the location is written in the
+    # first beat and that is where the acoustic has to come from.
+    check("the opening beat is the fallback",
+          S.room_tone(lens, "A workshop with a long bench under a window.")
+          == "a large room with a long tail")
+    check("...and the scene still wins when it names a space",
+          S.room_tone("A concrete basement.", "A workshop with a bench.")
+          == "hard walls giving the sound back")
     # A cue, not an inventory: the shot has a word budget and the beat needs most of it.
     many = S.sounds_for("He walks in, unlocks the chain, cuts the tape, throws it down "
                         "and slams the door.")
@@ -1165,7 +1181,11 @@ def test_turning_around():
 
 def test_schema():
     print("\n=== node schema ===")
-    schema = S.H3LongVideos.INPUT_TYPES()
+    # The BUILT-IN schema, not INPUT_TYPES(). INPUT_TYPES applies whatever is in
+    # defaults.json, which is the user's live settings file -- so reading it here
+    # made the suite pass or fail on local configuration. A test that moves with the
+    # machine it runs on is worse than no test.
+    schema = S.H3LongVideos._schema()
     req, opt = schema["required"], schema["optional"]
     for name in ("model", "clip", "vae", "audio_vae", "prompt"):
         check(f"{name} is required", name in req)
