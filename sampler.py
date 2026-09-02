@@ -738,29 +738,33 @@ def picture_tags(text):
 
 
 def resolve_tags(text, ref_list):
-    """(text with its tags renumbered, the images that shot carries, dropped slots).
+    """(text with every tag REMOVED, the images that shot carries, dropped slots).
 
-    comfy/text_encoders/minimax.py writes the "<Picture N>: " label ITSELF, numbering
-    by the order it receives the images -- so a shot that uses only <Picture 2>
-    receives that image labelled <Picture 1>, and text still saying <Picture 2>
-    points at nothing. The tags are renumbered per shot to match what the shot
-    actually carries: slot 2 alone becomes <Picture 1>; slots 2 and 4 become
-    <Picture 1> and <Picture 2>.
+    A <Picture N> tag says which reference belongs in this shot. It is an instruction
+    to this node, not prose, and it must not survive into the prompt.
 
-    A tag naming a slot with no image connected refers to nothing at all, so it is
-    removed from the text rather than left for the encoder to puzzle over."""
+    comfy/text_encoders/minimax.py writes the "<Picture N>: " label ITSELF, directly
+    ahead of the image it labels. A tag left in the text is therefore a SECOND
+    <Picture N> with no image behind it -- and in a sheet line,
+
+        <Picture 1>: [the image]   ... Kate: <Picture 1>, 22, she, blonde hair ...
+
+    the model has been introduced to one subject and then handed the same
+    introduction again with nothing attached. It draws a second person. The tag lives
+    in character_memory, so it was declaring a spare person in EVERY shot.
+
+    ComfyUI's own MiniMaxH3RefConditioning does not put a tag in the prompt either:
+    the label comes from the tokenizer and the prose simply describes the person. So
+    the tag chooses this shot's images, in slot order, and then comes out of the text.
+
+    A tag naming a slot with no image connected refers to nothing at all; it is
+    reported and removed like the rest."""
     wanted = picture_tags(text)
     live = [n for n in wanted if 1 <= n <= len(ref_list or [])]
     dropped = [n for n in wanted if n not in live]
-    renum = {old: new for new, old in enumerate(live, 1)}
-
-    def sub(m):
-        n = int(m.group(1))
-        return f"<Picture {renum[n]}>" if n in renum else ""
-
-    out = _PICTURE_TAG.sub(sub, text or "")
-    out = re.sub(r"\s+([,.;:])", r"\1", out)      # " ," left by a removed tag
-    out = re.sub(r",\s*,+", ",", out)             # ",," where the tag was the only item
+    out = _PICTURE_TAG.sub("", text or "")
+    out = re.sub(r"\s+([,.;:])", r"\1", out)      # " ," left where the tag was
+    out = re.sub(r"([:,;])\s*,", r"\1", out)      # "Kate:, 22" once the tag has gone
     out = re.sub(r"\s{2,}", " ", out)
     return out.strip(), [ref_list[n - 1] for n in live], dropped
 
@@ -3236,6 +3240,29 @@ class H3LongVideos:
         if float(cfg) != 1.0:
             notes.append(f"cfg is {float(cfg):g}; H3 is CFG-free and expects 1.0")
 
+        # Resolve the <Picture N> tags BEFORE the script is written, so `script` shows
+        # what the model is actually given rather than the instruction that chose it.
+        shot_refs_all = []
+        for _i, _s in enumerate(shots):
+            if tagged:
+                _s, _r, _missing = resolve_tags(_s, refs_all)
+                for _n in _missing:
+                    _msg = f"<Picture {_n}> names a slot with no image connected"
+                    if _msg not in notes:
+                        notes.append(_msg)
+                shots[_i] = _s
+            else:
+                _r = refs_all
+            shot_refs_all.append(_r)
+        if tagged and refs_all:
+            notes.append(
+                "<Picture N> tags placed the references and were then taken OUT of the "
+                "prompt text. H3's encoder writes '<Picture N>: ' itself, directly ahead "
+                "of the image, so a tag left in the prose is a second one with no image "
+                "behind it -- and in 'Name: <Picture 1>, ...' that reads as another "
+                "subject being declared, which the model draws. The tag was in the "
+                "character sheet, so it was declaring a spare person in every shot")
+
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
         info = " | ".join(notes)
         if plan_only:
@@ -3265,13 +3292,7 @@ class H3LongVideos:
         _deep_cleanup()
 
         for i, shot_prompt in enumerate(shots):
-            shot_refs = refs_all
-            if tagged:
-                shot_prompt, shot_refs, missing = resolve_tags(shot_prompt, refs_all)
-                for n in missing:
-                    msg = f"<Picture {n}> names a slot with no image connected"
-                    if msg not in notes:
-                        notes.append(msg)
+            shot_refs = shot_refs_all[i]
             silent = bool(silence_nonspeech and not speech[i] and not sounded[i])
 
             # A shot that follows a removal starts FRESH. Every shot is anchored to

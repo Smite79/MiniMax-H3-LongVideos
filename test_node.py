@@ -731,17 +731,25 @@ def test_text_in_frame():
 
 def test_reference_tags():
     print("\n=== <Picture N> tags ===")
-    # comfy/text_encoders/minimax.py writes the "<Picture N>: " label itself,
-    # numbering by the order it receives images. A shot using only <Picture 2>
-    # gets that image labelled <Picture 1>, so the text has to be renumbered or
-    # it points at nothing.
+    # A tag is PLACEMENT, not prose. comfy/text_encoders/minimax.py writes the
+    # "<Picture N>: " label itself, directly ahead of the image, so a tag left in the
+    # text is a SECOND <Picture N> with no image behind it -- and in a sheet line,
+    # "Kate: <Picture 1>, 22, she, ...", that is another subject being declared. The
+    # model draws it. The tag lives in character_memory, so it declared a spare
+    # person in every shot of the film.
     refs = ["A", "B", "C", "D"]
     out, imgs, dropped = S.resolve_tags("Kate, <Picture 2>, walks in.", refs)
-    check("a lone slot 2 is renumbered to 1", "<Picture 1>" in out)
-    check("...and carries the right image", imgs == ["B"])
+    check("the tag chooses the image", imgs == ["B"])
+    check("...and is taken out of the text", "Picture" not in out)
+    check("...leaving readable prose", out == "Kate, walks in.")
     out2, imgs2, _ = S.resolve_tags("Kate <Picture 2> and Dan <Picture 4> meet.", refs)
-    check("two slots renumber in order",
-          "<Picture 1>" in out2 and "<Picture 2>" in out2 and imgs2 == ["B", "D"])
+    check("two slots resolve in order", imgs2 == ["B", "D"])
+    check("...with both tags gone", "Picture" not in out2)
+    # The shape this actually appears in: a character-sheet line.
+    out4, imgs4, _ = S.resolve_tags("Kate: <Picture 1>, 22, she, blonde hair.", refs)
+    check("a sheet line loses its tag", "Picture" not in out4)
+    check("...and reads correctly afterwards",
+          out4 == "Kate: 22, she, blonde hair.")
     out3, imgs3, drop3 = S.resolve_tags("Kate, <Picture 9>, walks in.", refs)
     check("a tag with no image is removed", "Picture" not in out3 and drop3 == [9])
     check("...leaving readable text", out3 == "Kate, walks in.")
