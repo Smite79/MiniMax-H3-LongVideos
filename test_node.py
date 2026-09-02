@@ -1136,6 +1136,41 @@ def test_turning_around():
                         S.TURN_HOLD, re.I))
 
 
+def test_widget_values_are_usable():
+    print("\n=== a widget value that is not a number ===")
+    # Saved workflows restore widget values BY POSITION, with no names stored. Remove
+    # or reorder a widget and every later value shifts up one, so a boolean can land
+    # in a FLOAT slot -- which is where a widget reading NaN comes from, and a NaN
+    # pace makes NaN shot lengths and a render that never starts.
+    for _bad in (float("nan"), float("inf"), True, False, None, "", "abc"):
+        out, notes = S.sane_widgets({"pace": _bad})
+        check(f"unusable value repaired: {_bad!r}", out["pace"] == 1.0 and bool(notes))
+    check("...and the cause is named",
+          "by POSITION" in S.sane_widgets({"pace": float("nan")})[1][0])
+    # Out of range is a value the user chose, so it is clamped rather than discarded.
+    check("below the minimum is clamped", S.sane_widgets({"pace": 0.01})[0]["pace"] == 0.25)
+    check("above the maximum is clamped", S.sane_widgets({"pace": 9.0})[0]["pace"] == 2.0)
+    check("...and reported", "clamped" in S.sane_widgets({"pace": 9.0})[1][0])
+    check("a good value is untouched and silent",
+          S.sane_widgets({"pace": 1.0}) == ({"pace": 1.0}, []))
+    # Ints stay ints: a float step count would index a sigma schedule wrongly.
+    got = S.sane_widgets({"steps": 6.7})[0]["steps"]
+    check("an int widget stays an int", isinstance(got, int) and got == 6)
+    # Every numeric widget on the node is covered, and each entry agrees with the
+    # schema it claims to restore -- otherwise the "default" put back is a fiction.
+    sch = S.H3LongVideos.INPUT_TYPES()
+    numeric = {n: sp for g in ("required", "optional") for n, sp in sch[g].items()
+               if sp[0] in ("INT", "FLOAT")
+               and not (len(sp) > 1 and sp[1].get("forceInput"))}
+    missing = sorted(set(numeric) - {"seed"} - set(S._WIDGET_RANGE))
+    check(f"every numeric widget is covered (missing: {missing})", not missing)
+    for _n, (_d, _lo, _hi, _c) in S._WIDGET_RANGE.items():
+        opts = numeric[_n][1]
+        check(f"{_n} matches its widget: table {(_d, _lo, _hi)} vs "
+              f"{(opts.get('default'), opts.get('min'), opts.get('max'))}",
+              (opts["default"], opts["min"], opts["max"]) == (_d, _lo, _hi))
+
+
 def test_schema():
     print("\n=== node schema ===")
     # INPUT_TYPES is the schema, full stop. It used to apply defaults.json on top --
@@ -1223,6 +1258,7 @@ def main():
     test_auto_length()
     test_text_in_frame()
     test_reference_tags()
+    test_widget_values_are_usable()
     test_schema()
     print()
     if _fails:
