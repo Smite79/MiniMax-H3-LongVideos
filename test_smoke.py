@@ -363,10 +363,13 @@ def test_fall_keeps_the_hardware():
     blocks = [b for b in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3])
               if b.strip()]
     check("three shots planned", len(blocks) == 3)
-    hold, fall = S.RESTRAINT_HOLD.strip(), S.FALL_HOLD.strip()
+    fall = S.FALL_HOLD.strip()
     # The hold latches: once a restraint goes on it is held for the rest of the run.
+    # Cuffs are rigid hardware, so the chain clause carries the guarantee here -- it
+    # says "whole and closed" itself, and emitting both would say it twice.
     for i, b in enumerate(blocks, 1):
-        check(f"shot {i} holds the restraint", hold in b)
+        check(f"shot {i} holds the restraint",
+              S.RESTRAINT_HOLD.strip() in b or S.CHAIN_HOLD.strip() in b)
     # The fall clause is per-beat -- it only earns its tokens where a body goes down.
     check("the fall beat says what takes the landing", fall in blocks[1])
     check("...the beat that puts them on does not", fall not in blocks[0])
@@ -500,8 +503,12 @@ def test_chain_hold_end_to_end():
     sh = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3]) if x.strip()]
     chain = S.CHAIN_HOLD.strip()
     check("every shot with the hardware holds it rigid", all(chain in s for s in sh))
-    check("...alongside the restraint hold",
-          all(S.RESTRAINT_HOLD.strip() in s for s in sh))
+    # It REPLACES the restraint hold instead of joining it -- both say "whole and
+    # closed", and two clauses for one guarantee is twice the stasis in the prompt.
+    check("...instead of repeating the restraint hold",
+          all(S.RESTRAINT_HOLD.strip() not in s for s in sh))
+    check("...while still carrying its guarantee",
+          all("whole and closed" in s for s in sh))
     # Rope flexes. Saying it holds a straight line would be wrong, so it does not.
     soft = run_node("A basement.\n\nMaya: 27, a rope around her wrists.\n\n"
                     "Maya lies still.", plan_only=True)[3]
