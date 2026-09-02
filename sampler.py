@@ -374,8 +374,15 @@ _DIALOGUE_TAG = re.compile(r"<\s*d\s*>(.+?)<\s*/\s*d\s*>", re.I | re.S)
 _CAPTION_TOKEN = re.compile(r"<\|(?:caption|lyrics)_(?:start|end)\|>", re.I)
 
 
-BEAT_BASE_SEC = 2.0            # setup and settle, whatever the beat says
-SECONDS_PER_ACTION = 2.5       # screen time one staged action clause needs
+# A shot LONGER than its action does not get filled with more action -- it gets
+# filled by performing the same action more slowly, which reads as the whole film
+# being in slow motion. Measured: "Maya walks to the window" is a few steps, under
+# two seconds of real movement, and the old constants gave it a 4.5s shot.
+#
+# The base was the larger error. It was meant as setup and settle, but a chained shot
+# continues from the previous frame -- it opens mid-scene, with nothing to set up.
+BEAT_BASE_SEC = 0.8            # a little room to settle, not a whole beat of it
+SECONDS_PER_ACTION = 2.2       # screen time one staged action clause needs
 WORDS_PER_SEC = 2.5            # spoken delivery
 # A new coordinated verb phrase starts a new action.
 _CLAUSE_SPLIT = re.compile(
@@ -401,7 +408,7 @@ def beat_seconds(beat):
 MIN_AUTO_FRAMES = 73           # ~3.0s: the shortest shot that can hold one action
 
 
-def plan_lengths(beats, ceiling_frames, from_beat):
+def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
     """Frames for each shot. Returns (lengths, note).
 
     'fixed' gives every shot the ceiling. 'from the beat' sizes each shot from what
@@ -411,12 +418,17 @@ def plan_lengths(beats, ceiling_frames, from_beat):
 
     The estimate leans SHORT deliberately. A shot that ends before its action does
     hands a mid-motion frame to the next shot, and the chain is built to continue
-    from exactly that. A shot that outlasts its action has to invent the remainder."""
+    from exactly that. A shot that outlasts its action does not invent more action --
+    it performs the same action more slowly, which is what slow-looking footage is.
+
+    `pace` scales the whole estimate: below 1.0 the shots get shorter and the motion
+    in them brisker, above 1.0 they get longer and slower."""
     if not from_beat:
         return [ceiling_frames] * len(beats), ""
+    pace = max(0.05, float(pace if pace else 1.0))
     lens = []
     for b in beats:
-        need = beat_seconds(b)
+        need = beat_seconds(b) * pace
         want = align_frame_count_nearest(int(round(need * H3_FPS))) if need else MIN_AUTO_FRAMES
         lens.append(max(MIN_AUTO_FRAMES, min(want, ceiling_frames)))
     note = ""
@@ -2418,6 +2430,19 @@ class H3LongVideos:
                                "keep whatever was saved with them. It covers the widgets "
                                "only, not the images or the model, and not ComfyUI's own "
                                "'control after generate', which belongs to the editor."}),
+                "pace": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 2.0, "step": 0.05,
+                    "tooltip": "Scales how much screen time each beat is given, when "
+                               "shot_length is 'from the beat'.\n\n"
+                               "A shot longer than its action does not get filled with "
+                               "MORE action -- the model performs the same action more "
+                               "slowly to reach the end of the shot. That is what "
+                               "slow-looking footage is. Below 1.0 shortens every shot "
+                               "and the motion in it quickens; above 1.0 lengthens and "
+                               "slows.\n\n"
+                               "Try 0.75 if the movement drags. Shots are still floored "
+                               "at one action's worth and capped by shot_seconds, and "
+                               "'fixed' ignores this entirely. info reports the seconds "
+                               "each staged action ends up with."}),
             },
         }
 
@@ -2441,7 +2466,7 @@ class H3LongVideos:
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
-            character_guard=True, save_defaults=False):
+            character_guard=True, pace=1.0, save_defaults=False):
 
         notes = []
         if save_defaults:
@@ -2710,7 +2735,20 @@ class H3LongVideos:
                     if r is not None]
         tagged = any(picture_tags(s) for s in shots)
 
-        lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat")
+        lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat", pace)
+        # Seconds of shot per staged action -- the number that decides whether the
+        # motion looks brisk or stretched. A shot longer than its action is filled by
+        # performing the action more slowly, not by inventing more of it.
+        _clauses = sum(max(1, len([p for p in _CLAUSE_SPLIT.split(b)
+                                   if p and len(p.split()) >= 2])) for b in beats)
+        if _clauses and lens:
+            _per = sum(lens) / H3_FPS / _clauses
+            notes.append(
+                f"pacing: {_per:.1f}s of shot per staged action across {len(beats)} "
+                f"beat(s), at pace {float(pace):.2f}"
+                + (" -- a staged action is usually 2 to 3 seconds on screen, and a shot "
+                   "longer than its action is filled by performing it more slowly. Lower "
+                   "pace for brisker movement" if _per > 3.5 else ""))
         if len(set(lens)) == 1:
             notes.append(f"{len(shots)} shot(s) x {lens[0]}f (~{lens[0] / H3_FPS:.1f}s) "
                          f"at {w}x{h} = ~{sum(lens) / H3_FPS:.1f}s total")
