@@ -489,6 +489,40 @@ def test_removal_needs_a_particle():
           "black shiny latex crop top" in kept)
 
 
+def test_a_name_with_no_entry():
+    print("\n=== somebody the sheet never describes ===")
+    sheet = "Maya: she, 27, grey coat.\nJon: he, 35, jeans."
+    beats = ["Maya walks in.",
+             "Alex says hello to Maya.",
+             "Alex walks to the window.",
+             "Maya stands up and Alex takes her hand.",
+             "Jon takes her coat off."]
+    # The guard keeps the entries for the people a beat names. There is no entry to
+    # keep for Alex, so those shots stage somebody the model is told nothing about.
+    check("the undescribed person is found",
+          S.unknown_people(beats, sheet) == {"Alex": [2, 3, 4]})
+    # ...and the shot that has ONLY that person is the bad one: it falls back to the
+    # previous beat's cast, so it describes Maya, who is not in it.
+    kept, who = S.sheet_for_beat(sheet, "Alex walks to the window.", ["Maya"])
+    check("...which is why that shot describes the wrong person", who == ["Maya"])
+    check("nobody on the sheet is reported", "Maya" not in S.unknown_people(beats, sheet))
+    # A capitalised word is only a name once it has appeared MID-sentence. That
+    # separates a name from an ordinary word opening a sentence, with no list of
+    # ordinary words to keep.
+    check("a word that only ever opens a sentence is not a name",
+          S.unknown_people(["Alex walks in.", "Alex sits down."], sheet) == {})
+    check("...and one appearance mid-sentence is enough",
+          S.unknown_people(["Alex walks in.", "Maya greets Alex."], sheet)
+          == {"Alex": [1, 2]})
+    for _b in ("Maya walks in and pulls on her Nike leggings.",   # behind a determiner
+               "She turns the TV off.",                           # all caps
+               "Then she waits. Later she leaves.",                # sentence openers
+               'Jon says: "Sure. Let us go."',                     # a quoted line
+               "Maya walks into Jon's kitchen."):                  # possessive of a known name
+        check(f"not reported as a person: {_b[:38]!r}",
+              S.unknown_people([_b], sheet) == {})
+
+
 def test_how_clothes_actually_come_off():
     print("\n=== the verbs people write removals in ===")
     # Reported as "clothing removals are bugged". These phrasings took the garment
@@ -1183,6 +1217,7 @@ def main():
     test_opening_pose()
     test_removal_needs_a_particle()
     test_how_clothes_actually_come_off()
+    test_a_name_with_no_entry()
     test_layers()
     test_removal_completes()
     test_restraints_hold()

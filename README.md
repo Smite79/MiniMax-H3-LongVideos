@@ -68,6 +68,24 @@ Nothing more. If a shot should say something about posture, position, clothing o
 continuity, write it in the beat — the node will not write it for you, and it will
 not argue with what you wrote.
 
+### Everyone in a beat needs an entry
+
+A `Name: attributes` paragraph — or `character_memory` — describes the cast, and the
+node stamps the entries for the people a beat names into that shot.
+
+**One name per person, and an entry for every name.** A name the beats use and the
+sheet never describes is a person nothing in the shot describes: no age, no clothes,
+no face, so the model invents them, differently in each shot. And when that is the
+*only* person a beat names, the shot falls back to the previous beat's people — so it
+describes someone who is not in it and stays silent about the one who is.
+
+The commonest way in is calling one person two things: `Dan` in some beats and `Mike`
+in others reads as two people, one of them a stranger.
+
+`info` names every such person and the shots they are in. It is only ever reported —
+whether that name is somebody already on the sheet or a third person in the room is
+not answerable from the text, and guessing would be the node rewriting your script.
+
 Dialogue goes in **double quotes**, or in H3's own marker `<d>like this</d>`. Either
 tells the node which shots have speech; the rest are silenced.
 
