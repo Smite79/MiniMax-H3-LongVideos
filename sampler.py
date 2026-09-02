@@ -3382,6 +3382,27 @@ class H3LongVideos:
         # Resolve the <Picture N> tags before `script` is written, so what you read is
         # what the model is given. Which roster they resolve against depends entirely
         # on the format -- see build_conditioning.
+        # A REFERENCE MUST NEVER BE A SHOT'S ONLY PICTURE.
+        #
+        # With a keyframe beside it the roster reads as it should: the keyframe pins
+        # frame 0 through resolved_frame_index, and the reference is just identity.
+        # Alone, there is nothing pinning frame 0 -- and "<Picture 1>: <image>" then
+        # the prompt IS H3's first-frame shape, so the shot opens on the reference and
+        # moves off it. Reported exactly that way: the face as the first frame.
+        #
+        # Shot 1 is the case, since it has no previous frame to hand over, and so is
+        # any shot restart_after_removal has cut loose. The old node dodged this by
+        # having you tag a BEAT, so an establishing shot 1 simply had no tag -- its own
+        # tooltip warned that going by shot number instead "gets a portrait pushed
+        # into" it. Our tag lives in the character sheet, which is stamped into every
+        # shot, so the tag is always there and the rule has to be enforced here.
+        #
+        # Wiring first_frame gives shot 1 a keyframe, and the reference rides with it.
+        def _has_keyframe(i):
+            return ((i > 0 or first_frame is not None)
+                    and not (restart_after_removal and (i - 1) in stripped_shots))
+
+        _no_kf = []
         shot_refs_all = []
         for _i, _s in enumerate(shots):
             # The tag is the BINDING between a picture and the subject the prompt
@@ -3390,13 +3411,32 @@ class H3LongVideos:
             # prompting". Renumbered per shot, because the encoder numbers by the
             # order it receives images and a shot carrying only slot 2 receives that
             # image as <Picture 1>.
-            _s, _r, _missing = resolve_tags(_s, refs_all)
+            # No keyframe on this shot means a reference would be its only picture, so
+            # the roster is emptied and the tags go with it -- a tag pointing at no
+            # image is what conjures a spare subject.
+            _roster = refs_all if _has_keyframe(_i) else []
+            if refs_all and not _roster and picture_tags(_s):
+                _no_kf.append(_i + 1)
+            _s, _r, _missing = resolve_tags(_s, _roster)
             shots[_i] = _s
             shot_refs_all.append(_r)
-            for _n in _missing:
-                _msg = f"<Picture {_n}> names a slot with no image connected"
-                if _msg not in notes:
-                    notes.append(_msg)
+            if _roster:
+                for _n in _missing:
+                    _msg = f"<Picture {_n}> names a slot with no image connected"
+                    if _msg not in notes:
+                        notes.append(_msg)
+        if _no_kf:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in _no_kf)} carry NO reference, because "
+                f"they have no keyframe. A reference alone is the only picture the shot "
+                f"has, and '<Picture 1>: <image>' followed by the prompt is H3's "
+                f"first-frame shape -- so the shot would open ON the reference and move "
+                f"off it, which is the face turning up as the first frame. With a "
+                f"keyframe beside it there is no ambiguity: the keyframe pins frame 0 and "
+                f"the reference is only identity. Shot 1 has no previous frame, so wire "
+                f"first_frame if you want the reference there too -- a COMPOSED frame, "
+                f"since it pins framing as well. Their <Picture N> tags were taken out of "
+                f"those shots with the reference")
         if refs_all:
             _named = sum(1 for s in shots if picture_tags(s))
             notes.append(
