@@ -362,12 +362,9 @@ degrades every shot after the first.
 - **`first_frame`** pins the opening frame of shot 1, the only shot with no
   previous frame. If shot 1 must start in a particular pose or position, this is
   the mechanism — text does not outrank a picture.
-- **`ref_image_1…4`** are identity references, and only a **ref2va** checkpoint can
-  use them — set `reference_mode` to match your weights. On fl2va they are not sent
-  at all, because a numbered picture there is a *frame*, not a person. See
-  [below](#two-checkpoints-two-meanings-for-a-picture).
-- **`reference_mode`** says which checkpoint you loaded. `off (fl2va)` is the default
-  and the safe one; `ref2va` turns the reference channel on.
+- **`ref_image_1…4`** are identity references. Tag one onto the person it depicts —
+  `Nora: <Picture 1>, 34, she, …` — and it rides alongside the keyframe rather than
+  instead of it. See [below](#a-reference-and-the-keyframe-ride-together).
 - **`ref_noise_aug`** is how *clean* a reference is shown. At the default 0.999 the
   model tends to reproduce the reference — its pose and background included — in
   the opening frames. Lowering it says "approximate".
@@ -380,58 +377,52 @@ degrades every shot after the first.
   weaker, but nothing is corrupted. `info` says when this happens. If you want a
   real keyframe, keep `ref_noise_aug` at 0.99 or above.
 
-### Two checkpoints, two meanings for a picture
+### A reference and the keyframe ride together
 
-MiniMax ships H3 as **separate checkpoints for separate tasks**, and ComfyUI loads
-them all under one class — so the node cannot tell which you have. **`reference_mode`
-is where you tell it.** They use the same labels for different things:
+They are not alternatives, and a shot uses both:
 
-```
-fl2va:  "<Picture 1>: " <FIRST frame>  ["<Picture 2>: " <LAST frame>]  <prompt>
-ref2va: "<Picture i>: " <subject reference> …                          <prompt>
-```
+- the **keyframe** — the previous shot's last frame — anchors where this shot *starts*
+- a **reference** only says *who somebody is*
 
-#### `off (fl2va)` — the default
+ComfyUI packs both, in orders that agree: `model_base.py` builds the conditioning
+latents as keyframe-latents-then-reference-latents, and `PackedLayout` emits keyframe
+segments then reference segments. So both channels coexist and neither displaces the
+other.
 
-Correct for any checkpoint whose filename says **FL2VA**. There a numbered picture is
-*a frame of the video being generated*, and `<Picture 1>` is the frame the shot
-**starts on**.
-
-So **reference images are not sent**. A face handed over in that channel is not read
-as *this is who she is*, it is read as *this is where the shot begins*: the shot opens
-on the picture, then moves to where the character belongs, and she is on screen twice.
-There is nowhere else to put it — slot 2 is the *last* frame. Any `<Picture N>` tags
-come out of your text with it, because a tag pointing at nothing is what conjures a
-spare subject.
-
-**To pin a face on fl2va, use `first_frame`** — with a *composed* frame, not a
-portrait crop, because it pins framing along with the face. The chain then carries
-that face forward through every shot's keyframe.
-
-#### `ref2va` — identity references
-
-Requires a **ref2va checkpoint** (`minimax_h3_ref2va_*.safetensors`). It is the only
-H3 variant that does reference-driven identity, and setting this mode against fl2va
-weights re-arms the duplicate-character bug on purpose.
-
-There the pictures *are* the subjects. Connect the face to `ref_image_1` and **claim
-it on the person it depicts**:
+**Tag the reference onto the person it depicts**, in their sheet entry:
 
 ```
 Nora: <Picture 1>, 34, she, tall, red hair tied back, green canvas jacket.
 ```
 
-The tag travels with Nora into the shots she is in, and only those. A picture the
-prompt never refers to is read as *another* subject — ComfyUI's own reference node
-says so: *"the prompt refers to them as `<Picture i>`"*, *"Use the same tags when
-prompting."* Tags are renumbered per shot, because the encoder numbers by receipt
-order.
+References keep slots `1…N`, which is what that tag points at; the handoff is appended
+*after* them, where it disturbs no numbering. Tags are renumbered per shot, because
+the encoder numbers by the order it receives images — a shot carrying only slot 2
+receives that image as `<Picture 1>`.
 
-The keyframe stays **out** of the roster in this mode and rides as a latent instead —
-ref2va has no first-frame slot, so a picture it did not ask for is one more subject.
+A tagged reference travels with that person into the shots they are in, and only
+those: a shot the character guard trims them out of carries no reference at all. A
+picture the prompt never refers to is read as *another* subject, which is why
+`info` reports any shot that carries one it does not name.
 
-`ref_noise_aug` only governs anything in this mode; it set how clean a *reference* is
-shown.
+**Which image is the first frame is not decided by a label's number.** It is
+`resolved_frame_index` in the keyframe payload. The `<Picture N>` labels are only how
+the images are shown to the text encoder, and the one thing they have to line up with
+is the tags in your prompt. Reading slot 1 as *meaning* "the first frame" is wrong,
+and building around that belief is what briefly turned a connected reference into the
+frame each shot opened on.
+
+The handoff has to be in that list at all because the tokenizer is either/or: passing
+reference items makes it ignore the plain image channel outright. Leave the handoff
+out and the encoder is never shown where the shot left off — it is told the location
+in words, given a latent anchor, and re-imagines the scenery. Same place, new room.
+
+`ref_noise_aug` is how *clean* a reference is shown. At the default 0.999 the model
+tends to reproduce it, framing included, so a head-and-shoulders reference pulls
+towards head-and-shoulders framing. One aug covers every visual condition row,
+keyframe included — so below **0.99** the handoff stops being a keyframe and rides as
+an extra reference instead: weaker continuity, but nothing pretending to anchor while
+carrying noise. `info` says when that happens.
 
 
 ## Speed
