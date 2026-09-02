@@ -367,11 +367,12 @@ degrades every shot after the first.
 - **`first_frame`** pins the opening frame of shot 1, the only shot with no
   previous frame. If shot 1 must start in a particular pose or position, this is
   the mechanism — text does not outrank a picture.
-- **`ref_image_1…4`** are identity references, applied to every shot unless a
-  `<Picture 1>` tag places them. Keeping them on every shot is deliberate: they are
-  the only fixed anchor a long chain has against drift. The tag is an instruction to
-  the node and is taken out of the prompt before the model sees it — see
-  [below](#two-ways-a-shot-was-told-to-draw-someone-twice) for why that matters.
+- **`ref_image_1…4`** are identity references. **Tag them onto the person they
+  depict** — `Nora: <Picture 1>, 34, she, …` — or the model reads the image as a
+  separate character standing beside her. See
+  [below](#name-your-reference-or-it-becomes-another-person). A tagged reference
+  travels with that person into the shots they are in; an untagged one goes on every
+  shot, which is the case `info` warns about.
 - **`ref_noise_aug`** is how *clean* a reference is shown. At the default 0.999 the
   model tends to reproduce the reference — its pose and background included — in
   the opening frames. Lowering it says "approximate".
@@ -384,34 +385,42 @@ degrades every shot after the first.
   weaker, but nothing is corrupted. `info` says when this happens. If you want a
   real keyframe, keep `ref_noise_aug` at 0.99 or above.
 
-### Two ways a shot was told to draw someone twice
+### Name your reference, or it becomes another person
 
 H3's text encoder labels every image it is given `<Picture 1>: `, `<Picture 2>: `
 and so on, **numbered by the order it receives them**, and writes that label directly
-ahead of the image. A numbered picture is how a *subject* is introduced.
+ahead of the image. One rule follows, and it decides everything about references:
 
-**A `<Picture N>` tag is placement, not prose.** Writing one — the usual place is a
-sheet line, `Kate: <Picture 1>, 22, she, blonde hair` — used to leave the tag in the
-text that reached the model, so the encoder produced:
+> **A picture the prompt refers to is that subject.
+> A picture the prompt does not refer to is another subject.**
+
+That is H3's documented format, not a guess — ComfyUI's own reference node says
+*"Ordinals are 1-based per type, so the prompt refers to them as `<Picture i>`"*, and
+its description is *"Use the same tags when prompting."*
+
+**So write the tag on the person it depicts**, in their sheet entry:
 
 ```
-<Picture 1>: [the image]   … Kate: <Picture 1>, 22, she, blonde hair …
+Nora: <Picture 1>, 34, she, tall, red hair tied back, green canvas jacket.
 ```
 
-The subject is introduced, and then the same introduction appears again with no image
-behind it. That is a second person declared, and the model draws one. Because the tag
-normally lives in `character_memory`, it was declaring a spare person in **every
-shot**.
+That claims the image as Nora. It then travels with her into every shot she is in —
+and only those shots, so a shot she is not in carries no reference at all.
 
-Tags now choose which references a shot carries and are then **removed from the
-text** — which is what ComfyUI's own `MiniMaxH3RefConditioning` does: the label comes
-from the tokenizer and the prose just describes the person in words. `script` shows
-the text after the tags are resolved, so what you read is what the model is given.
+**Connect a reference without tagging anybody and the image arrives unclaimed**: the
+model has been handed a labelled picture of a person that no word of the prompt
+accounts for, and it renders them as a second character standing next to the one you
+described. `info` reports every shot where that is happening.
 
-**The handoff frame is not a subject either.** It used to be appended to the same
-image list. It came out as one more numbered subject, unexplained by any word of the
-prompt and looking exactly like the person already described — so the model drew both.
-With two people in the outgoing frame, it drew two extra.
+Tags are **renumbered per shot** to match what that shot actually carries, because the
+encoder numbers by receipt order — a shot using only slot 2 receives that image as
+`<Picture 1>`. `script` shows the renumbered text, so what you read is what the model
+is given.
+
+**The handoff frame is the same rule, in the other direction.** It used to be appended
+to the picture list, where it became a numbered subject that no wording referred to —
+a stranger who happened to look exactly like the person already described, so the
+model drew both. With two people in the outgoing frame, it drew two extra.
 
 So once a reference image is connected anywhere in the film, the handoff is kept out
 of the picture channel entirely. It still anchors the shot: it goes through as a

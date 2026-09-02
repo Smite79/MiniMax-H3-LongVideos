@@ -748,33 +748,45 @@ def picture_tags(text):
 
 
 def resolve_tags(text, ref_list):
-    """(text with every tag REMOVED, the images that shot carries, dropped slots).
+    """(text with its tags renumbered, the images that shot carries, dropped slots).
 
-    A <Picture N> tag says which reference belongs in this shot. It is an instruction
-    to this node, not prose, and it must not survive into the prompt.
+    A <Picture N> tag is the BINDING between an image and the subject the prompt
+    describes, and it belongs IN the prompt. comfy_extras/nodes_minimax_h3.py says so
+    outright: "Ordinals are 1-based per type, so the prompt refers to them as
+    <Picture i>", and the node's own description is "Use the same tags when
+    prompting."
 
-    comfy/text_encoders/minimax.py writes the "<Picture N>: " label ITSELF, directly
-    ahead of the image it labels. A tag left in the text is therefore a SECOND
-    <Picture N> with no image behind it -- and in a sheet line,
+    The rule that follows governs every reference decision in this file:
 
-        <Picture 1>: [the image]   ... Kate: <Picture 1>, 22, she, blonde hair ...
+        a picture the prompt REFERS TO is that subject;
+        a picture the prompt does NOT refer to is ANOTHER subject.
 
-    the model has been introduced to one subject and then handed the same
-    introduction again with nothing attached. It draws a second person. The tag lives
-    in character_memory, so it was declaring a spare person in EVERY shot.
+    So taking a tag out of the text does not remove a spare person, it CREATES one --
+    the image arrives labelled and unclaimed, and the model renders it as somebody
+    else. It is also why the handoff frame must not enter this channel at all: no
+    wording refers to it, so it would arrive as a stranger.
 
-    ComfyUI's own MiniMaxH3RefConditioning does not put a tag in the prompt either:
-    the label comes from the tokenizer and the prose simply describes the person. So
-    the tag chooses this shot's images, in slot order, and then comes out of the text.
+    comfy/text_encoders/minimax.py writes the "<Picture N>: " label itself, numbering
+    by the order it receives the images -- so a shot that uses only <Picture 2>
+    receives that image labelled <Picture 1>, and text still saying <Picture 2> points
+    at nothing. The tags are renumbered per shot to match what the shot actually
+    carries: slot 2 alone becomes <Picture 1>; slots 2 and 4 become <Picture 1> and
+    <Picture 2>.
 
-    A tag naming a slot with no image connected refers to nothing at all; it is
-    reported and removed like the rest."""
+    A tag naming a slot with no image connected refers to nothing at all, so it is
+    removed from the text rather than left for the encoder to puzzle over."""
     wanted = picture_tags(text)
     live = [n for n in wanted if 1 <= n <= len(ref_list or [])]
     dropped = [n for n in wanted if n not in live]
-    out = _PICTURE_TAG.sub("", text or "")
-    out = re.sub(r"\s+([,.;:])", r"\1", out)      # " ," left where the tag was
-    out = re.sub(r"([:,;])\s*,", r"\1", out)      # "Kate:, 22" once the tag has gone
+    renum = {old: new for new, old in enumerate(live, 1)}
+
+    def sub(m):
+        n = int(m.group(1))
+        return f"<Picture {renum[n]}>" if n in renum else ""
+
+    out = _PICTURE_TAG.sub(sub, text or "")
+    out = re.sub(r"\s+([,.;:])", r"\1", out)      # " ," left by a removed tag
+    out = re.sub(r"([:,;])\s*,", r"\1", out)      # ",," where the tag was the only item
     out = re.sub(r"\s{2,}", " ", out)
     return out.strip(), [ref_list[n - 1] for n in live], dropped
 
@@ -3257,6 +3269,7 @@ class H3LongVideos:
         # Resolve the <Picture N> tags BEFORE the script is written, so `script` shows
         # what the model is actually given rather than the instruction that chose it.
         shot_refs_all = []
+        unbound = []
         for _i, _s in enumerate(shots):
             if tagged:
                 _s, _r, _missing = resolve_tags(_s, refs_all)
@@ -3267,15 +3280,23 @@ class H3LongVideos:
                 shots[_i] = _s
             else:
                 _r = refs_all
+                if _r:
+                    unbound.append(_i + 1)
             shot_refs_all.append(_r)
-        if tagged and refs_all:
+        # A reference the shot's own text never names. H3 binds an image to a subject
+        # by NAMING it -- ComfyUI's reference node: "Use the same tags when prompting"
+        # -- so an unnamed picture is not a likeness of anybody in the shot, it is one
+        # more subject, and the model renders it as a second person.
+        if unbound:
             notes.append(
-                "<Picture N> tags placed the references and were then taken OUT of the "
-                "prompt text. H3's encoder writes '<Picture N>: ' itself, directly ahead "
-                "of the image, so a tag left in the prose is a second one with no image "
-                "behind it -- and in 'Name: <Picture 1>, ...' that reads as another "
-                "subject being declared, which the model draws. The tag was in the "
-                "character sheet, so it was declaring a spare person in every shot")
+                f"shot(s) {', '.join(str(n) for n in unbound)} carry {len(refs_all)} "
+                f"reference image(s) that nothing in their text refers to. H3's reference "
+                f"format binds an image to a subject by NAMING it -- ComfyUI's own "
+                f"reference node says 'use the same tags when prompting' -- so a picture "
+                f"the prompt never mentions is read as ANOTHER subject, and renders as a "
+                f"second person. Put the tag in the sheet entry for whoever it depicts: "
+                f"'Nora: <Picture 1>, 34, she, red hair, ...'. The tag then travels with "
+                f"that person into every shot they are in, and only those shots")
 
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
         info = " | ".join(notes)

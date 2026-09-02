@@ -646,23 +646,27 @@ def test_keyframe_is_not_a_cast_member():
         seen.clear()
         run_node(P, anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
-        # At most one picture per shot -- the reference. The keyframe is not one, and
-        # neither is a leftover tag in the prose.
-        check("no shot is given more than one picture",
-              all(pics <= 1 for pics, _ in seen))
+        # Every picture the shot is given has to be one its text names, or the model
+        # reads it as another subject. The keyframe names nothing, so it must not be
+        # one; the reference is named by its tag, so it must be.
+        check("every picture a shot carries is one its text names",
+              all(pics == tags for pics, tags in seen))
         check("...and the shot with a reference still gets it",
               any(pics == 1 for pics, _ in seen))
-        check("no <Picture N> survives into the prompt",
-              all(tags == 0 for _, tags in seen))
-        # `script` has to show what the model is given, not the instruction that
-        # chose it, or plan_only reports something the render never sees.
+        # `script` has to show the RENUMBERED text -- what the model is given -- or
+        # plan_only reports something the render never sees.
         info, script = run_node(P, plan_only=True, anchor="A room.",
                                 character_memory=mem,
                                 ref_image_1=torch.rand(1, H, W, 3))[2:4]
-        check("the script shows the resolved text", "Picture" not in script)
-        check("...and the sheet still reads", "Kate: she, 27, blonde hair" in script)
-        check("...and the run says the tags were removed",
-              "taken OUT of the prompt text" in info)
+        check("the binding survives into the script", "<Picture 1>" in script)
+        check("...on the person it depicts", "Kate: <Picture 1>, she, 27" in script)
+        # A reference no text names is the failure this all exists to stop.
+        loose = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
+                         anchor="A room.",
+                         character_memory="Kate: she, 27, grey coat.",
+                         ref_image_1=torch.rand(1, H, W, 3))[2]
+        check("an unnamed reference is reported", "nothing in their text refers to" in loose)
+        check("...with the fix named", "<Picture 1>" in loose)
         # With no reference anywhere there is no ref2va numbering to collide with,
         # and "<Picture 1>: <first frame> <prompt>" is H3's own fl2v shape -- what
         # comfy_extras/nodes_minimax_h3.py emits. That case is left alone.
