@@ -602,10 +602,12 @@ def test_person_described_once_end_to_end():
 
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
-    P = ("A cold concrete basement, a low hum off the strip light.\n\n"
+    # No space named, so no room tone -- this test is about the SILENCE path, and a
+    # bed under every shot would mean nothing is silenced and there is nothing to see.
+    P = ("Two people, late evening.\n\n"
          "Maya: 27, grey coat.\n\n"
-         "Maya lies still on the floor.\n\n"
-         "The chain drags and rattles across the concrete.\n\n"
+         "Maya lies still.\n\n"
+         "The chain drags and rattles beside her.\n\n"
          'Jon says: "Get up."')
     vae = FakeAudioVAE()
     info = run_node(P, audio_vae=vae)[2]
@@ -624,12 +626,14 @@ def test_sound_survives_silencing():
 
 def test_auto_sound_end_to_end():
     print("\n=== sound generated from the prompt ===")
-    P = ("A cold concrete basement.\n\n"
+    # No space named: this test isolates the sound a beat's own ACTION implies, and
+    # room tone would put a bed on every shot including the ones meant to be bare.
+    P = ("Two people, late evening.\n\n"
          "Maya: 27, grey coat. Wrists cuffed behind back.\n\n"
          "Jon walks in holding a pair of scissors.\n\n"
          "Maya thrashes against the chain, trying to get free.\n\n"
          "Maya lies still.\n\n"
-         "The chain drags and rattles across the concrete.")
+         "The chain drags and rattles beside her.")
     imgs, audio, info, script = run_node(P, plan_only=True)[:4]
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     check("walking is heard", "footsteps" in sh[0])
@@ -647,6 +651,33 @@ def test_auto_sound_end_to_end():
     # Off, nothing is added and those shots go back to being silenced.
     off = run_node(P, plan_only=True, auto_sound=False)[3]
     check("auto_sound off adds nothing", "It sounds like" not in off)
+
+
+def test_room_tone_under_every_shot():
+    print("\n=== the room is heard even when nothing happens ===")
+    # Real footage has a bed under the events. Digital silence between them is what
+    # makes a scene sound staged rather than recorded.
+    P = ("A cold concrete basement with bare walls.\n\n"
+         "Maya: 27, grey coat.\n\n"
+         "Jon walks in.\n\n"
+         "Maya lies still.\n\n"
+         "Maya looks up at him.")
+    imgs, audio, info, script = run_node(P, plan_only=True)[:4]
+    sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("every shot carries the room",
+          all("hard walls giving the sound back" in s for s in sh))
+    check("...including one where nothing happens", "hard walls" in sh[1])
+    check("the acting shot still gets its events too", "footsteps" in sh[0])
+    check("info names the acoustic", "room tone read from the scene" in info)
+    # With a bed under every shot nothing is silenced any more. That is the point,
+    # and it is also the cost: the audio branch is free everywhere, including on a
+    # shot with no line, which can therefore invent one.
+    check("nothing is left on digital silence", "conditioned on real silence" not in info)
+    check("...and the cost is stated", "invent one" in info)
+    check("...with the way back", "auto_sound off puts the silence guard back" in info)
+    # A scene naming no space gets no bed, and the silence guard still applies.
+    plain = run_node("Two people talking.\n\nHe waits.\n\nShe waits.", plan_only=True)[2]
+    check("no space named, no room tone", "room tone read" not in plain)
 
 
 def test_detail_trend():
@@ -766,6 +797,7 @@ def main():
     test_person_described_once_end_to_end()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
+    test_room_tone_under_every_shot()
     test_detail_trend()
     test_timing_report()
     print()

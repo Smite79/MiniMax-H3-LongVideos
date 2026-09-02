@@ -583,6 +583,31 @@ _SOUND_FROM = (
 )
 MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
 
+# The SPACE, as opposed to the things in it. Read from the scene, and this is the one
+# thing that safely can be: a chain standing in the scene must not rattle in a shot
+# where nobody moves, but a concrete room is hard in every shot whatever happens in
+# it. That is the difference between a recording and a sound effect -- real footage
+# has a bed under the events, and digital silence between them is what makes a scene
+# sound staged.
+_ROOM_TONE = (
+    (r"\b(?:bathroom|shower|tiled?|tiles)\b",       "tiled walls ringing"),
+    (r"\b(?:basement|cellar|warehouse|garage|hangar|tunnel|stairwell|"
+     r"corridor|concrete|stone|brick|bare walls?)\b", "hard walls giving the sound back"),
+    (r"\b(?:outside|outdoors|street|road|field|yard|garden|forest|beach|park)\b",
+                                                    "open air with no walls close by"),
+    (r"\b(?:carpet(?:ed)?|curtains?|bedroom|sofa|cushions?)\b",
+                                                    "a soft room with little echo"),
+    (r"\b(?:barn|attic|loft|shed|workshop|hall|church)\b", "a large room with a long tail"),
+)
+
+
+def room_tone(scene):
+    """How the space itself sounds. One room, one acoustic -- the first match wins."""
+    for pat, phrase in _ROOM_TONE:
+        if re.search(pat, scene or "", re.I):
+            return phrase
+    return ""
+
 
 def sounds_for(beat):
     """The sounds this beat's own action implies. [] when it stages nothing audible."""
@@ -2726,6 +2751,17 @@ class H3LongVideos:
                               ref_noise_aug, first_frame is not None)
         if _ref:
             notes.append(_ref)
+        # The acoustic of the space, read once: it is the same room in every shot.
+        _room = room_tone(scene) if auto_sound else ""
+        if _room:
+            notes.append(f"room tone read from the scene: {_room}. It is carried under "
+                         f"every shot, including the ones where nothing happens -- a shot "
+                         f"with no sound at all is conditioned on digital silence, and "
+                         f"nothing real is that quiet. Note what this costs: with a bed "
+                         f"under every shot, NO shot is silenced any more, so the audio "
+                         f"branch is free throughout. That is what makes the sound "
+                         f"continuous, and it is also what lets a shot with no line "
+                         f"invent one. auto_sound off puts the silence guard back")
         active = []                 # the people the previous beat involved
         guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
@@ -2872,6 +2908,12 @@ class H3LongVideos:
             # What you wrote wins: a beat that already describes its own sound is left
             # alone, and only one that describes none gets the sound its action implies.
             heard = [] if (not auto_sound or sound_described(body)) else sounds_for(body)
+            # The room is under every shot, including the ones where nothing happens.
+            # A shot with no events and no room tone is conditioned on digital silence,
+            # and nothing real is ever that quiet -- it is the single thing that makes
+            # a scene sound staged rather than recorded.
+            if auto_sound and _room:
+                heard = heard + [_room]
             if heard:
                 inferred_sound.append(len(shots) + 1)
             _sound = sound_clause(heard)

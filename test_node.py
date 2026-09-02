@@ -790,6 +790,20 @@ def test_sound_is_derived_from_the_action():
     # sound itself. That is the honest limit of deriving foley from prose.
     check("an action outside the table gets nothing",
           S.sounds_for("The camera pushes in on her face.") == [])
+    # The SPACE, as opposed to the things in it. Read from the scene -- the one thing
+    # that safely can be, because a room is hard in every shot whatever happens in it,
+    # while a chain standing in the scene must not rattle where nobody moves.
+    check("a concrete room is hard",
+          S.room_tone("A cold concrete basement.") == "hard walls giving the sound back")
+    check("...a carpeted one is not",
+          S.room_tone("A carpeted bedroom.") == "a soft room with little echo")
+    check("...outdoors has no walls",
+          "open air" in S.room_tone("A field behind the house."))
+    check("...tiles ring", "tiled" in S.room_tone("A tiled bathroom."))
+    check("one room, one acoustic",
+          S.room_tone("A tiled bathroom off a concrete hallway.").count(",") == 0)
+    check("a scene naming no space gets none", S.room_tone("Two people talking.") == "")
+    check("no scene at all is fine", S.room_tone("") == "")
     # A cue, not an inventory: the shot has a word budget and the beat needs most of it.
     many = S.sounds_for("He walks in, unlocks the chain, cuts the tape, throws it down "
                         "and slams the door.")
