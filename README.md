@@ -400,13 +400,22 @@ References keep slots `1…N`, which is what that tag points at; the handoff is 
 the encoder numbers by the order it receives images — a shot carrying only slot 2
 receives that image as `<Picture 1>`.
 
-A tagged reference travels with that person into the shots they are in, and only
-those: a shot the character guard trims them out of carries no reference at all. A
-picture the prompt never refers to is read as *another* subject, which is why
-`info` reports any shot that carries one it does not name.
+**Each reference is spent once**, on the first shot that names it. `info` says which
+shot each one went to.
 
-**With no tag anywhere, references go on every shot.** Placing by tag would otherwise
-place them nowhere, which is a connected input silently doing nothing.
+A reference row sits immediately before the target timeline, and near-clean it asks
+the model to reproduce the picture — pose and framing, not only the face. On the shot
+introducing the character that is the point. On every *later* shot it competes with
+the staging your beat describes, and the beat loses: the referenced character holds
+the portrait's gaze, and anyone with no reference of their own gets placed relative to
+that reproduced composition rather than where your text puts them, then travels there.
+
+After that first shot, identity is carried by the **keyframe chain**, which is what it
+is for. Watch for drift late in a long chain — if a face wanders, write the tag again
+in a later beat and the reference is spent a second time there.
+
+**With no tag anywhere**, the first shot is the only one that can be a first
+appearance, so it gets the reference and the rest carry their keyframe.
 
 ### If the reference turns up as the opening frame
 
