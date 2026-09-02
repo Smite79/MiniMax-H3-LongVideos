@@ -261,10 +261,22 @@ def test_character_sheet():
     check("...with one person too", S.is_character_sheet("Maya: 27, red jacket"))
     check("...and an inner capital is fine",
           S.is_character_sheet("McKenna: 22, grey coat"))
+    check("...and a participle that introduces attributes",
+          S.is_character_sheet("Maya: wearing a red coat"))
     # A beat stages something; a line of dialogue stages something.
     for _p in ("Maya walks in.", 'Jon: "Hello."', "Maya: 27, red jacket\nJon walks in.",
                "A basement. Maya is 27.", "remove: jacket", ""):
         check(f"not a sheet: {_p[:30]!r}", not S.is_character_sheet(_p))
+    # A LABELLED action is still an action. Getting this wrong is expensive in one
+    # direction only: a sheet mistaken for a beat costs one visible shot, while a
+    # beat mistaken for a sheet never renders AND has its words stamped onto every
+    # other shot -- which reads as beats being absorbed into other beats.
+    for _p in ("McKenna: thrashes in her restraints, trying to get free.",
+               "Dan: walks in holding a pair of scissors.",
+               "Camera: pushes in slowly on her face.",
+               "Maya: turns to face him.",
+               "Dan: is standing by the door."):
+        check(f"a labelled action is a beat: {_p[:38]!r}", not S.is_character_sheet(_p))
     beats, pulled = S.pull_character_sheets(["Maya walks in.", sheet, "Jon follows."])
     check("the sheet leaves the beat list", beats == ["Maya walks in.", "Jon follows."])
     check("...and is kept", pulled == sheet)
