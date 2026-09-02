@@ -445,17 +445,17 @@ def test_opening_pose():
     check("...or when no posture is described",
           S.posture_note("A basement. Maya walks to the window.", False) == "")
     check("...or with no scene at all", S.posture_note("", False) == "")
-    # ONE aug covers every visual conditioning row. At 0.999 a reference is handed
-    # over near-clean, and near-clean means "reproduce this" -- framing included. A
-    # portrait reference therefore pulls the shot towards portrait framing.
+    # ref_noise_aug set how clean a REFERENCE was shown, and references have no
+    # channel in fl2va, so the widget governs nothing. Saying so beats leaving
+    # somebody turning it.
     rn = S.reference_note(1, 0.999, False)
-    check("a near-clean reference is explained", "reproduce them" in rn)
-    check("...naming framing as what carries over", "FRAMING included" in rn)
-    check("...and that shot 1 has no anchor to protect", "no keyframe" in rn)
-    check("with a first_frame, shot 1 does have one",
-          "no keyframe" not in S.reference_note(1, 0.999, True))
+    check("a connected reference is called out", "are not sent" in rn)
+    check("...and the dead widget named", "ref_noise_aug" in rn)
+    check("...pointing at first_frame when shot 1 is unpinned", "first_frame" in rn)
+    check("with a first_frame there is nothing to point at",
+          "first_frame" not in S.reference_note(1, 0.999, True))
     check("no references, nothing to say", S.reference_note(0, 0.999, False) == "")
-    check("already softened, nothing to say", S.reference_note(1, 0.90, False) == "")
+    check("a softened aug says the same thing", "are not sent" in S.reference_note(1, 0.90, False))
 
 
 def test_removal_needs_a_particle():

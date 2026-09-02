@@ -228,8 +228,12 @@ def test_references_and_silence():
              ref_image_1=torch.rand(1, 64, 64, 3))
     # seen[0] is the empty negative prompt, encoded once before the loop.
     shots_seen = clip.seen[1:]
-    check("every shot is given the reference",
-          all(len(items) >= 1 for _, items in shots_seen),
+    # A reference is NOT given to any shot: on fl2va a numbered picture is a frame of
+    # this video, so a reference there is read as where the shot begins. Shot 1 has no
+    # keyframe either, so it carries no picture at all; the rest carry exactly one,
+    # their keyframe.
+    check("no shot is given the reference",
+          [len(i) for _, i in shots_seen] == [0, 1],
           str([len(i) for _, i in shots_seen]))
     clip2 = FakeCLIP()
     run_node("A room.\n\nHe walks in.\n\nShe says: \"Now.\"", clip=clip2)
@@ -273,16 +277,15 @@ def test_aug_protects_the_keyframe():
     check("at a safe aug the handoff is a real keyframe",
           "riding as an extra reference" not in info_hi)
     check("...and it is encoded", vae_hi.encodes >= 1, f"{vae_hi.encodes}")
+    # The demotion path is gone along with the references it demoted to. Nothing sets
+    # the aug now, so the keyframe rides at H3's own default whatever the widget says.
     info_lo = run_node(P, ref_image_1=ref, ref_noise_aug=0.90)[2]
-    check("at a soft aug the keyframe is not sent noised",
-          "riding as an extra reference" in info_lo)
-    check("...and the reason is named", "degrades while sampling" in info_lo)
-    check("...naming the value to restore", "0.99" in info_lo)
-    # With no references at all there is no aug in the payload, so the keyframe
-    # is safe whatever the widget says.
+    check("a soft aug can no longer demote the keyframe",
+          "riding as an extra reference" not in info_lo)
+    check("...and the dead widget is called out", "no longer governs anything" in info_lo)
     info_noref = run_node(P, ref_noise_aug=0.90)[2]
-    check("no references means the keyframe is never demoted",
-          "riding as an extra reference" not in info_noref)
+    check("with nothing connected there is nothing to say",
+          "no longer governs anything" not in info_noref)
 
 
 def test_beat_reviving_a_garment():
@@ -656,19 +659,16 @@ def test_keyframe_is_not_a_cast_member():
         check("...and every shot after the first has its keyframe as that picture",
               all(pics == 1 for pics, _ in seen[2:]))
         # `script` has to show the RENUMBERED text -- what the model is given -- or
-        # plan_only reports something the render never sees.
+        # `script` has to show what the model is given. A <Picture N> tag points at a
+        # reference, references are not sent, and a tag pointing at nothing is what
+        # conjures a subject -- so the tags come out, and the script shows that.
         info, script = run_node(P, plan_only=True, anchor="A room.",
                                 character_memory=mem,
                                 ref_image_1=torch.rand(1, H, W, 3))[2:4]
-        check("the binding survives into the script", "<Picture 1>" in script)
-        check("...on the person it depicts", "Kate: <Picture 1>, she, 27" in script)
-        # A reference no text names is the failure this all exists to stop.
-        loose = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
-                         anchor="A room.",
-                         character_memory="Kate: she, 27, grey coat.",
-                         ref_image_1=torch.rand(1, H, W, 3))[2]
-        check("an unnamed reference is reported", "nothing in their text refers to" in loose)
-        check("...with the fix named", "<Picture 1>" in loose)
+        check("no tag is left pointing at nothing", "Picture" not in script)
+        check("...and the sheet still reads", "Kate: she, 27, blonde hair" in script)
+        check("the run says the reference is not sent", "NONE is being sent" in info)
+        check("...and points at first_frame", "first_frame" in info)
         # With no reference anywhere there is no ref2va numbering to collide with,
         # and "<Picture 1>: <first frame> <prompt>" is H3's own fl2v shape -- what
         # comfy_extras/nodes_minimax_h3.py emits. That case is left alone.
