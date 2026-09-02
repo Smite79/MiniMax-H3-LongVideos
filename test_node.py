@@ -1173,8 +1173,12 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-5:] == ["anchor", "character_memory", "character_guard",
-                             "pace", "auto_sound"])
+          list(opt)[-6:] == ["anchor", "character_memory", "character_guard",
+                             "pace", "auto_sound", "reference_mode"])
+    check("reference_mode is offered", "reference_mode" in opt)
+    # fl2va is the default: it is what every checkpoint named FL2VA needs, and
+    # ref2va conditioning against those weights is the duplicate-character bug.
+    check("...defaulting to fl2va", opt["reference_mode"][1]["default"] == "off (fl2va)")
     # save_defaults was removed. A workflow saved with it still sends the value, so
     # run() swallows unknown keyword arguments rather than raising on load.
     check("save_defaults is gone", "save_defaults" not in opt and "save_defaults" not in req)

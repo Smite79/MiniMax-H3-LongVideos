@@ -676,6 +676,30 @@ def test_keyframe_is_not_a_cast_member():
         run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
         check("a chain with no reference keeps the fl2v keyframe picture",
               any(pics == 1 for pics, _ in seen))
+        # ref2va is the other format, and the only variant that does identity at all.
+        # There the pictures ARE the subjects: the reference goes to the shots whose
+        # text claims it by tag, and the keyframe stays OUT of the roster -- a picture
+        # ref2va did not ask for is one more subject. Never conditioned on whether
+        # this shot happens to have a reference: a shot the guard trimmed Kate out of
+        # would otherwise let the keyframe take the empty roster, putting an unclaimed
+        # picture into exactly the shots the guard was thinning.
+        seen.clear()
+        run_node("Kate walks in.\n\nKate sits beside Mike.\n\nMike stands up.",
+                 anchor="A room.", reference_mode="ref2va",
+                 character_memory="Kate: <picture 1>, 22, she, blonde hair.\nMike: he, 35",
+                 ref_image_1=torch.rand(1, H, W, 3))
+        shots_seen = seen[1:]           # seen[0] is the negative
+        check("ref2va gives the reference to the shots that claim it",
+              [p for p, _ in shots_seen] == [1, 1, 0],
+              str([p for p, _ in shots_seen]))
+        check("...and every picture is one the text names",
+              all(p == t for p, t in shots_seen), str(shots_seen))
+        info = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
+                        anchor="A room.", reference_mode="ref2va",
+                        character_memory="Kate: <picture 1>, 22, she, blonde hair.",
+                        ref_image_1=torch.rand(1, H, W, 3))[2]
+        check("the mode is reported", "reference_mode is ref2va" in info)
+        check("...with the checkpoint it needs", "ref2va checkpoint" in info)
     finally:
         FakeCLIP.tokenize = orig
 
