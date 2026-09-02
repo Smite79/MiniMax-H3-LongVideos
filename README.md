@@ -5,8 +5,13 @@ Long **MiniMax-H3 video with synchronised audio** from a single prompt, in Comfy
 H3 renders about 15 seconds at a time. This node turns a written scene into a
 **chain of shots** and joins them into one continuous video.
 
-**Your text is passed through verbatim.** The node does the chaining, not the
-writing — it adds nothing to your prompt and rewrites none of it.
+**Your text is never rewritten.** The node does the chaining, not the writing: what
+you type reaches the model word for word.
+
+It does *append* to it — a garment told to finish coming off, hardware told to stay
+fastened, the sound an action makes. Each of those answers a failure that text alone
+could not fix, each is one sentence, each has a switch, and `info` reports what was
+added and what share of the shot it came to.
 
 ---
 
