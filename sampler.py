@@ -349,6 +349,52 @@ def hidden_layers(covers, gone):
     return [u for u, o in (covers or {}).items() if o not in gone and u not in gone]
 
 
+def merge_sheets(*sources):
+    """(one sheet, the names that were described more than once).
+
+    character_memory and a `Name:` paragraph in the prompt are the same channel by
+    two routes, and using both -- the natural thing to do once the widget exists --
+    put the person in every shot TWICE:
+
+        A basement. Maya: 27, silver hair, grey coat. Maya: 27, silver hair, grey
+        coat. Maya lies still on the floor.
+
+    A model told about one person twice renders two of them. One entry per name, and
+    no line repeated. The earlier source wins, so character_memory overrides a sheet
+    left in the prompt."""
+    seen_names, seen_lines, out, dupes = set(), set(), [], []
+    for src in sources:
+        for name, line in sheet_lines(src):
+            key = name.lower() if name else None
+            if key and key in seen_names:
+                if name not in dupes:
+                    dupes.append(name)
+                continue
+            if line in seen_lines:
+                continue
+            if key:
+                seen_names.add(key)
+            seen_lines.add(line)
+            out.append(line)
+    return "\n".join(out), dupes
+
+
+def terminate_lines(text):
+    """Give every line a full stop, so what follows does not run into it.
+
+    The sheet is assembled ahead of the beat, and a line ending "grey coat" welds
+    onto the beat as "grey coat Maya lies still". A name fused to the end of an
+    attribute list reads as one more item in the list -- another person in shot."""
+    out = []
+    for ln in (text or "").splitlines():
+        s = ln.rstrip().rstrip(",;:")
+        if s and s[-1] not in ".!?":
+            s += "."
+        if s:
+            out.append(s)
+    return "\n".join(out)
+
+
 def build_scene(anchor, first_para, character_memory, sheet):
     """The text every shot carries, in reading order: the anchor frames the film,
     the opening paragraph sets the scene, and the character sheet says who is in it
@@ -359,7 +405,7 @@ def build_scene(anchor, first_para, character_memory, sheet):
     anchor put it back on every shot, under a beat that had just removed it."""
     parts = [(anchor or "").strip(), (first_para or "").strip(),
              (character_memory or "").strip(), (sheet or "").strip()]
-    return "\n".join(p for p in parts if p)
+    return "\n".join(terminate_lines(p) for p in parts if p)
 
 
 _QUOTED = re.compile(r'["“][^"”]+["”]')
@@ -2504,7 +2550,14 @@ class H3LongVideos:
         # The sheet is kept APART from the rest of the scene: it is the part that
         # varies per shot, because only the people a beat involves should be
         # described in it. Everything else is stamped on every shot unchanged.
-        sheet = "\n".join(p for p in ((character_memory or "").strip(), sheet) if p)
+        sheet, _dupes = merge_sheets((character_memory or "").strip(), sheet)
+        if _dupes:
+            notes.append(
+                f"{', '.join(_dupes)} described more than once -- character_memory and a "
+                f"'Name:' paragraph in the prompt are the same channel by two routes, and "
+                f"using both put the person in every shot twice. A model told about one "
+                f"person twice renders two of them. Kept the character_memory entry and "
+                f"dropped the duplicate")
         static = build_scene(anchor, scene, "", "")
         scene = build_scene(anchor, scene, "", sheet)      # the whole of it, for inference
         if sheet:
@@ -2642,8 +2695,11 @@ class H3LongVideos:
             # A garment still underneath something stays out of the text: described,
             # it gets drawn, and it is drawn through whatever is over it.
             covered = hidden_layers(covers, visible)
+            # Terminated, or the last sheet line welds onto the beat -- "grey coat
+            # Maya lies still" -- and a name fused to the end of an attribute list is
+            # read as one more item in it.
             shot_scene = scrub_removed(
-                "\n".join(p for p in (static, shot_sheet) if p.strip()),
+                "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
                 visible + covered)
             # An added layer is subject to removal too: once the shirt comes off, the
             # phrase that introduced it has to go with it, or the scene keeps
