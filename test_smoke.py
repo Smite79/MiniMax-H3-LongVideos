@@ -236,8 +236,15 @@ def test_references_and_silence():
     check("both shots reached the encoder", len(clip2.seen) == 3)   # + the negative
     check("the beat text is what was sent",
           "He walks in." in clip2.seen[1][0] and "Now." in clip2.seen[2][0])
-    check("...and nothing else was added",
-          clip2.seen[1][0] == "A room. He walks in.")
+    # auto_sound appends a sound sentence -- "He walks in." implies footsteps. Your
+    # words are still never rewritten; the node only ever adds after them, and every
+    # addition has a switch.
+    check("...with only the sound sentence added",
+          clip2.seen[1][0] == "A room. He walks in. It sounds like footsteps.")
+    clip3 = FakeCLIP()
+    run_node("A room.\n\nHe walks in.", clip=clip3, auto_sound=False)
+    check("...and with that off it is exactly what was written",
+          clip3.seen[1][0] == "A room. He walks in.")
 
 
 def test_first_frame():
@@ -602,8 +609,8 @@ def test_sound_survives_silencing():
          'Jon says: "Get up."')
     vae = FakeAudioVAE()
     info = run_node(P, audio_vae=vae)[2]
-    check("the beat with a sound keeps its audio", "describe a sound" in info)
-    check("...and is counted", "1 shot(s) have no line but describe" in info)
+    check("the beat with a sound keeps its audio", "carry sound" in info)
+    check("...and is counted", "have no line but carry sound" in info)
     check("the beat with none is silenced", "1 shot(s) have no quoted line and no sound"
           in info)
     check("...and the guidance says what silence actually is",
@@ -613,6 +620,33 @@ def test_sound_survives_silencing():
     # With silencing off, nothing is silenced and nothing is claimed about it.
     off = run_node(P, silence_nonspeech=False)[2]
     check("silencing off silences nothing", "conditioned on real silence" not in off)
+
+
+def test_auto_sound_end_to_end():
+    print("\n=== sound generated from the prompt ===")
+    P = ("A cold concrete basement.\n\n"
+         "Maya: 27, grey coat. Wrists cuffed behind back.\n\n"
+         "Jon walks in holding a pair of scissors.\n\n"
+         "Maya thrashes against the chain, trying to get free.\n\n"
+         "Maya lies still.\n\n"
+         "The chain drags and rattles across the concrete.")
+    imgs, audio, info, script = run_node(P, plan_only=True)[:4]
+    sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("walking is heard", "footsteps" in sh[0])
+    check("...and the scissors", "blades through fabric" in sh[0])
+    check("thrashing against a chain is heard", "chain links dragging" in sh[1])
+    check("a beat staging nothing audible gets nothing", "It sounds like" not in sh[2])
+    # What you wrote wins: a beat describing its own sound is left alone.
+    check("a beat with its own sound is not overwritten", "It sounds like" not in sh[3])
+    check("...and it still counts as asking for audio",
+          "have no line but carry sound" in info)
+    check("info lists the shots it scored", "were given the sound" in info)
+    # Sound is counted apart from the continuity guards, which ask for the opposite
+    # thing -- for something to stay as it is rather than to happen.
+    check("the balance separates sound from guards", "sound " in info.split("balance")[1][:120])
+    # Off, nothing is added and those shots go back to being silenced.
+    off = run_node(P, plan_only=True, auto_sound=False)[3]
+    check("auto_sound off adds nothing", "It sounds like" not in off)
 
 
 def test_detail_trend():
@@ -731,6 +765,7 @@ def main():
     test_av_stays_in_sync()
     test_person_described_once_end_to_end()
     test_sound_survives_silencing()
+    test_auto_sound_end_to_end()
     test_detail_trend()
     test_timing_report()
     print()

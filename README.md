@@ -447,6 +447,16 @@ Jon's boots echo on the stone floor as he walks in.
 The chain drags and rattles across the concrete as she shifts her weight.
 ```
 
+**`auto_sound`** (on by default) does most of this for you: it reads each beat and
+gives the shot the sound its own action implies — walking gets footsteps, scissors
+get blades through fabric, a chain gets links dragging, a lock gets a lock closing.
+Three at most, so the shot gets a cue rather than an inventory. It reads the **beat
+only**, never the scene, so a chain standing in the scene does not rattle in a shot
+where nobody moves. A beat that already describes its own sound is left alone.
+
+Write it yourself when you want something the action does not imply — a specific
+room tone, weather, a noise off-screen.
+
 Sound in the **anchor** or first paragraph carries through every shot — room tone,
 the space, the ambience. Sound in a **beat** belongs to that shot — footsteps,
 a door, a chain, breath.

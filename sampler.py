@@ -543,6 +543,61 @@ def sound_described(text):
     return bool(_SOUND_CUE.search(text or ""))
 
 
+# What a staged action sounds like. The beat already says what happens; the sound it
+# makes follows from that, so it does not have to be written twice.
+#
+# Matched against the BEAT only, never the scene. Sourcing it from the scene as well
+# would put a chain rattling into a shot where nobody moves, because the scene says
+# there is a chain -- the beat is what decides whether anything makes a noise.
+_SOUND_FROM = (
+    (r"\b(?:walk(?:s|ed|ing)?|step(?:s|ped|ping)?|pace[sd]?|enters?|"
+     r"runs?|approach(?:es|ed)?)\b",                "footsteps"),
+    (r"\bchains?\b",                                "chain links dragging"),
+    (r"\b(?:handcuff(?:s|ed)?|cuffs?|cuffed|shackle[sd]?|manacle[sd]?)\b",
+                                                    "cuffs knocking"),
+    (r"\b(?:padlock(?:s|ed)?|locks?|locked|locking)\b", "a lock snapping shut"),
+    (r"\b(?:scissors|shears|cut(?:s|ting)?)\b",     "blades through fabric"),
+    (r"\bdoors?\b",                                 "a door on its hinges"),
+    (r"\b(?:drops?|dropped|throw(?:s|n)?|threw|toss(?:es|ed)?)\b",
+                                                    "something landing"),
+    (r"\b(?:smack(?:s|ed)?|slap(?:s|ped)?|hits?|strikes?|struck)\b", "a sharp impact"),
+    (r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
+     r"strain(?:s|ing|ed)?|pull(?:s|ing|ed)?\s+against)\b",
+                                                    "restraints pulling taut"),
+    (r"\b(?:zip(?:s|ped|ping)?|unzip(?:s|ped|ping)?)\b", "a zip running"),
+    (r"\btap(?:e|es|ed|ing)\b",                     "tape pulling off"),
+    (r"\b(?:wakes?\s+up|woke|gasp(?:s|ing)?|pant(?:s|ing)?|breath(?:es|ing)?)\b",
+                                                    "breathing"),
+)
+MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
+
+
+def sounds_for(beat):
+    """The sounds this beat's own action implies. [] when it stages nothing audible."""
+    out = []
+    for pat, phrase in _SOUND_FROM:
+        if len(out) >= MAX_SOUNDS:
+            break
+        if phrase not in out and re.search(pat, beat or "", re.I):
+            out.append(phrase)
+    return out
+
+
+def sound_clause(phrases):
+    """One sentence naming what the shot is heard as.
+
+    Plain prose, and deliberately not a labelled line: `sound:` at the start of a
+    line is read as text to DRAW and turns up on screen, which is the whole reason
+    the old node's field labels had to be stripped out."""
+    if not phrases:
+        return ""
+    if len(phrases) == 1:
+        heard = phrases[0]
+    else:
+        heard = ", ".join(phrases[:-1]) + " and " + phrases[-1]
+    return f" It sounds like {heard}."
+
+
 def has_speech(beat):
     """Does this beat contain a scripted line?
 
@@ -2508,6 +2563,21 @@ class H3LongVideos:
                                "at one action's worth and capped by shot_seconds, and "
                                "'fixed' ignores this entirely. info reports the seconds "
                                "each staged action ends up with."}),
+                "auto_sound": ("BOOLEAN", {"default": True,
+                    "tooltip": "Give each shot the sound its own action implies.\n\n"
+                               "H3 is joint, so the same prose conditions the audio "
+                               "branch -- and a beat that says what happens has already "
+                               "said what it sounds like. Walking gets footsteps, a "
+                               "chain gets links dragging, scissors get blades through "
+                               "fabric, a lock gets a lock closing.\n\n"
+                               "Read from the BEAT only, never the scene: a chain "
+                               "standing in the scene does not rattle in a shot where "
+                               "nobody moves. Three sounds at most, so the shot gets a "
+                               "cue rather than an inventory.\n\n"
+                               "A beat that already describes its own sound is left "
+                               "alone -- what you wrote wins. A shot given sound is also "
+                               "not silenced, since it is now asking for audio. info "
+                               "lists which shots got one."}),
             },
         }
 
@@ -2531,7 +2601,7 @@ class H3LongVideos:
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
-            character_guard=True, pace=1.0, save_defaults=False):
+            character_guard=True, pace=1.0, auto_sound=True, save_defaults=False):
 
         notes = []
         if save_defaults:
@@ -2616,6 +2686,7 @@ class H3LongVideos:
         # start, and a description saying it is still worn is what puts it back.
         shots, speech, gone, shown = [], [], [], []
         sounded = []                # beats that ask for a sound of their own
+        inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
         stripped_shots = set()      # 0-based shots that took something off
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
@@ -2644,7 +2715,7 @@ class H3LongVideos:
         if _ref:
             notes.append(_ref)
         active = []                 # the people the previous beat involved
-        guard_words = beat_words = total_words = 0
+        guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
             body, toks, adds = extract_directives(b)
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
@@ -2786,8 +2857,19 @@ class H3LongVideos:
             # itself. Emitting both said it twice, which is twice the stasis for one
             # guarantee.
             hold = chain if chain else (RESTRAINT_HOLD if restrained else "")
-            shot_text = (line + tail + anchors + hold + fall + turn).strip()
-            guard_words += len(shot_text.split()) - len(f"{shot_scene} {body}".split())
+            # What you wrote wins: a beat that already describes its own sound is left
+            # alone, and only one that describes none gets the sound its action implies.
+            heard = [] if (not auto_sound or sound_described(body)) else sounds_for(body)
+            if heard:
+                inferred_sound.append(len(shots) + 1)
+            _sound = sound_clause(heard)
+            shot_text = (line + tail + anchors + _sound + hold + fall + turn).strip()
+            # Sound direction is not a continuity guard -- it asks for something to
+            # HAPPEN rather than for something to stay as it is -- so it is counted
+            # apart, or the balance report blames the wrong text for crowding the beat.
+            sound_words += len(_sound.split())
+            guard_words += (len(shot_text.split()) - len(_sound.split())
+                            - len(f"{shot_scene} {body}".split()))
             beat_words += len(body.split())
             total_words += len(shot_text.split())
             shots.append(shot_text)
@@ -2796,7 +2878,7 @@ class H3LongVideos:
             # that asks for a sound is asking for audio on purpose, and conditioning it
             # on real silence is how a scene ends up with no footsteps, no chain and no
             # room tone.
-            sounded.append(sound_described(body))
+            sounded.append(sound_described(body) or bool(heard))
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -2806,8 +2888,9 @@ class H3LongVideos:
         if total_words:
             notes.append(
                 f"prompt balance: the beat is {100 * beat_words / total_words:.0f}% of "
-                f"what each shot is told, continuity clauses {100 * guard_words / total_words:.0f}%, "
-                f"scene and sheet the rest"
+                f"what each shot is told, continuity clauses "
+                f"{100 * guard_words / total_words:.0f}%, sound "
+                f"{100 * sound_words / total_words:.0f}%, scene and sheet the rest"
                 + (" -- the guards are outweighing the action, which reads as a shot "
                    "where nothing happens. Fewer restraints named, or a beat with more "
                    "in it, shifts the balance back"
@@ -2846,14 +2929,22 @@ class H3LongVideos:
                             f"{' -- near-clean, so the reference tends to be reproduced in the '
                               'opening frames, pose and background included'
                               if float(ref_noise_aug) >= 0.99 else ''}"))
+        if inferred_sound:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in inferred_sound)} were given the "
+                f"sound their own action implies -- H3 is joint, so the same prose "
+                f"conditions the audio branch, and a beat that says what happens has "
+                f"said what it sounds like. Read from the beat, never the scene, so a "
+                f"chain standing in the scene does not rattle where nobody moves. A beat "
+                f"that describes its own sound is left alone")
         n_silent = sum(1 for s, snd in zip(speech, sounded) if not s and not snd)
         n_kept = sum(1 for s, snd in zip(speech, sounded) if not s and snd)
         if silence_nonspeech and n_kept:
             notes.append(
-                f"{n_kept} shot(s) have no line but describe a sound, so their audio is "
-                f"left free to make it. Silence is there to stop an unconditioned branch "
-                f"inventing a VOICE -- a beat asking for footsteps or a chain is asking "
-                f"for audio on purpose")
+                f"{n_kept} shot(s) have no line but carry sound -- described in the beat "
+                f"or derived from it -- so their audio is left free to make it. Silence "
+                f"is there to stop an unconditioned branch inventing a VOICE, and a shot "
+                f"with footsteps or a chain in it is asking for audio on purpose")
         if silence_nonspeech and n_silent:
             notes.append(
                 f"{n_silent} shot(s) have no quoted line and no sound described, so they "
