@@ -335,12 +335,11 @@ degrades every shot after the first.
 - **`first_frame`** pins the opening frame of shot 1, the only shot with no
   previous frame. If shot 1 must start in a particular pose or position, this is
   the mechanism — text does not outrank a picture.
-- **`ref_image_1…4`** are identity references. **Tag them onto the person they
-  depict** — `Nora: <Picture 1>, 34, she, …` — or the model reads the image as a
-  separate character standing beside her. See
-  [below](#name-your-reference-or-it-becomes-another-person). A tagged reference
-  travels with that person into the shots they are in; an untagged one goes on every
-  shot, which is the case `info` warns about.
+- **`ref_image_1…4`** are identity references, and they belong to the **ref2va**
+  checkpoints only. **On fl2va weights, leave them disconnected and use `first_frame`**
+  — see [below](#fl2va-or-ref2va-check-which-weights-you-loaded). On ref2va, tag the
+  reference onto the person it depicts (`Nora: <Picture 1>, 34, she, …`) or the model
+  reads it as a separate character.
 - **`ref_noise_aug`** is how *clean* a reference is shown. At the default 0.999 the
   model tends to reproduce the reference — its pose and background included — in
   the opening frames. Lowering it says "approximate".
@@ -353,51 +352,40 @@ degrades every shot after the first.
   weaker, but nothing is corrupted. `info` says when this happens. If you want a
   real keyframe, keep `ref_noise_aug` at 0.99 or above.
 
-### Name your reference, or it becomes another person
+### fl2va or ref2va: check which weights you loaded
 
-H3's text encoder labels every image it is given `<Picture 1>: `, `<Picture 2>: `
-and so on, **numbered by the order it receives them**, and writes that label directly
-ahead of the image. One rule follows, and it decides everything about references:
-
-> **A picture the prompt refers to is that subject.
-> A picture the prompt does not refer to is another subject.**
-
-That is H3's documented format, not a guess — ComfyUI's own reference node says
-*"Ordinals are 1-based per type, so the prompt refers to them as `<Picture i>`"*, and
-its description is *"Use the same tags when prompting."*
-
-**So write the tag on the person it depicts**, in their sheet entry:
+MiniMax ships H3 as **separate checkpoints for separate tasks**, and ComfyUI loads
+them all under one class — so nothing in the node can tell them apart. They use the
+same labels for different things:
 
 ```
-Nora: <Picture 1>, 34, she, tall, red hair tied back, green canvas jacket.
+fl2va:  "<Picture 1>: " <FIRST frame>  ["<Picture 2>: " <LAST frame>]  <prompt>
+ref2va: "<Picture i>: " <subject reference> …                          <prompt>
 ```
 
-That claims the image as Nora. It then travels with her into every shot she is in —
-and only those shots, so a shot she is not in carries no reference at all.
+On **fl2va**, a numbered picture is *a frame of the video you are generating*. On
+**ref2va**, it is *a person to put in it*.
 
-**Connect a reference without tagging anybody and the image arrives unclaimed**: the
-model has been handed a labelled picture of a person that no word of the prompt
-accounts for, and it renders them as a second character standing next to the one you
-described. `info` reports every shot where that is happening.
+**If your checkpoint filename says FL2VA, do not connect `ref_image_*`.** A headshot
+handed to fl2va weights as a picture is read as a frame of the shot, and comes out as
+a person standing in it. Use **`first_frame`** instead — that is fl2va's own channel,
+and it is the one the shot chain already runs on. `info` warns whenever references are
+connected.
 
-Tags are **renumbered per shot** to match what that shot actually carries, because the
-encoder numbers by receipt order — a shot using only slot 2 receives that image as
-`<Picture 1>`. `script` shows the renumbered text, so what you read is what the model
-is given.
+**One picture per shot, and it is slot 1.** A keyframe and a reference cannot share
+the roster: there is no numbering that reads correctly under both formats. Every shot
+after the first has a keyframe, the keyframe *is* `<Picture 1>`, and references are
+dropped there — so only shot 1 can carry one at all.
 
-**The handoff frame is the same rule, in the other direction.** It used to be appended
-to the picture list, where it became a numbered subject that no wording referred to —
-a stranger who happened to look exactly like the person already described, so the
-model drew both. With two people in the outgoing frame, it drew two extra.
+Ordering matters for the same reason. Appended *after* a reference the handoff became
+`<Picture 2>`, which on fl2va is the **last** frame: the model was being told the shot
+ends on the frame it should start from.
 
-So once a reference image is connected anywhere in the film, the handoff is kept out
-of the picture channel entirely. It still anchors the shot: it goes through as a
-keyframe *latent*, which is the channel that actually does the anchoring, and which
-ComfyUI's own `MiniMaxH3AddGuide` uses without touching the text encoder at all.
-
-With no reference connected there is no numbering to collide with, and
-`<Picture 1>: <first frame>` followed by the prompt is H3's own first-frame format.
-That case is unchanged.
+**A ref2va reference must be named in the prompt.** ComfyUI's reference node says so —
+*"the prompt refers to them as `<Picture i>`"*, *"Use the same tags when prompting"* —
+so write the tag on the person it depicts, `Nora: <Picture 1>, 34, she, …`. A picture
+the prompt never refers to is read as *another* subject. That is also why the handoff
+frame is never sent as an unclaimed picture.
 
 ## Speed
 
