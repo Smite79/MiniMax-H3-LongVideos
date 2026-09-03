@@ -693,10 +693,15 @@ _SOUND_CUE = re.compile(
     # "her boots loud on the concrete" describes a sound and named none of the above,
     # so it was read as staging nothing audible and the shot was silenced -- which is
     # the one thing the docs tell you to do to score a silent shot.
-    r"loud(?:ly)?|quiet(?:ly)?|faint(?:ly)?|audible|noisy|deafening|"
+    # Adverbs only where the bare adjective describes something other than a sound --
+    # "quietly closes the door" is a sound being made, while "the workshop is quiet",
+    # "she is quiet" and "a faint smile" are the absence of one or nothing to do with
+    # one. Opening the branch on those is a free branch with no line in the shot,
+    # which is where an invented voice comes from.
+    r"loud(?:ly)?|quietly|faintly|audible|noisy|deafening|"
     r"scuff(?:s|ing|ed)?|crunch(?:es|ing|ed)?|thump(?:s|ing|ed)?|"
     r"patter(?:s|ing)?|whirr?(?:s|ing)?|whine(?:s|d)?|whining|rumbl(?:e|es|ing)|"
-    r"growl(?:s|ing)?|roar(?:s|ing)?|chime(?:s|d)?|tick(?:s|ing)?|"
+    r"growl(?:s|ing)?|roar(?:s|ing)?|chime(?:s|d)?|ticking|"
     r"knock(?:s|ing)?|tap(?:s|ping)?|whoosh(?:es|ing)?|sizzl(?:e|es|ing))\b", re.I)
 
 
