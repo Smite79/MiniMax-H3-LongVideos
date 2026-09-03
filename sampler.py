@@ -1890,13 +1890,12 @@ _HARDWARE_ANCHOR = (
     (r"shackle[sd]?|leg\s+irons",        "shackles close around the ankles"),
     (r"harness(?:es)?",                  "a harness sits on the torso"),
     (r"spreader\s+bar",                  "a spreader bar holds the ankles apart"),
-    # Its own entry, ahead of the plain belt: a chastity belt is not a waistband, and
-    # the generic phrase said nothing about where it fastens, so the model put the
-    # lock wherever locks usually go on a strap -- behind. The lookbehind on the plain
-    # belt below keeps the two from both matching "chastity belt" and stating it twice.
-    (r"chastity\s+belts?",               "a chastity belt sits on the waist and hips with "
-                                         "its front shield running between the legs, and it "
-                                         "locks at the front"),
+    # No entry for a chastity belt, and the lookbehind below keeps the plain belt off
+    # it too, so it gets no placement clause at all. It is the item most likely to
+    # arrive with its own <Picture N>, and a written description of where the shield
+    # and the lock sit argues with the picture rather than adding to it. Where the
+    # reference shows the object, the object is already placed; describe it in your
+    # own words if you want it stated.
     (r"(?<!chastity\s)belt(?:s|ed)?",    "a belt closes around the waist and hips"),
 )
 
