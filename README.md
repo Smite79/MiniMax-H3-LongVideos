@@ -455,11 +455,14 @@ back to, it sends a frame from the middle of the last shot they *were* in as a
 reference. The middle, because somebody walking out is gone by the last frame and
 somebody walking in is missing from the first.
 
-Deliberately narrow. It only happens when the returning shot describes that person
-**alone**, because the recovered frame carries whoever else was on screen with them,
-and an unexplained person in a reference is how a second one gets drawn. A return into
-company is reported and left alone. `info` names every case either way — who came
-back, on which shot, and which shot the frame came from.
+Deliberately narrow, and **both ends have to be solo**. A frame is a picture of
+everyone in it, so it is taken only from a shot that was *theirs alone* and sent only
+into a shot that is — otherwise the other person rides in on it and turns up in a shot
+that does not call for them. A return into company is reported and left alone, and a
+character never on screen by themselves gets nothing, which beats importing somebody.
+
+`info` names every case either way — who came back, on which shot, and which shot the
+frame came from.
 
 **With no tag anywhere, references go on every shot.** Placing by tag would otherwise
 place them nowhere, which is a connected input silently doing nothing.

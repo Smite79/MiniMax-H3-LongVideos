@@ -3661,12 +3661,21 @@ class H3LongVideos:
             # 0..1, and feeding that back in to be re-encoded every boundary is a
             # drift that accumulates rather than cancels.
             handoff = hand_src[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True)
-            # Keep one frame per person in this shot, for the shot they come back on.
-            # The MIDDLE, not the last: a character who walks out during the shot is
-            # gone by the last frame -- which is the whole failure -- and one who walks
-            # in is missing from the first. The middle is where they are on screen.
+            # Keep a frame for the shot they come back on -- but ONLY from a shot that
+            # was theirs alone.
+            #
+            # A frame is a picture of everyone who was in it. Captured from a shot with
+            # two people and sent later as a reference, it brings the other one back
+            # into a shot that does not call for them. That is the second character
+            # turning up uninvited, and it was this code: the destination was guarded
+            # (the return shot has to describe one person) and the SOURCE was not.
+            #
+            # The MIDDLE frame, not the last: somebody walking out during the shot is
+            # gone by the last frame -- which is the whole failure -- and somebody
+            # walking in is missing from the first.
             try:
-                if hand_src.shape[0] and shot_cast and i < len(shot_cast):
+                if (hand_src.shape[0] and shot_cast and i < len(shot_cast)
+                        and len(shot_cast[i]) == 1):
                     _mid = hand_src.shape[0] // 2
                     _keep = hand_src[_mid:_mid + 1].detach().clamp(0.0, 1.0).to(
                         "cpu", copy=True)
@@ -3737,12 +3746,14 @@ class H3LongVideos:
                             for n, who, src in _recovered)
                 + ". They were back after a shot away with no picture of them anywhere "
                   "-- the keyframe is the previous shot's last frame and they were not "
-                  "in it -- so a frame from the middle of the last shot they WERE in "
-                  "was sent as a reference. The middle, because somebody walking out is "
-                  "gone by the last frame and somebody walking in is missing from the "
-                  "first. Only done where the shot describes that person ALONE, since "
-                  "the recovered frame carries whoever else was on screen with them, "
-                  "and only for a character with no <Picture N> tag of their own")
+                  "in it -- so a frame from the middle of the last shot that was THEIRS "
+                  "ALONE was sent as a reference. The middle, because somebody walking "
+                  "out is gone by the last frame and somebody walking in is missing from "
+                  "the first. Both ends have to be solo: a frame is a picture of "
+                  "everyone in it, so one taken from a shared shot would carry the other "
+                  "person into a shot that does not call for them. A character never on "
+                  "screen alone gets nothing, which beats importing somebody. Skipped "
+                  "for anyone with a <Picture N> tag of their own")
         video = torch.cat(vid_out, dim=0)
         if video.dtype != torch.float32:
             video = video.float()          # back to what every downstream node expects
