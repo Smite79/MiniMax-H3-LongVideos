@@ -26,7 +26,7 @@ Copy this folder into `ComfyUI/custom_nodes/` and restart the ComfyUI **server**
 
 | | |
 |---|---|
-| **UNET** | a MiniMax-H3 diffusion model |
+| **UNET** | a MiniMax-H3 diffusion model — a **hybrid fl2va/ref2va merge** gives the best results here, see [below](#which-checkpoint) |
 | **CLIP** | H3's text encoder, loader type `minimax` |
 | **VAE** | the H3 **video** VAE |
 | **audio VAE** | the H3 **audio** VAE (a separate file, and it must be the *converted* one) |
@@ -376,6 +376,36 @@ degrades every shot after the first.
   handoff as a keyframe and rides it as an extra reference instead: continuity is
   weaker, but nothing is corrupted. `info` says when this happens. If you want a
   real keyframe, keep `ref_noise_aug` at 0.99 or above.
+
+### Which checkpoint
+
+**Use a hybrid fl2va/ref2va merge.** This node leans on *both* halves of H3 at once —
+the keyframe chain that joins one shot to the next, and reference images for identity
+— and MiniMax split those across two checkpoints that are each weak at the other's
+job:
+
+| | keyframe chain | reference conditioning | output quality |
+|---|---|---|---|
+| **fl2va** | trained for it | not trained for it | better |
+| **ref2va** | — | trained for it | noticeably worse |
+
+So on fl2va a reference fights the staging your beat describes, and on ref2va you pay
+for it in picture and audio quality across every shot. Neither is a good fit for a
+chain that wants both.
+
+The hybrid merges resolve that. They combine the two official checkpoints at the
+tensor level — each weight taken from one side or the other, no fine-tuning — to keep
+fl2va's quality while retaining ref2va's reference conditioning:
+
+**[smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models](https://huggingface.co/smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models)**
+— several variants, around 21 GB each. Put one in `models/diffusion_models/` and load
+it with the UNETLoader as usual; nothing in the node needs changing.
+
+If you are on a plain **fl2va** checkpoint, references still work — each is spent on
+the shot that introduces its character, and the keyframe chain carries identity from
+there — but that is the arrangement being worked around, and a hybrid is the better
+answer.
+
 
 ### A reference and the keyframe ride together
 
