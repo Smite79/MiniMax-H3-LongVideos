@@ -757,6 +757,18 @@ def test_a_modified_state_is_not_read_as_an_act():
     s = run_node("Daylight. A yard.\n\nThey stand by a van with its doors closed.",
                  plan_only=True)[3]
     check("the held state is bounded", "for the whole shot" in s, "")
+    # Whole-path: the auto sound must not ask for the swing the hold forbids. Needs a
+    # line in the beat, because a silent shot gets no sound clause at all.
+    P = ('Daylight. A yard.\n\nMara stands behind a van with closed rear doors. '
+         'Mara says: "We wait here."')
+    s = run_node(P, plan_only=True)[3]
+    check("the held doors are not also heard swinging",
+          "already closed" in s and "a door on its hinges" not in s, "")
+    check("...while the shot still has its other sound", "an engine outside" in s, "")
+    # The shot that stages the opening keeps the sound of one.
+    s = run_node('Daylight. A yard.\n\nMara opens the van doors. Mara says: "Here."',
+                 plan_only=True)[3]
+    check("a staged opening still sounds like one", "a door on its hinges" in s, "")
 
 
 def test_a_staged_change_gets_both_ends():

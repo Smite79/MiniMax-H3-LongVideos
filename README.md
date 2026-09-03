@@ -106,6 +106,11 @@ Verbs that genuinely go either way — *pulls*, *draws*, *slides*, *swings* — 
 anchor. Drawing the curtains closes them; a wrong anchor asks for the reversal rather
 than allowing it. Two sentences per shot at most, both kinds sharing that budget.
 
+A held thing is also dropped from `auto_sound`. H3 is joint, so *"a door on its hinges"*
+is not a decoration on a shot with a door in it — it is a request for a door to swing,
+and it beats a sentence saying the door stays shut. A beat that genuinely works the door
+keeps the sound.
+
 Both are worse at low step counts. On a 4-step distill LoRA the layout is committed
 almost immediately and there are no later steps to argue a wrong opening frame back.
 

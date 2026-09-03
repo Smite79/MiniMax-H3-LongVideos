@@ -1046,6 +1046,34 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_a_held_thing_is_not_also_heard_moving():
+    print("\n=== the shot is not told to hold a door and to sound like one swinging ===")
+    # Reported after the state hold was fixed: the doors now STARTED closed, as the
+    # hold asked, and were then opened. Two guards contradicting each other.
+    #
+    # H3 is joint. The prose conditions the audio branch and the picture follows the
+    # audio, so "a door on its hinges" is not a decoration on a shot that has a door
+    # in it -- it is a request for a door to swing. Beside a sentence holding that
+    # same door shut, the sound wins: it describes something happening, and the hold
+    # describes something not happening.
+    b = "Mara and Dom stand behind a van with closed rear doors."
+    check("a door mention alone is heard swinging",
+          "a door on its hinges" in S.sounds_for(b))
+    check("...but not while the shot is holding it shut",
+          "a door on its hinges" not in S.sounds_for(b, held=["door"]))
+    # The rest of the shot's sound is untouched -- this drops one phrase, not the
+    # audio. A shot stripped of all sound is a shot conditioned on silence.
+    check("the other sounds survive", S.sounds_for(b, held=["door"]) == ["an engine outside"])
+    # A beat that WORKS the door is asking for exactly that swing, and keeps it.
+    check("a staged opening still sounds like one",
+          "a door on its hinges" in S.sounds_for("Mara opens the van doors."))
+    check("holding nothing changes nothing", S.sounds_for(b, held=[]) == S.sounds_for(b))
+    # Only the sounds that ARE a thing moving are tied to a hold. Holding the doors
+    # must not silence the footsteps.
+    check("an unrelated hold drops nothing",
+          S.sounds_for(b, held=["curtain", "lid"]) == S.sounds_for(b))
+
+
 def test_a_staged_change_names_both_ends():
     print("\n=== which end of the action is which ===")
     # Reported on the same 4-step LoRA: some distill LoRAs render an action
@@ -1692,6 +1720,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_a_held_thing_is_not_also_heard_moving()
     test_a_staged_change_names_both_ends()
     test_sound_described()
     test_sound_is_derived_from_the_action()
