@@ -646,6 +646,38 @@ def test_undressing_completely_end_to_end():
     check("...and lists the garments", "jacket, jumper, t-shirt, jeans, boots" in info)
 
 
+def test_back_after_a_shot_away():
+    print("\n=== somebody back after a shot away ===")
+    # Reported: a character's appearance is lost when they walk out of frame and
+    # return. Every shot starts from the PREVIOUS shot's last frame, so somebody who
+    # was not in that shot is not in the picture this one begins from -- their
+    # appearance comes from the sheet text and nothing else, and text drifts where a
+    # picture does not.
+    P = "\n\n".join(["Nora sets a toolbox on the bench.",
+                     "Nora walks out through the side entrance.",
+                     "Victor kneels by the cable, alone in the workshop.",
+                     "Nora comes back in and picks up the spanner."])
+    mem = "Nora: 34, she, tall, red hair.\nVictor: he, 41, dark hair"
+    info = run_node(P, plan_only=True, anchor="A room.", character_memory=mem)[2]
+    check("the return is detected", "back after a shot away" in info)
+    check("...naming the shot and who", "shot 4: Nora" in info)
+    check("...and why the keyframe cannot carry them",
+          "not in the picture this one begins from" in info)
+    # A reference tag IS the picture that pins them, so the advice differs.
+    check("with no tag, it says to add one", "no <Picture N> tag" in info)
+    tagged = run_node(P, plan_only=True, anchor="A room.",
+                      character_memory="Nora: <picture 1>, 34, she, red hair.\n"
+                                       "Victor: he, 41, dark hair",
+                      ref_image_1=torch.rand(1, H, W, 3))[2]
+    check("with a tag, it says they are pinned", "All of them carry a reference" in tagged)
+    check("...and does not ask for one", "no <Picture N> tag" not in tagged)
+    # Nobody leaves, nobody returns.
+    straight = run_node("Nora walks in.\n\nNora sits down.", plan_only=True,
+                        anchor="A room.", character_memory=mem)[2]
+    check("a chain nobody leaves reports nothing",
+          "back after a shot away" not in straight)
+
+
 def test_a_name_with_no_entry_end_to_end():
     print("\n=== a person the sheet never describes ===")
     P = "\n\n".join(["Maya walks in.", "Alex says hello to Maya.",
@@ -992,6 +1024,7 @@ def main():
     test_person_described_once_end_to_end()
     test_references_ride_with_the_keyframe()
     test_undressing_completely_end_to_end()
+    test_back_after_a_shot_away()
     test_a_name_with_no_entry_end_to_end()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
