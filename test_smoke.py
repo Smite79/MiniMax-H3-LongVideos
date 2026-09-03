@@ -646,6 +646,29 @@ def test_undressing_completely_end_to_end():
     check("...and lists the garments", "jacket, jumper, t-shirt, jeans, boots" in info)
 
 
+def test_hardware_stays_on_its_owner():
+    print("\n=== hardware does not spread to the other character ===")
+    # Reported: a belt locked onto one character turned up on the other, over their
+    # clothes. The hold named nobody, so in a two-person shot it was an instruction
+    # about whoever was on screen.
+    mem = ("Nora: 34, she, red hair, bare skin, a locked steel waist belt.\n"
+           "Victor: he, 41, dark hair, navy overalls, work boots")
+    P = ("Nora stands by the bench, the steel belt locked on her hips.\n\n"
+         "Victor walks in through the side door and looks at her.")
+    sh = [" ".join(x.split()) for x in
+          re.split(r"(?=\[Shot )", run_node(P, plan_only=True, anchor="A workshop.",
+                                            character_memory=mem)[3]) if x.strip()]
+    check("the shot with one person keeps the plain hold",
+          "Every restraint stays whole" in sh[0])
+    check("...and spends no words naming whose", "hardware is Nora's" not in sh[0])
+    check("the shot with two names the wearer", "Every restraint on Nora" in sh[1])
+    check("...and says whose the hardware is", "The hardware is Nora's" in sh[1])
+    check("...pinning the other to his own entry",
+          "exactly what their own entry lists" in sh[1])
+    # And his entry is still there to be pinned to.
+    check("the other character keeps his clothes described", "navy overalls" in sh[1])
+
+
 def test_back_after_a_shot_away():
     print("\n=== somebody back after a shot away ===")
     # Reported: a character's appearance is lost when they walk out of frame and
@@ -1107,6 +1130,7 @@ def main():
     test_person_described_once_end_to_end()
     test_references_ride_with_the_keyframe()
     test_undressing_completely_end_to_end()
+    test_hardware_stays_on_its_owner()
     test_back_after_a_shot_away()
     test_a_name_with_no_entry_end_to_end()
     test_sound_survives_silencing()

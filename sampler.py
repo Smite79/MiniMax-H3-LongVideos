@@ -1658,6 +1658,39 @@ RESTRAINT_HOLD_KEY = ("handcuffs cuffs chains rope ropes tape gag collar restrai
 RESTRAINT_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
                   "on, and still fastened at the last frame.")
 
+
+def restraint_wearers(sheet):
+    """The people whose own sheet entry describes hardware.
+
+    Read from the entries rather than the beat, because the entry is what says who is
+    WEARING it -- a beat can mention a chain without anyone being in it."""
+    return [n for n, ln in sheet_lines(sheet) if n and restraint_present(ln)]
+
+
+def own_hold(hold, wearers, described):
+    """Attribute a hold to whoever actually wears the hardware.
+
+    The holds say "every restraint stays fastened" and name nobody, which was fine
+    while a shot meant one person. Put a second person in the frame and it becomes an
+    instruction about whoever is on screen: the belt locked onto one character turned
+    up on the other, over their clothes, because the sentence never said whose it was.
+
+    Only when the shot describes more than one person -- with one there is no
+    ambiguity, and the extra words are shot budget spent on nothing. Positively
+    phrased: saying who wears it is what excludes everyone else, where "nobody else
+    is wearing one" asks the model to render an absence."""
+    if not hold or not wearers or len(described) < 2:
+        return hold
+
+    def _and(names):
+        return names[0] if len(names) == 1 else \
+            ", ".join(names[:-1]) + " and " + names[-1]
+
+    who = _and(wearers)
+    tail = (f" The hardware is {who}'s, worn on the body it was locked to. Everyone "
+            f"else in the shot has on exactly what their own entry lists.")
+    return hold.replace("Every restraint", f"Every restraint on {who}", 1).rstrip() + tail
+
 # Hardware that means restraint on its own.
 _RESTRAINT_PLAIN = re.compile(
     r"\b(?:handcuff(?:s|ed)?|cuffed|shackle[sd]?|manacle[sd]?|hogtied|hog-?tied|"
@@ -3243,6 +3276,15 @@ class H3LongVideos:
             # itself. Emitting both said it twice, which is twice the stasis for one
             # guarantee.
             hold = chain if chain else (RESTRAINT_HOLD if restrained else "")
+            # ...and say WHOSE. Unattributed, "every restraint stays fastened" is an
+            # instruction about whoever is on screen, so hardware locked onto one
+            # character turned up on the other, over their clothes. Read from the sheet
+            # entries, which are what say who is wearing it.
+            _wearers = [n for n in restraint_wearers(shot_sheet)
+                        if not character_guard or n in active]
+            hold = own_hold(hold, _wearers,
+                            active if character_guard else
+                            [n for n, _ in sheet_lines(shot_sheet) if n])
             # What you wrote wins: a beat that already describes its own sound is left
             # alone, and only one that describes none gets the sound its action implies.
             # ONLY WHAT THE AUTHOR WROTE OPENS THE AUDIO BRANCH.
