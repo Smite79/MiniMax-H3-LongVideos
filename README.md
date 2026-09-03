@@ -462,6 +462,39 @@ References keep slots `1…N`, which is what that tag points at; the handoff is 
 the encoder numbers by the order it receives images — a shot carrying only slot 2
 receives that image as `<Picture 1>`.
 
+**An object can carry a reference too.** A `<Picture N>` attached to a *thing* is a
+picture of that thing:
+
+```
+Nora: <Picture 1>, 34, she, red hair, a silver locket <Picture 2>, green jacket.
+```
+
+Ownership is read from what stands immediately **before** the tag — a lowercase noun
+means the object owns it, and anything else (a name, a colon, an age) means the person
+does. It errs towards the person, because losing an identity reference costs the shot
+its face while a stray object tag only keeps describing something already taken off.
+
+**An object's reference comes off with the object, and goes back on with it.**
+
+```
+Nora unclasps the silver locket and sets it down.
+remove: locket
+
+Nora picks it up again.
+add: her silver locket <Picture 2> is back around her neck
+```
+
+```
+shot 1  <Picture 1> <Picture 2>    both on
+shot 3  <Picture 1>                locket and its picture gone
+shot 4  <Picture 1> <Picture 2>    back on
+```
+
+The person's tag is never dropped by a removal. And an `add:` is only retired by a
+removal that comes **after** it — putting something back on used to be impossible,
+because the token stayed removed for the rest of the film and suppressed the very line
+undoing it.
+
 **References go where tagged — every beat that names them.** That is what holds a face
 across a chain instead of letting it drift down the keyframe handoffs, and it is the
 reason to tag the *person* rather than a single shot: written in the character sheet,

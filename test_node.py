@@ -186,6 +186,28 @@ def test_removals():
     _r3 = S.scrub_removed(_long, ["scarf", "jacket", "boots"])
     check("three removals leave only what is still worn",
           _r3 == "A basement. Kate is 20, blonde, pale blue cotton shirt.")
+    # An OBJECT can carry a reference too -- "a silver locket <Picture 2>" is a
+    # picture OF the locket -- and that tag has to come off with the object. Left
+    # behind it keeps asserting the thing just removed, and a tag pointing at a
+    # picture nothing accounts for is how a spare subject gets drawn.
+    _obj = "Nora: <Picture 1>, 34, red hair, a silver locket <Picture 2>, green jacket."
+    check("an object's tag leaves with the object",
+          S.picture_tags(S.scrub_removed(_obj, ["locket"])) == [1])
+    check("...and the person's stays", "<Picture 1>" in S.scrub_removed(_obj, ["locket"]))
+    check("removing something else keeps both",
+          S.picture_tags(S.scrub_removed(_obj, ["jacket"])) == [1, 2])
+    check("removing both leaves only the person's",
+          S.picture_tags(S.scrub_removed(_obj, ["locket", "jacket"])) == [1])
+    # Ownership is decided by what stands immediately BEFORE the tag: a lowercase
+    # noun means the object owns it, anything else -- a name, a colon, an age -- means
+    # the person does. Erring towards the person, because losing an identity
+    # reference costs the shot its face.
+    for _t, _want in (("Nora: <Picture 1>, 34, she", ["1"]),
+                      ("Nora <Picture 1> in a grey coat", ["1"]),
+                      ("Kate is 20, <Picture 1> blonde crop top", ["1"]),
+                      ("a silver locket <Picture 2>", []),
+                      ("green canvas jacket <Picture 3>", [])):
+        check(f"owner of {_t[:34]!r}", S.person_tags(_t) == _want)
     check("a picture tag is never dropped with a garment",
           S.picture_tags(S.scrub_removed(
               "A basement. Kate is 20, <Picture 1> blonde crop top, boots.",

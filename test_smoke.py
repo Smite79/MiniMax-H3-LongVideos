@@ -646,6 +646,39 @@ def test_undressing_completely_end_to_end():
     check("...and lists the garments", "jacket, jumper, t-shirt, jeans, boots" in info)
 
 
+def test_a_tagged_object_comes_off_and_goes_back_on():
+    print("\n=== an object's reference follows the object ===")
+    # A <Picture N> can be attached to a THING, not only a person: "a silver locket
+    # <Picture 2>" is a picture of the locket. It has to come off when the locket does
+    # -- left behind, the reference keeps asserting what was just removed -- and come
+    # back when an 'add:' puts it on again.
+    mem = "Nora: <picture 1>, 34, she, red hair, a silver locket <picture 2>, green jacket"
+    P = "\n\n".join([
+        "Nora stands by the bench.",
+        "Nora unclasps the silver locket and sets it down.\nremove: locket",
+        "Nora looks out of the window.",
+        "Nora picks it up again.\nadd: her silver locket <picture 2> is back around her neck",
+        "Nora walks to the door."])
+    script = run_node(P, plan_only=True, anchor="A workshop.", character_memory=mem,
+                      ref_image_1=torch.rand(1, H, W, 3),
+                      ref_image_2=torch.rand(1, H, W, 3))[3]
+    tags = [re.findall(r"<Picture \d+>", " ".join(x.split()))
+            for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("both references start on", tags[0] == ["<Picture 1>", "<Picture 2>"],
+          str(tags[0]))
+    check("the object's reference goes with the object",
+          tags[2] == ["<Picture 1>"], str(tags[2]))
+    check("...and the person's stays throughout",
+          all("<Picture 1>" in t for t in tags), str(tags))
+    # Putting it back on. This could not work before: the token stayed in `gone` for
+    # the rest of the film, so an 'add:' naming it was suppressed by the very removal
+    # it was undoing.
+    check("an add puts the object and its reference back",
+          tags[3] == ["<Picture 1>", "<Picture 2>"], str(tags[3]))
+    check("...and it stays on after that",
+          tags[4] == ["<Picture 1>", "<Picture 2>"], str(tags[4]))
+
+
 def test_hardware_stays_on_its_owner():
     print("\n=== hardware does not spread to the other character ===")
     # Reported: a belt locked onto one character turned up on the other, over their
@@ -1130,6 +1163,7 @@ def main():
     test_person_described_once_end_to_end()
     test_references_ride_with_the_keyframe()
     test_undressing_completely_end_to_end()
+    test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_back_after_a_shot_away()
     test_a_name_with_no_entry_end_to_end()
