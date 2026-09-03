@@ -718,6 +718,24 @@ def test_back_after_a_shot_away():
                           ref_image_1=torch.rand(1, H, W, 3))[2]
         check("a tagged character is not given a second picture",
               "recovered a face" not in tagged)
+        # THE SOURCE has to be solo too, not just the destination. A frame is a
+        # picture of everyone in it, so one captured from a shared shot brings the
+        # other person back into a shot that does not call for them -- which is the
+        # second character turning up uninvited.
+        shared = ["Nora walks into the workshop.",
+                  "Victor comes in and Nora hands him the spanner.",
+                  "Victor kneels by the cable, alone.",
+                  "Nora comes back in and picks up the toolbox."]
+        info2 = run_node("\n\n".join(shared), anchor="A room.", character_memory=mem)[2]
+        src = re.search(r"recovered a face for Nora on shot 4, from shot (\d+)", info2)
+        check("the frame comes from a shot that was hers alone",
+              bool(src) and src.group(1) == "1", src.group(1) if src else "none")
+        # Never on screen alone: no clean frame exists, so nothing is sent. Leaving
+        # the sheet text to carry her beats importing somebody who is not in the shot.
+        only_shared = run_node("\n\n".join(shared[1:]), anchor="A room.",
+                               character_memory=mem)[2]
+        check("no solo frame anywhere means nothing is recovered",
+              "recovered a face" not in only_shared)
     finally:
         FakeCLIP.tokenize = orig
 
