@@ -344,6 +344,23 @@ def sheet_for_beat(sheet, beat, previous=None):
     return "\n".join(keep), named
 
 
+# A beat that stages somebody ARRIVING. The chain is right for these: the previous
+# shot's last frame is where they walk in from. A beat that stages no entrance is
+# describing where somebody already IS, and there is no frame to inherit that has them
+# in it.
+_ENTRANCE = re.compile(
+    r"\b(?:walk|step|come|run|stride|hurry|move|wander|burst|barge|slip|climb)"
+    r"(?:s|ed|ing)?\s+(?:in|into|through|up|over|back|out\s+of)\b"
+    r"|\benter(?:s|ed|ing)?\b|\barriv(?:es?|ed|ing)\b|\bappear(?:s|ed|ing)?\b"
+    r"|\bjoin(?:s|ed|ing)?\b|\breturn(?:s|ed|ing)?\b|\bfollow(?:s|ed|ing)?\b"
+    r"|\bshows?\s+up\b|\bturns?\s+up\b|\blets?\s+\w+\s+in\b", re.I)
+
+
+def arrives_in(text):
+    """Does this beat stage somebody arriving?"""
+    return bool(_ENTRANCE.search(text or ""))
+
+
 def unresolved_pronouns(sheet, beat, previous=None):
     """[(pronoun group, the people who could answer to it)] this beat cannot settle.
 
@@ -3198,6 +3215,7 @@ class H3LongVideos:
         active = []                 # the people the previous beat involved
         _seen_before = set()        # everyone a shot has described so far
         _returns = []               # (shot, names back after a shot away)
+        _placed_shots = set()       # 0-based shots introducing somebody in position
         shot_cast = []              # the names each shot describes
         guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
@@ -3228,6 +3246,20 @@ class H3LongVideos:
                         f"because naming somebody the beat did not is how an extra "
                         f"character walks into a shot. Write the name instead of the "
                         f"pronoun in that beat and it resolves")
+                # First appearance, with the beat saying where they ARE rather than
+                # staging them arriving. See the handoff decision in the render loop.
+                _new = [n for n in active if n not in _seen_before]
+                if _new and not arrives_in(body) and shots:
+                    _placed_shots.add(len(shots))
+                    notes.append(
+                        f"shot {len(shots) + 1} introduces {', '.join(_new)} in "
+                        f"position rather than arriving, so it starts FRESH instead of "
+                        f"continuing from the previous shot's last frame -- that frame "
+                        f"does not have them in it, and a keyframe is a picture, so "
+                        f"they would have to appear out of nothing and travel to the "
+                        f"spot the beat describes. Costs a cut where a new character "
+                        f"appears. Write the entrance -- 'walks in', 'steps through' -- "
+                        f"if you would rather they arrive on screen and keep the join")
                 _back = [n for n in active if n not in _was and n in _seen_before]
                 if _back:
                     _returns.append((len(shots) + 1, list(_back)))
@@ -3725,6 +3757,23 @@ class H3LongVideos:
             # cut exactly where a cut belongs.
             shot_handoff = handoff
             if restart_after_removal and (i - 1) in stripped_shots:
+                shot_handoff = None
+                fresh.append(i + 1)
+            # ...and so does a shot that INTRODUCES somebody already in position.
+            #
+            # Same reasoning, same evidence. The keyframe is the previous shot's last
+            # frame, and a character appearing for the first time is not in it. The
+            # beat says where they are; the picture says they are nowhere. The picture
+            # wins, so the model starts from a frame without them and has to put them
+            # there during the shot -- which renders as the person arriving out of
+            # nothing and then travelling to the spot the beat described.
+            #
+            # Only when the beat does NOT stage an entrance. "Dan walks in through the
+            # side door" is a person who SHOULD arrive, and continuing from the frame
+            # before is exactly right there. "Dan is already sitting on the crate" is
+            # a person who should be there at the first frame, and there is no frame to
+            # inherit that has him in it.
+            elif i in _placed_shots:
                 shot_handoff = None
                 fresh.append(i + 1)
 

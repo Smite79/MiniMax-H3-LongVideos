@@ -702,6 +702,43 @@ def test_hardware_stays_on_its_owner():
     check("the other character keeps his clothes described", "navy overalls" in sh[1])
 
 
+def test_introducing_somebody_already_in_position():
+    print("\n=== a character introduced in position starts fresh ===")
+    # Reported: a character is thrown into the shot and then moved to where they
+    # belong. Every shot continues from the previous shot's LAST FRAME, and somebody
+    # appearing for the first time is not in it -- so the beat says where they are and
+    # the picture says they are nowhere. The picture wins, and they have to arrive out
+    # of nothing and travel to the spot.
+    mem = "Nora: 34, she, red hair.\nDan: 41, he, dark hair, navy overalls"
+    tail = "\n\nNora picks up the spanner."
+
+    def encodes(beat2):
+        vae = FakeVAE()
+        info = run_node("Nora sets a toolbox on the bench.\n\n" + beat2 + tail,
+                        anchor="A workshop.", character_memory=mem, vae=vae)[2]
+        return vae.encodes, info
+
+    # In position: the shot cannot inherit a frame that has him in it, so it starts
+    # fresh. Three shots, and only shot 3 encodes a keyframe.
+    n_placed, info = encodes("Dan is already sitting on the crate, watching her.")
+    check("an in-position introduction drops its keyframe", n_placed == 1, str(n_placed))
+    check("...and the run says so", "introduces Dan in position" in info)
+    check("...naming what it costs", "Costs a cut" in info)
+    check("...and how to keep the join", "Write the entrance" in info)
+    # Arriving is what the chain is FOR: he walks in from the frame before.
+    n_arrive, info2 = encodes("Dan walks in through the side door and looks at her.")
+    check("an arriving introduction keeps the chain", n_arrive == 2, str(n_arrive))
+    check("...and claims nothing", "introduces Dan in position" not in info2)
+    for _b, _want in (("Dan enters the workshop.", True),
+                      ("Dan comes back in.", True),
+                      ("Nora follows him in.", True),
+                      ("Dan steps into the room.", True),
+                      ("Dan is at the far wall, watching her.", False),
+                      ("Dan stands at the bench.", False),
+                      ("Dan waits by the roller door.", False)):
+        check(f"arrival={_want}: {_b[:34]!r}", S.arrives_in(_b) == _want)
+
+
 def test_back_after_a_shot_away():
     print("\n=== somebody back after a shot away ===")
     # Reported: a character's appearance is lost when they walk out of frame and
@@ -711,7 +748,7 @@ def test_back_after_a_shot_away():
     # picture does not.
     P = "\n\n".join(["Nora sets a toolbox on the bench.",
                      "Nora walks out through the side entrance.",
-                     "Victor kneels by the cable, alone in the workshop.",
+                     "Victor walks in and kneels by the cable, alone in the workshop.",
                      "Nora comes back in and picks up the spanner."])
     mem = "Nora: 34, she, tall, red hair.\nVictor: he, 41, dark hair"
     info = run_node(P, plan_only=True, anchor="A room.", character_memory=mem)[2]
@@ -747,7 +784,7 @@ def test_back_after_a_shot_away():
     try:
         base = ["Nora sets a toolbox on the bench.",
                 "Nora walks out through the side entrance.",
-                "Victor kneels by the cable, alone in the workshop."]
+                "Victor walks in and kneels by the cable, alone in the workshop."]
         seen.clear()
         info = run_node("\n\n".join(base + ["Nora comes back in and picks up the spanner."]),
                         anchor="A room.", character_memory=mem)[2]
@@ -811,7 +848,7 @@ def test_back_after_a_shot_away():
         # second character turning up uninvited.
         shared = ["Nora walks into the workshop.",
                   "Victor comes in and Nora hands him the spanner.",
-                  "Victor kneels by the cable, alone.",
+                  "Victor walks in and kneels by the cable, alone.",
                   "Nora comes back in and picks up the toolbox."]
         info2 = run_node("\n\n".join(shared), anchor="A room.", character_memory=mem)[2]
         src = re.search(r"recovered a face for Nora on shot 4, from shot (\d+)", info2)
@@ -875,7 +912,10 @@ def test_references_ride_with_the_keyframe():
     try:
         mem = "Kate: <picture 1>, 22, she, blonde hair.\nMike: he, 35, jeans"
         seen.clear()
-        run_node("Kate walks in.\n\nKate sits beside Mike.\n\nMike stands up.",
+        # Mike ARRIVES, so the chain is kept and this stays a test of the picture
+        # roster rather than of the fresh-start rule for an in-position introduction.
+        run_node("Kate walks in.\n\nMike walks in and Kate sits beside him.\n\n"
+                 "Mike stands up.",
                  anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
         shots = seen[1:]                     # seen[0] is the negative
@@ -1196,6 +1236,7 @@ def main():
     test_undressing_completely_end_to_end()
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
+    test_introducing_somebody_already_in_position()
     test_back_after_a_shot_away()
     test_a_name_with_no_entry_end_to_end()
     test_sound_survives_silencing()

@@ -75,6 +75,14 @@ Mike: he, 41, dark hair, navy overalls.
 
 `info` names anyone it could not resolve, and which shots.
 
+**Introducing a character: say whether they arrive or are already there.** Each shot
+continues from the previous shot's last frame, and somebody appearing for the first
+time is not in it. Write the entrance — *"Dan walks in through the side door"* — and
+he arrives on screen with the join intact. Write him in position — *"Dan is already
+sitting on the crate"* — and the shot starts fresh instead, because there is no frame
+to inherit that has him in it; that costs a cut where the character appears, and `info`
+says when it happens.
+
 ## Clothing
 
 **List what is visible**, not every layer at once. `auto_remove` (on) takes a garment
