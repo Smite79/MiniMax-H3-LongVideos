@@ -702,6 +702,34 @@ def test_hardware_stays_on_its_owner():
     check("the other character keeps his clothes described", "navy overalls" in sh[1])
 
 
+def test_dialogue_headroom():
+    print("\n=== how much of a speaking shot the line does not fill ===")
+    # The audio branch is open for the WHOLE shot once there is a line in it, so the
+    # seconds the line does not cover are unconditioned audio in a shot the model
+    # already knows has a voice. That is where speech carries on past the line and
+    # turns into babble.
+    P = "\n\n".join([
+        'Dan says: "Wait."',
+        'Dan says: "Wait there a moment, I need to check the cable before you '
+        'start it up."',
+        "Nora picks up the spanner."])
+    fixed = run_node(P, plan_only=True, anchor="A workshop.",
+                     shot_length="fixed", shot_seconds=15.0)[2]
+    check("a one-word line in a fixed shot is flagged", "dialogue headroom" in fixed)
+    check("...with the words and the seconds", "shot 1: 1 word(s), about 0.4s" in fixed)
+    check("...and a long line in the same shot too",
+          "shot 2: 15 word(s), about 6.0s" in fixed)
+    check("...naming the two ways out", "longer line, or a shorter shot" in fixed)
+    # Sized from the beat, the shot follows the line and there is no tail to report.
+    beat = run_node(P, plan_only=True, anchor="A workshop.",
+                    shot_length="from the beat", shot_seconds=15.0)[2]
+    check("sizing from the beat leaves no headroom", "dialogue headroom" not in beat)
+    # A shot with no line has no dialogue to outlast; silence covers it instead.
+    quiet = run_node("Nora walks to the window.\n\nNora sits down.", plan_only=True,
+                     anchor="A workshop.", shot_length="fixed", shot_seconds=15.0)[2]
+    check("a shot with no line is not flagged", "dialogue headroom" not in quiet)
+
+
 def test_introducing_somebody_already_in_position():
     print("\n=== a character introduced in position starts fresh ===")
     # Reported: a character is thrown into the shot and then moved to where they
@@ -1236,6 +1264,7 @@ def main():
     test_undressing_completely_end_to_end()
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
+    test_dialogue_headroom()
     test_introducing_somebody_already_in_position()
     test_back_after_a_shot_away()
     test_a_name_with_no_entry_end_to_end()
