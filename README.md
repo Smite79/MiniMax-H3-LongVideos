@@ -65,7 +65,9 @@ Mike: he, 41, dark hair, navy overalls.
 ```
 
 - **Declare a pronoun** (`she`, `he`, `they`). It is what lets *"he takes her coat
-  off"* resolve to the right two people.
+  off"* resolve to the right two people. Where two characters share a pronoun, the
+  one in the previous beat wins; if that settles nothing the guard describes
+  **neither** and says so, so write the name in that beat instead.
 - **One name per person.** `Dan` in some beats and `Mike` in others reads as two
   people, one of whom is described nowhere.
 - **Every name needs an entry.** A name without one is a person the shot describes in

@@ -297,16 +297,34 @@ def sheet_for_beat(sheet, beat, previous=None):
         # previous cast on any pronoun put someone in a shot they were not in --
         # "Jon walks out and shuts the door behind him" kept the other character,
         # because "him" was read as evidence that somebody else was present.
+        # ONE PRONOUN IS ONE PERSON. Resolved per pronoun GROUP, not per sheet entry:
+        # walking the entries and taking everyone who declares "she" is fine with one
+        # woman on the sheet and a guess with two, and it used to take BOTH -- a third
+        # character pulled into a shot that named two.
         matched = False
-        for name, line in rows:
-            if not name or name in named:
-                matched = matched or bool(sheet_pronoun(line) and used
-                                          & _PRONOUN_SET[sheet_pronoun(line)])
+        for group, words in _PRONOUN_SET.items():
+            if not used & words:
                 continue
-            group = sheet_pronoun(line)
-            if group and used & _PRONOUN_SET[group]:
-                named.append(name)
+            # Already accounted for by somebody the beat names outright: "Nora and Dan
+            # look at her hands" needs nobody else for "her".
+            if any(sheet_pronoun(ln) == group for n, ln in rows if n and n in named):
                 matched = True
+                continue
+            cands = [n for n, ln in rows
+                     if n and n not in named and sheet_pronoun(ln) == group]
+            if len(cands) == 1:
+                named.append(cands[0])
+                matched = True
+            elif len(cands) > 1:
+                # Two people declare it. The scene continuing is the only evidence
+                # available, so take the one who was in the last beat -- and if that
+                # does not single anybody out, add NOBODY. Naming a person the beat
+                # did not is the failure being fixed; leaving them to the keyframe is
+                # recoverable.
+                narrowed = [n for n in cands if n in (previous or [])]
+                if len(narrowed) == 1:
+                    named.append(narrowed[0])
+                    matched = True
         # A sheet that declares no pronouns tells us nothing, so fall back to the
         # last beat's people rather than guessing.
         if not matched:
@@ -324,6 +342,30 @@ def sheet_for_beat(sheet, beat, previous=None):
         named = _all if len(_all) == 1 else []
     keep = [ln for n, ln in rows if n is None or n in named]
     return "\n".join(keep), named
+
+
+def unresolved_pronouns(sheet, beat, previous=None):
+    """[(pronoun group, the people who could answer to it)] this beat cannot settle.
+
+    Two people declaring "she" and a beat saying "her" is a guess, and the guard makes
+    none: it adds nobody rather than both. Nobody being described is recoverable --
+    the keyframe still carries them -- but it is worth saying, because the fix is to
+    write the name instead of the pronoun."""
+    rows = sheet_lines(sheet)
+    named = [n for n, _ in rows
+             if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "")]
+    used = {m.group(0).lower() for m in _PRONOUN.finditer(beat or "")}
+    out = []
+    for group, words in _PRONOUN_SET.items():
+        if not used & words:
+            continue
+        if any(sheet_pronoun(ln) == group for n, ln in rows if n and n in named):
+            continue
+        cands = [n for n, ln in rows
+                 if n and n not in named and sheet_pronoun(ln) == group]
+        if len(cands) > 1 and len([n for n in cands if n in (previous or [])]) != 1:
+            out.append((group, cands))
+    return out
 
 
 _PRONOUN_SET = {"she": {"she", "her", "hers"},
@@ -3178,6 +3220,14 @@ class H3LongVideos:
                 # sheet text and nothing else, and text drifts where a picture does
                 # not. This is what "walks out of frame and comes back looking
                 # different" is.
+                for _grp, _who_all in unresolved_pronouns(sheet, body, _was):
+                    notes.append(
+                        f"shot {len(shots) + 1} says '{_grp}' and "
+                        f"{' and '.join(_who_all)} all answer to it, so the guard could "
+                        f"not tell which -- and it describes NEITHER rather than both, "
+                        f"because naming somebody the beat did not is how an extra "
+                        f"character walks into a shot. Write the name instead of the "
+                        f"pronoun in that beat and it resolves")
                 _back = [n for n in active if n not in _was and n in _seen_before]
                 if _back:
                     _returns.append((len(shots) + 1, list(_back)))
