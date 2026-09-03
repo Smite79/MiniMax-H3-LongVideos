@@ -997,6 +997,34 @@ def test_a_stated_state_is_not_an_event():
     # ...while the state word sitting straight in front of its noun is an adjective.
     check("'closed doors' is not an act", not S.state_acts("They pass the closed doors."))
     check("...but 'closed the doors' is", S.state_acts("Mara closed the doors."))
+    # Reported after the first version shipped: the doors were STILL opening and being
+    # closed. It was this node doing it. "a van with closed rear doors" has a word
+    # between the state and its noun, and the adjective guard only allowed none, so
+    # "closed" was read as the verb -- and the shot was handed "the doors are open at
+    # the first frame and shut by the last". The guard was not missing, it was
+    # inverted: the node was asking for the exact thing it was written to prevent.
+    #
+    # What separates them is the determiner, not the distance. You close THE doors;
+    # "closed rear doors" cannot take one, because it belongs in front of the phrase.
+    for _t in ("Dan walks out from behind a van with closed rear doors.",
+               "They come out from behind the closed sliding door of the van.",
+               "A van with shut cargo doors.",
+               "Two people behind a van with closed back doors."):
+        check(f"still an adjective: {_t[:38]!r}",
+              S.stated_states(_t) and not S.state_changes(_t))
+    for _t in ("Mara closed the rear doors.", "Mara closed the van's doors.",
+               "Dom shut the two doors.", "Dom locked both doors."):
+        check(f"still an act: {_t[:38]!r}",
+              S.state_changes(_t) and not S.stated_states(_t))
+    # A possessive gap is a determiner phrase, and a gap of bare word characters does
+    # not match one -- so "closed the van's doors" was seen as nothing at all.
+    check("a possessive gap is still read",
+          S.state_changes("Mara closed the van's doors.") == [("doors", "shut")])
+    # A text that both asserts and acts gets the ACTION reading, once. Left to the
+    # caller, "slams the tailgate shut" came back held AND anchored, disagreeing.
+    check("acting on it wins over stating it",
+          not S.stated_states("Dom slams the tailgate shut.")
+          and S.state_changes("Dom slams the tailgate shut.") == [("tailgate", "shut")])
     # A character sheet goes into this same text. Boots are not a door.
     for _t in ("Mara: she, 30, red coat, brown boots.",
                "Dom looks back at the yard.",

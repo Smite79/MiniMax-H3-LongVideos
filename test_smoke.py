@@ -735,6 +735,30 @@ def test_a_state_in_the_scene_is_not_reasserted():
     check("...and changes nothing else", off.count("doors closed") == 3, "")
 
 
+def test_a_modified_state_is_not_read_as_an_act():
+    print("\n=== 'closed rear doors' is not somebody closing them ===")
+    # Reported after the state hold shipped: the doors were STILL opening and being
+    # closed on camera. The node was doing it. A word between the state and its noun
+    # made "closed" parse as the verb, and the shot was handed "the doors are open at
+    # the first frame and shut by the last" -- the inverted guard, asking for exactly
+    # the render it exists to prevent. Whole-path, because that is where it bit.
+    for _beat in ("Mara and Dom walk out from behind a van with closed rear doors.",
+                  "Mara and Dom step out from behind the van, its back doors closed.",
+                  "Mara and Dom stand behind a van with shut cargo doors."):
+        s = run_node("Daylight. A yard.\n\n" + _beat, plan_only=True)[3]
+        check(f"held, not anchored: {_beat[36:60]!r}",
+              "already" in s and "open at the first frame" not in s, "")
+    # The one that really does stage it still gets its two ends.
+    s = run_node("Daylight. A yard.\n\nMara closed the van's doors.", plan_only=True)[3]
+    check("a possessive act is still an act",
+          "The doors are open at the first frame and shut by the last." in s, "")
+    # And the state is bounded: "stays closed" with no end on it is a state something
+    # can happen to before the shot is out.
+    s = run_node("Daylight. A yard.\n\nThey stand by a van with its doors closed.",
+                 plan_only=True)[3]
+    check("the held state is bounded", "for the whole shot" in s, "")
+
+
 def test_a_staged_change_gets_both_ends():
     print("\n=== a staged change is anchored at both ends ===")
     # The shot that WORKS the thing gets no held state -- it is asking for that
@@ -1331,6 +1355,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_a_modified_state_is_not_read_as_an_act()
     test_a_staged_change_gets_both_ends()
     test_dialogue_headroom()
     test_introducing_somebody_already_in_position()
