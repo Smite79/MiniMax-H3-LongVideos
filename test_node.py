@@ -1354,6 +1354,27 @@ def test_a_tagged_object_can_be_taken_off():
         check(f"not a removal: {_beat[:36]!r}", S.infer_removals(_beat, _b) == [])
 
 
+def test_a_written_sound_is_recognised():
+    print("\n=== a sound you wrote, in the words people write it in ===")
+    # Writing the sound into a beat is what opens that shot's audio branch, and it is
+    # the documented way to score a shot with no dialogue. The cue list was nouns --
+    # "hum", "rattle", "footsteps" -- so a sound written with an ordinary noun and a
+    # sound WORD went unrecognised, and the shot was silenced. "her boots loud on the
+    # concrete" is the README's own example.
+    for _t in ("her boots loud on the concrete", "a low hum off the strip light",
+               "her boots scuff the floor", "gravel crunching under the tyres",
+               "a knock at the door", "the engine roars",
+               "rain drumming on the roof", "the fan whirring overhead",
+               "the chain drags and rattles"):
+        check(f"heard: {_t[:34]!r}", S.sound_described(_t))
+    # Ordinary action still stages nothing audible of its own, which is what keeps a
+    # walking shot silent.
+    for _t in ("Nora walks to the window.", "Nora looks at the toolbox.",
+               "Nora sits down on the bench.", "Nora picks up the spanner.",
+               "Dan hands her the cable."):
+        check(f"not a written sound: {_t[:32]!r}", not S.sound_described(_t))
+
+
 def test_a_body_under_effort_has_a_voice():
     print("\n=== effort makes a sound, and it is a voice ===")
     # H3 is joint, so silence on the audio branch tells the model the person makes no
@@ -1510,6 +1531,7 @@ def main():
     test_hardware_belongs_to_somebody()
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
+    test_a_written_sound_is_recognised()
     test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()
     test_schema()
