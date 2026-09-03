@@ -1207,6 +1207,44 @@ def test_sound_clause_closes_the_list():
               not re.search(r"\b(?:no|not|never|without|nobody|silent)\b", cl, re.I))
 
 
+def test_hardware_belongs_to_somebody():
+    print("\n=== a restraint hold names whose ===")
+    # Reported: hardware locked onto one character turned up on the other, over their
+    # clothes. The hold said "every restraint stays whole and closed" and named
+    # nobody, which was fine while a shot meant one person -- put a second one in the
+    # frame and it becomes an instruction about whoever is on screen.
+    sheet = ("Nora: 34, she, red hair, a locked steel waist belt.\n"
+             "Victor: he, 41, navy overalls, work boots.\n"
+             "Kate: she, 20, grey coat")
+    _wear = S.restraint_wearers(sheet)
+    check(f"the wearer is read from the sheet entry (got {_wear})", _wear == ["Nora"])
+    check("...not from anyone else's", "Victor" not in S.restraint_wearers(sheet))
+    check("nobody wearing any, nobody named", S.restraint_wearers(
+        "Nora: 34, she, red hair.\nVictor: he, 41, overalls") == [])
+    two = S.own_hold(S.RESTRAINT_HOLD, ["Nora"], ["Nora", "Victor"])
+    check("with two people the hold names the wearer", "restraint on Nora" in two)
+    check("...and says whose the hardware is", "The hardware is Nora's" in two)
+    check("...pinning the other to their own entry",
+          "exactly what their own entry lists" in two)
+    # Positively phrased: naming who wears it is what excludes everyone else, where
+    # "nobody else is wearing one" asks the model to render an absence.
+    check("...positively",
+          not re.search(r"\b(?:no|not|never|nobody|without)\b", two, re.I))
+    # One person in shot: no ambiguity, and the words would be budget spent on nothing.
+    check("one person in shot is left alone",
+          S.own_hold(S.RESTRAINT_HOLD, ["Nora"], ["Nora"]) == S.RESTRAINT_HOLD)
+    check("nobody wearing hardware is left alone",
+          S.own_hold(S.RESTRAINT_HOLD, [], ["Nora", "Victor"]) == S.RESTRAINT_HOLD)
+    check("no hold, nothing to attribute", S.own_hold("", ["Nora"], ["Nora", "V"]) == "")
+    # Every variant carries the same opening, so all three attribute.
+    for _n, _h in (("chain", S.CHAIN_HOLD), ("chain+pose", S.CHAIN_POSE_HOLD)):
+        check(f"{_n} attributes too",
+              "restraint on Nora" in S.own_hold(_h, ["Nora"], ["Nora", "Victor"]))
+    # Two wearers read as a list.
+    both = S.own_hold(S.RESTRAINT_HOLD, ["Nora", "Kate"], ["Nora", "Kate", "Victor"])
+    check("two wearers are both named", "on Nora and Kate" in both)
+
+
 def test_a_body_under_effort_has_a_voice():
     print("\n=== effort makes a sound, and it is a voice ===")
     # H3 is joint, so silence on the audio branch tells the model the person makes no
@@ -1360,6 +1398,7 @@ def main():
     test_text_in_frame()
     test_reference_tags()
     test_sound_clause_closes_the_list()
+    test_hardware_belongs_to_somebody()
     test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()
     test_schema()

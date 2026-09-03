@@ -260,6 +260,27 @@ it — no removals are inferred from your prose.
 
 ## Things that must stay the same
 
+### Hardware belongs to somebody
+
+A restraint hold used to say *"every restraint stays whole and closed"* and name
+nobody. With one person in the shot that is unambiguous. Put a second person in the
+frame and it becomes an instruction about whoever is on screen — so a belt locked onto
+one character turned up on the other, over their clothes.
+
+The hold now names the wearer, read from the **sheet entry** (the entry is what says
+who is wearing it — a beat can mention a chain without anyone being in it):
+
+> *Every restraint **on Nora** stays whole and closed, fastened exactly as it was put
+> on… The hardware is Nora's, worn on the body it was locked to. Everyone else in the
+> shot has on exactly what their own entry lists.*
+
+Naming who wears it is what excludes everyone else — positively, because at cfg 1
+*"nobody else is wearing one"* is not a prohibition, it is the model being asked to
+render an absence.
+
+Only when the shot describes **more than one person**. With one there is nothing to
+disambiguate and the words would be shot budget spent on nothing.
+
 **Fastened hardware is held for you.** `hold_restraints` (on by default) notices when
 something that fastens is put on a person — handcuffs, a chain, rope, tape — and from
 that shot onward every shot carries one sentence: *every restraint stays whole and
