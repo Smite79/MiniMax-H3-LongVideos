@@ -1373,6 +1373,17 @@ def test_a_written_sound_is_recognised():
                "Nora sits down on the bench.", "Nora picks up the spanner.",
                "Dan hands her the cable."):
         check(f"not a written sound: {_t[:32]!r}", not S.sound_described(_t))
+    # Adverbs only where the bare adjective describes something else: "quietly closes
+    # the door" is a sound being MADE, while these are the absence of one or nothing to
+    # do with one. Opening the branch on an establishing beat is a free branch with no
+    # line in the shot, which is where an invented voice comes from.
+    for _t in ("The workshop is quiet, the roller door shut.", "She is quiet.",
+               "A quiet street at night.", "She gives him a quiet look.",
+               "The light is faint.", "A faint smile.",
+               "He ticks a box on the form."):
+        check(f"still silent: {_t[:36]!r}", not S.sound_described(_t))
+    for _t in ("She quietly closes the door.", "The clock is ticking."):
+        check(f"...but heard: {_t[:32]!r}", S.sound_described(_t))
 
 
 def test_a_body_under_effort_has_a_voice():
