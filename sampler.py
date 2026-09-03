@@ -3409,26 +3409,6 @@ class H3LongVideos:
                 f"nowhere. To aim them, write the tag on the person they depict: 'Nora: "
                 f"<Picture 1>, 34, she, ...'. Each then travels with that person into "
                 f"the shots she is in, and only those")
-        # EACH REFERENCE IS USED ONCE, on the first shot that names it.
-        #
-        # A reference row sits immediately before the target timeline, and near-clean
-        # it asks the model to reproduce the picture -- pose and framing, not just the
-        # face. On the shot that introduces the character that is the point. On every
-        # LATER shot it competes with the staging the beat describes, and the beat
-        # loses: the referenced character holds the portrait's gaze, and anyone with no
-        # reference of their own gets placed relative to the reproduced composition
-        # rather than where the text puts them, then travels there.
-        #
-        # The old node did not hit this because its tag went in a BEAT -- one shot, one
-        # reference. Ours lives in the character sheet, which is stamped into every
-        # shot the character appears in, so what was one shot became all of them. This
-        # restores the old shape without asking anyone to hand-place tags per beat.
-        #
-        # Identity after that first shot is carried by the keyframe chain, which is
-        # what it is for. `info` names the shot each reference was spent on so drift
-        # later in a long chain is visible rather than a surprise.
-        _spent = set()
-        _ref_shot = {}
         shot_refs_all = []
         for _i, _s in enumerate(shots):
             # The tag is the BINDING between a picture and the subject the prompt
@@ -3438,23 +3418,8 @@ class H3LongVideos:
             # order it receives images and a shot carrying only slot 2 receives that
             # image as <Picture 1>.
             if not _tagged:
-                # No tag anywhere: the first shot is the only one that can be "first".
-                shot_refs_all.append(list(refs_all) if _i == 0 else [])
+                shot_refs_all.append(list(refs_all))
                 continue
-            _here = picture_tags(_s)
-            _fresh = {n for n in _here if n not in _spent}
-            for _n in _here:
-                if _n in _fresh and 1 <= _n <= len(refs_all):
-                    _ref_shot[_n] = _i + 1
-                _spent.add(_n)
-            # A tag for a reference already spent comes OUT of the text before
-            # resolution: it would otherwise point at no image, and a tag pointing at
-            # nothing is what conjures a spare subject. resolve_tags then renumbers
-            # what is left and tidies the punctuation behind both.
-            _already = [n for n in _here if n not in _fresh]
-            if _already:
-                _s = _PICTURE_TAG.sub(
-                    lambda m: m.group(0) if int(m.group(1)) in _fresh else "", _s)
             _s, _r, _missing = resolve_tags(_s, refs_all)
             shots[_i] = _s
             shot_refs_all.append(_r)
@@ -3463,25 +3428,39 @@ class H3LongVideos:
                 if _msg not in notes:
                     notes.append(_msg)
         if refs_all:
-            _where = ", ".join(f"<Picture {n}> on shot {s}"
-                               for n, s in sorted(_ref_shot.items())) or "no shot"
+            _named = sum(1 for s in shots if picture_tags(s))
             notes.append(
-                f"{len(refs_all)} reference image(s) supply IDENTITY, and each is spent "
-                f"ONCE, on the first shot that names it: {_where}. A reference row sits "
-                f"immediately before the target timeline and, near-clean, asks the model "
-                f"to reproduce the picture -- pose and framing, not only the face. On the "
-                f"shot introducing the character that is the point; on every later shot "
-                f"it competes with the staging the beat describes, and the beat loses. "
-                f"After that first shot identity is carried by the keyframe chain, which "
-                f"is what it is for -- so watch for drift late in a long chain, and give "
-                f"a character a second tag in a later beat if the face wanders")
-            _unspent = [n for n in range(1, len(refs_all) + 1) if n not in _ref_shot]
-            if _unspent:
+                f"{len(refs_all)} reference image(s) supply IDENTITY, and they go WHERE "
+                f"TAGGED: every shot whose text names <Picture N> carries image N, which "
+                f"is what holds a face across beats instead of letting it drift down the "
+                f"keyframe chain. Put the tag on the person -- 'Nora: <Picture 1>, 34, "
+                f"she, ...' -- and it travels with her. {_named} shot(s) claim one here. "
+                f"References ride alongside the keyframe rather than instead of it: the "
+                f"keyframe anchors the first frame, a reference only says who somebody "
+                f"is, and ComfyUI packs both (keyframe rows then ref rows, in the same "
+                f"order model_base builds the latents). References keep slots 1..N so the "
+                f"tag points at the right image; the handoff is appended after them and "
+                f"disturbs no numbering")
+            if _named > 1 and float(ref_noise_aug) >= KEYFRAME_SAFE_AUG:
                 notes.append(
-                    f"reference slot(s) {', '.join(str(n) for n in _unspent)} were never "
-                    f"spent, because no shot names them. Claim each on the person it "
-                    f"depicts -- 'Nora: <Picture 1>, 34, she, ...' -- or it is connected "
-                    f"and doing nothing")
+                    f"a reference on {_named} shots at ref_noise_aug "
+                    f"{float(ref_noise_aug):g} is the trade this makes. Near-clean, a "
+                    f"reference asks the model to reproduce the PICTURE -- pose and "
+                    f"framing, not only the face -- and on a shot that is not introducing "
+                    f"the character that competes with the staging the beat describes: "
+                    f"the referenced person can hold the portrait's gaze while anyone "
+                    f"without a reference is placed relative to that composition and then "
+                    f"travels to where the text put them. It is the price of the face "
+                    f"holding. A hybrid fl2va/ref2va checkpoint is trained for reference "
+                    f"conditioning and does not make this trade; on a plain fl2va one, "
+                    f"lowering ref_noise_aug is the dial")
+            if _named < len(shots):
+                notes.append(
+                    f"{len(shots) - _named} shot(s) name no <Picture N> at all, so they "
+                    f"carry no reference. Claim it on the person it depicts -- 'Nora: "
+                    f"<Picture 1>, 34, she, ...' -- and it travels with her into the shots "
+                    f"she is in, and only those. A picture the prompt never refers to is "
+                    f"read as ANOTHER subject")
 
 
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
