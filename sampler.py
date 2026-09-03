@@ -2055,10 +2055,37 @@ _STATE_ACTS = (r"opens?|opened|opening|closes?|closed|closing|shuts?|shutting|"
                r"pushes?|pushed|pushing|draws?|drew|drawing|locks?|locked|locking|"
                r"unlocks?|unlocked|unlocking|lifts?|lifted|lifting|raises?|raised|"
                r"lowers?|lowered|swings?|swung|yanks?|yanked|wrenches|wrenched")
-_STATE_ACT = re.compile(r"\b(" + _STATE_ACTS + r")\s+((?:\w+\s+){0,3}?)(" +
+# The gap takes apostrophes: "closed the van's doors" is a determiner phrase, and a
+# gap of bare \w+ does not match one, so the whole act went unseen.
+_STATE_ACT = re.compile(r"\b(" + _STATE_ACTS + r")\s+((?:[\w']+\s+){0,3}?)(" +
                         _STATE_THING + r")\b", re.I)
-# "closed doors" -- the state in front of its noun.
-_STATE_ADJ = re.compile(r"\b(" + _STATE_WORD + r")\s+(" + _STATE_THING + r")\b", re.I)
+# What tells "closed the rear doors" from "closed rear doors": a determiner. The verb
+# reading needs one -- you close THE doors, ITS doors, THE VAN'S doors -- and the
+# adjective reading cannot have one, because the determiner belongs in front of the
+# whole phrase ("a van with closed rear doors").
+#
+# Getting this wrong is not a missed guard, it is an inverted one. Read as a verb,
+# "a van with closed rear doors" earned the anchor "the doors are open at the first
+# frame and shut by the last" -- the node itself asking for the doors to start open
+# and be closed on camera, which is the bug it was written to fix.
+_STATE_DET = re.compile(r"\b(?:the|a|an|its|his|her|their|our|my|your|this|that|these|"
+                        r"those|both|all|each|every|another|one|two|three|\w+'s)\b", re.I)
+
+
+def _adjectival(verb, gap):
+    """Is this state word describing the noun rather than acting on it?
+
+    Only words that are ALSO states can be adjectives: "opens" is a verb however it
+    is placed. Modifiers may sit between -- "closed rear doors", "shut cargo doors" --
+    so the test is the determiner, not the distance."""
+    return (bool(re.fullmatch(_STATE_WORD, verb, re.I))
+            and not _STATE_DET.search(gap or ""))
+
+
+# "closed doors", and "closed rear doors" -- the state in front of its noun, with the
+# modifiers a real sentence puts between them.
+_STATE_ADJ = re.compile(r"\b(" + _STATE_WORD + r")\s+((?:[\w']+\s+){0,2}?)(" +
+                        _STATE_THING + r")\b", re.I)
 # "the doors are closed", "the doors closed", "the doors are still shut". The gap is
 # copulas and nothing else, so a state word further off in the sentence -- belonging
 # to some other object -- is not dragged onto this one.
@@ -2098,7 +2125,7 @@ def state_changes(text):
     out, seen = [], set()
     for m in _STATE_ACT.finditer(text or ""):
         verb, gap, thing = m.group(1), m.group(2), m.group(3)
-        if not gap.strip() and re.fullmatch(_STATE_WORD, verb, re.I):
+        if _adjectival(verb, gap):
             continue
         key = _state_key(thing)
         if key in seen:
@@ -2134,11 +2161,20 @@ def direction_anchor(changes):
 
 def stated_states(text):
     """(thing, state) for every scenery state this text asserts but does not stage."""
-    out, seen = [], set()
+    # A thing this same text WORKS is not a thing standing in a state: "slams the
+    # tailgate shut" reads as both, and the action is the true reading. Left to the
+    # caller this came back twice, once held and once anchored, disagreeing.
+    out, seen = [], set(state_acts(text))
     for pat, order in ((_STATE_ADJ, "sn"), (_STATE_PRED, "ns")):
         for m in pat.finditer(text or ""):
-            state, thing = ((m.group(1), m.group(2)) if order == "sn"
-                            else (m.group(3), m.group(1)))
+            if order == "sn":
+                state, gap, thing = m.group(1), m.group(2), m.group(3)
+                # The same determiner test, from the other side: with one, this is
+                # somebody closing the doors, and the state is not standing at all.
+                if not _adjectival(state, gap):
+                    continue
+            else:
+                state, thing = m.group(3), m.group(1)
             key = _state_key(thing)
             if key in seen:
                 continue
@@ -2155,8 +2191,12 @@ def state_hold(pairs):
     said = []
     for thing, state in pairs[:2]:
         plural = thing.endswith("s")
+        # BOUNDED, for the same reason a removal says "by the last frame": "stays
+        # closed" has no end on it, and a state with time left over is a state
+        # something can happen to before the shot is out.
         said.append(f"The {thing} {'are' if plural else 'is'} already {state} at the "
-                    f"first frame and {'stay' if plural else 'stays'} {state}.")
+                    f"first frame and {'stay' if plural else 'stays'} {state} for the "
+                    f"whole shot.")
     return (" " + " ".join(said)) if said else ""
 
 
