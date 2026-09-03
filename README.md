@@ -441,6 +441,26 @@ guard trims them out of carries no reference at all.
 A picture the prompt never refers to is read as *another* subject, which is why `info`
 reports any shot carrying one it does not name.
 
+### Walking out of frame and coming back
+
+Every shot starts from the previous shot's **last frame**. Somebody who was not in
+that shot is not in the picture this one begins from — so when they come back, their
+appearance is carried by the sheet text and nothing else, and text drifts where a
+picture does not. That is a character walking out of frame and returning looking
+different.
+
+If they have a `<Picture N>` tag, that reference travels with them and pins them. If
+they do not, the node **recovers a frame it already rendered**: on the shot they come
+back to, it sends a frame from the middle of the last shot they *were* in as a
+reference. The middle, because somebody walking out is gone by the last frame and
+somebody walking in is missing from the first.
+
+Deliberately narrow. It only happens when the returning shot describes that person
+**alone**, because the recovered frame carries whoever else was on screen with them,
+and an unexplained person in a reference is how a second one gets drawn. A return into
+company is reported and left alone. `info` names every case either way — who came
+back, on which shot, and which shot the frame came from.
+
 **With no tag anywhere, references go on every shot.** Placing by tag would otherwise
 place them nowhere, which is a connected input silently doing nothing.
 

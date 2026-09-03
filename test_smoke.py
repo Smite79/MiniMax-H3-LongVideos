@@ -677,6 +677,50 @@ def test_back_after_a_shot_away():
     check("a chain nobody leaves reports nothing",
           "back after a shot away" not in straight)
 
+    # And the fix: a frame from the middle of the last shot they WERE in, sent as a
+    # reference on the shot they come back to. The middle because somebody walking
+    # out is gone by the last frame and somebody walking in is missing from the first.
+    seen = []
+    orig = FakeCLIP.tokenize
+
+    def spy(self, text, minimax_ref_items=None, **kw):
+        seen.append(sum(1 for it in (minimax_ref_items or []) if it["type"] == "image"))
+        return orig(self, text, minimax_ref_items=minimax_ref_items, **kw)
+
+    FakeCLIP.tokenize = spy
+    try:
+        base = ["Nora sets a toolbox on the bench.",
+                "Nora walks out through the side entrance.",
+                "Victor kneels by the cable, alone in the workshop."]
+        seen.clear()
+        info = run_node("\n\n".join(base + ["Nora comes back in and picks up the spanner."]),
+                        anchor="A room.", character_memory=mem)[2]
+        # shot 1 no keyframe and no refs; 2 and 3 their keyframe; 4 keyframe + recovered.
+        check("the return shot gets a second picture", seen[1:] == [0, 1, 1, 2],
+              str(seen[1:]))
+        check("...and the run says whose face and from where",
+              "recovered a face for Nora on shot 4, from shot 2" in info)
+        # NARROW: the recovered frame carries whoever else was on screen, so a return
+        # into company is reported and left alone rather than risking a second person.
+        seen.clear()
+        multi = run_node("\n\n".join(
+            base + ["Nora comes back in and Victor hands her the spanner."]),
+            anchor="A room.", character_memory=mem)[2]
+        check("a return into company is left alone", seen[1:] == [0, 1, 1, 1],
+              str(seen[1:]))
+        check("...and nothing is claimed for it", "recovered a face" not in multi)
+        # A tagged character already has their own reference travelling with them.
+        seen.clear()
+        tagged = run_node("\n\n".join(base + ["Nora comes back in and picks up the spanner."]),
+                          anchor="A room.",
+                          character_memory="Nora: <picture 1>, 34, she, red hair.\n"
+                                           "Victor: he, 41, dark hair",
+                          ref_image_1=torch.rand(1, H, W, 3))[2]
+        check("a tagged character is not given a second picture",
+              "recovered a face" not in tagged)
+    finally:
+        FakeCLIP.tokenize = orig
+
 
 def test_a_name_with_no_entry_end_to_end():
     print("\n=== a person the sheet never describes ===")

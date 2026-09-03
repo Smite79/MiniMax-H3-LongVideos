@@ -3044,6 +3044,7 @@ class H3LongVideos:
         active = []                 # the people the previous beat involved
         _seen_before = set()        # everyone a shot has described so far
         _returns = []               # (shot, names back after a shot away)
+        shot_cast = []              # the names each shot describes
         guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
             body, toks, adds = extract_directives(b)
@@ -3271,6 +3272,7 @@ class H3LongVideos:
             beat_words += len(body.split())
             total_words += len(shot_text.split())
             shots.append(shot_text)
+            shot_cast.append(list(active) if character_guard else [])
             speech.append(_speaks)
             # What the AUTHOR wrote, and nothing this file worked out. See above.
             sounded.append(_own)
@@ -3434,6 +3436,7 @@ class H3LongVideos:
         # place them nowhere -- a connected reference that silently does nothing at
         # all. The old node fell back rather than no-op, and so does this.
         _tagged = any(picture_tags(s) for s in shots)
+        _tagged_names = {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}
         if refs_all and not _tagged:
             notes.append(
                 f"{len(refs_all)} reference image(s) connected and no <Picture N> tag "
@@ -3520,6 +3523,9 @@ class H3LongVideos:
         t_start = time.perf_counter()
         vid_out, aud_out, sr = [], [], 44100
         av_fix = 0                  # samples of A/V drift corrected across the chain
+        _captured = {}              # name -> a frame from the last shot they were in
+        _captured_from = {}         # name -> which shot that frame came from
+        _recovered = []             # (shot, name, source shot) actually pinned
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         _deep_cleanup()
 
@@ -3538,9 +3544,32 @@ class H3LongVideos:
                 shot_handoff = None
                 fresh.append(i + 1)
 
+            # SOMEBODY BACK AFTER A SHOT AWAY, with no picture of them anywhere.
+            #
+            # This shot starts from the previous shot's last frame, and they were not
+            # in that shot -- so nothing pictorial carries their appearance and the
+            # sheet text is on its own. A frame from the last shot they WERE in fixes
+            # that, and the node has one: it rendered it.
+            #
+            # Narrow on purpose. Only when this shot describes that person ALONE,
+            # because the recovered frame contains whoever else was on screen when it
+            # was taken, and an unexplained person in a reference is how a second one
+            # gets drawn. A multi-character return is reported and left alone.
+            #
+            # Skipped for anyone with a <Picture N> tag: their own reference already
+            # travels into every shot they are named in, and a second picture of the
+            # same person is just a second picture.
+            _extra = []
+            _cast = shot_cast[i] if i < len(shot_cast) else []
+            if len(_cast) == 1 and _cast[0] not in _tagged_names:
+                _who = _cast[0]
+                if any(n == i + 1 and _who in ws for n, ws in _returns) \
+                        and _captured.get(_who) is not None:
+                    _extra = [_captured[_who]]
+                    _recovered.append((i + 1, _who, _captured_from.get(_who, 0)))
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
-                handoff=shot_handoff, refs=shot_refs_all[i],
+                handoff=shot_handoff, refs=list(shot_refs_all[i]) + _extra,
                 ref_noise_aug=ref_noise_aug, silent=silent)
             if demoted and not _aug_warned:
                 _aug_warned = True
@@ -3616,6 +3645,20 @@ class H3LongVideos:
             # 0..1, and feeding that back in to be re-encoded every boundary is a
             # drift that accumulates rather than cancels.
             handoff = hand_src[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True)
+            # Keep one frame per person in this shot, for the shot they come back on.
+            # The MIDDLE, not the last: a character who walks out during the shot is
+            # gone by the last frame -- which is the whole failure -- and one who walks
+            # in is missing from the first. The middle is where they are on screen.
+            try:
+                if hand_src.shape[0] and shot_cast and i < len(shot_cast):
+                    _mid = hand_src.shape[0] // 2
+                    _keep = hand_src[_mid:_mid + 1].detach().clamp(0.0, 1.0).to(
+                        "cpu", copy=True)
+                    for _who in shot_cast[i]:
+                        _captured[_who] = _keep
+                        _captured_from[_who] = i + 1
+            except Exception:
+                pass                       # a recovered frame is a nicety, not the render
             del hand_src
             if trim_seam and i > 0:
                 imgs = imgs[1:]
@@ -3656,6 +3699,19 @@ class H3LongVideos:
             if cleanup_between_shots:
                 _deep_cleanup()
 
+        if _recovered:
+            notes.append(
+                "recovered a face for "
+                + "; ".join(f"{who} on shot {n}, from shot {src}"
+                            for n, who, src in _recovered)
+                + ". They were back after a shot away with no picture of them anywhere "
+                  "-- the keyframe is the previous shot's last frame and they were not "
+                  "in it -- so a frame from the middle of the last shot they WERE in "
+                  "was sent as a reference. The middle, because somebody walking out is "
+                  "gone by the last frame and somebody walking in is missing from the "
+                  "first. Only done where the shot describes that person ALONE, since "
+                  "the recovered frame carries whoever else was on screen with them, "
+                  "and only for a character with no <Picture N> tag of their own")
         video = torch.cat(vid_out, dim=0)
         # PIXEL upscale, once, on the finished chain. After the latent pass and after
         # the join, so a model-based upscaler sees whole frames and the seam is not
