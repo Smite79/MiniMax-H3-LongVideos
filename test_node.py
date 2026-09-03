@@ -1277,6 +1277,49 @@ def test_hardware_belongs_to_somebody():
     check("two wearers are both named", "on Nora and Kate" in both)
 
 
+def test_one_pronoun_is_one_person():
+    print("\n=== three characters, and a pronoun two of them answer to ===")
+    # Reported with three characters defined and two in a shot: the third was pulled
+    # in. Resolution walked the sheet ENTRIES and took everyone declaring "she" --
+    # unambiguous with one woman on the sheet, a guess with two, and it took both.
+    three = ("Nora: 34, she, red hair.\n"
+             "Kate: 27, she, blonde.\n"
+             "Dan: 41, he, dark hair")
+    two = "Nora: 34, she, red hair.\nDan: 41, he, dark hair"
+    for _sheet, _label, _beat, _prev, _want in (
+            (three, "both named outright", "Dan hands Nora the spanner.", [],
+             ["Nora", "Dan"]),
+            # The scene continuing is the only evidence there is, so the one who was
+            # in the last beat wins.
+            (three, "the last beat narrows it", "Dan takes her coat off.", ["Nora"],
+             ["Dan", "Nora"]),
+            # Nothing to narrow with: add NOBODY. Naming a person the beat did not is
+            # the failure; leaving them to the keyframe is recoverable.
+            (three, "nothing narrows it", "Dan takes her coat off.", [], ["Dan"]),
+            # Already accounted for by somebody the beat names outright.
+            (three, "a named person answers it", "Nora and Dan look at her hands.", [],
+             ["Nora", "Dan"]),
+            (three, "only one man on the sheet", "Nora walks out behind him.", [],
+             ["Nora", "Dan"]),
+            (three, "she only, narrowed", "She walks to the window.", ["Kate"], ["Kate"]),
+            # A two-hander is unambiguous and behaves exactly as before.
+            (two, "two-hander, named + her", "Dan takes her coat off.", [],
+             ["Dan", "Nora"]),
+            (two, "two-hander, pronoun only", "She lies still.", [], ["Nora"])):
+        _got = S.sheet_for_beat(_sheet, _beat, _prev)[1]
+        check(f"{_label}: {_got}", sorted(_got) == sorted(_want))
+    # ...and it is reported, because the fix is to write the name.
+    _amb = S.unresolved_pronouns(three, "Dan takes her coat off.", [])
+    check(f"the ambiguity is reported ({_amb})",
+          _amb == [("she", ["Nora", "Kate"])])
+    check("...but not once the last beat narrows it",
+          S.unresolved_pronouns(three, "Dan takes her coat off.", ["Nora"]) == [])
+    check("...nor when the beat names one of them",
+          S.unresolved_pronouns(three, "Nora and Dan look at her hands.", []) == [])
+    check("...nor with only one person declaring it",
+          S.unresolved_pronouns(two, "Dan takes her coat off.", []) == [])
+
+
 def test_a_tagged_object_can_be_taken_off():
     print("\n=== a tagged object is still a wardrobe entry ===")
     # An object carrying its own reference -- "a silver locket <Picture 2>," -- was
@@ -1465,6 +1508,7 @@ def main():
     test_reference_tags()
     test_sound_clause_closes_the_list()
     test_hardware_belongs_to_somebody()
+    test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
     test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()
