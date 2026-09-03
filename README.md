@@ -91,17 +91,29 @@ on the doors open and somebody closes them — the state becomes the most intere
 event in the sentence.
 
 `hold_scene_state` (on) says the state is already true at the first frame, for doors,
-gates, windows, curtains, blinds, shutters, hatches, tailgates, lids and drawers. A beat
-that **works** the thing — *"Mara opens the van doors"* — is left alone, and once a beat
-has changed a state, no later shot is told the old one.
+gates, windows, curtains, blinds, shutters, hatches, tailgates, lids and drawers. Once a
+beat has changed a state, no later shot is told the old one.
 
-This is worse at low step counts. On a 4-step distill LoRA the layout is committed almost
-immediately and there are no later steps to argue a wrong opening frame back.
+**And a staged change gets both of its ends.** Some LoRAs — silveroxide's 4-step among
+them — render an action **backwards**: the beat opens the doors and the shot closes them.
+A beat naming one state names neither end, so the reverse answers it just as well. The
+shot working the thing is told *"The doors are shut at the first frame and open by the
+last"* instead of being told the state holds.
 
-Two things it does not cover: scenery outside that list, and a state your **scene**
-paragraph keeps asserting after a beat changed it — your text reaches the model word for
-word, so put changing scenery in the beat rather than the scene. `first_frame` pins
-shot 1's opening outright if a state has to be exact.
+Verbs that genuinely go either way — *pulls*, *draws*, *slides*, *swings* — get no
+anchor. Drawing the curtains closes them; a wrong anchor asks for the reversal rather
+than allowing it. Two sentences per shot at most, both kinds sharing that budget.
+
+Both are worse at low step counts. On a 4-step distill LoRA the layout is committed
+almost immediately and there are no later steps to argue a wrong opening frame back.
+
+**Reversal is likeliest in shot 1**, which has no previous last frame pinning where it
+starts — later shots inherit one. `first_frame` pins shot 1's outright.
+
+What this does not cover: scenery outside that list, actions other than opening and
+shutting, and a state your **scene** paragraph keeps asserting after a beat changed it.
+Your text reaches the model word for word, so put changing scenery in the beat rather
+than the scene.
 
 ## Clothing
 
@@ -213,7 +225,7 @@ resets at every cut.
 | `auto_remove` | read removals from the prose |
 | `restart_after_removal` | break the chain after a removal, so a garment cannot be inherited back |
 | `hold_restraints` | keep hardware fastened, and the same object, once it is on |
-| `hold_scene_state` | put a described state at the first frame instead of leaving it to be performed |
+| `hold_scene_state` | put a described state at the first frame, and give a staged change both its ends |
 | `auto_sound` | add the sound an action implies |
 | `silence_nonspeech` | silence shots with no line and no sound |
 | `trim_seam` | drop the duplicated frame at each cut |

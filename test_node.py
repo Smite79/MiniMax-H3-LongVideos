@@ -1018,6 +1018,50 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_a_staged_change_names_both_ends():
+    print("\n=== which end of the action is which ===")
+    # Reported on the same 4-step LoRA: some distill LoRAs render an action
+    # BACKWARDS -- the beat opens the doors and the shot closes them. A beat naming
+    # one state names neither END, so the reverse is an equally good answer to it.
+    # Saying both ends settles it, the way a removal already says "off during this
+    # shot and away by the last frame".
+    check("opening runs shut to open",
+          S.direction_anchor(S.state_changes("Mara opens the van doors."))
+          == " The doors are shut at the first frame and open by the last.")
+    check("shutting runs open to shut",
+          S.direction_anchor(S.state_changes("Dom slams the tailgate shut."))
+          == " The tailgate is open at the first frame and shut by the last.")
+    check("locking shuts", S.state_changes("Dom locks the hatch.") == [("hatch", "shut")])
+    check("lifting opens", S.state_changes("Mara lifts the lid.") == [("lid", "open")])
+    # A verb that genuinely goes either way gets NO anchor. Drawing the curtains
+    # closes them and pulling a door can do either, and a wrong anchor is worse than
+    # none: it asks for the reversal instead of merely allowing it.
+    for _t in ("Mara pulls the curtains.", "Dom draws the blinds.",
+               "Mara slides the door.", "Dom swings the gate."):
+        _ch = S.state_changes(_t)
+        check(f"no direction guessed: {_t[:30]!r}",
+              _ch and _ch[0][1] is None and S.direction_anchor(_ch) == "")
+    # ...but it still counts as having been WORKED, so the old state is not re-asserted
+    # in a later shot. Not knowing the new state is a reason to say nothing, not a
+    # reason to say the previous thing.
+    check("an ambiguous verb still latches", S.state_acts("Dom draws the blinds.") == ["blind"])
+    check("an adjective still does not", S.state_acts("They pass the closed doors.") == [])
+    # The sentence itself.
+    cl = S.direction_anchor([("doors", "open")])
+    check("the clause is one sentence", cl.count(".") == 1)
+    check("...and names both ends", "first frame" in cl and "by the last" in cl)
+    check("...and is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    check("...and agrees with a singular",
+          S.direction_anchor([("hatch", "shut")]).startswith(" The hatch is open"))
+    # Two at most, sharing a budget with the held states.
+    many = S.direction_anchor([("doors", "open"), ("lid", "open"), ("gate", "shut")])
+    check("at most two changes are anchored", many.count("first frame") == 2)
+    check("nothing staged, nothing said", S.direction_anchor([]) == "")
+    check("...and a directionless change says nothing",
+          S.direction_anchor([("curtains", None)]) == "")
+
+
 def test_sound_described():
     print("\n=== a beat that asks for a sound keeps its audio ===")
     # Silence is conditioned on encoded silence, which is not "no speech" but "no
@@ -1620,6 +1664,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_a_staged_change_names_both_ends()
     test_sound_described()
     test_sound_is_derived_from_the_action()
     test_pace()

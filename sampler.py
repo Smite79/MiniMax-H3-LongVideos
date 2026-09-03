@@ -2073,20 +2073,63 @@ def _state_key(thing):
     return t[:-2] if t.endswith("es") and t.startswith("hatch") else t.rstrip("s")
 
 
-def state_acts(text):
-    """Which of those things this text actually OPENS, SHUTS or LOCKS.
+# Which way a verb runs. Reported: some distill LoRAs render an action BACKWARDS --
+# the beat opens the doors and the shot closes them. A single staged action is
+# direction-ambiguous to a model that has learned to treat a clip and its reverse as
+# the same clip, which is what time-flip augmentation teaches. Naming the two ends
+# settles it, and it is the same thing a removal already does: "off during this shot
+# and away by the last frame".
+#
+# Only verbs that HAVE a direction. "pulls", "draws", "slides" and "swings" do not:
+# drawing the curtains closes them and pulling a door can do either, and a wrong
+# anchor is worse than none -- it asks for the reversal instead of merely allowing it.
+_OPENS = re.compile(r"(?:opens?|opened|opening|unlocks?|unlocked|unlocking|"
+                    r"lifts?|lifted|lifting|raises?|raised)\Z", re.I)
+_SHUTS = re.compile(r"(?:closes?|closed|closing|shuts?|shutting|slams?|slammed|"
+                    r"slamming|locks?|locked|locking|lowers?|lowered)\Z", re.I)
+
+
+def state_changes(text):
+    """[(thing, 'open'|'shut'|None)] for the scenery this text actually works.
 
     A state word sitting straight in front of its noun is an adjective describing
-    the thing, not a verb acting on it: "the closed doors" says nothing happens."""
-    out = []
+    the thing, not a verb acting on it: "the closed doors" says nothing happens.
+    The direction is None where the verb does not carry one."""
+    out, seen = [], set()
     for m in _STATE_ACT.finditer(text or ""):
         verb, gap, thing = m.group(1), m.group(2), m.group(3)
         if not gap.strip() and re.fullmatch(_STATE_WORD, verb, re.I):
             continue
         key = _state_key(thing)
-        if key not in out:
-            out.append(key)
+        if key in seen:
+            continue
+        seen.add(key)
+        way = ("open" if _OPENS.match(verb) else
+               "shut" if _SHUTS.match(verb) else None)
+        out.append((thing.lower(), way))
     return out
+
+
+def state_acts(text):
+    """Which of those things this text works, in either direction."""
+    return [_state_key(t) for t, _ in state_changes(text)]
+
+
+def direction_anchor(changes):
+    """Say which end of a staged change is which, for the ones that have a direction.
+
+    Two at most, and the caller trades these against the held states: a shot carrying
+    four continuity sentences is a shot that has stopped being about its beat."""
+    said = []
+    for thing, way in changes:
+        if not way:
+            continue
+        start, end = ("shut", "open") if way == "open" else ("open", "shut")
+        said.append(f"The {thing} {'are' if thing.endswith('s') else 'is'} {start} at "
+                    f"the first frame and {end} by the last.")
+        if len(said) == 2:
+            break
+    return (" " + " ".join(said)) if said else ""
 
 
 def stated_states(text):
@@ -3170,11 +3213,19 @@ class H3LongVideos:
                                "Doors, gates, windows, curtains, blinds, shutters, "
                                "hatches, tailgates, lids and drawers. Two at most per "
                                "shot.\n\n"
-                               "A beat that WORKS the thing is left alone -- 'Mara opens "
-                               "the doors' is asking for exactly that -- and once a beat "
-                               "has changed a state, no later shot is told the old one, "
-                               "even though the scene paragraph still says it. info lists "
-                               "which shots got one."}),
+                               "A beat that WORKS the thing is not held -- 'Mara opens the "
+                               "doors' is asking for exactly that motion. It is given the "
+                               "two ENDS of the change instead: shut at the first frame, "
+                               "open by the last. Some distill LoRAs render an action "
+                               "backwards, and a beat naming one state names neither end, "
+                               "so the reverse answers it just as well. Verbs that go "
+                               "either way -- pulls, draws, slides, swings -- get no "
+                               "anchor, since a wrong one asks for the reversal rather "
+                               "than allowing it.\n\n"
+                               "Once a beat has changed a state, no later shot is told "
+                               "the old one, even though the scene paragraph still says "
+                               "it. Two sentences per shot at most, the two kinds sharing "
+                               "that budget. info lists which shots got which."}),
             },
         }
 
@@ -3318,6 +3369,7 @@ class H3LongVideos:
         # paragraph goes into every shot still saying "doors closed".
         state_acted = set()
         stated_shots = []           # shots given a state put at the first frame
+        turned_shots = []           # shots given both ends of a staged change
         stripped_shots = set()      # 0-based shots that took something off
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
         # an object. A sheet LABELS them, which beats scanning prose for capitals --
@@ -3585,16 +3637,24 @@ class H3LongVideos:
             # because the van usually stands in the scene paragraph rather than in
             # the beat -- and suppressed for anything this beat is actually working,
             # since a shot that opens the doors is a shot about the doors opening.
-            _pairs = []
+            _pairs, _moves = [], []
             if hold_scene_state:
-                _acting = state_acts(body)
+                _moves = state_changes(body)
+                _acting = [_state_key(t) for t, _ in _moves]
                 _pairs = [(t, s) for t, s in stated_states(line)
                           if _state_key(t) not in state_acted and _state_key(t) not in _acting]
-            _state = state_hold(_pairs)
+            # Which end of the action is which. Some distill LoRAs render a staged
+            # change backwards, and a beat that names one state names neither end.
+            _turn = direction_anchor(_moves)
+            # The two share a budget. Holding a state and anchoring a change are both
+            # continuity, and four such sentences is a shot about its own continuity.
+            _state = state_hold(_pairs[:max(0, 2 - _turn.count("first frame"))]) + _turn
             if _pairs:
                 stated_shots.append(len(shots) + 1)
+            if _turn:
+                turned_shots.append(len(shots) + 1)
             # Latch what this beat changed, so no later shot re-asserts the old state.
-            state_acted.update(state_acts(body))
+            state_acted.update(_state_key(t) for t, _ in _moves)
             # The chain clause SUBSUMES the restraint hold -- it says "whole and closed"
             # itself. Emitting both said it twice, which is twice the stasis for one
             # guarantee.
@@ -3762,6 +3822,17 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if turned_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in turned_shots)} stage a change with a "
+                f"direction -- something opened or shut -- so the shot is told both ends: "
+                f"what is true at the first frame and what is true by the last. Some "
+                f"distill LoRAs render an action backwards, and a beat naming one state "
+                f"names neither end, so the reverse reads as an equally good answer. Verbs "
+                f"that genuinely go either way -- pulls, draws, slides, swings -- get no "
+                f"anchor, because a wrong one asks for the reversal instead of allowing "
+                f"it. Reversal is likeliest in shot 1, which has no previous last frame "
+                f"pinning where it starts; first_frame pins it. Off with hold_scene_state.")
         if inferred_sound:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in inferred_sound)} were given the "

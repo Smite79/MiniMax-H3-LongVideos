@@ -717,9 +717,10 @@ def test_a_state_in_the_scene_is_not_reasserted():
     check("shot 1 is told the doors are already closed",
           "already closed at the first frame" in shots[0], "")
     # The beat that opens them is asking for that motion. Holding the state here
-    # would be the node arguing with the script.
-    check("the shot that opens them is left alone",
-          "first frame" not in shots[1], "")
+    # would be the node arguing with the script. It gets the two ENDS of the change
+    # instead, which is a different sentence and the subject of its own test.
+    check("the shot that opens them is not told the state holds",
+          "already closed" not in shots[1], "")
     check("...and the shot after is not told the old state",
           "first frame" not in shots[2], "")
     # The author's own words still reach the model verbatim -- the node adds nothing
@@ -732,6 +733,39 @@ def test_a_state_in_the_scene_is_not_reasserted():
     off = run_node(P, plan_only=True, hold_scene_state=False)[3]
     check("the switch turns it off", "first frame" not in off, "")
     check("...and changes nothing else", off.count("doors closed") == 3, "")
+
+
+def test_a_staged_change_gets_both_ends():
+    print("\n=== a staged change is anchored at both ends ===")
+    # The shot that WORKS the thing gets no held state -- it is asking for that
+    # motion -- but it is exactly the shot a reversing LoRA renders backwards. It
+    # gets the two ends instead.
+    P = ("Daylight. A yard, and a van with its doors closed.\n\n"
+         "Mara and Dom stand behind the van.\n\n"
+         "Mara opens the van doors and climbs in.\n\n"
+         "Dom slams the tailgate shut.")
+    shots = [s for s in run_node(P, plan_only=True)[3].split("---") if s.strip()]
+    check("shot 1 holds the standing state",
+          "already closed at the first frame" in shots[0], "")
+    check("shot 2 gets both ends of the opening",
+          "The doors are shut at the first frame and open by the last." in shots[1], "")
+    check("shot 3 gets both ends of the shutting",
+          "The tailgate is open at the first frame and shut by the last." in shots[2], "")
+    check("the working shot is not also told the state holds",
+          "already" not in shots[1].split("climbs in.")[1], "")
+    info = run_node(P, plan_only=True)[2]
+    check("info names the anchored shots", "shot(s) 2, 3 stage a change" in info, "")
+    check("...and says where reversal is likeliest", "shot 1, which has no previous" in info, "")
+    off = run_node(P, plan_only=True, hold_scene_state=False)[3]
+    check("the switch turns it off too", "by the last" not in off, "")
+    # Continuity and beat share one shot. Two anchors plus two held states would be
+    # four continuity sentences on a beat that is one line long.
+    B = ("A yard. The gate is open and the blinds are drawn.\n\n"
+         "Mara opens the van doors and Dom lifts the lid of the crate.")
+    one = run_node(B, plan_only=True)[3]
+    check("at most two frame sentences in a shot", one.count("first frame") == 2, "")
+    check("...and the beat's own action wins the budget",
+          "The doors are shut" in one and "The lid is shut" in one, "")
 
 
 def test_dialogue_headroom():
@@ -1297,6 +1331,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_a_staged_change_gets_both_ends()
     test_dialogue_headroom()
     test_introducing_somebody_already_in_position()
     test_back_after_a_shot_away()
