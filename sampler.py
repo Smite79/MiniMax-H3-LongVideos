@@ -1957,6 +1957,36 @@ def names_any(text, tokens):
 # jumper" takes off the coat; the jumper is what becomes visible. The old version of
 # this node matched garment words anywhere in the beat and took both off, which is
 # the failure that made prose inference untrustworthy.
+def person_tags(text):
+    """The <Picture N> tags that belong to a PERSON rather than to an object.
+
+    Decided by what stands immediately BEFORE the tag. A name -- capitalised, with or
+    without its colon -- means the picture is of that person: "Nora: <Picture 1>",
+    "Nora <Picture 1> in a grey coat". A lowercase noun means it is a picture OF the
+    thing it is standing next to: "a silver locket <Picture 2>".
+
+    That distinction is what lets an object's reference come off with the object. A
+    person's tag has to survive a removal that shares its fragment, or the shot loses
+    its identity reference; an object's tag has to go, or it keeps asserting the thing
+    that was just taken off."""
+    out = []
+    for m in _PICTURE_TAG.finditer(text or ""):
+        before = (text[:m.start()]).rstrip().rstrip(",").rstrip()
+        w = re.search(r"([\w'’-]+)$", before)
+        # An object owns the tag only when a lowercase NOUN stands immediately before
+        # it -- "a silver locket <Picture 2>". Everything else is the person's: a
+        # name, a colon, an age ("Kate is 20, <Picture 1> blonde crop top"), or
+        # nothing at all. Erring this way on purpose, because losing a person's
+        # identity reference costs the shot its face, while an object tag left behind
+        # only keeps describing something already taken off.
+        if not before.endswith(":") and w:
+            head = w.group(1)[:1]
+            if head.isalpha() and head.islower():
+                continue                      # the picture belongs to the object
+        out.append(m.group(1))
+    return out
+
+
 _OBJECT_END = re.compile(r"(?:,|;|\.|\bexposing\b|\brevealing\b|\bshowing\b|\bleaving\b|"
                          r"\bto\s+expose\b|\bto\s+reveal\b|\bthen\b|\buntil\b)", re.I)
 
@@ -2232,10 +2262,18 @@ def scrub_removed(text, tokens):
                 sides = re.split(r"\s+\band\b\s+", frag, flags=re.I)
                 gone = [s for s in sides if any(p.search(s) for p in pats)]
                 keep = [s for s in sides if s not in gone] if len(sides) > 1 else []
-                # A <Picture N> tag is not clothing and must never leave with a
-                # garment that happened to share its fragment -- losing it costs
-                # that shot its identity reference.
-                tags = [n for s in (gone or [frag]) for n in _PICTURE_TAG.findall(s)]
+                # A PERSON's tag must not leave with a garment that happened to share
+                # its fragment -- losing it costs that shot its identity reference.
+                # An OBJECT's tag is the opposite case: "a silver locket <Picture 2>"
+                # is a picture OF the locket, so when the locket comes off the tag has
+                # to come off with it. Left behind it kept asserting the thing that
+                # was just removed, and a tag pointing at a picture nothing in the
+                # text accounts for is also how a spare subject gets drawn.
+                #
+                # The person's tag is the one in the fragment carrying their LABEL --
+                # "Nora: <Picture 1>" -- because that is where a sheet entry puts it.
+                # Any other tag belongs to whatever it is standing next to.
+                tags = [n for s in (gone or [frag]) for n in person_tags(s)]
                 piece = " and ".join(k for k in keep if k.strip())
                 if tags:
                     piece = ((piece + " ") if piece.strip() else "") + \
@@ -3176,6 +3214,17 @@ class H3LongVideos:
             if toks:
                 stripped_shots.add(len(shots))
                 gone.extend(t for t in toks if t not in gone)
+                # An added layer is subject to removal too: once the shirt comes off,
+                # the phrase that introduced it goes with it, or the scene keeps
+                # describing a garment that is no longer there. Retired HERE, at the
+                # moment of removal, so it retires the phrases that exist NOW -- an
+                # add written later is putting the thing back on and must survive.
+                _retired = [a for a in shown if names_any(a, toks)]
+                if _retired:
+                    shown = [a for a in shown if a not in _retired]
+                    notes.append(f"shot {len(shots) + 1} takes off something an earlier "
+                                 f"'add:' had put on, so that line retires with it: "
+                                 + "; ".join(_retired))
                 notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
                              + ", ".join(toks))
             maybe = missing_removals(body, scene, gone) if not auto_remove else []
@@ -3216,10 +3265,12 @@ class H3LongVideos:
             shot_scene = scrub_removed(
                 "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
                 visible + covered)
-            # An added layer is subject to removal too: once the shirt comes off, the
-            # phrase that introduced it has to go with it, or the scene keeps
-            # describing a garment that is no longer there.
-            live = [a for a in shown if not names_any(a, gone)]
+            # Retirement is handled at the moment of removal, above, so this is just
+            # what is currently on. Filtering here against the whole history of `gone`
+            # meant an add could never put anything BACK: the token stays in `gone`
+            # for the rest of the film, so "add: her locket is back on" was suppressed
+            # by the removal that took it off in the first place.
+            live = list(shown)
             if live:
                 tail = ". ".join(a.rstrip(".") for a in live) + "."
                 tail = tail[0].upper() + tail[1:]
