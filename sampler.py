@@ -2030,6 +2030,93 @@ def anchor_clause(phrases):
     return " Each piece of hardware sits where it belongs: " + "; ".join(phrases) + "."
 
 
+# A state written down is a state the model can render by ARRIVING at it.
+#
+# Reported: "stand behind a van with its doors closed" put the doors open and the
+# characters closing them. The text named a state and never said WHEN it was true,
+# and a video model asked for a door renders the thing a door does. The state is
+# the most interesting event in the sentence, so it gets performed.
+#
+# Fewer sampling steps make it worse rather than better. On a 4-step distill
+# schedule the layout is committed almost immediately, so an opening frame that
+# guessed wrong is never argued out of it by the later steps -- there are none.
+# Saying the state is already true at the first frame costs one sentence and takes
+# the event away.
+#
+# Scenery only, and only words that are not also something worn: no "boots", no
+# "hood", no "bonnet". A character sheet lives in this same text.
+_STATE_THING = (r"doors?|gates?|windows?|curtains?|blinds?|shutters?|"
+                r"hatch(?:es)?|tailgates?|lids?|drawers?")
+_STATE_WORD = r"closed|shut|open|locked|unlocked|latched|bolted|drawn|ajar|sealed"
+# Verbs that CHANGE one of those states. Several are also the state word itself --
+# "closed" is both -- which the reader below has to tell apart.
+_STATE_ACTS = (r"opens?|opened|opening|closes?|closed|closing|shuts?|shutting|"
+               r"slams?|slammed|slamming|slides?|slid|sliding|pulls?|pulled|pulling|"
+               r"pushes?|pushed|pushing|draws?|drew|drawing|locks?|locked|locking|"
+               r"unlocks?|unlocked|unlocking|lifts?|lifted|lifting|raises?|raised|"
+               r"lowers?|lowered|swings?|swung|yanks?|yanked|wrenches|wrenched")
+_STATE_ACT = re.compile(r"\b(" + _STATE_ACTS + r")\s+((?:\w+\s+){0,3}?)(" +
+                        _STATE_THING + r")\b", re.I)
+# "closed doors" -- the state in front of its noun.
+_STATE_ADJ = re.compile(r"\b(" + _STATE_WORD + r")\s+(" + _STATE_THING + r")\b", re.I)
+# "the doors are closed", "the doors closed", "the doors are still shut". The gap is
+# copulas and nothing else, so a state word further off in the sentence -- belonging
+# to some other object -- is not dragged onto this one.
+_STATE_PRED = re.compile(r"\b(" + _STATE_THING + r")\s+" +
+                         r"((?:(?:are|is|was|were|remains?|stay|stays|still|both|all)\s+){0,2})(" +
+                         _STATE_WORD + r")\b", re.I)
+
+
+def _state_key(thing):
+    """One key for 'door' and 'doors', so a beat acting on either clears both."""
+    t = (thing or "").lower()
+    return t[:-2] if t.endswith("es") and t.startswith("hatch") else t.rstrip("s")
+
+
+def state_acts(text):
+    """Which of those things this text actually OPENS, SHUTS or LOCKS.
+
+    A state word sitting straight in front of its noun is an adjective describing
+    the thing, not a verb acting on it: "the closed doors" says nothing happens."""
+    out = []
+    for m in _STATE_ACT.finditer(text or ""):
+        verb, gap, thing = m.group(1), m.group(2), m.group(3)
+        if not gap.strip() and re.fullmatch(_STATE_WORD, verb, re.I):
+            continue
+        key = _state_key(thing)
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def stated_states(text):
+    """(thing, state) for every scenery state this text asserts but does not stage."""
+    out, seen = [], set()
+    for pat, order in ((_STATE_ADJ, "sn"), (_STATE_PRED, "ns")):
+        for m in pat.finditer(text or ""):
+            state, thing = ((m.group(1), m.group(2)) if order == "sn"
+                            else (m.group(3), m.group(1)))
+            key = _state_key(thing)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((thing.lower(), state.lower()))
+    return out
+
+
+def state_hold(pairs):
+    """One sentence putting those states at the first frame instead of in the action.
+
+    Two at most. These sentences are continuity, and continuity that outgrows the
+    beat is what the beat stops being about."""
+    said = []
+    for thing, state in pairs[:2]:
+        plural = thing.endswith("s")
+        said.append(f"The {thing} {'are' if plural else 'is'} already {state} at the "
+                    f"first frame and {'stay' if plural else 'stays'} {state}.")
+    return (" " + " ".join(said)) if said else ""
+
+
 def rigid_hardware(text):
     """Is the hardware here the kind that cannot flex?"""
     return bool(_RIGID_HARDWARE.search(text or ""))
@@ -3068,6 +3155,26 @@ class H3LongVideos:
                                "alone -- what you wrote wins. A shot given sound is also "
                                "not silenced, since it is now asking for audio. info "
                                "lists which shots got one."}),
+                # APPENDED, like every widget before it. Saved workflows restore these
+                # positionally with no names stored, so inserting one shifts every
+                # value after it into the wrong control.
+                "hold_scene_state": ("BOOLEAN", {"default": True,
+                    "tooltip": "Put a described state at the first frame instead of "
+                               "leaving it to be performed.\n\n"
+                               "'A van with its doors closed' names a state and never "
+                               "says when it is true. A video model asked for a door "
+                               "renders what a door does, so the shot opens on the doors "
+                               "open and the characters close them -- the state arrives "
+                               "as the action, because that is the most interesting "
+                               "event in the sentence.\n\n"
+                               "Doors, gates, windows, curtains, blinds, shutters, "
+                               "hatches, tailgates, lids and drawers. Two at most per "
+                               "shot.\n\n"
+                               "A beat that WORKS the thing is left alone -- 'Mara opens "
+                               "the doors' is asking for exactly that -- and once a beat "
+                               "has changed a state, no later shot is told the old one, "
+                               "even though the scene paragraph still says it. info lists "
+                               "which shots got one."}),
             },
         }
 
@@ -3091,7 +3198,8 @@ class H3LongVideos:
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
-            character_guard=True, pace=1.0, auto_sound=True, **_removed):
+            character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
+            **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
@@ -3204,6 +3312,12 @@ class H3LongVideos:
         sounded = []                # beats that ask for a sound of their own
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
+        # Scenery whose state a beat has CHANGED. After that the node stops asserting
+        # the state it was written with, because it is no longer the state: a van
+        # opened in shot 2 must not be told it is shut in shot 3, and the scene
+        # paragraph goes into every shot still saying "doors closed".
+        state_acted = set()
+        stated_shots = []           # shots given a state put at the first frame
         stripped_shots = set()      # 0-based shots that took something off
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
         # an object. A sheet LABELS them, which beats scanning prose for capitals --
@@ -3467,6 +3581,20 @@ class H3LongVideos:
                              f"it, so the shot says where it sits: "
                              f"{anchors.split(': ', 1)[1].rstrip('.')}")
             line = f"{shot_scene} {body}".strip() if shot_scene else body
+            # A state the text asserts but does not stage. Read from the whole line,
+            # because the van usually stands in the scene paragraph rather than in
+            # the beat -- and suppressed for anything this beat is actually working,
+            # since a shot that opens the doors is a shot about the doors opening.
+            _pairs = []
+            if hold_scene_state:
+                _acting = state_acts(body)
+                _pairs = [(t, s) for t, s in stated_states(line)
+                          if _state_key(t) not in state_acted and _state_key(t) not in _acting]
+            _state = state_hold(_pairs)
+            if _pairs:
+                stated_shots.append(len(shots) + 1)
+            # Latch what this beat changed, so no later shot re-asserts the old state.
+            state_acted.update(state_acts(body))
             # The chain clause SUBSUMES the restraint hold -- it says "whole and closed"
             # itself. Emitting both said it twice, which is twice the stasis for one
             # guarantee.
@@ -3523,7 +3651,7 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            shot_text = (line + tail + anchors + _sound + hold + fall + turn).strip()
+            shot_text = (line + tail + anchors + _state + _sound + hold + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
@@ -3625,6 +3753,15 @@ class H3LongVideos:
                          + f" = ~{sum(lens) / H3_FPS:.1f}s total")
         if len_note:
             notes.append(len_note)
+        if stated_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in stated_shots)} describe scenery in a "
+                f"state -- doors closed, curtains drawn -- so the shot is told that state "
+                f"is already true at the first frame. A state written down and not placed "
+                f"in time is a state the model can render by arriving at it, which is a "
+                f"van whose doors open so somebody can close them. A beat that works the "
+                f"thing itself is left alone, and once a beat has changed a state no "
+                f"later shot is told the old one. Off with hold_scene_state.")
         if inferred_sound:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in inferred_sound)} were given the "
