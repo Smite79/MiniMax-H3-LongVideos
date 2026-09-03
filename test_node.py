@@ -901,18 +901,21 @@ def test_hardware_has_somewhere_to_go():
         check(f"already placed: {_t[:36]!r}", S.unanchored_hardware(_t) == [])
     check("no hardware, nothing to place",
           S.unanchored_hardware("Maya walks to the window.") == [])
-    # A chastity belt is not a waistband. The generic belt phrase said nothing about
-    # where it fastens, so the lock went where locks usually go on a strap -- behind.
-    _cb = S.unanchored_hardware("Jon shows her a chastity belt.")
-    check("a chastity belt gets its own placement", len(_cb) == 1)
-    check("...with the lock at the front", "locks at the front" in _cb[0])
-    check("...and the shield between the legs", "between the legs" in _cb[0])
-    check("the plugged variant is the same belt",
-          S.unanchored_hardware("Jon shows her a plugged chastity belt.") == _cb)
-    # The plain belt entry must not ALSO match inside "chastity belt", or the shot
-    # states two different placements for one object.
-    check("...and the plain belt phrase does not double up",
-          not any("closes around the waist" in p for p in _cb))
+    # A chastity belt gets NO placement clause: it is the item most likely to arrive
+    # with its own <Picture N>, and a written description of where the shield and the
+    # lock sit argues with the picture instead of adding to it.
+    for _t in ("Jon shows her a chastity belt.",
+               "Jon locks a chastity belt on her.",
+               "Jon shows her a plugged chastity belt."):
+        check(f"no clause for: {_t[:38]!r}", S.unanchored_hardware(_t) == [])
+    # The plain belt entry must not reach inside "chastity belt" either, or the shot
+    # is told where a waistband sits when the picture already shows the object.
+    check("the plain belt phrase does not reach it",
+          not any("closes around the waist" in p
+                  for p in S.unanchored_hardware("Jon shows her a chastity belt.")))
+    check("...while an ordinary belt still gets placed",
+          S.unanchored_hardware("Jon holds up a belt.")
+          == ["a belt closes around the waist and hips"])
     check("an ordinary belt still gets the ordinary phrase",
           S.unanchored_hardware("Jon shows her a leather belt.")
           == ["a belt closes around the waist and hips"])
