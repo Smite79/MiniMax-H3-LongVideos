@@ -192,7 +192,7 @@ resets at every cut.
 | `character_guard` | describe only the people a beat names |
 | `auto_remove` | read removals from the prose |
 | `restart_after_removal` | break the chain after a removal, so a garment cannot be inherited back |
-| `hold_restraints` | keep hardware fastened once it is on |
+| `hold_restraints` | keep hardware fastened, and the same object, once it is on |
 | `auto_sound` | add the sound an action implies |
 | `silence_nonspeech` | silence shots with no line and no sound |
 | `trim_seam` | drop the duplicated frame at each cut |
