@@ -159,6 +159,13 @@ a low hum off the strip light.
 `auto_sound` (on) adds the sound an action implies to shots that are already open, and
 a beat naming its own sound is left alone.
 
+**Give a line a shot it can fill.** Once a shot has dialogue its audio branch is open
+for the whole shot, so the seconds the line does not cover are unconditioned in a shot
+the model knows has a voice in it — which is where speech carries on past the line and
+turns into babble. `info` reports the gap per shot. `shot_length: from the beat` sizes
+to the line and removes it; `fixed` does not, so with a 15 s cap a four-word line
+leaves about 13 s of open branch.
+
 ## Settings
 
 | setting | value |

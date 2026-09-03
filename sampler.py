@@ -3554,6 +3554,32 @@ class H3LongVideos:
                     if r is not None]
 
         lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat", pace)
+        # How much of a SPEAKING shot the line does not cover. The branch is free for
+        # the whole shot, so whatever the line does not fill is unconditioned audio in
+        # a shot the model knows somebody is talking in -- which is where invented
+        # speech after the line comes from. Reported per shot, because the fix is the
+        # author's: a longer line, or a shorter shot.
+        _tail = []
+        for _i, _b in enumerate(beats):
+            if _i >= len(lens) or not has_speech(_b):
+                continue
+            _words = (sum(len(q.split()) for q in _QUOTED.findall(_b))
+                      + sum(len(q.split()) for q in _DIALOGUE_TAG.findall(_b)))
+            _say = _words / WORDS_PER_SEC
+            _shot = lens[_i] / H3_FPS
+            if _shot - _say >= 3.0:
+                _tail.append((_i + 1, _words, _say, _shot))
+        if _tail:
+            notes.append(
+                "dialogue headroom -- "
+                + "; ".join(f"shot {n}: {w} word(s), about {s:.1f}s of a {t:.1f}s shot"
+                            for n, w, s, t in _tail)
+                + ". The audio branch is open for the whole shot, so the seconds the "
+                  "line does not fill are unconditioned in a shot the model already "
+                  "knows has a voice in it -- that is where speech carries on after the "
+                  "line, or turns into babble. Give the beat a longer line, or a "
+                  "shorter shot: shot_length 'from the beat' sizes to the line, while "
+                  "'fixed' gives every shot shot_seconds whatever the line needs")
         # Seconds of shot per staged action -- the number that decides whether the
         # motion looks brisk or stretched. A shot longer than its action is filled by
         # performing the action more slowly, not by inventing more of it.
