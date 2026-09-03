@@ -3692,7 +3692,22 @@ class H3LongVideos:
                     shot_detail.append(frame_detail(imgs[-1]))
             except Exception:
                 pass
-            vid_out.append(imgs.to("cpu", copy=True) if cleanup_between_shots else imgs)
+            # HALF PRECISION IN RAM. The finished shots are the largest thing this node
+            # holds, and they compete with the weights for system memory -- ComfyUI
+            # offloads models to RAM rather than discarding them, so a shot boundary is
+            # a PCIe copy only while that RAM is there. Once the frames crowd the
+            # weights out, the "reload" becomes a disk read, and on a chain that is
+            # once per shot per model.
+            #
+            # A 107s chain at 1056x608 is ~2580 frames, 18.5GB as float32 and 9.3GB as
+            # float16, against ~39GB of weights on a 64GB machine. That 9GB is the
+            # difference between the weights staying resident and not.
+            #
+            # Free, not a trade: fp16 carries ~3 decimal digits over 0..1, and the
+            # output is 8-bit. Converted back at the join, so nothing downstream sees
+            # a different dtype.
+            vid_out.append(imgs.to("cpu", torch.float16, copy=True)
+                           if cleanup_between_shots else imgs)
             aud_out.append(wav["waveform"].to("cpu", copy=True) if cleanup_between_shots
                            else wav["waveform"])
             del imgs, wav
@@ -3713,6 +3728,8 @@ class H3LongVideos:
                   "the recovered frame carries whoever else was on screen with them, "
                   "and only for a character with no <Picture N> tag of their own")
         video = torch.cat(vid_out, dim=0)
+        if video.dtype != torch.float32:
+            video = video.float()          # back to what every downstream node expects
         # PIXEL upscale, once, on the finished chain. After the latent pass and after
         # the join, so a model-based upscaler sees whole frames and the seam is not
         # upscaled twice.
@@ -3723,6 +3740,24 @@ class H3LongVideos:
                 notes.append(up_note)
         audio = torch.cat(aud_out, dim=-1)
         total = video.shape[0]
+        # The finished chain is the largest thing this node holds, and it competes with
+        # the MODELS for system RAM: ComfyUI offloads weights to RAM rather than
+        # discarding them, so a shot boundary is a PCIe copy while that RAM is there
+        # and a disk read once the frames have crowded the weights out.
+        if cleanup_between_shots and total:
+            _held = total * int(w) * int(h) * 3 * 2 / GB          # fp16, as stored
+            if _held >= 2.0:
+                notes.append(
+                    f"the finished chain is {_held:.1f}GB in system RAM ({total} frames at "
+                    f"{w}x{h}, held as float16 -- float32 would be {_held * 2:.1f}GB). It "
+                    f"shares that RAM with the models, which ComfyUI offloads to it "
+                    f"rather than discarding: while they fit, a shot boundary is a PCIe "
+                    f"copy; once the frames crowd them out it becomes a disk read, once "
+                    f"per model per shot. If the machine is thrashing, the levers are "
+                    f"fewer frames per run (lower shot_seconds, or split a long script "
+                    f"and join the parts outside the node), a lower megapixels, or a "
+                    f"smaller diffusion quant -- every GB of weights is a GB not "
+                    f"available to hold the render")
         if fresh:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in fresh)} start fresh, because the shot "

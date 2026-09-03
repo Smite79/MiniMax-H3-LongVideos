@@ -951,6 +951,27 @@ def test_the_decode_keeps_the_vae_it_is_about_to_use():
     check("no current_loaded_models at all is survivable", S._resident([model]) == [])
 
 
+def test_finished_shots_are_held_in_half_precision():
+    print("\n=== the chain does not crowd the weights out of RAM ===")
+    # ComfyUI offloads models to system RAM rather than discarding them, so a shot
+    # boundary is a PCIe copy while that RAM is there and a disk read once it is not.
+    # The finished chain is the largest thing this node holds and the one thing it can
+    # shrink: a 107s chain at 1056x608 is 18.5GB as float32 and 9.3GB as float16,
+    # against ~39GB of weights on a 64GB machine.
+    imgs = run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")[0]
+    check("what comes out is still float32", imgs.dtype == torch.float32, str(imgs.dtype))
+    check("...and still in range",
+          float(imgs.min()) >= 0.0 and float(imgs.max()) <= 1.0)
+    # Free, not a trade: fp16 resolves far finer than the 8 bits the output has.
+    x = torch.rand(100000)
+    err = (x - x.half().float()).abs().max().item()
+    check(f"fp16 error {err:.1e} is inside one 8-bit step {1 / 255:.1e}", err < 1 / 255)
+    # With cleanup off the frames stay where they were; nothing is converted, and the
+    # concat must not trip over a dtype it did not expect.
+    off = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
+    check("cleanup off still returns float32", off.dtype == torch.float32, str(off.dtype))
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -1074,6 +1095,7 @@ def main():
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
     test_the_decode_keeps_the_vae_it_is_about_to_use()
+    test_finished_shots_are_held_in_half_precision()
     test_detail_trend()
     test_timing_report()
     print()
