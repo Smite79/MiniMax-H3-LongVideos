@@ -688,7 +688,16 @@ _SOUND_CUE = re.compile(
     r"scream(?:s|ing)?|shout(?:s|ing)?|whisper(?:s|ing)?|laugh(?:s|ing|ter)?|"
     r"hum(?:s|ming)?|buzz(?:es|ing)?|hiss(?:es|ing)?|drip(?:s|ping)?|"
     r"rustl(?:e|es|ing)|click(?:s|ing)?|snap(?:s|ping)?|zip(?:s|ping)?|"
-    r"rings?|ringing|wind|rain|thunder|traffic|music|hollow|muffled|reverb)\b", re.I)
+    r"rings?|ringing|wind|rain|thunder|traffic|music|hollow|muffled|reverb|"
+    # How a sound is usually written when the noun is not itself a sound word.
+    # "her boots loud on the concrete" describes a sound and named none of the above,
+    # so it was read as staging nothing audible and the shot was silenced -- which is
+    # the one thing the docs tell you to do to score a silent shot.
+    r"loud(?:ly)?|quiet(?:ly)?|faint(?:ly)?|audible|noisy|deafening|"
+    r"scuff(?:s|ing|ed)?|crunch(?:es|ing|ed)?|thump(?:s|ing|ed)?|"
+    r"patter(?:s|ing)?|whirr?(?:s|ing)?|whine(?:s|d)?|whining|rumbl(?:e|es|ing)|"
+    r"growl(?:s|ing)?|roar(?:s|ing)?|chime(?:s|d)?|tick(?:s|ing)?|"
+    r"knock(?:s|ing)?|tap(?:s|ping)?|whoosh(?:es|ing)?|sizzl(?:e|es|ing))\b", re.I)
 
 
 def sound_described(text):
