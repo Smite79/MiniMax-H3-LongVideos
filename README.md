@@ -82,6 +82,15 @@ describes someone who is not in it and stays silent about the one who is.
 The commonest way in is calling one person two things: `Dan` in some beats and `Mike`
 in others reads as two people, one of them a stranger.
 
+**A beat the node cannot resolve describes nobody, not everybody.** When a beat names
+no one it recognises — an establishing shot, a camera move, a person referred to only
+as *someone* — it keeps the **previous** beat's people, because a scene usually
+continues with them. With nothing before it, it describes **nobody**: putting the whole
+sheet into a shot on the strength of not knowing who is in it is how every entry and
+every wardrobe ends up in an opening shot of an empty room, and a person the text
+describes is a person the model draws. A sheet with a single character is unambiguous
+and still resolves.
+
 `info` names every such person and the shots they are in. It is only ever reported —
 whether that name is somebody already on the sheet or a third person in the room is
 not answerable from the text, and guessing would be the node rewriting your script.

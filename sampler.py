@@ -311,8 +311,17 @@ def sheet_for_beat(sheet, beat, previous=None):
         # last beat's people rather than guessing.
         if not matched:
             named += [n for n in (previous or []) if n not in named]
+    # Somebody is in it, but the beat does not say who -- "Someone knocks at the
+    # door." Keep the last beat's people, since a scene usually continues with them.
+    # With nobody before it, describing the WHOLE sheet is the same failure in
+    # miniature: it puts everyone in a shot on the strength of not knowing. One
+    # person on the sheet is unambiguous and still resolves; two or more is a guess,
+    # and the guard exists precisely not to make it.
     if not named:
-        named = list(previous) if previous else [n for n, _ in rows if n]
+        named = list(previous or [])
+    if not named:
+        _all = [n for n, _ in rows if n]
+        named = _all if len(_all) == 1 else []
     keep = [ln for n, ln in rows if n is None or n in named]
     return "\n".join(keep), named
 

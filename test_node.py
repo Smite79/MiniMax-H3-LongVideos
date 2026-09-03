@@ -392,10 +392,17 @@ def test_character_guard():
     check("...while the capitalised name still matches",
           S.sheet_for_beat(_w, "Will walks to the window.", [])[1] == ["Will"])
     # A beat naming nobody keeps the last beat's people rather than emptying the frame.
-    keep, who = S.sheet_for_beat(sheet, "The camera pushes in.", ["Maya"])
-    check("a beat naming nobody holds the last cast", who == ["Maya"])
-    check("with no history it keeps everyone",
-          sorted(S.sheet_for_beat(sheet, "The camera pushes in.")[1]) == ["Jon", "Maya"])
+    check("a beat naming nobody holds the last cast",
+          S.sheet_for_beat(sheet, "The camera pushes in.", ["Maya"])[1] == ["Maya"])
+    # ...but with NOTHING before it, describing everyone is the reported failure: the
+    # whole character memory lands in a shot on the strength of not knowing who is in
+    # it, and a person the text describes is a person the model draws.
+    check("with no history, two on the sheet is a guess not worth making",
+          S.sheet_for_beat(sheet, "The camera pushes in.")[1] == [])
+    check("...and the same for a person the beat does not name",
+          S.sheet_for_beat(sheet, "Someone knocks at the door.")[1] == [])
+    check("...but a lone character is unambiguous and still resolves",
+          S.sheet_for_beat("Maya: 27, grey coat", "The camera pushes in.")[1] == ["Maya"])
     # An unlabelled line belongs to the scene, not to a person, and never drops.
     keep, _ = S.sheet_for_beat("The room is cold.\nMaya: 27, grey scarf",
                                "Jon walks in.", ["Jon"])
@@ -545,8 +552,8 @@ def test_a_name_with_no_entry():
     # keep for Alex, so those shots stage somebody the model is told nothing about.
     check("the undescribed person is found",
           S.unknown_people(beats, sheet) == {"Alex": [2, 3, 4]})
-    # ...and the shot that has ONLY that person is the bad one: it falls back to the
-    # previous beat's cast, so it describes Maya, who is not in it.
+    # ...and the shot that has ONLY that person describes nobody: Alex is not on the
+    # sheet, so there is no entry to keep, and Maya is not in the beat either.
     kept, who = S.sheet_for_beat(sheet, "Alex walks to the window.", ["Maya"])
     check("...which is why that shot describes the wrong person", who == ["Maya"])
     check("nobody on the sheet is reported", "Maya" not in S.unknown_people(beats, sheet))
