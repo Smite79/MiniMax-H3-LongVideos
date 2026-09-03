@@ -3042,6 +3042,8 @@ class H3LongVideos:
                          f"suppresses that -- only the silent keyframe does, and it pins "
                          f"the whole shot rather than just its opening")
         active = []                 # the people the previous beat involved
+        _seen_before = set()        # everyone a shot has described so far
+        _returns = []               # (shot, names back after a shot away)
         guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
             body, toks, adds = extract_directives(b)
@@ -3050,12 +3052,23 @@ class H3LongVideos:
             # off their sheet entries -- and only theirs. Undressing one person must
             # not take the other one's clothes off.
             if character_guard:
+                _was = list(active)
                 shot_sheet, active = sheet_for_beat(sheet, body, active)
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
                     notes.append(f"shot {len(shots) + 1} describes only "
                                  f"{', '.join(active) or 'the scene'} -- the rest of the "
                                  f"sheet is held back, because a person the text "
                                  f"describes is a person the model draws")
+                # Somebody back after a shot away. The keyframe is the PREVIOUS shot's
+                # last frame, so a person who was not in that shot is not in the
+                # picture this one starts from -- their appearance is carried by the
+                # sheet text and nothing else, and text drifts where a picture does
+                # not. This is what "walks out of frame and comes back looking
+                # different" is.
+                _back = [n for n in active if n not in _was and n in _seen_before]
+                if _back:
+                    _returns.append((len(shots) + 1, list(_back)))
+                _seen_before.update(active)
             else:
                 shot_sheet = sheet
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
@@ -3267,6 +3280,25 @@ class H3LongVideos:
         # drown the one sentence describing what HAPPENS -- which renders as a shot
         # where nothing does. The previous node reached 96%; this is here so the creep
         # is visible before it gets there again.
+        # Somebody back after a shot away, with nothing pictorial carrying them.
+        if _returns:
+            _lines = "; ".join(f"shot {n}: {', '.join(w)}" for n, w in _returns)
+            _tagged_back = {w for _, ws in _returns for w in ws
+                            if re.search(r"^\s*" + re.escape(w) + r"\s*:.*<\s*picture",
+                                         sheet or "", re.I | re.M)}
+            _bare = sorted({w for _, ws in _returns for w in ws} - _tagged_back)
+            notes.append(
+                f"back after a shot away -- {_lines}. Each shot starts from the PREVIOUS "
+                f"shot's last frame, so somebody who was not in that shot is not in the "
+                f"picture this one begins from: their appearance comes from the sheet "
+                f"text and nothing else, and text drifts where a picture does not. That "
+                f"is a character walking out of frame and coming back looking different"
+                + (f". {', '.join(_bare)} " + ("has" if len(_bare) == 1 else "have")
+                   + " no <Picture N> tag, so there is no picture of them anywhere in the "
+                     "run -- tag a reference to them and it is carried into every shot "
+                     "they are named in, this one included"
+                   if _bare else
+                   ". All of them carry a reference tag, which is what pins them here"))
         if total_words:
             notes.append(
                 f"prompt balance: the beat is {100 * beat_words / total_words:.0f}% of "
