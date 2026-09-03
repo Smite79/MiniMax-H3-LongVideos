@@ -702,6 +702,38 @@ def test_hardware_stays_on_its_owner():
     check("the other character keeps his clothes described", "navy overalls" in sh[1])
 
 
+def test_a_state_in_the_scene_is_not_reasserted():
+    print("\n=== a state changed in one beat is not re-asserted later ===")
+    # The van usually stands in the SCENE paragraph, which is prepended to every
+    # shot. So the text saying "doors closed" is in shot 3 as much as shot 1 -- and
+    # by shot 3 the doors have been opened. Asserting the written state there would
+    # shut them again, which is the reported bug wearing the other shoe.
+    P = ("Daylight. A yard, and a van with its doors closed.\n\n"
+         "Mara and Dom stand behind the van.\n\n"
+         "Mara opens the van doors and climbs in.\n\n"
+         "Dom looks back at the yard.")
+    shots = [s for s in run_node(P, plan_only=True)[3].split("---") if s.strip()]
+    check("three shots", len(shots) == 3, "")
+    check("shot 1 is told the doors are already closed",
+          "already closed at the first frame" in shots[0], "")
+    # The beat that opens them is asking for that motion. Holding the state here
+    # would be the node arguing with the script.
+    check("the shot that opens them is left alone",
+          "first frame" not in shots[1], "")
+    check("...and the shot after is not told the old state",
+          "first frame" not in shots[2], "")
+    # The author's own words still reach the model verbatim -- the node adds nothing
+    # and takes nothing away. It is only the ADDED sentence that stops.
+    check("the scene text itself is untouched",
+          all("doors closed" in s for s in shots), "")
+    info = run_node(P, plan_only=True)[2]
+    check("info names the shot", "shot(s) 1 describe scenery in a state" in info, "")
+    check("...and names the switch", "hold_scene_state" in info, "")
+    off = run_node(P, plan_only=True, hold_scene_state=False)[3]
+    check("the switch turns it off", "first frame" not in off, "")
+    check("...and changes nothing else", off.count("doors closed") == 3, "")
+
+
 def test_dialogue_headroom():
     print("\n=== how much of a speaking shot the line does not fill ===")
     # The audio branch is open for the WHOLE shot once there is a line in it, so the
@@ -1264,6 +1296,7 @@ def main():
     test_undressing_completely_end_to_end()
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
+    test_a_state_in_the_scene_is_not_reasserted()
     test_dialogue_headroom()
     test_introducing_somebody_already_in_position()
     test_back_after_a_shot_away()

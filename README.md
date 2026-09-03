@@ -83,6 +83,26 @@ sitting on the crate"* — and the shot starts fresh instead, because there is n
 to inherit that has him in it; that costs a cut where the character appears, and `info`
 says when it happens.
 
+### Describing a state
+
+**A state you write down is a state the model can render by arriving at it.** *"A van
+with its doors closed"* names a state and never says when it is true, so the shot opens
+on the doors open and somebody closes them — the state becomes the most interesting
+event in the sentence.
+
+`hold_scene_state` (on) says the state is already true at the first frame, for doors,
+gates, windows, curtains, blinds, shutters, hatches, tailgates, lids and drawers. A beat
+that **works** the thing — *"Mara opens the van doors"* — is left alone, and once a beat
+has changed a state, no later shot is told the old one.
+
+This is worse at low step counts. On a 4-step distill LoRA the layout is committed almost
+immediately and there are no later steps to argue a wrong opening frame back.
+
+Two things it does not cover: scenery outside that list, and a state your **scene**
+paragraph keeps asserting after a beat changed it — your text reaches the model word for
+word, so put changing scenery in the beat rather than the scene. `first_frame` pins
+shot 1's opening outright if a state has to be exact.
+
 ## Clothing
 
 **List what is visible**, not every layer at once. `auto_remove` (on) takes a garment
@@ -193,6 +213,7 @@ resets at every cut.
 | `auto_remove` | read removals from the prose |
 | `restart_after_removal` | break the chain after a removal, so a garment cannot be inherited back |
 | `hold_restraints` | keep hardware fastened, and the same object, once it is on |
+| `hold_scene_state` | put a described state at the first frame instead of leaving it to be performed |
 | `auto_sound` | add the sound an action implies |
 | `silence_nonspeech` | silence shots with no line and no sound |
 | `trim_seam` | drop the duplicated frame at each cut |

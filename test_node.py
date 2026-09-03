@@ -972,6 +972,52 @@ def test_a_tape_gag_stays_tape():
           not re.search(r"\b(?:she|he|her|his|they|body|still)\b", S.FORM_HOLD, re.I))
 
 
+def test_a_stated_state_is_not_an_event():
+    print("\n=== a described state belongs at the first frame ===")
+    # Reported on a 4-step distill LoRA: "stand behind a van with its doors closed"
+    # rendered the doors OPEN and the characters closing them. The text named a
+    # state and never said when it was true, and a video model asked for a door
+    # renders what a door does. Fewer steps make it worse: the layout is committed
+    # almost immediately and there are no later steps to argue it back.
+    for _t in ("Mara and Dom stand behind a van with its doors closed.",
+               "They stand by the closed doors of the van.",
+               "The window is open.",
+               "The curtains are still drawn."):
+        check(f"state read: {_t[:38]!r}", S.stated_states(_t))
+    check("the state and the thing come back together",
+          S.stated_states("a van with its doors closed") == [("doors", "closed")])
+    # A beat that WORKS the thing is asking for exactly the motion above, so it must
+    # not be told the state holds. This is the one that would break the scene.
+    for _t in ("Mara opens the van doors and climbs in.",
+               "Dom slams the tailgate shut.",
+               "Mara pulls the curtains.",
+               "Dom locks the hatch.",
+               "Mara closed the doors."):
+        check(f"acted on: {_t[:34]!r}", S.state_acts(_t))
+    # ...while the state word sitting straight in front of its noun is an adjective.
+    check("'closed doors' is not an act", not S.state_acts("They pass the closed doors."))
+    check("...but 'closed the doors' is", S.state_acts("Mara closed the doors."))
+    # A character sheet goes into this same text. Boots are not a door.
+    for _t in ("Mara: she, 30, red coat, brown boots.",
+               "Dom looks back at the yard.",
+               "He pulls his hood up."):
+        check(f"nothing to hold: {_t[:34]!r}",
+              not S.stated_states(_t) and not S.state_acts(_t))
+    # The sentence itself: positive, because at cfg 1 a negative is never evaluated.
+    cl = S.state_hold([("doors", "closed")])
+    check("the clause is one sentence", cl.count(".") == 1)
+    check("...and says when the state is true", "first frame" in cl)
+    check("...and is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    check("...and agrees with a plural", "The doors are already closed" in cl)
+    check("...and with a singular",
+          "The hatch is already shut" in S.state_hold([("hatch", "shut")]))
+    # Two at most. Continuity that outgrows the beat is what the beat stops being about.
+    many = S.state_hold([("doors", "closed"), ("gate", "open"), ("blinds", "drawn")])
+    check("at most two states are held", many.count("first frame") == 2)
+    check("nothing stated, nothing said", S.state_hold([]) == "")
+
+
 def test_sound_described():
     print("\n=== a beat that asks for a sound keeps its audio ===")
     # Silence is conditioned on encoded silence, which is not "no speech" but "no
@@ -1517,7 +1563,8 @@ def test_schema():
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
     # 17 core + 6 upscale + shot_length, hold_restraints, restart_after_removal,
-    # auto_remove + anchor, character_memory, character_guard, pace, auto_sound.
+    # auto_remove + anchor, character_memory, character_guard, pace, auto_sound,
+    # hold_scene_state.
     # A ceiling, not a target: the old node had 38 and nobody could find anything.
     # Every one added since the rebuild answers a reported failure.
     check(f"the node stays small: {n_widgets} widgets", n_widgets <= 34)
@@ -1528,8 +1575,10 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-5:] == ["anchor", "character_memory", "character_guard",
-                             "pace", "auto_sound"])
+          list(opt)[-6:] == ["anchor", "character_memory", "character_guard",
+                             "pace", "auto_sound", "hold_scene_state"])
+    check("hold_scene_state is offered, and on",
+          "hold_scene_state" in opt and opt["hold_scene_state"][1]["default"] is True)
     # reference_mode is gone. It existed only because I had concluded fl2va could not
     # carry identity references, which was wrong: references and the keyframe ride
     # together, and always did. A switch whose "on" position was the bug is worse
@@ -1570,6 +1619,7 @@ def main():
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
+    test_a_stated_state_is_not_an_event()
     test_sound_described()
     test_sound_is_derived_from_the_action()
     test_pace()
