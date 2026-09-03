@@ -3701,6 +3701,22 @@ class H3LongVideos:
                         and _captured.get(_who) is not None:
                     _extra = [_captured[_who]]
                     _recovered.append((i + 1, _who, _captured_from.get(_who, 0)))
+                    # CLAIM IT IN THE PROSE. A picture the prompt refers to is that
+                    # subject; one it never mentions is ANOTHER subject. Sent
+                    # unclaimed, a recovered frame of somebody is read as a second
+                    # person who looks exactly like them -- same face, same clothes --
+                    # standing beside the one the beat asked for.
+                    #
+                    # Its number is its place in the roster: the shot's own references
+                    # first, this after them. The handoff follows and stays unclaimed,
+                    # which is H3's own first-frame shape.
+                    _n = len(shot_refs_all[i]) + 1
+                    _tag = f"<Picture {_n}>"
+                    if f"{_who}:" in shot_prompt:
+                        shot_prompt = shot_prompt.replace(
+                            f"{_who}:", f"{_who}: {_tag},", 1)
+                    else:
+                        shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
                 handoff=shot_handoff, refs=list(shot_refs_all[i]) + _extra,
@@ -3871,7 +3887,11 @@ class H3LongVideos:
                   "everyone in it, so one taken from a shared shot would carry the other "
                   "person into a shot that does not call for them. A character never on "
                   "screen alone gets nothing, which beats importing somebody. Skipped "
-                  "for anyone with a <Picture N> tag of their own")
+                  "for anyone with a <Picture N> tag of their own. The frame is "
+                  "CLAIMED on their sheet entry for that shot -- a picture the "
+                  "prompt never refers to is read as another subject, so an "
+                  "unclaimed one would arrive as a second person with the same "
+                  "face and the same clothes. `script` is written before the render, so it does not show that tag")
         video = torch.cat(vid_out, dim=0)
         if video.dtype != torch.float32:
             video = video.float()          # back to what every downstream node expects

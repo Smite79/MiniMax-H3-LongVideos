@@ -774,6 +774,37 @@ def test_back_after_a_shot_away():
                           ref_image_1=torch.rand(1, H, W, 3))[2]
         check("a tagged character is not given a second picture",
               "recovered a face" not in tagged)
+        # THE RECOVERED FRAME HAS TO BE CLAIMED IN THE PROSE. A picture the prompt
+        # refers to is that subject; one it never mentions is ANOTHER subject. Sent
+        # unclaimed, a frame of somebody is read as a second person who looks exactly
+        # like them -- same face, same clothes -- beside the one the beat asked for.
+        tagseen = []
+        _o = FakeCLIP.tokenize
+
+        def _spy(self, text, minimax_ref_items=None, **kw):
+            tagseen.append((sum(1 for it in (minimax_ref_items or [])
+                                if it["type"] == "image"),
+                            re.findall(r"<Picture \d+>", text), text))
+            return _o(self, text, minimax_ref_items=minimax_ref_items, **kw)
+
+        FakeCLIP.tokenize = _spy
+        try:
+            run_node("\n\n".join(["Dan walks into the workshop alone.",
+                                  "Dan walks out through the side door.",
+                                  "Nora kneels by the cable, alone.",
+                                  "Dan comes back in and picks up the spanner."]),
+                     anchor="A workshop.",
+                     character_memory="Nora: 34, she, red hair.\n"
+                                      "Dan: he, 41, dark hair, navy overalls")
+        finally:
+            FakeCLIP.tokenize = _o
+        _pics, _tags, _txt = tagseen[4]          # [0] is the negative; shot 4
+        check("the return shot carries the recovered frame and its keyframe",
+              _pics == 2, str(_pics))
+        check("...and the prose claims the recovered one", _tags == ["<Picture 1>"],
+              str(_tags))
+        check("...on the entry of the person it depicts",
+              "Dan: <Picture 1>," in _txt, _txt[:80])
         # THE SOURCE has to be solo too, not just the destination. A frame is a
         # picture of everyone in it, so one captured from a shared shot brings the
         # other person back into a shot that does not call for them -- which is the
