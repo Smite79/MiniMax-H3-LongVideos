@@ -187,6 +187,14 @@ the **scene already says is worn**. Only the verb's own object counts — the sp
 to the next clause boundary — so *"pulls off her coat, showing the jumper"* takes the
 coat and leaves the jumper. `info` reports every removal it reads, by shot.
 
+Hardware also comes off by being **undone** — *"unlocks the chastity belt"*,
+*"unbuckles"*, *"unclips"*, *"unlaces"*, *"undoes"* — and those read as removals on
+their own, no particle needed.
+
+A **tagged** object is a wardrobe entry like any other. `a silver locket <Picture 2>,`
+reads as an entry whose head is *locket*, so the prose can take it off exactly as it
+would an untagged one; the tag between the noun and its comma is looked past.
+
 The verb can sit either side of its particle — *"kicks off her boots"* and *"kicks
 her boots off"* both read — and *"steps out of"*, *"wriggles out of"*, *"slides off"*
 and *"lifts it over her head"* are removals too. A particle belongs to the nearest

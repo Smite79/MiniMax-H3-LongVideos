@@ -1588,7 +1588,13 @@ _TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
                   r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
 # ...and verbs that are a removal on their own, needing no particle.
 _UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
-              r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?")
+              r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?|"
+              # Hardware comes off by being UNDONE, and these were missing: a beat
+              # saying "unlocks the belt" left it described as worn for the rest of
+              # the film, because nothing here read as a removal at all.
+              r"unlock(?:s|ed)?|unbuckle[sd]?|unclip(?:s|ped)?|unstrap(?:s|ped)?|"
+              r"unlace[sd]?|untie[sd]?|unties|unwrap(?:s|ped)?|"
+              r"undo(?:es)?|undid")
 
 _REMOVAL_PROSE = re.compile(
     r"\b(?:" + _UNDO_VERB + r")\b"
@@ -2021,6 +2027,11 @@ _RESTRAINT_WORD = re.compile(
     r"straitjacket|spreader|hogtie|clamps?|clips?)$", re.I)
 
 
+# A <Picture N> immediately after a word, so the entry-end test can look past an
+# object's own reference to the comma that actually ends its entry.
+_LEADING_TAG = re.compile(r"^\s*<\s*picture[\s_\-]*\d+\s*>", re.I)
+
+
 def _is_entry_head(word, scene):
     """Is `word` the head of a wardrobe entry in the scene, rather than a modifier
     inside one or a fragment of a hyphenated compound?"""
@@ -2030,7 +2041,13 @@ def _is_entry_head(word, scene):
             continue
         if m.end() < len(scene) and scene[m.end()] == "-":
             continue
-        if _ENTRY_END.match(scene[m.end():]):
+        # An object's own reference sits between the noun and the comma that ends its
+        # entry -- "a silver locket <Picture 2>, green jacket" -- so the entry-end
+        # test has to look past it. Without this, a tagged object is never the head of
+        # anything, which means auto_remove can never take it off: it needed an
+        # explicit `remove:` line while an untagged one came off from the prose.
+        tail = _LEADING_TAG.sub("", scene[m.end():], count=1)
+        if _ENTRY_END.match(tail):
             return True
     return False
 
