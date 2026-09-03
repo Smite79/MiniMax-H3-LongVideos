@@ -115,6 +115,10 @@ The tag decides which shots get that image — every beat naming it. A person's 
 their sheet entry travels with them; an object's tag comes off when the object does and
 returns when it does. A reference with no tag anywhere goes on every shot.
 
+**A picture the prompt never refers to is read as another subject** — a second person
+with the same face and clothes. That is what the tag prevents, so tag every reference
+you connect.
+
 `ref_noise_aug` is how *clean* a reference is shown. At **0.999** the model tends to
 reproduce it, framing and background included; lower it (0.97, 0.95) to say
 *approximate*. Below **0.99** the shot handoff stops being a keyframe, so continuity
