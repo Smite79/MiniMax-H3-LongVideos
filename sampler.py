@@ -802,12 +802,31 @@ def room_tone(scene, opening=""):
     return ""
 
 
-def sounds_for(beat):
-    """The sounds this beat's own action implies. [] when it stages nothing audible."""
+# Sounds that are a THING IN MOTION, and which thing. H3 is joint: the prose
+# conditions the audio branch and the picture follows the audio, so "a door on its
+# hinges" is not a decoration on a shot with a door in it -- it is a request for a
+# door to swing. Asked for beside a sentence holding that same door shut, the sound
+# wins, because it describes something happening and the hold describes something
+# not happening.
+#
+# Reported exactly that way: the doors started closed, as the hold asked, and were
+# then opened. Two guards, one contradicting the other.
+_SOUND_OF_MOVING = {"a door on its hinges": ("door",)}
+
+
+def sounds_for(beat, held=()):
+    """The sounds this beat's own action implies. [] when it stages nothing audible.
+
+    `held` is the scenery this shot is holding still. A sound of one of those moving
+    is dropped: the shot cannot be asked to keep the doors shut and to sound like a
+    door swinging."""
+    held = set(held or ())
     out = []
     for pat, phrase in _SOUND_FROM:
         if len(out) >= MAX_SOUNDS:
             break
+        if held.intersection(_SOUND_OF_MOVING.get(phrase, ())):
+            continue
         if phrase not in out and re.search(pat, beat or "", re.I):
             out.append(phrase)
     return out
@@ -3735,7 +3754,10 @@ class H3LongVideos:
             _voiced = exertion_in(body)
             _will_silence = bool(silence_nonspeech and not _speaks and not _own
                                  and not _voiced)
-            heard = [] if (not auto_sound or _own) else sounds_for(body)
+            # The held scenery goes in, so the shot is not asked to keep the doors
+            # shut and to sound like a door swinging in the same breath.
+            heard = ([] if (not auto_sound or _own)
+                     else sounds_for(body, held=[_state_key(t) for t, _ in _pairs]))
             if _will_silence:
                 # The audio is pinned to silence for this shot's whole length, so a
                 # sentence saying what it sounds like would describe an acoustic the
