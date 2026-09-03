@@ -1274,6 +1274,40 @@ def test_hardware_belongs_to_somebody():
     check("two wearers are both named", "on Nora and Kate" in both)
 
 
+def test_a_tagged_object_can_be_taken_off():
+    print("\n=== a tagged object is still a wardrobe entry ===")
+    # An object carrying its own reference -- "a silver locket <Picture 2>," -- was
+    # never the HEAD of a wardrobe entry, because the entry-end test looked for the
+    # comma and found the tag instead. auto_remove could therefore never take a tagged
+    # object off: it needed an explicit `remove:` line, while the identical untagged
+    # object came off from the prose.
+    tagged = "Nora: <Picture 1>, 34, red hair, a silver locket <Picture 2>, green jacket."
+    plain = "Nora: <Picture 1>, 34, red hair, a silver locket, green jacket."
+    check("a tagged object is an entry head", S._is_entry_head("locket", tagged))
+    check("...same as an untagged one", S._is_entry_head("locket", plain))
+    check("a tag at the end of the line is fine",
+          S._is_entry_head("jacket", "Nora: 34, red hair, green jacket <Picture 2>."))
+    for _sc, _label in ((tagged, "tagged"), (plain, "untagged")):
+        check(f"the {_label} object comes off from the prose",
+              S.infer_removals("Nora takes the silver locket off.", _sc) == ["locket"])
+    check("a neighbour is unaffected",
+          S.infer_removals("Nora takes her green jacket off.", tagged) == ["jacket"])
+    # Hardware comes off by being UNDONE, and those verbs were missing entirely: a
+    # beat saying "unlocks the belt" left it described as worn for the rest of the
+    # film, because nothing read as a removal at all.
+    _b = "Nora: <Picture 1>, 34, a steel chastity belt <Picture 3>, green jacket, boots."
+    for _beat, _want in (
+            ("Dan unlocks the chastity belt and takes it off.", ["belt"]),
+            ("Dan unlocks the chastity belt.", ["belt"]),
+            ("Dan unbuckles the belt.", ["belt"]),
+            ("She unlaces the boots.", ["boots"]),
+            ("He undoes the jacket and drops it.", ["jacket"])):
+        check(f"undone: {_beat[:38]!r}", S.infer_removals(_beat, _b) == _want)
+    for _beat in ("Dan unlocks the door and steps out.", "She unties her hair.",
+                  "He looks at the belt.", "Dan tightens the belt."):
+        check(f"not a removal: {_beat[:36]!r}", S.infer_removals(_beat, _b) == [])
+
+
 def test_a_body_under_effort_has_a_voice():
     print("\n=== effort makes a sound, and it is a voice ===")
     # H3 is joint, so silence on the audio branch tells the model the person makes no
@@ -1428,6 +1462,7 @@ def main():
     test_reference_tags()
     test_sound_clause_closes_the_list()
     test_hardware_belongs_to_somebody()
+    test_a_tagged_object_can_be_taken_off()
     test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()
     test_schema()
