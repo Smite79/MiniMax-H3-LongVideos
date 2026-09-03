@@ -401,10 +401,12 @@ fl2va's quality while retaining ref2va's reference conditioning:
 — several variants, around 21 GB each. Put one in `models/diffusion_models/` and load
 it with the UNETLoader as usual; nothing in the node needs changing.
 
-If you are on a plain **fl2va** checkpoint, references still work — each is spent on
-the shot that introduces its character, and the keyframe chain carries identity from
-there — but that is the arrangement being worked around, and a hybrid is the better
-answer.
+If you are on a plain **fl2va** checkpoint, references still work — they go where
+tagged, on every beat naming them, which is what holds a face across a chain. But
+fl2va was never trained on reference conditioning, so a near-clean reference there
+also pulls pose and framing towards the picture, and on a shot that is not
+introducing the character that competes with the staging your beat describes. That is
+the arrangement a hybrid removes; on fl2va, `ref_noise_aug` is the dial for it.
 
 
 ### A reference and the keyframe ride together
@@ -430,22 +432,26 @@ References keep slots `1…N`, which is what that tag points at; the handoff is 
 the encoder numbers by the order it receives images — a shot carrying only slot 2
 receives that image as `<Picture 1>`.
 
-**Each reference is spent once**, on the first shot that names it. `info` says which
-shot each one went to.
+**References go where tagged — every beat that names them.** That is what holds a face
+across a chain instead of letting it drift down the keyframe handoffs, and it is the
+reason to tag the *person* rather than a single shot: written in the character sheet,
+the tag travels with them into every shot they appear in, and a shot the character
+guard trims them out of carries no reference at all.
 
-A reference row sits immediately before the target timeline, and near-clean it asks
-the model to reproduce the picture — pose and framing, not only the face. On the shot
-introducing the character that is the point. On every *later* shot it competes with
-the staging your beat describes, and the beat loses: the referenced character holds
-the portrait's gaze, and anyone with no reference of their own gets placed relative to
-that reproduced composition rather than where your text puts them, then travels there.
+A picture the prompt never refers to is read as *another* subject, which is why `info`
+reports any shot carrying one it does not name.
 
-After that first shot, identity is carried by the **keyframe chain**, which is what it
-is for. Watch for drift late in a long chain — if a face wanders, write the tag again
-in a later beat and the reference is spent a second time there.
+**With no tag anywhere, references go on every shot.** Placing by tag would otherwise
+place them nowhere, which is a connected input silently doing nothing.
 
-**With no tag anywhere**, the first shot is the only one that can be a first
-appearance, so it gets the reference and the rest carry their keyframe.
+**The trade on a plain fl2va checkpoint.** A near-clean reference asks the model to
+reproduce the *picture* — pose and framing, not only the face. On the shot introducing
+a character that is the point; on later shots it competes with the staging your beat
+describes, and the referenced person can hold the portrait's gaze while anyone without
+a reference gets placed relative to that composition and then travels to where the
+text put them. That is the price of the face holding, and `info` says when you are
+paying it. A [hybrid checkpoint](#which-checkpoint) is trained for reference
+conditioning and does not make this trade; on fl2va, `ref_noise_aug` is the dial.
 
 ### If the reference turns up as the opening frame
 
