@@ -1,3 +1,5 @@
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/smite79)
+
 # H3-LongVideos
 
 Long **MiniMax-H3 video with synchronised audio** from a single prompt, in ComfyUI.
