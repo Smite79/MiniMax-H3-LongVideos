@@ -813,7 +813,7 @@ def test_sound_survives_silencing():
     info = run_node(P, audio_vae=vae)[2]
     check("the beat that describes a sound keeps its audio",
           "describe a sound IN THE BEAT" in info)
-    check("...and is counted", "1 shot(s) have no line but describe a sound" in info)
+    check("...and is counted", "1 shot(s) have no line but either describe a sound" in info)
     check("the beat with none is silenced", "1 shot(s) have no quoted line and no sound"
           in info)
     check("...and the guidance says what silence actually is",
@@ -837,7 +837,7 @@ def test_auto_sound_end_to_end():
     P = ("Two people, late evening.\n\n"
          "Maya: 27, grey coat. Wrists cuffed behind back.\n\n"
          "Jon walks in holding a pair of scissors and says: \"Hold still.\"\n\n"
-         "Maya thrashes against the chain, trying to get free.\n\n"
+         "Jon walks to the bench and looks at the box.\n\n"
          "Maya lies still.\n\n"
          "The chain drags and rattles beside her.")
     imgs, audio, info, script = run_node(P, plan_only=True)[:4]
@@ -850,14 +850,14 @@ def test_auto_sound_end_to_end():
     # nothing about sound, since the clause would describe an acoustic that is not
     # there. This is the one that was babbling.
     check("a shot with no line gets no derived sound",
-          "chain links dragging" not in sh[1])
+          "footsteps" not in sh[1])
     check("...and no sound sentence at all",
           "sounds like" not in sh[1] and "only sound" not in sh[1])
     check("a beat staging nothing audible gets nothing", "sounds like" not in sh[2])
     # What you wrote wins: a beat describing its own sound is left alone AND stays open.
     check("a beat with its own sound is not overwritten", "It sounds like" not in sh[3])
     check("...and it still counts as asking for audio",
-          "have no line but describe a sound" in info)
+          "either describe a sound IN THE BEAT or" in info)
     check("info lists the shots it scored", "were given the sound" in info)
     check("...saying it can never unsilence one", "never unsilence a shot" in info)
     # Sound is counted apart from the continuity guards, which ask for the opposite

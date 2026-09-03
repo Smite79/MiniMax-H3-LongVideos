@@ -1207,6 +1207,34 @@ def test_sound_clause_closes_the_list():
               not re.search(r"\b(?:no|not|never|without|nobody|silent)\b", cl, re.I))
 
 
+def test_a_body_under_effort_has_a_voice():
+    print("\n=== effort makes a sound, and it is a voice ===")
+    # H3 is joint, so silence on the audio branch tells the model the person makes no
+    # sound -- and a person making no sound is rendered still. A beat staging effort
+    # was being silenced, which is the flat, unreacting face.
+    for _b in ("McKenna thrashes on the bed.", "She writhes and arches under him.",
+               "He shudders and grips the sheet.", "She strains against him."):
+        check(f"voiced: {_b[:34]!r}",
+              any("moans of effort" in s for s in S.sounds_for(_b)))
+    # What you wrote wins. Those words are already sound cues, so the beat opens the
+    # branch itself and nothing is added over the top of it.
+    check("a beat naming the sound is left alone", S.sounds_for("She moans.") == [])
+    check("...but it does count as asking for audio", S.sound_described("She moans."))
+    for _w in ("gasps", "whimpers", "groans", "pants", "sobs"):
+        check(f"{_w} is heard as a sound the author wrote", S.sound_described(f"She {_w}."))
+    # Effort is read from the AUTHOR's verb, so it belongs with a quoted line and a
+    # written sound -- not with the things this file infers, which may never open the
+    # branch. That distinction is what keeps a walking shot silent.
+    check("effort opens the branch", S.exertion_in("She writhes on the bed."))
+    check("...and ordinary movement does not", not S.exertion_in("Maya walks to the window."))
+    # Restraints need something to pull against. The verb alone was arming it, so a
+    # bed became handcuffs.
+    check("thrashing loose is not restraints",
+          "restraints pulling taut" not in S.sounds_for("McKenna thrashes on the bed."))
+    check("...and thrashing in cuffs is",
+          "restraints pulling taut" in S.sounds_for("Kate thrashes against the handcuffs."))
+
+
 def test_widget_values_are_usable():
     print("\n=== a widget value that is not a number ===")
     # Saved workflows restore widget values BY POSITION, with no names stored. Remove
@@ -1332,6 +1360,7 @@ def main():
     test_text_in_frame()
     test_reference_tags()
     test_sound_clause_closes_the_list()
+    test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()
     test_schema()
     print()

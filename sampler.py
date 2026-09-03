@@ -658,9 +658,25 @@ _SOUND_FROM = (
     (r"\b(?:drops?|dropped|throw(?:s|n)?|threw|toss(?:es|ed)?)\b",
                                                     "something landing"),
     (r"\b(?:smack(?:s|ed)?|slap(?:s|ped)?|hits?|strikes?|struck)\b", "a sharp impact"),
-    (r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
+    # Only where there is something to pull against. "McKenna thrashes on the bed"
+    # was getting restraints she is not wearing, because the verb alone armed it.
+    (r"(?=[\s\S]*\b(?:cuffs?|handcuffs?|shackles?|manacles?|chains?|ropes?|cords?|"
+     r"straps?|restraints?|bindings?|ties?|tape|harness|collar)\b)"
+     r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
      r"strain(?:s|ing|ed)?|pull(?:s|ing|ed)?\s+against)\b",
                                                     "restraints pulling taut"),
+    # A body under effort makes a VOICE, not only movement. H3 is joint, so this is
+    # also what stops the face going flat: conditioning the audio on silence tells the
+    # model the person makes no sound, and a person making no sound is rendered still.
+    # A beat that already names the sound is left alone -- "she moans" is in
+    # _SOUND_CUE, so what you wrote wins and none of this is added.
+    (r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
+     r"strain(?:s|ing|ed)?|arch(?:es|ed|ing)?|shudder(?:s|ed|ing)?|"
+     r"trembl(?:e|es|ing|ed)|shiver(?:s|ed|ing)?|buck(?:s|ed|ing)?|"
+     r"grind(?:s|ing)?|rock(?:s|ed|ing)?|thrust(?:s|ing)?|"
+     r"clutch(?:es|ed|ing)?|grip(?:s|ped|ping)?|clench(?:es|ed|ing)?)\b",
+                                                    "unsteady breathing, with gasps and "
+                                                    "moans of effort"),
     (r"\b(?:zip(?:s|ped|ping)?|unzip(?:s|ped|ping)?)\b", "a zip running"),
     (r"\btap(?:e|es|ed|ing)\b",                     "tape pulling off"),
     (r"\b(?:wakes?\s+up|woke|gasp(?:s|ing)?|pant(?:s|ing)?|breath(?:es|ing)?)\b",
@@ -3245,7 +3261,15 @@ class H3LongVideos:
             # every version that let an inference open the branch babbled.
             _speaks = has_speech(body)
             _own = sound_described(body)
-            _will_silence = bool(silence_nonspeech and not _speaks and not _own)
+            # A beat staging EFFORT or vocal reaction is asking for a voice, and that
+            # is read from the author's own verbs -- "thrashes", "writhes", "moans" --
+            # so it belongs with a quoted line and a written sound, not with the things
+            # this file infers. Silencing it says the person makes no sound, and a
+            # person making no sound is rendered still: it is the flat, unreacting
+            # face, and it is why a body under effort came out mute.
+            _voiced = exertion_in(body)
+            _will_silence = bool(silence_nonspeech and not _speaks and not _own
+                                 and not _voiced)
             heard = [] if (not auto_sound or _own) else sounds_for(body)
             if _will_silence:
                 # The audio is pinned to silence for this shot's whole length, so a
@@ -3274,8 +3298,9 @@ class H3LongVideos:
             shots.append(shot_text)
             shot_cast.append(list(active) if character_guard else [])
             speech.append(_speaks)
-            # What the AUTHOR wrote, and nothing this file worked out. See above.
-            sounded.append(_own)
+            # What the AUTHOR wrote, and nothing this file worked out. See above --
+            # effort counts, because the verb staging it is theirs.
+            sounded.append(_own or _voiced)
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -3354,9 +3379,10 @@ class H3LongVideos:
         n_kept = sum(1 for s, snd in zip(speech, sounded) if not s and snd)
         if silence_nonspeech and n_kept:
             notes.append(
-                f"{n_kept} shot(s) have no line but describe a sound IN THE BEAT, so "
-                f"their audio is left free to make it -- writing the sound yourself is "
-                f"asking for audio on purpose. Those are the only shots without a line "
+                f"{n_kept} shot(s) have no line but either describe a sound IN THE BEAT or "
+                f"stage EFFORT, so their audio is left free to make it -- writing the "
+                f"sound, or the verb that produces one, is asking for audio on purpose. "
+                f"Those are the only shots without a line "
                 f"where the branch is open, and an open branch on a joint model can "
                 f"still put a voice in the gap. If one of them babbles, that beat's own "
                 f"sound wording is what opened it")
@@ -3369,21 +3395,11 @@ class H3LongVideos:
                 f"a chain dragging, a low hum off the strip light'. Write it into a beat "
                 f"for that shot, or into the anchor to carry it through the film. Do not "
                 f"use a label like 'sound:' -- a labelled line is read as text to draw")
-            # H3 is JOINT: the face follows the audio branch. Conditioning that branch
-            # on real silence says this person is making no sound -- and a person
-            # making no sound is rendered still. On a beat that stages effort or
-            # reaction that is the wrong instruction, and it reads as a flat face.
-            n_effort = sum(1 for b, sp in zip(beats, speech)
-                           if not sp and exertion_in(b))
-            if n_effort:
-                notes.append(
-                    f"{n_effort} of those stage effort or reaction with no line to speak. "
-                    f"H3 is joint -- the face follows the audio branch -- so conditioning "
-                    f"it on silence says the person makes no sound, and a person making no "
-                    f"sound is rendered still. That is the flat, unreacting face. Turning "
-                    f"silence_nonspeech OFF lets the branch generate breath and effort, "
-                    f"which the face performs to; the cost is that an unconditioned branch "
-                    f"can also invent speech, and the mouth will follow that too")
+            # The note that used to sit here warned that a beat staging effort was
+            # being silenced, which read as a flat, unreacting face. It cannot happen
+            # any more: effort opens the audio branch, because the verb staging it is
+            # the author's. See _voiced in the shot loop.
+
         if first_frame is None:
             notes.append("no first_frame: shot 1 has nothing pinning its opening frame, so its "
                          "starting pose and framing come from the text and any reference")

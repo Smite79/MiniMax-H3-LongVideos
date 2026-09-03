@@ -634,6 +634,7 @@ So the branch is opened by **what you wrote**, and by nothing this file worked o
 |---|---|
 | a quoted line, or `<d>…</d>` | **yes** |
 | a sound *you* described in the beat | **yes** |
+| a beat staging **effort** — thrashes, writhes, strains, shudders | **yes** |
 | footsteps `auto_sound` inferred from "walks in" | no |
 | room tone read from the location | no |
 
@@ -652,10 +653,23 @@ a prohibition, it is the word *speaks* in the prompt. A shot with a line keeps t
 open form (*"It sounds like…"*), since closing the list there would say the line is
 not among the sounds.
 
-**The trade this makes.** A shot with no dialogue gets no ambience unless you write
-it. That is the cost of a hard guarantee, and on a joint model there is no third
-option — either the audio is pinned, or it can talk. To score a silent shot, describe
-it yourself and the branch opens for it:
+**A body under effort has a voice.** Effort is read from *your* verb — thrashes,
+writhes, strains, arches, shudders, grips — so it opens the branch the same way a
+written sound does. It has to: silence tells a joint model the person makes no sound,
+and a person making no sound is rendered still. That is the flat, unreacting face.
+Those shots are given *"unsteady breathing, with gasps and moans of effort"*.
+
+A beat that already names the sound is left alone — **moans, gasps, whimpers, groans,
+pants, sobs** are all sound words, so writing one both opens the branch and carries
+it, and nothing is added over the top. What you wrote wins.
+
+Restraint sound now needs a restraint. *"thrashes on the bed"* used to imply cuffs
+that were never there; it takes a cuff, chain, rope, strap or tie in the beat.
+
+**The trade this makes.** A shot with no dialogue, no written sound and no effort gets
+no ambience unless you write it. That is the cost of a hard guarantee, and on a joint
+model there is no third option — either the audio is pinned, or it can talk. To score
+such a shot, describe it yourself and the branch opens for it:
 
 ```
 Nora walks to the window, her boots loud on the concrete,
