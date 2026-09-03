@@ -930,6 +930,48 @@ def test_hardware_has_somewhere_to_go():
     check("nothing to place, no sentence", S.anchor_clause([]) == "")
 
 
+def test_a_tape_gag_stays_tape():
+    print("\n=== a tape gag is flat, and stays tape ===")
+    # Reported: a duct tape gag that had become a mask by the later beats. Two
+    # separate causes, both of them in the text.
+    #
+    # First, the placement clause was wrong for it. Tape lies flat against the
+    # face; "a gag sits in the mouth" describes something with bulk, and that
+    # clause was going onto every shot of the chain.
+    for _t in ("Jon puts a duct tape gag on her.",
+               "Jon gags her with duct tape.",
+               "Jon shows her a tape gag."):
+        check(f"tape lies flat: {_t[:34]!r}",
+              S.unanchored_hardware(_t) == [S._TAPE_GAG_CLAUSE])
+    # ...and it must not collect BOTH clauses, which disagree about the bulk.
+    check("one clause, not two",
+          S._GAG_CLAUSE not in S.unanchored_hardware("Jon puts a duct tape gag on her."))
+    # A gag that really does have bulk keeps the phrase it had.
+    check("a ball gag still sits in the mouth",
+          S.unanchored_hardware("Jon holds up a ball gag.") == [S._GAG_CLAUSE])
+    # Tape somewhere other than the mouth must not be sent to the mouth.
+    check("tape at the wrists gets no mouth clause",
+          S._TAPE_GAG_CLAUSE
+          not in S.unanchored_hardware("Her wrists are bound with duct tape."))
+    check("tape that is not a gag at all is left alone",
+          S.unanchored_hardware("Jon tapes the box shut.") == [])
+    # Second, the holds. They constrained the FASTENING and nothing else, so a
+    # strip of tape decoded and re-encoded once a shot had nothing in the text
+    # keeping it made of tape, and it drifted to the commoner object over a face.
+    for _name in ("RESTRAINT_HOLD", "CHAIN_HOLD", "CHAIN_POSE_HOLD"):
+        check(f"{_name} holds the material too",
+              "keeps the material and shape" in getattr(S, _name))
+    # It must stay positive: at cfg 1 a negative is never evaluated.
+    check("the form hold is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", S.FORM_HOLD, re.I))
+    # And short. These holds are already the longest thing a restrained shot carries.
+    check("...and is one short sentence",
+          S.FORM_HOLD.count(".") == 1 and len(S.FORM_HOLD.split()) <= 14)
+    # It says nothing about the body, which is the beat's to direct.
+    check("...and constrains no body",
+          not re.search(r"\b(?:she|he|her|his|they|body|still)\b", S.FORM_HOLD, re.I))
+
+
 def test_sound_described():
     print("\n=== a beat that asks for a sound keeps its audio ===")
     # Silence is conditioned on encoded silence, which is not "no speech" but "no
@@ -1527,6 +1569,7 @@ def main():
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
+    test_a_tape_gag_stays_tape()
     test_sound_described()
     test_sound_is_derived_from_the_action()
     test_pace()

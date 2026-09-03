@@ -1743,8 +1743,16 @@ RESTRAINT_HOLD_KEY = ("handcuffs cuffs chains rope ropes tape gag collar restrai
 # that is an instruction to hold still, and stacked together the holds came to 64% of
 # a shot whose beat was 11%. The performance died under its own continuity guards.
 # Say what the metal does; leave the body to the beat.
+# Staying closed is not the same as staying itself. Every hold above constrains
+# the fastening; none of them says the thing is still made of what it was made
+# of. A strip of tape, decoded and re-encoded once a shot, has nothing in the
+# text holding it to being tape, and it drifts to the nearest commoner object.
+# One short sentence, because these holds are already the longest thing a
+# restrained shot carries.
+FORM_HOLD = ", and each piece keeps the material and shape it was put on with."
+
 RESTRAINT_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
-                  "on, and still fastened at the last frame.")
+                  "on, still fastened at the last frame") + FORM_HOLD
 
 
 def restraint_wearers(sheet):
@@ -1906,7 +1914,7 @@ def falls_in(text):
 # guarantee.
 CHAIN_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put on, "
               "and still fastened at the last frame; its links keep their size and the run "
-              "between them stays straight and taut.")
+              "between them stays straight and taut") + FORM_HOLD
 
 # When hardware is what PUTS a body in a position, the length of that hardware is the
 # whole reason the position holds. Saying the metal keeps its shape is not enough: a
@@ -1920,7 +1928,7 @@ CHAIN_POSE_HOLD = (" Every restraint stays whole and closed, fastened exactly as
                    "on; the metal is already drawn out to its full length, so the position "
                    "it fixes is the position that keeps, and the body strains and pulls "
                    "against it while the fastenings hold at exactly the length they were "
-                   "locked to.")
+                   "locked to") + FORM_HOLD
 
 # A position that hardware can be locked to enforce.
 _FORCED_POSE = re.compile(
@@ -1954,10 +1962,21 @@ _RIGID_HARDWARE = re.compile(
 # the item is being fastened or merely held up and shown.
 #
 # (item pattern, the phrase that places it)
+_TAPE_GAG = (r"(?:duct[\s-]*)?tape\s+gag|"
+             r"gag(?:s|ged|ging)?\s+\w{0,12}\s*with\s+"
+             r"(?:duct\s+|packing\s+|masking\s+)?tape|"
+             r"tape\s+(?:over|across)\s+(?:her|his|their|the)\s+mouth")
+_TAPE_GAG_CLAUSE = "a strip of tape lies flat across the mouth"
+_GAG_CLAUSE = "a gag sits in the mouth"
+
 _HARDWARE_ANCHOR = (
     (r"collar(?:s|ed)?",                 "a collar closes around the neck"),
     (r"leash(?:es)?|lead\b",             "a leash clips to the collar at the neck and hangs down from it"),
-    (r"gag(?:s|ged)?|ball\s*gag",        "a gag sits in the mouth"),
+    # Tape is a gag that lies flat against the face. Told "a gag sits in the
+    # mouth" it is given bulk it does not have, and bulk over the mouth,
+    # re-encoded shot after shot, settles into a mask.
+    (_TAPE_GAG,                          _TAPE_GAG_CLAUSE),
+    (r"gag(?:s|ged)?|ball\s*gag",        _GAG_CLAUSE),
     (r"blindfold(?:s|ed)?",              "a blindfold covers the eyes"),
     (r"handcuff(?:s|ed)?",               "handcuffs close around the wrists"),
     (r"shackle[sd]?|leg\s+irons",        "shackles close around the ankles"),
@@ -1997,6 +2016,10 @@ def unanchored_hardware(text):
                 break
         if found and not placed and phrase not in out:
             out.append(phrase)
+    # A tape gag answers the gag entry as well, and the two clauses disagree
+    # about whether the thing has bulk. The flat one is the true one.
+    if _TAPE_GAG_CLAUSE in out and _GAG_CLAUSE in out:
+        out.remove(_GAG_CLAUSE)
     return out
 
 
