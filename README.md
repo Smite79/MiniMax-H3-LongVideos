@@ -164,6 +164,10 @@ The tag decides which shots get that image — every beat naming it. A person's 
 their sheet entry travels with them; an object's tag comes off when the object does and
 returns when it does. A reference with no tag anywhere goes on every shot.
 
+**`<Picture N>` means `ref_image_N`, the socket** — `<Picture 3>` is whatever is wired to
+`ref_image_3`, whether or not `ref_image_2` has anything on it. A tag naming an empty
+socket is dropped from the text and `info` says so.
+
 **A picture the prompt never refers to is read as another subject** — a second person
 with the same face and clothes. That is what the tag prevents, so tag every reference
 you connect.

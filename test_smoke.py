@@ -808,6 +808,38 @@ def test_every_reference_is_claimed():
         check(f"{name}: every picture is claimed", not bad, "; ".join(bad))
 
 
+def test_a_gapped_socket_still_sends_its_image():
+    print("\n=== wiring ref_image_1 and ref_image_3 sends both ===")
+    # Whole-path, because the unit test cannot show the image being dropped. Wire a
+    # gap and the second picture used to vanish: its tag matched nothing in a roster
+    # of two, so it was stripped, and a reference nothing claims is not sent.
+    img = lambda: torch.rand(1, H, W, 3)
+    P = "A yard.\n\nMara waits.\n\nMara walks."
+    sent, _ = _prompts_sent(P, character_memory="Mara: <Picture 1>, she, a locket <Picture 3>.",
+                            ref_image_1=img(), ref_image_3=img())
+    p, n = sent[0]
+    check("both images are sent", n == 2, f"{n}")
+    check("...and both are claimed in the text",
+          sorted(re.findall(r"<Picture (\d+)>", p)) == ["1", "2"], p[:90])
+    # A single image on a socket that is not the first.
+    sent, _ = _prompts_sent(P, character_memory="Mara: <Picture 2>, she, 30.",
+                            ref_image_2=img())
+    p, n = sent[0]
+    check("a lone image on socket 2 is sent", n == 1 and "<Picture 1>" in p, f"{n} {p[:60]}")
+    # Sockets filled from the top are untouched -- this must not move anybody's
+    # working setup.
+    sent, _ = _prompts_sent(P, character_memory="Mara: <Picture 1>, she, a locket <Picture 2>.",
+                            ref_image_1=img(), ref_image_2=img())
+    p, n = sent[0]
+    check("no gap, nothing changes",
+          n == 2 and sorted(re.findall(r"<Picture (\d+)>", p)) == ["1", "2"], f"{n}")
+    # And a tag on an empty socket is reported rather than silently dropped.
+    info = run_node(P, plan_only=True, character_memory="Mara: <Picture 3>, she, 30.",
+                    ref_image_1=img())[2]
+    check("a tag with no image behind it is named",
+          "names a socket with no image on it" in info, "")
+
+
 def test_a_modified_state_is_not_read_as_an_act():
     print("\n=== 'closed rear doors' is not somebody closing them ===")
     # Reported after the state hold shipped: the doors were STILL opening and being
@@ -1442,6 +1474,7 @@ def main():
     test_a_state_in_the_scene_is_not_reasserted()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
+    test_a_gapped_socket_still_sends_its_image()
     test_a_modified_state_is_not_read_as_an_act()
     test_a_staged_change_gets_both_ends()
     test_dialogue_headroom()

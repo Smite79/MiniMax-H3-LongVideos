@@ -1046,6 +1046,46 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_a_tag_names_the_socket_it_is_wired_to():
+    print("\n=== <Picture N> means ref_image_N ===")
+    # Reported as "the <picture> reference is not being transferred to the prompt".
+    # The roster is packed dense -- the wired images become picture 1, 2, 3 in socket
+    # order -- but the sheet is written with the number on the SOCKET, which is what
+    # the README documents. Fill the sockets from the top and the two agree, which is
+    # why this stayed hidden. Leave a gap and they do not: <Picture 3> names nothing
+    # in a roster of two, so the tag was stripped and the image dropped in silence.
+    check("no gap, nothing to do",
+          S.renumber_reference_tags("Mara: <Picture 1>, Dom: <Picture 2>.", [1, 2])
+          == "Mara: <Picture 1>, Dom: <Picture 2>.")
+    check("a gap is closed up",
+          S.renumber_reference_tags("Mara: <Picture 1>, a locket <Picture 3>.", [1, 3])
+          == "Mara: <Picture 1>, a locket <Picture 2>.")
+    check("one socket, not the first",
+          S.renumber_reference_tags("Mara: <Picture 2>.", [2]) == "Mara: <Picture 1>.")
+    check("the last socket alone",
+          S.renumber_reference_tags("Mara: <Picture 4>.", [4]) == "Mara: <Picture 1>.")
+    check("all four, out of a gap",
+          S.renumber_reference_tags("<Picture 2> <Picture 4>", [2, 4])
+          == "<Picture 1> <Picture 2>")
+    # A tag on an empty socket is left alone here and stripped downstream, the same
+    # as before -- but it is now REPORTED, because silently dropping a picture the
+    # author asked for is how this went unnoticed.
+    check("a tag on an empty socket is left for the stripper",
+          S.renumber_reference_tags("Mara: <Picture 3>.", [1]) == "Mara: <Picture 3>.")
+    check("...and is named", S.unwired_reference_tags("Mara: <Picture 3>.", [1]) == [3])
+    check("nothing wired, every tag is named",
+          S.unwired_reference_tags("<Picture 1> <Picture 2>", []) == [1, 2])
+    check("all wired, nothing to name",
+          S.unwired_reference_tags("<Picture 1> <Picture 3>", [1, 3]) == [])
+    # The spelling the rest of the file accepts.
+    check("spacing and underscores are read the same",
+          S.renumber_reference_tags("<picture_3> < Picture 3 >", [1, 3])
+          == "<Picture 2> <Picture 2>")
+    check("no tags, no change", S.renumber_reference_tags("Mara: she, 30.", [1, 3])
+          == "Mara: she, 30.")
+    check("empty text survives", S.renumber_reference_tags("", [1, 3]) == "")
+
+
 def test_an_exit_and_a_shut_door_disagree():
     print("\n=== leaving the van, with the doors shut ===")
     # Three rounds of "the doors keep opening" went by as a silent bad render. By the
@@ -1743,6 +1783,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_a_tag_names_the_socket_it_is_wired_to()
     test_an_exit_and_a_shut_door_disagree()
     test_a_held_thing_is_not_also_heard_moving()
     test_a_staged_change_names_both_ends()
