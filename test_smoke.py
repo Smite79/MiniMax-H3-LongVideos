@@ -833,6 +833,32 @@ def test_a_gapped_socket_still_sends_its_image():
     p, n = sent[0]
     check("no gap, nothing changes",
           n == 2 and sorted(re.findall(r"<Picture (\d+)>", p)) == ["1", "2"], f"{n}")
+    # The renumbered tag must still fetch the RIGHT image. Two pictures that can be
+    # told apart by value, so a mix-up shows up as the wrong face rather than as a
+    # number that merely looks tidy. This is the check that matters: renumbering is
+    # only safe if the image follows the number.
+    A = torch.full((1, H, W, 3), 0.10)
+    B = torch.full((1, H, W, 3), 0.70)
+    val = lambda t: round(float(t.mean()), 2)
+    seen = []
+    orig = S.build_conditioning
+    def spy(clip, vae, audio_vae, prompt, *a, **k):
+        seen.append((prompt, [val(r) for r in (k.get("refs") or [])]))
+        return orig(clip, vae, audio_vae, prompt, *a, **k)
+    S.build_conditioning = spy
+    try:
+        run_node("A yard.\n\nMara waits.\n\nDom arrives.\n\nMara and Dom talk.",
+                 character_memory="Mara: <Picture 1>, she, 30.\nDom: <Picture 3>, he, 41.",
+                 ref_image_1=A, ref_image_3=B)
+    finally:
+        S.build_conditioning = orig
+    check("the lone-reference shot renumbers to 1",
+          re.findall(r"<Picture (\d+)>", seen[1][0]) == ["1"], str(seen[1][0][-60:]))
+    check("...and still sends that person's own image",
+          seen[1][1] == [0.7], str(seen[1][1]))
+    check("the shared shot keeps both, in order",
+          sorted(re.findall(r"<Picture (\d+)>", seen[2][0])) == ["1", "2"]
+          and seen[2][1] == [0.1, 0.7], str(seen[2][1]))
     # And a tag on an empty socket is reported rather than silently dropped.
     info = run_node(P, plan_only=True, character_memory="Mara: <Picture 3>, she, 30.",
                     ref_image_1=img())[2]

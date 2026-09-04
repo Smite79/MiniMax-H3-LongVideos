@@ -4110,8 +4110,9 @@ class H3LongVideos:
             _named = sum(1 for s in shots if picture_tags(s))
             notes.append(
                 f"{len(refs_all)} reference image(s) supply IDENTITY, and they go WHERE "
-                f"TAGGED: every shot whose text names <Picture N> carries image N, which "
-                f"is what holds a face across beats instead of letting it drift down the "
+                f"TAGGED: every shot whose text names <Picture N> carries the image on "
+                f"ref_image_N, which is what holds a face across beats instead of "
+                f"letting it drift down the "
                 f"keyframe chain. Put the tag on the person -- 'Nora: <Picture 1>, 34, "
                 f"she, ...' -- and it travels with her. {_named} shot(s) claim one here. "
                 f"References ride alongside the keyframe rather than instead of it: the "
@@ -4119,7 +4120,13 @@ class H3LongVideos:
                 f"is, and ComfyUI packs both (keyframe rows then ref rows, in the same "
                 f"order model_base builds the latents). References keep slots 1..N so the "
                 f"tag points at the right image; the handoff is appended after them and "
-                f"disturbs no numbering")
+                f"disturbs no numbering. Expect the NUMBER in script to differ from the "
+                f"one you wrote: it is the picture's place in THAT shot's reference "
+                f"list, not a name for the image, so a shot carrying one reference "
+                f"always says <Picture 1> whichever socket it came from. The image is "
+                f"still that person's -- what would be wrong is a shot carrying two "
+                f"references and naming only one, since a picture the text never names "
+                f"is read as another subject")
             if _named > 1 and float(ref_noise_aug) >= KEYFRAME_SAFE_AUG:
                 notes.append(
                     f"a reference on {_named} shots at ref_noise_aug "
