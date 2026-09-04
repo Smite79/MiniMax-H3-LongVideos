@@ -210,6 +210,26 @@ a low hum off the strip light.
 `auto_sound` (on) adds the sound an action implies to shots that are already open, and
 a beat naming its own sound is left alone.
 
+### Mouths on shots with no line
+
+A shot with no line but a sound **you** wrote used to keep its audio branch open — and
+an open branch invents a voice the face lip-syncs to. Nobody is speaking and the mouth
+moves anyway.
+
+`mouths_shut_when_no_line` (on) conditions those shots to silence like any other
+wordless shot, and adds one sentence saying the mouths are closed. The conditioning is
+what settles it; the sentence alone loses to a stream that has decided somebody is
+talking.
+
+**The cost: that shot gives up the sound you wrote for it.** `info` names those shots.
+Turn the switch off to keep the ambience and accept the mouth.
+
+Two exemptions, both deliberate. A beat staging **effort** — *strains, thrashes* — is
+vocal, so its mouth should be open and it keeps its audio. And a **scenery** beat with
+nobody in it is told nothing about mouths: describing a mouth for a person who is not
+there can only be satisfied by drawing one in. Those shots are still silenced — an empty
+room still babbles — the two are separate conditions.
+
 **Give a line a shot it can fill.** Once a shot has dialogue its audio branch is open
 for the whole shot, so the seconds the line does not cover are unconditioned in a shot
 the model knows has a voice in it — which is where speech carries on past the line and
@@ -247,6 +267,7 @@ resets at every cut.
 | `hold_scene_state` | put a described state at the first frame, and give a staged change both its ends |
 | `auto_sound` | add the sound an action implies |
 | `silence_nonspeech` | silence shots with no line and no sound |
+| `mouths_shut_when_no_line` | silence a wordless shot even if you wrote it a sound, so the mouth cannot move |
 | `trim_seam` | drop the duplicated frame at each cut |
 | `tiled_decode`, `cleanup_between_shots` | lower VRAM; leave on |
 | `upscale`, `latent_upscale` | optional, off by default |

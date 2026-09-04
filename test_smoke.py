@@ -81,6 +81,9 @@ def check(label, ok, detail=""):
 # --- fakes ------------------------------------------------------------------
 
 W, H, FRAMES = 128, 96, 39            # small, on the 17k+5 grid
+# A scene and one wordless beat. Kept as a constant because it is checked twice, with
+# the mouth guard on and off, and the two spellings must not drift apart.
+TWO_LINE_ROOM = "A room.\n\nHe walks in."
 
 
 class FakeCLIP:
@@ -246,8 +249,15 @@ def test_references_and_silence():
     # The beat has no line and no sound of its own, so it is pinned silent and gets no
     # sound sentence: a clause would describe an acoustic the conditioning removes,
     # and a free branch there is what put a voice in the mouth.
-    check("...with nothing added to a silenced shot",
-          clip2.seen[1][0] == "A room. He walks in.", clip2.seen[1][0])
+    # It carries the mouth clause and nothing else: no sound sentence, because a
+    # clause would describe an acoustic the conditioning removes. The mouth clause is
+    # the picture half of the same guarantee and has its own switch.
+    check("...with no sound sentence added to a silenced shot",
+          clip2.seen[1][0] == "A room. He walks in." + S.MOUTH_HOLD, clip2.seen[1][0])
+    clip2b = FakeCLIP()
+    run_node(TWO_LINE_ROOM, clip=clip2b, mouths_shut_when_no_line=False)
+    check("...and none at all with the mouth guard off",
+          clip2b.seen[1][0] == "A room. He walks in.", clip2b.seen[1][0])
     # The shot that DOES speak gets the open form: closing the list there would be
     # telling the model the line is not in it.
     clip4 = FakeCLIP()
@@ -257,8 +267,8 @@ def test_references_and_silence():
                               'It sounds like footsteps.', clip4.seen[1][0])
     clip3 = FakeCLIP()
     run_node("A room.\n\nHe walks in.", clip=clip3, auto_sound=False)
-    check("...and with that off it is exactly what was written",
-          clip3.seen[1][0] == "A room. He walks in.")
+    check("...and with that off only the mouth clause remains",
+          clip3.seen[1][0] == "A room. He walks in." + S.MOUTH_HOLD, clip3.seen[1][0])
 
 
 def test_first_frame():
@@ -748,6 +758,58 @@ def _prompts_sent(P, **kw):
     finally:
         S.build_conditioning = orig
     return seen, out[3]
+
+
+def test_mouths_stay_shut_with_no_line():
+    print("\n=== a shot with nobody speaking keeps its mouth closed ===")
+    # H3 is joint: the face follows the audio branch. A shot with no line but a sound
+    # the AUTHOR wrote -- "a low hum off the strip light" -- kept its branch open, and
+    # an open branch invents a voice the picture lip-syncs to. Nobody is speaking and
+    # the mouth moves anyway. That was the hole; a written sound was enough to open it.
+    P = ('A workshop.\n\n'
+         'Kate walks to the window.\n\n'
+         'Kate says: "Wait there."\n\n'
+         'A low hum comes off the strip light.\n\n'
+         'Kate strains against the cuffs.')
+    # With a sheet, because that is how the node knows Kate is a person. It does not
+    # scan prose for capitals on purpose -- a sheet LABELS people and guessing from
+    # capitalisation picks up place names. A beat with a bare pronoun still works
+    # without one; a beat with only an unlisted name does not, and that is the
+    # conservative direction: no clause rather than a clause about nobody.
+    MEM = "Kate: she, 30, red coat."
+    info, script = run_node(P, plan_only=True, character_memory=MEM)[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    mouth = [i + 1 for i, s in enumerate(sh) if "Every mouth in the shot stays closed" in s]
+    check("the wordless shot with a person is told to close", mouth == [1], str(mouth))
+    check("the speaking shot is not", "Every mouth in the shot stays closed" not in sh[1], "")
+    # ca75672, which this must not undo: a mouth sentence on a beat with nobody in it
+    # describes a person who is not there, and the only way to satisfy it is to draw a
+    # face into an empty frame. The AUDIO half has no such limit -- an empty room still
+    # babbles -- so shot 3 is silenced without being told anything about mouths.
+    check("the scenery beat is told nothing about mouths",
+          "Every mouth in the shot stays closed" not in sh[2], "")
+    check("...but is still silenced", "sound is" not in sh[2], "")
+    # Effort is vocal and its mouth SHOULD be open. Silencing a straining body was a
+    # bug once already -- it renders as a flat, unreacting face.
+    check("a straining body is left alone", "Every mouth in the shot stays closed" not in sh[3], "")
+    check("...and keeps its audio", "sound" in sh[3].lower(), "")
+    # The written sound on a wordless shot is given up, because conditioning the
+    # branch is the only thing that actually settles the mouth.
+    check("the wordless sound shot is silenced", "sound is" not in sh[2], "")
+    check("info names the shots held closed", "mouths held closed on shot(s) 1" in info, "")
+    check("...and names what it cost", "gave up the sound you wrote" in info, "")
+    # The switch puts it all back.
+    off = run_node(P, plan_only=True, character_memory=MEM,
+                   mouths_shut_when_no_line=False)[3]
+    check("off, nothing is told to close", "Every mouth in the shot stays closed" not in off, "")
+    check("off, the written sound comes back",
+          "sound" in [s for s in off.split("---") if s.strip()][2].lower(), "")
+    # Positively phrased: at cfg 1 no negative is evaluated, so an absence cannot be
+    # asked for -- only a closed mouth can be drawn.
+    check("the clause is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b|\bnobody\b", S.MOUTH_HOLD, re.I), "")
+    check("...and is one short sentence",
+          S.MOUTH_HOLD.count(".") == 1 and len(S.MOUTH_HOLD.split()) <= 14, "")
 
 
 def test_script_is_what_was_sent():
@@ -1358,12 +1420,18 @@ def test_room_tone_under_every_shot():
     check("...and the room does not go under it", "hard walls" not in sh[1], sh[1][-70:])
     check("...and it is told nothing about sound",
           "sounds like" not in sh[1] and "only sound" not in sh[1])
-    # A sound the AUTHOR wrote is a request for audio, so that shot stays open -- and
-    # with no line it is told these are the only sounds, which shapes a branch that is
-    # legitimately free.
-    check("a sound you wrote yourself keeps the branch open",
-          "hard walls giving the sound back" in sh[2])
-    check("...in the closed form, because it has no line", "The only sound" in sh[2])
+    # A sound the AUTHOR wrote used to keep that shot open even with no line -- and
+    # an open branch is exactly where the invented voice and the lip-sync came from.
+    # mouths_shut_when_no_line, on by default, now silences it instead. The old rule
+    # is still the rule with the switch off, and that is the trade, stated both ways.
+    off = run_node(P, plan_only=True, mouths_shut_when_no_line=False)[3]
+    off_sh = [b for b in off.split("---") if b.strip()]
+    check("a sound you wrote keeps the branch open, guard off",
+          "hard walls giving the sound back" in off_sh[2])
+    check("...in the closed form, because it has no line",
+          "The only sound" in off_sh[2])
+    check("...while on, that shot is silenced so the mouth cannot move",
+          "The only sound" not in sh[2] and "Every mouth in the shot stays closed" in sh[2])
     check("...and info explains the mouth", "stops the mouth moving" in info)
     # A scene naming no space gets no bed, and the silence guard still applies.
     plain = run_node("Two people talking.\n\nHe waits.\n\nShe waits.", plan_only=True)[2]
@@ -1557,6 +1625,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_mouths_stay_shut_with_no_line()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()

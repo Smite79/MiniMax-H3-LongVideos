@@ -1768,6 +1768,48 @@ RESTRAINT_HOLD_KEY = ("handcuffs cuffs chains rope ropes tape gag collar restrai
 # text holding it to being tape, and it drifts to the nearest commoner object.
 # One short sentence, because these holds are already the longest thing a
 # restrained shot carries.
+# The picture side of a shot with nobody speaking. Positively phrased, because at
+# cfg 1 no negative is evaluated: "nobody speaks" asks the model to render an absence
+# and a closed mouth is a thing it can actually draw.
+#
+# This is the WEAK half and is known to be. _silent_audio_latent already records that
+# a lips-closed sentence loses against an audio stream that has decided somebody is
+# talking -- conditioning the branch is what settles it. So this rides along, and the
+# switch also extends the silencing to the shots that were keeping the branch open.
+#
+# TWO THINGS ca75672 PAID FOR, both of which this has to keep:
+#
+# It goes AFTER the action, never in front of it. As the opening tokens it was face
+# anatomy in the first thing the model reads, and a distilled LoRA settles composition
+# in its first step or two -- that rendered a face at the start of shots.
+#
+# It is only ever said where there is a mouth to describe. On a scenery beat with
+# nobody in it, a sentence about mouths describes a person who is not there, and the
+# only way to satisfy it is to put a face in an empty frame. The AUDIO half has no
+# such limit -- an empty room still babbles -- so the two are separate conditions and
+# are gated separately below.
+MOUTH_HOLD = " Every mouth in the shot stays closed, the jaw still."
+
+_PERSON_WORD = re.compile(
+    r"\b(?:he|she|they|him|her|hers|them|his|their|theirs|himself|herself|themselves|"
+    r"nobody|somebody|anyone|everyone|man|woman|men|women|boy|girl|person|people|"
+    r"figure|guard|driver|doctor|nurse|officer)\b", re.I)
+
+
+def beat_puts_somebody_on_screen(beat, sheet=""):
+    """Does the BEAT itself put a person in the shot?
+
+    Deliberately not "is a person described in this shot's text": the character
+    guard carries the previous shot's cast forward so a wordless beat does not empty
+    the frame, and falls back to the sole sheet entry when there is no previous. So
+    a scenery beat has a person described beside it before anybody has walked in,
+    and reading that as "somebody is here" is what put a face in an empty yard."""
+    b = beat or ""
+    if _PERSON_WORD.search(b):
+        return True
+    return any(n and re.search(r"\b" + re.escape(n) + r"\b", b, re.I)
+               for n, _ in sheet_lines(sheet))
+
 FORM_HOLD = ", and each piece keeps the material and shape it was put on with."
 
 RESTRAINT_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
@@ -3368,6 +3410,25 @@ class H3LongVideos:
                                "the old one, even though the scene paragraph still says "
                                "it. Two sentences per shot at most, the two kinds sharing "
                                "that budget. info lists which shots got which."}),
+                # APPENDED. Saved workflows restore widgets by position.
+                "mouths_shut_when_no_line": ("BOOLEAN", {"default": True,
+                    "tooltip": "Keep mouths closed on shots where nobody speaks.\n\n"
+                               "H3 is joint: the face follows the audio branch. A shot "
+                               "with no line but a sound YOU wrote -- 'a low hum off the "
+                               "strip light' -- kept its branch open, and an open branch "
+                               "invents a voice the face lip-syncs to. Nobody is speaking "
+                               "and the mouth moves anyway.\n\n"
+                               "On, such a shot is conditioned on silence like any other "
+                               "wordless shot, and every wordless shot is also told the "
+                               "mouths are closed. Conditioning is what actually settles "
+                               "it; the sentence alone loses to a stream that has already "
+                               "decided somebody is talking.\n\n"
+                               "THE COST: that shot gives up the sound you wrote for it. "
+                               "info names those shots, so turn this off if you would "
+                               "rather keep the ambience and risk the mouth.\n\n"
+                               "EFFORT IS EXEMPT. Straining, thrashing, a body under load "
+                               "is vocal and its mouth should be open, so those shots keep "
+                               "their audio and are never told to close."}),
             },
         }
 
@@ -3392,7 +3453,7 @@ class H3LongVideos:
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
-            **_removed):
+            mouths_shut_when_no_line=True, **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
@@ -3537,6 +3598,8 @@ class H3LongVideos:
         state_acted = set()
         stated_shots = []           # shots given a state put at the first frame
         turned_shots = []           # shots given both ends of a staged change
+        mouth_shut = []             # shots told every mouth is closed
+        muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
         # an object. A sheet LABELS them, which beats scanning prose for capitals --
@@ -3876,8 +3939,38 @@ class H3LongVideos:
             # person making no sound is rendered still: it is the flat, unreacting
             # face, and it is why a body under effort came out mute.
             _voiced = exertion_in(body)
-            _will_silence = bool(silence_nonspeech and not _speaks and not _own
+            # A shot where nobody speaks but the author wrote a SOUND kept its branch
+            # open, and an open branch invents a voice the face lip-syncs to. That is
+            # the hole: "a low hum off the strip light" is nobody talking, and it was
+            # enough to leave the mouth free for the whole shot.
+            #
+            # Effort is different and stays out of this. Straining, thrashing, a body
+            # under load -- those are vocal, the mouth SHOULD be open, and silencing
+            # them was a bug once already: a person making no sound renders as a flat,
+            # unreacting face.
+            _mute_written = bool(mouths_shut_when_no_line and _own and not _speaks
                                  and not _voiced)
+            _will_silence = bool(silence_nonspeech and not _speaks and not _voiced
+                                 and (not _own or _mute_written))
+            if _mute_written and _will_silence:
+                muted_sound.append(len(shots) + 1)
+            # The picture side -- and ONLY where the shot actually describes somebody.
+            # A mouth sentence on a scenery beat describes a person who is not there,
+            # and the one way to satisfy it is to draw a face in an empty frame. That
+            # is ca75672's bug and it must not come back.
+            # Read from the BEAT, not from the carried cast. The guard keeps the
+            # previous shot's people in the text so a wordless beat does not empty the
+            # frame, and it falls back to the sole sheet entry when there is no
+            # previous -- so "Rain on the corrugated roof", before anybody has walked
+            # in, still has a person described beside it. Taking that as "somebody is
+            # here" puts a mouth sentence on an empty yard, which is the whole of
+            # ca75672. If the beat itself does not put a person in the shot, say
+            # nothing about mouths and let the audio half do the work.
+            _has_people = beat_puts_somebody_on_screen(body, sheet)
+            _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
+                                    and not _speaks and not _voiced) else ""
+            if _mouth:
+                mouth_shut.append(len(shots) + 1)
             # The held scenery goes in, so the shot is not asked to keep the doors
             # shut and to sound like a door swinging in the same breath.
             heard = ([] if (not auto_sound or _own)
@@ -3897,7 +3990,8 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            shot_text = (line + tail + anchors + _state + _sound + hold + fall + turn).strip()
+            shot_text = (line + tail + anchors + _state + _sound + _mouth
+                         + hold + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
@@ -4008,6 +4102,24 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if mouth_shut:
+            notes.append(
+                f"mouths held closed on shot(s) {', '.join(str(n) for n in mouth_shut)} -- "
+                f"no scripted line and no effort staged in them. H3 is joint, so the face "
+                f"follows the audio branch: the sentence is the picture half and the "
+                f"silent conditioning is the half that actually settles it, since a "
+                f"lips-closed line loses to a stream that has decided somebody is "
+                f"talking. Shots staging effort are left out on purpose -- straining is "
+                f"vocal and that mouth should be open. Off with mouths_shut_when_no_line")
+        if muted_sound:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in muted_sound)} gave up the sound you "
+                f"wrote for them so the mouths could be held shut. Those shots have no "
+                f"line, and a sound alone was enough to leave the audio branch open -- "
+                f"which is where the invented voice and the lip-sync came from. This is "
+                f"the trade and it is the only one available: the ambience cannot be kept "
+                f"while the branch is conditioned to silence. Turn off "
+                f"mouths_shut_when_no_line to keep the sound and accept the mouth")
         if turned_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in turned_shots)} stage a change with a "

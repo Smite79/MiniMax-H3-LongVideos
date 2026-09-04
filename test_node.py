@@ -69,7 +69,12 @@ def test_verbatim():
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
     for gone in ("Exactly two people in this shot", "Solid things stay solid",
                  "physically restrained", "Two bodies in contact", "stays down for the whole shot",
-                 "Movement is continuous", "lips together"):
+                 "Movement is continuous", "lips together",
+                 # ca75672: the mouth clause must never LEAD a shot, and must
+                 # never be said where no person is. MOUTH_HOLD is the scoped
+                 # replacement -- appended, and only where the beat itself puts
+                 # somebody on screen. These spellings stay banned.
+                 "Everyone in this shot is silent"):
         check(f"no guard text remains: {gone!r}", gone not in src)
 
 
@@ -1046,6 +1051,40 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_only_a_beat_with_a_person_gets_a_mouth():
+    print("\n=== a mouth clause needs a mouth to be about ===")
+    # ca75672 removed the old lips-closed sentence for two reasons and this must not
+    # undo either. It led the shot, which put face anatomy in the first tokens a
+    # distilled LoRA reads -- so it rendered a face at the START of shots. And it was
+    # said on scenery beats, where describing a mouth for a person who is not there
+    # can only be satisfied by drawing one in.
+    sheet = "Kate: she, 30, red coat.\nDan: he, 41."
+    for _t in ("Kate walks to the window.", "She lies still.",
+               "Dan and Kate stand by the crate.", "The man waits by the door.",
+               "Somebody moves behind the glass."):
+        check(f"a person is on screen: {_t[:36]!r}",
+              S.beat_puts_somebody_on_screen(_t, sheet))
+    for _t in ("Rain on the corrugated roof.", "The gate stands open.",
+               "A low hum comes off the strip light.", "An empty yard.",
+               "Wind through the fence wire."):
+        check(f"nobody on screen: {_t[:36]!r}",
+              not S.beat_puts_somebody_on_screen(_t, sheet))
+    # A pronoun carries it without any sheet at all.
+    check("a pronoun needs no sheet", S.beat_puts_somebody_on_screen("She lies still.", ""))
+    # ...but an unlisted name does not, because the node does not scan prose for
+    # capitals: a sheet LABELS people, and guessing from capitalisation picks up
+    # place names. No clause is the safe answer, not a clause about nobody.
+    check("an unlisted name is not guessed at",
+          not S.beat_puts_somebody_on_screen("Kate walks to the window.", ""))
+    # The sentence itself: appended, never leading, and positively phrased.
+    check("the clause is one short sentence",
+          S.MOUTH_HOLD.count(".") == 1 and len(S.MOUTH_HOLD.split()) <= 12)
+    check("...and is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b|\bnobody\b", S.MOUTH_HOLD, re.I))
+    check("...and starts with a space, so it appends",
+          S.MOUTH_HOLD.startswith(" "))
+
+
 def test_a_tag_names_the_socket_it_is_wired_to():
     print("\n=== <Picture N> means ref_image_N ===")
     # Reported as "the <picture> reference is not being transferred to the prompt".
@@ -1738,8 +1777,12 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-6:] == ["anchor", "character_memory", "character_guard",
-                             "pace", "auto_sound", "hold_scene_state"])
+          list(opt)[-7:] == ["anchor", "character_memory", "character_guard",
+                             "pace", "auto_sound", "hold_scene_state",
+                             "mouths_shut_when_no_line"])
+    check("mouths_shut_when_no_line is offered, and on",
+          "mouths_shut_when_no_line" in opt
+          and opt["mouths_shut_when_no_line"][1]["default"] is True)
     check("hold_scene_state is offered, and on",
           "hold_scene_state" in opt and opt["hold_scene_state"][1]["default"] is True)
     # reference_mode is gone. It existed only because I had concluded fl2va could not
@@ -1783,6 +1826,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_only_a_beat_with_a_person_gets_a_mouth()
     test_a_tag_names_the_socket_it_is_wired_to()
     test_an_exit_and_a_shut_door_disagree()
     test_a_held_thing_is_not_also_heard_moving()
