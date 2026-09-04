@@ -168,6 +168,12 @@ returns when it does. A reference with no tag anywhere goes on every shot.
 `ref_image_3`, whether or not `ref_image_2` has anything on it. A tag naming an empty
 socket is dropped from the text and `info` says so.
 
+**The number in `script` will not always be the number you wrote, and that is correct.**
+H3 reads the number as the picture's place in *that shot's* reference list, so a shot
+carrying one reference always says `<Picture 1>`, whichever socket it came from. The
+image is still that person's. What would be wrong is a shot carrying two references and
+naming only one — a picture the text never names is read as another subject.
+
 **A picture the prompt never refers to is read as another subject** — a second person
 with the same face and clothes. That is what the tag prevents, so tag every reference
 you connect.
