@@ -2227,6 +2227,35 @@ def exits_vehicle(text):
     return bool(_EXIT_VEHICLE.search(text or ""))
 
 
+_PICTURE_TAG = re.compile(r"<\s*picture[\s_\-]*(\d+)\s*>", re.I)
+
+
+def renumber_reference_tags(text, wired):
+    """Rewrite <Picture N> from INPUT number to position in the reference roster.
+
+    The roster is packed dense -- the wired images become picture 1, 2, 3 in the
+    order of their sockets -- but nobody writing a sheet knows that. They write the
+    number on the socket, which is what the README documents. Wire ref_image_1 and
+    ref_image_3 and the two conventions disagree: <Picture 3> names nothing in a
+    roster of two, so the tag was stripped and the image was dropped in silence.
+
+    `wired` is the socket numbers that actually have an image, in socket order. With
+    no gaps this is the identity mapping and nothing changes, which is why the fault
+    stayed hidden -- everybody fills the sockets from the top until they don't."""
+    seat = {slot: i + 1 for i, slot in enumerate(wired)}
+    if not text or all(k == v for k, v in seat.items()):
+        return text
+    return _PICTURE_TAG.sub(
+        lambda m: (f"<Picture {seat[int(m.group(1))]}>"
+                   if int(m.group(1)) in seat else m.group(0)), text)
+
+
+def unwired_reference_tags(text, wired):
+    """Tag numbers naming a socket with no image on it. Sorted, no repeats."""
+    return sorted({int(m.group(1)) for m in _PICTURE_TAG.finditer(text or "")}
+                  - set(wired or ()))
+
+
 def state_hold(pairs):
     """One sentence putting those states at the first frame instead of in the action.
 
@@ -3356,6 +3385,31 @@ class H3LongVideos:
         upscale_target_short_edge = _fixed["upscale_target_short_edge"]
         upscale_batch, pace = _fixed["upscale_batch"], _fixed["pace"]
         notes.extend(_fixnotes)
+        # <Picture N> means ref_image_N, the socket. Everything downstream works on
+        # the packed roster instead, so translate once, here, before anything has
+        # read a tag. With the sockets filled from the top this changes nothing.
+        _wired = [n for n, r in enumerate((ref_image_1, ref_image_2, ref_image_3,
+                                           ref_image_4), 1) if r is not None]
+        _missing = unwired_reference_tags(f"{prompt}\n{character_memory}", _wired)
+        if _wired and list(_wired) != list(range(1, len(_wired) + 1)):
+            notes.append(
+                f"reference sockets {', '.join('ref_image_' + str(n) for n in _wired)} "
+                f"are wired with a gap, so <Picture N> has been read as the SOCKET "
+                f"number and renumbered onto the packed roster "
+                f"({', '.join(f'{n}->{i}' for i, n in enumerate(_wired, 1))}). Without "
+                f"this a tag naming a socket past the end of the roster matched nothing, "
+                f"and its image was dropped in silence")
+        prompt = renumber_reference_tags(prompt, _wired)
+        character_memory = renumber_reference_tags(character_memory, _wired)
+        if _missing:
+            notes.append(
+                f"<Picture {'>, <Picture '.join(str(n) for n in _missing)}> "
+                f"{'names a socket' if len(_missing) == 1 else 'name sockets'} with no "
+                f"image on it: nothing is wired to "
+                f"{', '.join('ref_image_' + str(n) for n in _missing)}. The tag is "
+                f"dropped from the text, because a tag pointing at no picture is a "
+                f"person the model is told to look up and cannot find. Wire the image, "
+                f"or take the tag out")
         swap = flush_for_model_change(model)
         if swap:
             notes.append(swap)
