@@ -808,6 +808,65 @@ def test_every_reference_is_claimed():
         check(f"{name}: every picture is claimed", not bad, "; ".join(bad))
 
 
+def _encoded_refs(P, **kw):
+    """(prompt, number of images actually encoded as references) per shot.
+
+    The demotion happens inside build_conditioning, so counting the refs handed TO
+    it misses the handoff being added. This counts what reaches the encoder."""
+    rows, box = [], {}
+    ob, orr = S.build_conditioning, S._build_ref_images
+    def spy_r(vae, imgs, w, h, size):
+        box["n"] = len(imgs); return orr(vae, imgs, w, h, size)
+    def spy_b(clip, vae, audio_vae, prompt, *a, **k):
+        box["n"] = 0
+        out = ob(clip, vae, audio_vae, prompt, *a, **k)
+        rows.append((prompt, box["n"]))
+        return out
+    S._build_ref_images, S.build_conditioning = spy_r, spy_b
+    try:
+        run_node(P, **kw)
+    finally:
+        S._build_ref_images, S.build_conditioning = orr, ob
+    return rows
+
+
+def test_the_demoted_handoff_is_claimed():
+    print("\n=== below the safe aug, the handoff is named too ===")
+    # Reported as a duplicate Dan at the END of the video. Below KEYFRAME_SAFE_AUG
+    # the handoff stops being a keyframe and is encoded as an extra reference -- and
+    # it went in unclaimed, on the reasoning that a first frame is not a subject. In
+    # the reference rows it is not a first frame any more: it is picture N of N, and
+    # a picture the prompt never names is read as ANOTHER subject. The picture is the
+    # previous shot, so the other subject wears that shot's face and clothes.
+    #
+    # Later shots only, because a shot needs BOTH a handoff and a reference to demote
+    # anything -- which is exactly "at the end of the video".
+    mem = "Dan: <Picture 1>, he, 41, grey jacket.\nMara: she, 30, red coat."
+    P = "A yard.\n\nDan waits.\n\nMara arrives.\n\nDan and Mara talk.\n\nDan looks up."
+    img = torch.rand(1, H, W, 3)
+    for aug in (0.999, 0.98, 0.95, 0.90):
+        rows = _encoded_refs(P, character_memory=mem, ref_image_1=img, ref_noise_aug=aug)
+        bad = []
+        for i, (p, enc) in enumerate(rows, 1):
+            tags = {int(x) for x in re.findall(r"<Picture (\d+)>", p)}
+            if enc != len(tags) or sorted(tags) != list(range(1, enc + 1)):
+                bad.append(f"shot {i}: {enc} encoded, tags {sorted(tags)}")
+        check(f"every picture claimed at aug {aug}", not bad, "; ".join(bad))
+    # The claim must say it is the SAME people, or naming it invites a new one.
+    rows = _encoded_refs(P, character_memory=mem, ref_image_1=img, ref_noise_aug=0.95)
+    late = rows[2][0]
+    check("the handoff is named as the opening frame",
+          "is the frame this shot opens on" in late, "")
+    check("...and as the same people, not new ones",
+          "the same people" in late and "anybody new" in late, "")
+    # At a safe aug nothing is demoted, so nothing extra is said.
+    early = _encoded_refs(P, character_memory=mem, ref_image_1=img, ref_noise_aug=0.999)
+    check("nothing added when the handoff stays a keyframe",
+          all("opens on" not in p for p, _ in early), "")
+    info = run_node(P, character_memory=mem, ref_image_1=img, ref_noise_aug=0.95)[2]
+    check("info explains it", "encoded as a reference rather than a keyframe" in info, "")
+
+
 def test_a_gapped_socket_still_sends_its_image():
     print("\n=== wiring ref_image_1 and ref_image_3 sends both ===")
     # Whole-path, because the unit test cannot show the image being dropped. Wire a
@@ -1500,6 +1559,7 @@ def main():
     test_a_state_in_the_scene_is_not_reasserted()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
+    test_the_demoted_handoff_is_claimed()
     test_a_gapped_socket_still_sends_its_image()
     test_a_modified_state_is_not_read_as_an_act()
     test_a_staged_change_gets_both_ends()
