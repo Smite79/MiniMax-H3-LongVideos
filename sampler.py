@@ -2202,6 +2202,28 @@ def stated_states(text):
     return out
 
 
+# Getting OUT of a vehicle. A person leaving a van opens a door to do it, so a beat
+# staging an exit and a state saying the doors are shut are two instructions that
+# cannot both be followed. The beat wins -- it stages an action, and an action beats
+# a state -- and the hold is left arguing with the script it is supposed to serve.
+#
+# The node must not touch the wording either way: those are the author's words, and
+# "out of the van" may be exactly what they mean. So it says so instead. Three rounds
+# of this went by as a silent bad render when one line of info would have placed it.
+_EXIT_VEHICLE = re.compile(
+    r"\b(?:get|gets|got|climb(?:s|ed)?|step(?:s|ped)?|jump(?:s|ed)?|slid(?:e|es)|"
+    r"come|comes|came|walk(?:s|ed)?|hop(?:s|ped)?|pile)\s+(?:down\s+|back\s+)?out\s+"
+    r"of\s+(?:the\s+|a\s+|an\s+|his\s+|her\s+|their\s+|its\s+)?"
+    r"(?:back\s+of\s+(?:the\s+|a\s+)?)?(?:van|car|truck|cab|vehicle|lorry|bus)\b"
+    r"|\bexits?\s+(?:the\s+|a\s+)?(?:van|car|truck|cab|vehicle)\b"
+    r"|\bout\s+of\s+(?:the\s+|a\s+)?(?:van|car|truck|cab)\b", re.I)
+
+
+def exits_vehicle(text):
+    """Does this beat stage somebody getting out of a vehicle?"""
+    return bool(_EXIT_VEHICLE.search(text or ""))
+
+
 def state_hold(pairs):
     """One sentence putting those states at the first frame instead of in the action.
 
@@ -3712,6 +3734,22 @@ class H3LongVideos:
                 stated_shots.append(len(shots) + 1)
             if _turn:
                 turned_shots.append(len(shots) + 1)
+            # The beat and the hold asking for opposite things. Reported three times
+            # running as "the doors keep opening", and every time the node text was
+            # by then correct -- it was the beat staging an exit the doors have to
+            # open for. Say it; do not touch the wording.
+            if _pairs and exits_vehicle(body) and any(
+                    _state_key(t) in ("door",) for t, _ in _pairs):
+                notes.append(
+                    f"shot {len(shots) + 1} says somebody gets OUT of a vehicle and also "
+                    f"says the doors are closed. Those are opposite instructions and the "
+                    f"beat wins: a person leaving a van opens a door to do it, so the "
+                    f"doors open however firmly the text says they are shut. If they are "
+                    f"meant to be shut the whole shot, the people cannot be leaving the "
+                    f"vehicle in it -- write them already out and standing ('Mara and Dom "
+                    f"stand behind the van, its rear doors closed'), or put the exit in "
+                    f"its own earlier shot. Your wording is never edited, so this is "
+                    f"yours to resolve.")
             # Latch what this beat changed, so no later shot re-asserts the old state.
             state_acted.update(_state_key(t) for t, _ in _moves)
             # The chain clause SUBSUMES the restraint hold -- it says "whole and closed"
