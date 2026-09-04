@@ -1046,6 +1046,29 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_an_exit_and_a_shut_door_disagree():
+    print("\n=== leaving the van, with the doors shut ===")
+    # Three rounds of "the doors keep opening" went by as a silent bad render. By the
+    # end the node's own text was correct and the beat was the thing asking for the
+    # doors to open: somebody getting OUT of a van opens a door to do it. The beat
+    # wins -- it stages an action, and an action beats a state -- so the hold is left
+    # arguing with the script it exists to serve. The node says so and edits nothing.
+    for _t in ("Mara and Dom step out of the van with its rear doors closed.",
+               "Mara and Dom get out of the van and stand behind it.",
+               "They climb out of the back of the van.",
+               "Dom exits the van.",
+               "They pile out of the truck."):
+        check(f"an exit: {_t[:40]!r}", S.exits_vehicle(_t))
+    # Standing BEHIND a van is not leaving one, and neither is leaving a building.
+    # A false positive here puts a warning on a shot that has nothing wrong with it.
+    for _t in ("Mara and Dom walk out from behind a van with closed rear doors.",
+               "Mara and Dom stand behind the van, its rear doors closed.",
+               "Dom walks out of the warehouse.",
+               "Mara steps out of the shower.",
+               "Dom looks back at the yard."):
+        check(f"not an exit: {_t[:40]!r}", not S.exits_vehicle(_t))
+
+
 def test_a_held_thing_is_not_also_heard_moving():
     print("\n=== the shot is not told to hold a door and to sound like one swinging ===")
     # Reported after the state hold was fixed: the doors now STARTED closed, as the
@@ -1720,6 +1743,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_an_exit_and_a_shut_door_disagree()
     test_a_held_thing_is_not_also_heard_moving()
     test_a_staged_change_names_both_ends()
     test_sound_described()
