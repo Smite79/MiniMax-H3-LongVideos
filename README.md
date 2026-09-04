@@ -180,8 +180,10 @@ you connect.
 
 `ref_noise_aug` is how *clean* a reference is shown. At **0.999** the model tends to
 reproduce it, framing and background included; lower it (0.97, 0.95) to say
-*approximate*. Below **0.99** the shot handoff stops being a keyframe, so continuity
-weakens as identity strengthens.
+*approximate*. Below **0.99** the shot handoff stops being a keyframe and is encoded as
+an extra reference, so continuity weakens as identity strengthens. That extra picture is
+named in the text as the frame the shot opens on — unnamed it was read as another
+subject, which put a duplicate of whoever was on screen into the later shots.
 
 `first_frame` pins shot 1's opening frame. It pins the **whole** frame, so give it a
 composed shot rather than a portrait crop.

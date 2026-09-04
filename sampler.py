@@ -2256,6 +2256,35 @@ def unwired_reference_tags(text, wired):
                   - set(wired or ()))
 
 
+def handoff_rides_as_ref(handoff, refs, ref_noise_aug):
+    """Is the shot handoff about to be encoded as a subject reference?
+
+    Mirrors the demotion in build_conditioning. Read in the render loop as well,
+    because the text has to claim the picture and the text is written up there."""
+    return bool(handoff is not None and refs
+                and not (ref_noise_aug is None
+                         or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG))
+
+
+def handoff_claim(n):
+    """Name the demoted handoff as this shot's opening frame.
+
+    Below KEYFRAME_SAFE_AUG the handoff stops being a keyframe and is encoded as an
+    extra reference -- and it was going in unclaimed, on the reasoning that a first
+    frame is not a subject and needs no tag. It needs one HERE. In the reference
+    rows it is not a first frame any more, it is picture N of N, and the rule that
+    governs those is the node's oldest: a picture the prompt names is that subject,
+    and a picture it never names is ANOTHER subject.
+
+    So the last shot of a run carried a second person wearing the previous shot's
+    clothes and face -- reported as a duplicate at the end of the video, and only
+    ever below 0.99, which is why lowering the aug to strengthen identity was what
+    produced the twin."""
+    return (f" <Picture {n}> is the frame this shot opens on: the same place and the "
+            f"same people, one moment earlier, carried forward rather than joined by "
+            f"anybody new.")
+
+
 def state_hold(pairs):
     """One sentence putting those states at the first frame instead of in the action.
 
@@ -4187,6 +4216,7 @@ class H3LongVideos:
         _captured = {}              # name -> a frame from the last shot they were in
         _captured_from = {}         # name -> which shot that frame came from
         _recovered = []             # (shot, name, source shot) actually pinned
+        _handoff_claimed = []       # shots whose demoted handoff was named in the text
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         _deep_cleanup()
 
@@ -4261,6 +4291,14 @@ class H3LongVideos:
                             f"{_who}:", f"{_who}: {_tag},", 1)
                     else:
                         shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
+            # The handoff, when it is demoted to a reference, is a picture like any
+            # other and has to be claimed or it reads as a second person. Decided
+            # here rather than inside build_conditioning because the claim is text,
+            # and the text is assembled up here.
+            _shot_refs = list(shot_refs_all[i]) + _extra
+            if handoff_rides_as_ref(shot_handoff, _shot_refs, ref_noise_aug):
+                shot_prompt = shot_prompt + handoff_claim(len(_shot_refs) + 1)
+                _handoff_claimed.append(i + 1)
             # Whatever this shot ends up being, that is what `script` reports.
             sent_text[i] = shot_prompt
             cond, latent, fc, demoted = build_conditioning(
@@ -4419,6 +4457,18 @@ class H3LongVideos:
             if cleanup_between_shots:
                 _deep_cleanup()
 
+        if _handoff_claimed:
+            notes.append(
+                f"ref_noise_aug is below {KEYFRAME_SAFE_AUG:g}, so on shot(s) "
+                f"{', '.join(str(n) for n in _handoff_claimed)} the handoff is encoded as "
+                f"a reference rather than a keyframe, and the text now NAMES it as the "
+                f"frame the shot opens on. Unnamed it was a picture of the previous shot "
+                f"-- the same people, a moment earlier -- sitting in the reference rows "
+                f"with nothing claiming it, and a picture the prompt never names is read "
+                f"as another subject. That is a duplicate of whoever was on screen, "
+                f"appearing on the later shots because those are the ones with both a "
+                f"handoff and a reference. Raising ref_noise_aug to {KEYFRAME_SAFE_AUG:g} "
+                f"or above keeps the handoff a keyframe and the question does not arise")
         if _recovered:
             notes.append(
                 "recovered a face for "
