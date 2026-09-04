@@ -735,6 +735,79 @@ def test_a_state_in_the_scene_is_not_reasserted():
     check("...and changes nothing else", off.count("doors closed") == 3, "")
 
 
+def _prompts_sent(P, **kw):
+    """Every prompt build_conditioning actually received, in shot order."""
+    seen = []
+    orig = S.build_conditioning
+    def spy(clip, vae, audio_vae, prompt, *a, **k):
+        seen.append((prompt, len(k.get("refs") or [])))
+        return orig(clip, vae, audio_vae, prompt, *a, **k)
+    S.build_conditioning = spy
+    try:
+        out = run_node(P, **kw)
+    finally:
+        S.build_conditioning = orig
+    return seen, out[3]
+
+
+def test_script_is_what_was_sent():
+    print("\n=== script reports the text the model was actually given ===")
+    # script is documented as the exact per-shot text, and it is what the reader is
+    # told to check when a shot renders somebody they did not ask for. It was built
+    # before the render loop and never touched again, while the recovered-face claim
+    # was written onto the loop's own copy -- so on exactly the shot most likely to
+    # be under investigation, the model got "Dom: <Picture 1>, he, 41" and script
+    # said "Dom: he, 41". Diagnosing a duplicate from that leads to the wrong fix.
+    mem = "Mara: <Picture 1>, she, 30, red coat.\nDom: he, 41, grey jacket."
+    P = ("Daylight. A yard.\n\nDom stands by the gate.\n\n"
+         "Mara walks along the fence.\n\nDom looks at the sky.")
+    sent, script = _prompts_sent(P, character_memory=mem,
+                                 ref_image_1=torch.rand(1, H, W, 3))
+    rep = [b.split("] ", 1)[1].strip() for b in script.split("\n---\n")]
+    check("every shot matches, claim included",
+          all(s.strip() == r for (s, _), r in zip(sent, rep)), "")
+    check("the recovery shot really does carry a claim",
+          "<Picture 1>" in sent[2][0] and "<Picture 1>" in rep[2], "")
+
+
+def test_every_reference_is_claimed():
+    print("\n=== no shot carries a picture its text never names ===")
+    # The node's own rule, and the cause of every duplicate reported so far: a
+    # picture the prompt refers to is that subject, and one it never mentions is
+    # ANOTHER subject -- a second person with the same face and clothes. So the
+    # count of references sent must equal the count of tags in the prompt, and the
+    # numbers must run 1..n with no gaps, or a tag points at the wrong image.
+    img = lambda: torch.rand(1, H, W, 3)
+    cases = [
+        ("one tagged, one untagged returning",
+         "A yard.\n\nDom stands by the gate.\n\nMara walks along the fence.\n\n"
+         "Dom looks at the sky.",
+         dict(character_memory="Mara: <Picture 1>, she, 30, red coat.\nDom: he, 41.",
+              ref_image_1=img())),
+        ("two people, two tagged references",
+         "A yard.\n\nMara waits.\n\nDom arrives.\n\nMara and Dom talk.",
+         dict(character_memory="Mara: <Picture 1>, she, 30.\nDom: <Picture 2>, he, 41.",
+              ref_image_1=img(), ref_image_2=img())),
+        ("a reference nobody tags",
+         "A yard.\n\nMara waits.\n\nDom arrives.",
+         dict(character_memory="Mara: <Picture 1>, she, 30.\nDom: he, 41.",
+              ref_image_1=img(), ref_image_2=img())),
+        ("an object tag beside a person tag",
+         "A yard.\n\nMara waits.\n\nMara holds the locket.\n\nDom arrives.",
+         dict(character_memory="Mara: <Picture 1>, she, a silver locket <Picture 2>.\n"
+                               "Dom: he, 41.",
+              ref_image_1=img(), ref_image_2=img())),
+    ]
+    for name, P, kw in cases:
+        sent, _ = _prompts_sent(P, **kw)
+        bad = []
+        for i, (p, n) in enumerate(sent, 1):
+            tags = sorted({int(x) for x in re.findall(r"<Picture (\d+)>", p)})
+            if n != len(tags) or tags != list(range(1, n + 1)):
+                bad.append(f"shot {i}: {n} sent, tags {tags}")
+        check(f"{name}: every picture is claimed", not bad, "; ".join(bad))
+
+
 def test_a_modified_state_is_not_read_as_an_act():
     print("\n=== 'closed rear doors' is not somebody closing them ===")
     # Reported after the state hold shipped: the doors were STILL opening and being
@@ -1367,6 +1440,8 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_script_is_what_was_sent()
+    test_every_reference_is_claimed()
     test_a_modified_state_is_not_read_as_an_act()
     test_a_staged_change_gets_both_ends()
     test_dialogue_headroom()

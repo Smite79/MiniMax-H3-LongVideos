@@ -1831,9 +1831,12 @@ _BINDING_VERB = re.compile(
 # by itself, which is how "clamps the board to the workbench" armed the restraint
 # hold -- the same way a chain-link fence did before "chain" was taken out of the
 # verbs. Same reason "tapes" is a noun here and only "taped"/"taping" are verbs.
-_BODY_PART = re.compile(
-    r"\b(?:wrists?|ankles?|arms?|legs?|hands?|feet|neck|throat|mouth|waist|hips?|"
-    r"thighs?|knees?|elbows?|thumbs?|eyes)\b", re.I)
+# _BODY_PART used to be defined twice at module level, here and again further down.
+# Both readers sit below the second one, so the second has always been the one in
+# force and this was dead -- but it read as the live definition from up here, and the
+# restraint check below was written against this narrower vocabulary. Removed rather
+# than merged: merging would change which shots read as restrained, and that is a
+# behaviour change wearing a tidy-up's clothes.
 
 
 # A turn shows a surface the shot has never shown. The keyframe pins the FRONT, so
@@ -4085,6 +4088,16 @@ class H3LongVideos:
                     f"read as ANOTHER subject")
 
 
+        # What each shot was SENT. Built here so plan_only has it, and corrected in
+        # the render loop for the one sentence that is added down there.
+        #
+        # It used to be built here and never touched again, while the recovered-face
+        # claim was written onto the loop's own copy of the prompt -- so the model got
+        # "Dom: <Picture 1>, he, 41" and this said "Dom: he, 41". The output documented
+        # as the exact per-shot text was wrong about the one shot most likely to be
+        # under investigation, and it is the output the reader is told to check when a
+        # shot renders somebody they did not ask for.
+        sent_text = list(shots)
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
         info = " | ".join(notes)
         if plan_only:
@@ -4187,6 +4200,8 @@ class H3LongVideos:
                             f"{_who}:", f"{_who}: {_tag},", 1)
                     else:
                         shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
+            # Whatever this shot ends up being, that is what `script` reports.
+            sent_text[i] = shot_prompt
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
                 handoff=shot_handoff, refs=list(shot_refs_all[i]) + _extra,
@@ -4430,6 +4445,7 @@ class H3LongVideos:
                          "trades cheaper sampling for a 4x more expensive decode, so it "
                          "is the wrong way round at this step count. megapixels is the "
                          "lever that lowers both")
+        script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(sent_text, 1))
         return (video, {"waveform": audio, "sample_rate": sr}, " | ".join(notes), script,
                 lens[0], total, len(shots), round(total / H3_FPS, 2))
 
