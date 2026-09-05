@@ -902,6 +902,28 @@ def test_a_television_keeps_its_own_voice():
     check("the switch turns it off", "the TV's" not in off, "")
 
 
+def test_underwear_is_hidden_until_it_is_not():
+    print("\n=== underwear stays out of the text while something is over it ===")
+    mem = "Mara: she, 22, blue denim shorts, white top, panties, a chastity belt."
+    P = ("A room.\n\nMara stands by the window.\n\n"
+         "Mara pulls off her shorts.\n\nMara turns around.")
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [s.lower() for s in script.split("---") if s.strip()]
+    check("while the shorts are on, the panties are not described",
+          "panties" not in sh[0], sh[0][-90:])
+    check("...nor the belt", "chastity belt" not in sh[0], "")
+    check("...while the shorts themselves are", "shorts" in sh[0], "")
+    # The shot that takes them off is where both become visible, and it has to say so
+    # or the reveal happens against a body the text says is bare.
+    check("the reveal shot describes them", "panties" in sh[1] and "chastity belt" in sh[1], "")
+    check("...and every shot after", "panties" in sh[2] and "chastity belt" in sh[2], "")
+    check("info explains the layering", "read as layers" in info, "")
+    # Nothing over it: underwear is on show and must not be described away.
+    solo = run_node("A room.\n\nMara stands by the window.", plan_only=True,
+                    character_memory="Mara: she, 22, panties and a bra.")[3]
+    check("underwear alone is still described", "panties" in solo.lower(), "")
+
+
 def test_a_garment_moved_is_not_a_garment_gone():
     print("\n=== shorts pulled down stay on, and stay described ===")
     # Reported: the shorts changed appearance in the next beat. "Pulls down her
@@ -1941,6 +1963,7 @@ def main():
     test_a_sheet_that_claims_hardware_too_early()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
+    test_underwear_is_hidden_until_it_is_not()
     test_a_garment_moved_is_not_a_garment_gone()
     test_undressing_does_not_drop_her()
     test_an_unbound_fall_is_told_what_catches_it()

@@ -1215,6 +1215,40 @@ def test_a_machines_line_is_not_the_actors_line():
     check("no machine, no clause", S.device_voice_clause("Mara says: 'Hello.'") == "")
 
 
+def test_underwear_goes_under():
+    print("\n=== underwear is not drawn through the clothes over it ===")
+    # Reported: panties, underwear and a chastity belt showing through the clothes.
+    # infer_layers only ever learned what the SCRIPT states -- "takes A off to expose
+    # B" -- so a sheet listing panties beside shorts, with no beat pairing them, left
+    # both described in every shot. A layer the model is told about is a layer it
+    # draws, and it draws it through whatever is over it.
+    got = S.implied_layers("Mara: she, 22, blue denim shorts, white top, panties, "
+                           "a chastity belt.")
+    check("panties go under the shorts", got.get("panties") == "shorts")
+    check("...and so does the belt", got.get("chastity belt") == "shorts")
+    check("a dress covers both bra and knickers",
+          S.implied_layers("Mara: a summer dress, a bra and knickers underneath.")
+          == {"knickers": "dress", "bra": "dress"})
+    check("a skirt covers a thong",
+          S.implied_layers("Mara: a skirt, a thong, boots.") == {"thong": "skirt"})
+    # BY REGION. A bra is not hidden by trousers, and saying it is would take it out
+    # of the text on a shot where it is the only thing she has on up top.
+    check("trousers do not cover a bra",
+          S.implied_layers("Mara: jeans, a bra, boots.") == {})
+    check("a top does not cover panties",
+          S.implied_layers("Mara: a white top, panties.") == {})
+    # Underwear with nothing over it is ON SHOW. Hiding it would describe away what
+    # the author dressed them in.
+    check("underwear alone stays visible",
+          S.implied_layers("Mara: she, 22, panties and a bra.") == {})
+    check("no underwear listed, nothing to hide",
+          S.implied_layers("Mara: jeans and a t-shirt.") == {})
+    # hidden_layers is what acts on it: still under something that has not come off.
+    covers = {"panties": "shorts"}
+    check("hidden while the shorts are on", S.hidden_layers(covers, []) == ["panties"])
+    check("...and back once they come off", S.hidden_layers(covers, ["shorts"]) == [])
+
+
 def test_pulling_something_down_is_not_falling():
     print("\n=== 'pulls down her shorts' is not a body hitting the floor ===")
     # Reported: she stands up to take her shorts off and the shot drops her on the
@@ -2203,6 +2237,7 @@ def main():
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
+    test_underwear_goes_under()
     test_pulling_something_down_is_not_falling()
     test_a_fall_says_what_takes_the_landing()
     test_the_look_goes_where_the_beat_says()

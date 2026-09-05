@@ -184,6 +184,12 @@ work in both orders — *"kicks off her boots"*, *"kicks her boots off"* — and
 there the wardrobe is read off the sheet and all of it comes off — for the people that
 beat names, and never the restraints.
 
+**Underwear goes under.** List it and the outer layer together — *"denim shorts, white
+top, panties, a chastity belt"* — and the under layer is left out of the text until the
+thing over it comes off. A layer the model is told about is a layer it draws, and it
+draws it *through* whatever is on top. Paired by region, so a bra is not hidden by
+trousers, and underwear with nothing over it stays on show.
+
 **Moved is not removed.** *"Pulls down her shorts"*, *"pushes up her top"*, *"shoves the
 coat aside"* leave the garment **on**, so it stays in the scene and later shots are told
 where it now sits. Taken as a removal it would be scrubbed instead, and a garment that

@@ -497,6 +497,48 @@ def infer_layers(bodies, scene):
     return covers
 
 
+# Layering that needs no telling: underwear goes under. infer_layers only learns what
+# the SCRIPT states -- "takes A off to expose B" -- so a sheet listing panties beside
+# shorts, with no beat ever saying one is under the other, left both described in every
+# shot. A layer the model is told about is a layer it draws, and it draws it through
+# whatever is over it. Reported as underwear and a chastity belt showing through the
+# clothes.
+#
+# By REGION, because that is what covering means: a bra is not hidden by trousers.
+_UNDER_BY_REGION = {
+    "lower": (r"panties|knickers|thong|g-?string|briefs|boxers|boxer\s+shorts|"
+              r"underwear|undies|chastity\s+belt|jockstrap|loincloth"),
+    "upper": (r"bra|bralette|brassiere|camisole|undershirt|vest|corset|bustier"),
+}
+_OUTER_BY_REGION = {
+    "lower": (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|"
+              r"tracksuit\s+bottoms|dungarees|overalls|dress|gown|robe"),
+    "upper": (r"top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|hoodie|"
+              r"cardigan|jacket|coat|dress|gown|robe|dungarees|overalls|tunic"),
+}
+
+
+def implied_layers(scene):
+    """{under: over} for underwear the scene lists beneath outer clothes it also lists.
+
+    Only where BOTH are named: underwear with nothing over it is on show, and saying
+    it is hidden would be describing away something the author dressed them in."""
+    covers = {}
+    text = scene or ""
+    for region, unders in _UNDER_BY_REGION.items():
+        over = None
+        for m in re.finditer(r"\b(?:" + _OUTER_BY_REGION[region] + r")\b", text, re.I):
+            over = m.group(0).lower()
+            break
+        if not over:
+            continue
+        for m in re.finditer(r"\b(?:" + unders + r")\b", text, re.I):
+            under = re.sub(r"\s+", " ", m.group(0).lower())
+            if under != over:
+                covers.setdefault(under, over)
+    return covers
+
+
 def hidden_layers(covers, gone):
     """Garments still underneath something that has not come off yet."""
     return [u for u, o in (covers or {}).items() if o not in gone and u not in gone]
@@ -4083,9 +4125,15 @@ class H3LongVideos:
         # Which garment is under which, read from the script's own "takes A off to
         # expose B". A sheet lists every layer at once, and a layer the model is told
         # about is a layer it draws -- through the one on top of it.
-        covers = infer_layers([extract_directives(b)[0] for b in beats], scene)
+        # What the script states wins over what the categories imply: a beat saying
+        # "takes the shorts off to expose the belt" is the author telling us directly,
+        # and it may pair things the lists opposite know nothing about.
+        covers = dict(implied_layers(scene))
+        covers.update(infer_layers([extract_directives(b)[0] for b in beats], scene))
         if covers:
-            notes.append("read as layers, from the script's own wording: "
+            notes.append("read as layers -- underwear goes under whatever the sheet "
+                         "also puts over it, and anything the script itself pairs by "
+                         "taking one off to expose the other: "
                          + "; ".join(f"{u} under {o}" for u, o in covers.items())
                          + " -- each is left out of the scene text until the thing "
                            "over it comes off, so it is not described as visible "
