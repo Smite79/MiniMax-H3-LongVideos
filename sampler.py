@@ -4439,6 +4439,7 @@ class H3LongVideos:
         revealed_shots = []       # shots that uncover a layer
         crowded = []              # (shot, clauses dropped for room)
         absent_hold = []          # shots where the wearer is not on screen
+        exposed_by_beat = []      # (shot, garments the beat names while covered)
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
@@ -4652,6 +4653,19 @@ class H3LongVideos:
             # A garment still underneath something stays out of the text: described,
             # it gets drawn, and it is drawn through whatever is over it.
             covered = hidden_layers(covers, visible)
+            # A BEAT that names a covered garment. Beats are passed through word for
+            # word and never scrubbed -- that is the node's oldest promise -- so the
+            # layering can take the belt out of the sheet and the beat can put it
+            # straight back. The words win, the thing is drawn over what is on top of
+            # it, and from there the keyframe carries it into every later shot, which
+            # is why it looks permanent rather than like one bad shot.
+            #
+            # Not edited, ever. Reported, because from the outside it is
+            # indistinguishable from the layering being broken.
+            _said = [g for g in covered
+                     if re.search(r"\b" + re.escape(g) + r"\b", body or "", re.I)]
+            if _said:
+                exposed_by_beat.append((len(shots) + 1, _said))
             # The shot that UNCOVERS one says so. Reported: the shorts come off and
             # the render goes straight to bare skin, past the underwear the sheet
             # named. The removal clause is emphatic and specific -- off the body,
@@ -5187,6 +5201,18 @@ class H3LongVideos:
                 f"entry in an attribute list, and against a prior that says trousers "
                 f"coming off means bare skin, a list entry does not compete. Said only "
                 f"on the shot that uncovers it; after that it is simply worn")
+        if exposed_by_beat:
+            notes.append(
+                "a beat NAMES something the wardrobe says is covered: "
+                + "; ".join(f"shot {n}: {', '.join(g)}" for n, g in exposed_by_beat)
+                + ". Your beats are passed through word for word and are never "
+                  "scrubbed, so the layering can take it out of the sheet and the "
+                  "beat puts it straight back -- and a described thing is a drawn "
+                  "thing, drawn over whatever is on top of it. Worse, the next shot "
+                  "starts from this one's last frame, so once it is rendered on top "
+                  "it is carried forward and looks permanent. Take the name out of "
+                  "the beat while it is underneath, or take the outer garment off "
+                  "first. Nothing here edits your wording")
         if absent_hold:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in absent_hold)} describe nobody who "

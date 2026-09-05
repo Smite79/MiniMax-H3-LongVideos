@@ -983,6 +983,33 @@ def test_the_removal_shot_says_what_is_under():
     check("a full strip promises nothing", "what shows there now" not in strip, "")
 
 
+def test_a_beat_can_name_what_the_layering_hid():
+    print("\n=== a beat naming a covered garment puts it back, and is reported ===")
+    # Three fixes into "the belt is on top of the jeans", with the sheet correct, the
+    # tag correct and the picture correctly withheld. This is the route none of them
+    # could touch: beats are passed through word for word and are never scrubbed, so
+    # the layering takes the belt out of the sheet and the beat puts it straight back.
+    # A described thing is a drawn thing, drawn over whatever is on top of it -- and
+    # the next shot starts from this one's last frame, so it is carried forward from
+    # there and looks permanent rather than like one bad shot.
+    mem = "Mara: <Picture 1>, she, 22, blue jeans, a chastity belt <Picture 2>."
+    P = ("A room.\n\nMara stands by the window.\n\n"
+         "Mara runs a hand over the chastity belt under her jeans.\n\nMara waits.")
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    check("the sheet still hides it", "chastity belt" not in sh[0].lower(), "")
+    check("the beat still says it", "chastity belt" in sh[1].lower(), "")
+    check("...word for word, unedited",
+          "runs a hand over the chastity belt under her jeans" in sh[1], "")
+    check("the clash is reported", "says is covered" in info, "")
+    check("...naming the shot and the garment",
+          "shot 2: chastity belt" in info, "")
+    # And it must not fire when the beat leaves it alone.
+    quiet = run_node("A room.\n\nMara stands.\n\nMara waits.", plan_only=True,
+                     character_memory=mem)[2]
+    check("no mention, no warning", "says is covered" not in quiet, "")
+
+
 def test_an_untagged_picture_defeats_the_layering():
     print("\n=== an untagged reference is sent even where its garment is covered ===")
     # Reported: the belt drawn on top of the jeans, with "chastity belt" spelled the
@@ -2081,6 +2108,7 @@ def main():
     test_a_television_keeps_its_own_voice()
     test_a_shifted_workflow_stops_before_rendering()
     test_the_removal_shot_says_what_is_under()
+    test_a_beat_can_name_what_the_layering_hid()
     test_an_untagged_picture_defeats_the_layering()
     test_underwear_is_hidden_until_it_is_not()
     test_a_garment_moved_is_not_a_garment_gone()
