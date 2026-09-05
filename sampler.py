@@ -506,8 +506,16 @@ def infer_layers(bodies, scene):
 #
 # By REGION, because that is what covering means: a bra is not hidden by trousers.
 _UNDER_BY_REGION = {
+    # NO HARDWARE HERE. A chastity belt is a restraint, and a restraint left out of
+    # the text renders absent -- that is the bug the hardware latch exists for, and
+    # putting the belt in this list rebuilt it from the other side. Reported as the
+    # belt disappearing a few beats in, right after layering shipped.
+    #
+    # Cloth can be hidden and recovered from a description. Hardware cannot: a belt
+    # that stops being drawn does not come back looking slightly wrong, it is gone,
+    # and so is every beat that depended on it being there.
     "lower": (r"panties|knickers|thong|g-?string|briefs|boxers|boxer\s+shorts|"
-              r"underwear|undies|chastity\s+belt|jockstrap|loincloth"),
+              r"underwear|undies|jockstrap|loincloth"),
     "upper": (r"bra|bralette|brassiere|camisole|undershirt|vest|corset|bustier"),
 }
 _OUTER_BY_REGION = {
@@ -1925,7 +1933,7 @@ RESTRAINT_HOLD_KEY = ("handcuffs cuffs chains rope ropes tape gag collar restrai
 # only way to satisfy it is to put a face in an empty frame. The AUDIO half has no
 # such limit -- an empty room still babbles -- so the two are separate conditions and
 # are gated separately below.
-MOUTH_HOLD = " Every mouth in the shot stays closed, the jaw still."
+MOUTH_HOLD = " Mouths in the shot stay closed, jaws still."
 
 _PERSON_WORD = re.compile(
     r"\b(?:he|she|they|him|her|hers|them|his|their|theirs|himself|herself|themselves|"
@@ -1947,7 +1955,7 @@ def beat_puts_somebody_on_screen(beat, sheet=""):
     return any(n and re.search(r"\b" + re.escape(n) + r"\b", b, re.I)
                for n, _ in sheet_lines(sheet))
 
-FORM_HOLD = ", and each piece keeps the material and shape it was put on with."
+FORM_HOLD = ", the same object in the same material."
 
 # THE SHOT WHERE THE HARDWARE GOES ON IS NOT A SHOT WHERE IT IS ALREADY ON.
 #
@@ -1966,8 +1974,7 @@ RESTRAINT_GOING_ON = (" The hardware goes on during this shot: it is open and of
 # on, so the applying shot keeps this even though it must not be told the thing is
 # already fastened -- dropping it there let the chain go soft for exactly the shot
 # that introduces it, which is where a model's idea of the object gets set.
-CHAIN_RIGID_TAIL = (" Its links keep their size and the run between them stays straight "
-                    "and taut.")
+CHAIN_RIGID_TAIL = " Its links keep their size and the run between them stays taut."
 # Applying it, as opposed to describing it already worn. The tense is what separates
 # them: "Dan cuffs her" stages the act, "her wrists cuffed" and "is handcuffed to the
 # rail" describe a state that already holds. Getting that backwards would put "free at
@@ -2063,8 +2070,13 @@ def restraint_going_on(beat):
     return bool(_APPLY_NOW.search(b) or _APPLY_PHRASE.search(b))
 
 
-RESTRAINT_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
-                  "on, still fastened at the last frame") + FORM_HOLD
+# COMPRESSED, 2026-09-05. This said "whole and closed", "fastened exactly as it was
+# put on" and "still fastened at the last frame" -- three ways of saying closed --
+# and then the material clause on top. 32 words. Measured on a real scene the
+# guards had reached 65% of the shot against a 12% beat, which is the number this
+# node was rebuilt to escape and the number RESTRAINT_HOLD's own comment warns
+# about. Every guarantee is still here; each is stated once.
+RESTRAINT_HOLD = (" Every restraint stays closed and fastened as it was put on") + FORM_HOLD
 
 
 def restraint_wearers(sheet):
@@ -2073,6 +2085,96 @@ def restraint_wearers(sheet):
     Read from the entries rather than the beat, because the entry is what says who is
     WEARING it -- a beat can mention a chain without anyone being in it."""
     return [n for n, ln in sheet_lines(sheet) if n and restraint_present(ln)]
+
+
+# A ceiling on continuity text, in words, relative to the beat it is standing next to.
+#
+# This node was rebuilt once because the guards had buried the action: the author's
+# beat was under 4% of a 434-word prompt. It happened again by the ordinary route --
+# a clause per bug report, each one justified on its own, none of them counting the
+# others. Measured on a real scene the guards were 65% against a 12% beat, and the
+# symptom is not subtle: the shot stops doing what the beat says. Somebody does not
+# sit in the chair they were told to sit in.
+#
+# So the clauses are ranked and the low-priority end is dropped when there is no room,
+# rather than every clause being emitted because each was a good idea in isolation.
+# The floor exists so a very short beat still gets its single most important guard.
+# Set to catch RUNAWAY, not to trim routinely. Measured against the same scene before
+# this session's clause work, a shot carried 71 words of prompt; merging the three
+# hardware clauses into one and shortening the gaze and mouth lines brought the worst
+# shot from 124 words back to 59, which is already under that baseline. A tight budget
+# on top of that was dropping guards that exist because of real reports -- the mouth
+# holds, the revealed layer, the limb anchor -- and trading one set of bugs for
+# another. The ceiling is here so the next clause added without counting the others
+# cannot quietly rebuild the pile; it is not the thing doing the work.
+GUARD_FLOOR_WORDS = 90
+GUARD_WORDS_PER_BEAT_WORD = 5
+
+
+def fit_guards(clauses, beat_words):
+    """(kept text, dropped names) for continuity clauses, ranked, within a budget.
+
+    `clauses` is [(priority, name, text)] with 1 the most important. Order in the
+    OUTPUT follows the list as given, not the priority -- the ranking decides what
+    survives, not where it sits in the sentence."""
+    budget = max(GUARD_FLOOR_WORDS, int(beat_words) * GUARD_WORDS_PER_BEAT_WORD)
+    spent, keep = 0, set()
+    for _, name, text in sorted(clauses, key=lambda c: c[0]):
+        if not text:
+            continue
+        cost = len(text.split())
+        if spent + cost > budget and spent > 0:
+            continue
+        spent += cost
+        keep.add(name)
+    kept = "".join(t for _, n, t in clauses if n in keep and t)
+    dropped = [n for _, n, t in clauses if t and n not in keep]
+    return kept, dropped
+
+
+def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False):
+    """ONE sentence for the hardware: what it is, that it is closed, and where it holds.
+
+    These used to be three, written at three different times for three different bug
+    reports, and each of them names the same object again:
+
+        Every restraint stays closed and fastened as it was put on, ... (29 w)
+        The cuffs are still on her, in plain sight where they were put. (13 w)
+        The fastened wrists stay behind the back, where they were locked. (11 w)
+
+    53 words about one pair of handcuffs, beside a nine-word beat. Measured on a real
+    scene the guards had reached 65% of the shot against a 12% beat -- the number this
+    node was rebuilt to escape, arrived at again by adding a clause per report with no
+    budget on the total. Merged, the same facts cost 25.
+
+    Every guarantee survives: the thing is named so it gets drawn, it is closed, it is
+    the same object in the same material, and it is where it was fastened."""
+    plural = bool(item) and item.endswith("s") and not item.endswith("ss")
+    who = ""
+    if wearers and len(described) >= 2:
+        who = (wearers[0] if len(wearers) == 1
+               else ", ".join(wearers[:-1]) + " and " + wearers[-1])
+    if item:
+        subject = f"The {item} on {who}" if who else f"The {item}"
+        verb = "stay" if plural else "stays"
+    else:
+        subject = f"Every restraint on {who}" if who else "Every restraint"
+        verb = "stays"
+    it, was = ("they", "were") if plural else ("it", "was")
+    out = f" {subject} {verb} closed and fastened as {it} {was} put on"
+    if anchor:
+        out += f", holding the wrists {anchor}"
+    if posed:
+        out += ("; the metal is already drawn to its full length, so the position it "
+                "fixes is the position that keeps, and the body strains against it "
+                "while the fastenings hold")
+    elif rigid:
+        out += (f", {'their' if plural else 'its'} links keeping their size and the run "
+                f"between them taut")
+    out += f", the same object in the same material."
+    if who:
+        out += " Everyone else in the shot has on exactly what their own entry lists."
+    return out
 
 
 def own_hold(hold, wearers, described):
@@ -2262,9 +2364,8 @@ def falls_in(text):
 # REPLACES the restraint hold rather than joining it -- the two said "stays whole and
 # closed" twice, and two clauses saying the same thing is twice the stasis for one
 # guarantee.
-CHAIN_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put on, "
-              "and still fastened at the last frame; its links keep their size and the run "
-              "between them stays straight and taut") + FORM_HOLD
+CHAIN_HOLD = (" Every restraint stays closed and fastened as it was put on, its links "
+              "keeping their size and the run between them taut") + FORM_HOLD
 
 # When hardware is what PUTS a body in a position, the length of that hardware is the
 # whole reason the position holds. Saying the metal keeps its shape is not enough: a
@@ -2274,11 +2375,10 @@ CHAIN_HOLD = (" Every restraint stays whole and closed, fastened exactly as it w
 # It replaces the clause above rather than joining it, and it is careful to leave the
 # body free to act: straining and pulling is exactly what should happen, and the last
 # thing this should say is that anything holds still.
-CHAIN_POSE_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
-                   "on; the metal is already drawn out to its full length, so the position "
-                   "it fixes is the position that keeps, and the body strains and pulls "
-                   "against it while the fastenings hold at exactly the length they were "
-                   "locked to") + FORM_HOLD
+CHAIN_POSE_HOLD = (" Every restraint stays closed and fastened as it was put on; the metal "
+                   "is already drawn to its full length, so the position it fixes is the "
+                   "position that keeps, and the body strains against it while the "
+                   "fastenings hold") + FORM_HOLD
 
 # A position that hardware can be locked to enforce.
 _FORCED_POSE = re.compile(
@@ -2405,8 +2505,10 @@ def gaze_hold(target):
     the head is turned to face what the eyes are on."""
     if not target:
         return ""
-    return (f" The look goes to the {target}: the eyes are on it and the head is "
-            f"turned to face it.")
+    # SHORT. Nineteen words restating a nine-word beat is most of the shot spent
+    # agreeing with it, and the guards crowding out the action is what "the
+    # character did not do what I told it" looks like from the outside.
+    return f" The eyes and the head are turned to the {target}."
 
 
 def forced_pose(text):
@@ -4190,6 +4292,7 @@ class H3LongVideos:
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
+        crowded = []              # (shot, clauses dropped for room)
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
@@ -4646,9 +4749,27 @@ class H3LongVideos:
             # entries, which are what say who is wearing it.
             _wearers = [n for n in restraint_wearers(shot_sheet)
                         if not character_guard or n in active]
-            hold = own_hold(hold, _wearers,
-                            active if character_guard else
-                            [n for n, _ in sheet_lines(shot_sheet) if n])
+            _described = (active if character_guard else
+                         [n for n, _ in sheet_lines(shot_sheet) if n])
+            # ONE sentence for the hardware. The hold, the name of the thing and
+            # where it holds were three separate clauses written for three separate
+            # reports, each naming the same object again -- 53 words about one pair
+            # of cuffs beside a nine-word beat. Merged they cost 25 and every
+            # guarantee survives.
+            #
+            # The applying shot keeps its own wording: it is the one shot where the
+            # hardware is NOT already closed, and that is the whole point of it.
+            if not _applying and restrained:
+                hold = restraint_sentence(
+                    worn_item if not _named_item else "",
+                    # Not on the shot that STAGES the anchor: the author's own
+                    # words are right there, and a second sentence saying it back
+                    # is the redundancy this merge exists to remove.
+                    _wearers, _described, anchor=("" if _anchor_now else anchored),
+                    rigid=bool(rigid), posed=bool(posed))
+                _still = _anchor = ""
+            else:
+                hold = own_hold(hold, _wearers, _described)
             # What you wrote wins: a beat that already describes its own sound is left
             # alone, and only one that describes none gets the sound its action implies.
             # ONLY WHAT THE AUTHOR WROTE OPENS THE AUDIO BRANCH.
@@ -4737,9 +4858,29 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            shot_text = (line + tail + _revealed + _moved + anchors + _gaze
-                         + _state + _sound + _device + _mouth + hold + _still
-                         + _anchor + fall + turn).strip()
+            # RANKED, and cut to fit. Each of these was a good idea on its own and
+            # none of them counted the others; together they had reached 65% of the
+            # shot against a 12% beat, which is the state this node was rebuilt to
+            # escape. What the beat itself stages ranks above what merely persists.
+            _guards = [
+                (1, "removal", tail),        # the beat's own action, completing
+                (2, "revealed", _revealed),  # what shows where it was
+                (3, "hold", hold),           # hardware coming open is not a drift
+                (4, "fall", fall),           # a body going down needs a landing
+                (5, "device", _device),      # a voice that is not hers
+                (6, "moved", _moved),        # a garment left where it was put
+                (7, "anchors", anchors),     # hardware with nowhere to sit
+                (8, "hardware", _still),     # normally merged into the hold
+                (9, "limbs", _anchor),       # likewise
+                (10, "state", _state),
+                (11, "gaze", _gaze),
+                (12, "mouth", _mouth),
+                (13, "turn", turn),
+            ]
+            _kept, _dropped = fit_guards(_guards, len(body.split()))
+            if _dropped:
+                crowded.append((len(shots) + 1, _dropped))
+            shot_text = (line + _kept + _sound).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
