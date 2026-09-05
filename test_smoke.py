@@ -847,6 +847,29 @@ def test_a_sheet_that_claims_hardware_too_early():
     check("said once, not per shot", many.count("already lists it as worn") == 1, "")
 
 
+def test_no_cuffs_described_without_their_wearer():
+    print("\n=== a shot without the restrained person is not told about cuffs ===")
+    # Reported as nasty duplicates. The hold latched for the whole film, so a shot
+    # describing only the other character still said cuffs were closed on wrists --
+    # and with nobody in the text to own those wrists, the model draws one.
+    mem = "Mara: she, 22, grey dress.\nDan: he, 41, dark coat."
+    P = ("A bare room.\n\nMara waits by the window.\n\n"
+         "Dan walks in and cuffs her wrists behind her back.\n\n"
+         "Mara sits on the crate.\n\nDan checks the cuffs.\n\nMara looks up.")
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    hw = ["yes" if ("closed and fastened" in s or "hardware goes on" in s) else "no"
+          for s in sh]
+    check("before it goes on, nothing", hw[0] == "no", str(hw))
+    check("the applying shot has it", hw[1] == "yes", str(hw))
+    check("the wearer's own shots have it", hw[2] == "yes" and hw[4] == "yes", str(hw))
+    check("the shot with only the other man does NOT",
+          hw[3] == "no", sh[3][-90:])
+    check("info names that shot", "shot(s) 4 describe nobody who is wearing" in info, "")
+    # It LATCHES: leaving it out of his shot must not lose it for hers.
+    check("...and it is back when she is", "closed and fastened" in sh[4], "")
+
+
 def test_caught_first_then_restrained():
     print("\n=== the shot that puts the cuffs on gets both ends ===")
     mem = "Mara: she, 30.\nDan: he, 41."
@@ -2023,6 +2046,7 @@ def main():
     test_a_state_in_the_scene_is_not_reasserted()
     test_the_cuffs_stay_in_the_picture()
     test_a_sheet_that_claims_hardware_too_early()
+    test_no_cuffs_described_without_their_wearer()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
     test_a_shifted_workflow_stops_before_rendering()

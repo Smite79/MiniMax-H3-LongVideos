@@ -2133,6 +2133,45 @@ def fit_guards(clauses, beat_words):
     return kept, dropped
 
 
+def restrained_by_beat(beat, cast):
+    """Who this beat puts in the hardware. The agent is not the one wearing it.
+
+    `restrained` was a film-level latch: once anything was on anybody, every later
+    shot got the hold. So a shot describing only the man who applied it was told
+    there were cuffs holding wrists behind a back -- with nobody in the text those
+    wrists could belong to. The model has to draw the person the sentence describes,
+    so it invents one. That is the duplicate.
+
+    One person in the shot is the one wearing it. Two or more and the first named is
+    the one doing it, which is how these beats are written: "Dan walks in and cuffs
+    her wrists"."""
+    people = [n for n in (cast or []) if n]
+    if len(people) <= 1:
+        return set(people)
+    b = beat or ""
+    # The agent is whoever is named nearest BEFORE the applying verb, not whoever is
+    # named first. "Mara runs for the door. Dan catches her and cuffs her wrists"
+    # opens on the person being cuffed, and reading the first name as the agent put
+    # the hardware on the wrong one -- which then silenced the hold in every shot she
+    # was in, because the node thought she was not wearing anything.
+    verb = None
+    for pat in (_APPLY_NOW, _APPLY_PHRASE):
+        for m in pat.finditer(b):
+            verb = m.start() if verb is None else min(verb, m.start())
+    if verb is None:
+        return set(people)
+    agent, at = None, -1
+    for n in people:
+        for m in re.finditer(r"\b" + re.escape(n) + r"\b", b, re.I):
+            if at < m.start() < verb:
+                agent, at = n, m.start()
+    # No name in front of it -- "she is cuffed to the rail" -- so nothing here says
+    # who is doing it. Everybody stays a candidate rather than nobody: a hold that
+    # fires when it need not is a wasted sentence, one that fails to fire is hardware
+    # that stops being described.
+    return {n for n in people if n != agent} if agent else set(people)
+
+
 def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False):
     """ONE sentence for the hardware: what it is, that it is closed, and where it holds.
 
@@ -4288,12 +4327,14 @@ class H3LongVideos:
         sounded = []                # beats that ask for a sound of their own
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
+        restrained_who = set()    # who is actually in the hardware
         anchored = ""             # where fastened limbs are held
         worn_item = ""            # the hardware, in the author's words
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
         crowded = []              # (shot, clauses dropped for room)
+        absent_hold = []          # shots where the wearer is not on screen
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
@@ -4557,8 +4598,16 @@ class H3LongVideos:
                     restrained = posed = rigid_latched = False
                     anchored = ""
                     worn_item = ""
+                    restrained_who = set()
                 elif restraint_present(body) or restraint_present(shot_scene):
                     restrained = True
+                    # Only at the moment it GOES ON. Re-reading it every shot
+                    # added whoever happened to be present -- so the shot where
+                    # the man alone checks the cuffs marked HIM as wearing them,
+                    # and the gate below let the hold through again.
+                    if not _was_restrained:
+                        _new = restrained_by_beat(body, active)
+                        restrained_who |= (_new if _new else set(active))
             # The shot where the hardware GOES ON. Newly restrained -- so it was not on
             # before -- and the beat stages the act rather than describing it worn. On
             # that one shot the standing hold is a lie about the first frame, and a
@@ -4760,7 +4809,20 @@ class H3LongVideos:
             #
             # The applying shot keeps its own wording: it is the one shot where the
             # hardware is NOT already closed, and that is the whole point of it.
-            if not _applying and restrained:
+            # ONLY where somebody wearing it is in this shot. Otherwise the hold
+            # describes cuffs on wrists belonging to nobody the text mentions,
+            # and the model draws the person that sentence implies.
+            _wearer_here = (not restrained_who
+                            or not character_guard
+                            or bool(restrained_who & set(_described or [])))
+            if not _wearer_here:
+                # Nobody in this shot is wearing it. The hold would describe cuffs
+                # on wrists belonging to nobody the text mentions, and the model
+                # draws the person that sentence implies -- which is the duplicate.
+                # It latches, so the shot they come back in has it again.
+                hold = _still = _anchor = ""
+                absent_hold.append(len(shots) + 1)
+            elif not _applying and restrained:
                 hold = restraint_sentence(
                     worn_item if not _named_item else "",
                     # Not on the shot that STAGES the anchor: the author's own
@@ -5001,6 +5063,15 @@ class H3LongVideos:
                 f"entry in an attribute list, and against a prior that says trousers "
                 f"coming off means bare skin, a list entry does not compete. Said only "
                 f"on the shot that uncovers it; after that it is simply worn")
+        if absent_hold:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in absent_hold)} describe nobody who "
+                f"is wearing the hardware, so the restraint hold is left out of them. It "
+                f"says cuffs are closed on wrists, and in a shot where the person wearing "
+                f"them is not described those wrists belong to nobody the text mentions -- "
+                f"so the model draws the person the sentence implies, which is a duplicate "
+                f"nobody asked for. The hold latches, so the shot they come back in has it "
+                f"again")
         if moved_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in moved_shots)} carry a garment "

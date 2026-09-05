@@ -1114,6 +1114,34 @@ def test_the_hardware_keeps_being_named():
     check("nothing to name, nothing said", S.hardware_still_on("") == "")
 
 
+def test_the_hold_needs_its_wearer_on_screen():
+    print("\n=== cuffs are not described in a shot with nobody wearing them ===")
+    # Reported as nasty duplicates. `restrained` was a film-level latch: once anything
+    # was on anybody, every later shot got the hold. So the shot describing only the
+    # man who applied it was told there were cuffs closed on wrists -- and with nobody
+    # in the text those wrists could belong to, the model draws the person that
+    # sentence implies. That is the extra figure.
+    for _b, _cast, _want in (
+            ("Dan walks in and cuffs her wrists behind her back.", ["Mara", "Dan"], {"Mara"}),
+            ("Dan locks the cuffs on Mara.", ["Dan", "Mara"], {"Mara"}),
+            ("Mara cuffs Dan to the pipe.", ["Mara", "Dan"], {"Dan"}),
+            ("Mara is handcuffed to the rail.", ["Mara"], {"Mara"})):
+        check(f"wearer read: {_b[:38]!r}", S.restrained_by_beat(_b, _cast) == _want)
+    # The agent is the name nearest BEFORE the applying verb, not the first name in
+    # the beat. This one opens on the person being cuffed, and reading the first name
+    # as the agent put the hardware on the wrong one -- which then silenced the hold
+    # in every shot she was in, because the node thought she wore nothing.
+    check("the beat may open on the victim",
+          S.restrained_by_beat("Mara runs for the door. Dan catches her and cuffs "
+                               "her wrists.", ["Mara", "Dan"]) == {"Mara"})
+    # Nothing saying who: everybody stays a candidate rather than nobody. A hold that
+    # fires when it need not is a wasted sentence; one that fails to fire is hardware
+    # that stops being described, which is the worse of the two.
+    check("no agent named, nobody is excluded",
+          S.restrained_by_beat("She is cuffed to the rail.", ["Mara", "Dan"])
+          == {"Mara", "Dan"})
+
+
 def test_the_hold_names_its_wearer_once():
     print("\n=== attributing the hardware costs one mention, not two ===")
     # Reported as a second girl appearing at the moment of cuffing. own_hold rewrote
@@ -2316,6 +2344,7 @@ def main():
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
     test_the_hardware_keeps_being_named()
+    test_the_hold_needs_its_wearer_on_screen()
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
