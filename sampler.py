@@ -3438,8 +3438,18 @@ def scrub_removed(text, tokens):
     # is only part of the sentence, so it gets the surgical treatment below.
     kept = []
     for sent in re.split(r"(?<=[.!?])\s+", text):
-        _label_tagged = bool(re.search(r"[A-Z][\w'’-]*\s*:\s*<\s*picture",
-                                       sent, re.I))
+        # Ownership is decided on the WHOLE SENTENCE, then applied per fragment.
+        #
+        # person_tags reads what stands immediately before a tag, and splitting on
+        # commas throws that away: " <Picture 2> a chastity belt" has nothing in front
+        # of it once detached, so the tag fell back to "the person's" and survived the
+        # belt being scrubbed -- an orphaned tag, which still fetches the picture. The
+        # sentence has "blue jeans" in front of it and answers correctly.
+        #
+        # This also settles "Kate is 20, <Picture 1> blonde crop top" the same way and
+        # without special-casing: in the full sentence the age stands before the tag,
+        # so it is hers and stays.
+        _person_tags = set(person_tags(sent))
         frags = sent.split(",")
         out_frags = []
         for frag in frags:
@@ -3480,8 +3490,8 @@ def scrub_removed(text, tokens):
                 # are the same shape once split. What tells them apart is whether
                 # the person is ALREADY tagged at their label: if she is, a later
                 # tag cannot be hers as well.
-                tags = [n for s in (gone or [frag])
-                        for n in person_tags(s, live if _label_tagged else None)]
+                tags = [n for s in (gone or [frag]) for n in picture_tags(s)
+                        if str(n) in _person_tags]
                 piece = " and ".join(k for k in keep if k.strip())
                 if tags:
                     piece = ((piece + " ") if piece.strip() else "") + \

@@ -1088,6 +1088,46 @@ def test_a_beat_can_name_what_the_layering_hid():
     check("no mention, no warning", "says is covered" not in quiet, "")
 
 
+def test_an_object_tag_works_without_a_face_picture():
+    print("\n=== a tagged object is placed even when nobody is tagged ===")
+    # A picture is not always somebody's face. With the person untagged, the belt's
+    # own tag was the only one in the entry -- and once the layering scrubbed the
+    # belt's WORDS, ownership was decided on the leftover comma fragment, which has
+    # nothing in front of it. So the tag read as the person's, survived, and went on
+    # fetching the belt's picture into every shot where the belt was covered.
+    FACE = torch.full((1, H, W, 3), 0.10)
+    BELT = torch.full((1, H, W, 3), 0.80)
+    which = lambda t: "FACE" if abs(float(t.mean()) - 0.10) < 0.01 else "BELT"
+    def imgs(mem):
+        rows = []
+        ob = S.build_conditioning
+        def spy(clip, vae, audio_vae, p, *a, **k):
+            rows.append([which(r) for r in (k.get("refs") or [])])
+            return ob(clip, vae, audio_vae, p, *a, **k)
+        S.build_conditioning = spy
+        try:
+            run_node("A room.\n\nMara stands.\n\nMara waits.\n\nMara pulls off her jeans.",
+                     character_memory=mem, ref_image_1=FACE, ref_image_2=BELT)
+        finally:
+            S.build_conditioning = ob
+        return rows
+    for label, mem in (
+            ("nobody tagged, belt tag first",
+             "Mara: she, 22, blue jeans, <Picture 2> a chastity belt."),
+            ("nobody tagged, belt tag last",
+             "Mara: she, 22, blue jeans, a chastity belt <Picture 2>.")):
+        got = imgs(mem)
+        check(f"{label}: withheld while covered",
+              "BELT" not in got[0] and "BELT" not in got[1], str(got))
+        check(f"{label}: sent when uncovered", "BELT" in got[2], str(got))
+    # A face picture alongside it still behaves, and still travels every shot.
+    got = imgs("Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.")
+    check("with a face too, the face is always there",
+          all("FACE" in g for g in got), str(got))
+    check("...and the belt only when uncovered",
+          "BELT" not in got[0] and "BELT" in got[2], str(got))
+
+
 def test_an_untagged_picture_defeats_the_layering():
     print("\n=== an untagged reference is sent even where its garment is covered ===")
     # Reported: the belt drawn on top of the jeans, with "chastity belt" spelled the
@@ -2188,6 +2228,7 @@ def main():
     test_a_shifted_workflow_stops_before_rendering()
     test_the_removal_shot_says_what_is_under()
     test_a_beat_can_name_what_the_layering_hid()
+    test_an_object_tag_works_without_a_face_picture()
     test_an_untagged_picture_defeats_the_layering()
     test_underwear_is_hidden_until_it_is_not()
     test_a_garment_moved_is_not_a_garment_gone()
