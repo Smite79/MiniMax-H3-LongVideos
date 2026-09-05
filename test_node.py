@@ -1203,6 +1203,38 @@ def test_a_machines_line_is_not_the_actors_line():
     check("no machine, no clause", S.device_voice_clause("Mara says: 'Hello.'") == "")
 
 
+def test_pulling_something_down_is_not_falling():
+    print("\n=== 'pulls down her shorts' is not a body hitting the floor ===")
+    # Reported: she stands up to take her shorts off and the shot drops her on the
+    # floor. The put-down-by-somebody-else branch of the fall cue had an OPTIONAL
+    # object, so the verb and the direction could sit straight against each other --
+    # and "pulls down her shorts" is a verb and a direction. Every undressing beat
+    # written that way was read as a body going down, and told what takes the landing
+    # and how the legs fold under it.
+    #
+    # Latent until FALL_HOLD_FREE: before that the clause only fired on a RESTRAINED
+    # body, so the false positive stayed mostly out of sight.
+    for _t in ("She stands and pulls down her shorts.",
+               "She pulls her shorts down to show the thong.",
+               "Mara pulls down the blind.", "Dan pulls down the shutter.",
+               "Dan pulls her jacket down off her shoulders.",
+               "Dan throws the keys down.", "She drags the chair over.",
+               "He pushes the door open."):
+        check(f"not a fall: {_t[:40]!r}", not S.falls_in(_t))
+    # What goes down has to be a person -- named, then the direction.
+    for _t in ("Dan pushes her down onto the floor.", "Dan knocks him down.",
+               "Dan throws her to the ground.", "Dan pulls her down.",
+               "Dan shoves her over.", "Dan drags Mara down."):
+        check(f"still a fall: {_t[:40]!r}", S.falls_in(_t))
+    # ...or a destination explicit enough to be nothing else, which is how the
+    # passive gets in without an object of its own.
+    check("the passive still reads", S.falls_in("She is pushed to the floor."))
+    # The body's own verbs are untouched by any of this.
+    for _t in ("Mara trips and falls to the floor.", "Mara collapses.",
+               "Mara loses her balance.", "Kate slumps against the wall."):
+        check(f"own fall: {_t[:40]!r}", S.falls_in(_t))
+
+
 def test_a_fall_says_what_takes_the_landing():
     print("\n=== a falling body is told what catches it ===")
     # Reported: a third leg on the shot where she fell, grown to brace a landing
@@ -2159,6 +2191,7 @@ def main():
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
+    test_pulling_something_down_is_not_falling()
     test_a_fall_says_what_takes_the_landing()
     test_the_look_goes_where_the_beat_says()
     test_an_object_tag_leaves_with_its_object()
