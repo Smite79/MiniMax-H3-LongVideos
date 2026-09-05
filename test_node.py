@@ -767,6 +767,36 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_a_removal_names_it_the_way_the_sheet_does():
+    """The removal clause uses the SHEET's words. infer_removals keys a garment by
+    its head noun -- "shorts" -- which is right for matching and wrong for prose:
+    the shot then read "the shorts come off" beside a sheet saying "blue jeans
+    shorts", which is two garments described, and the one that came back was the
+    bare one. Same defect as the displacement path, a different code path, and the
+    first fix only reached the other one."""
+    sc = ("McKenna: she, 22, Shiny white crop top, chastity belt, "
+          "blue jeans shorts.")
+    check("the removal clause carries the sheet's words",
+          "The blue jeans shorts come off"
+          in S.off_by_last_frame(["shorts"], "", sc))
+    check("...and so does the agent form",
+          "Dan takes the blue jeans shorts off"
+          in S.off_by_last_frame(["shorts"], "Dan", sc))
+    check("...for a two-word name too",
+          "The chastity belt comes off" in S.off_by_last_frame(["belt"], "", sc))
+    # Plural agreement follows the SHEET's name, not the key: "blue jeans shorts"
+    # is still plural, and a name ending in a singular head must not be pluralised.
+    check("plural agreement follows the full name",
+          " are away" in S.off_by_last_frame(["shorts"], "", sc))
+    check("...and singular stays singular",
+          " is away" in S.off_by_last_frame(["belt"], "", sc))
+    # Unknown to the sheet, it keeps the word the beat used rather than vanishing.
+    check("a garment the sheet does not name still reads",
+          "The cape comes off" in S.off_by_last_frame(["cape"], "", sc))
+    check("no scene, no expansion", "The shorts come off"
+          in S.off_by_last_frame(["shorts"], "", ""))
+
+
 def test_the_sheet_names_the_garment():
     """Anything the node says about a garment uses the SHEET's words, not the
     beat's. A beat says "pulls the shorts back up" for what the sheet dressed her
@@ -2591,6 +2621,7 @@ def main():
     test_layers()
     test_bare_region()
     test_the_sheet_names_the_garment()
+    test_a_removal_names_it_the_way_the_sheet_does()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()

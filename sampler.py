@@ -2084,7 +2084,7 @@ def removal_agent(beat, cast, wearer=None):
     return first or people[0]
 
 
-def off_by_last_frame(items, agent=""):
+def off_by_last_frame(items, agent="", scene=""):
     """State that a removal FINISHES inside this shot. Empty when nothing came off.
 
     Scrubbing the scene stops a garment being described. It does not tell the model
@@ -2100,8 +2100,14 @@ def off_by_last_frame(items, agent=""):
     items = [i.strip() for i in (items or []) if i and i.strip()]
     if not items:
         return ""
-    what = " and ".join(f"the {i}" for i in items)
-    plural = len(items) > 1 or bool(_PLURAL_ITEM.search(items[-1]))
+    # The SHEET's words for it, not the head noun the reader keyed it under. The
+    # tokens are identity keys -- matched by head noun everywhere that scrubs and
+    # compares -- but this sentence is PROSE the model reads, and "the shorts" beside
+    # a sheet saying "blue jeans shorts" is two garments described, not one. The pair
+    # that came back was the bare one, drawn however the model liked.
+    named = [scene_name_for(i, scene) or i for i in items]
+    what = " and ".join(f"the {i}" for i in named)
+    plural = len(items) > 1 or bool(_PLURAL_ITEM.search(named[-1]))
     verb, are = ("come", "are") if plural else ("comes", "is")
     # Named hands where the beat gives them. Without an agent this says a garment
     # comes off by itself, and a belt with nobody touching it drops to the floor.
@@ -5100,7 +5106,7 @@ class H3LongVideos:
                 body, active if character_guard else
                 [n for n, _ in sheet_lines(shot_sheet) if n], _wearer) if toks else ""
             tail = (BARE_HOLD if (bare and toks)
-                    else off_by_last_frame(toks, _agent))
+                    else off_by_last_frame(toks, _agent, scene))
             # Once hardware is on, it stays on. Latched, not re-detected: a beat that
             # does not mention the cuffs does not mean they came off, and a cuff that
             # renders open is not a detail that drifts -- it is the scene ceasing to

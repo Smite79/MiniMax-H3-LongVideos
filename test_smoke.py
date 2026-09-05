@@ -516,18 +516,20 @@ def test_removing_shot_without_a_keyframe():
     # Jon is; naming a person the shot does not describe would be worse, since a
     # described person is a person the model draws.
     check("...by the hands of somebody the sheet describes",
-          "Maya takes the jacket off during this shot" in sh[0], sh[0][-120:])
+          "Maya takes the black quilted jacket off during this shot" in sh[0],
+          sh[0][-120:])
     check("the next shot has lost it", "quilted jacket" not in sh[1])
     check("...and shows what was under it", "grey wool scarf" in sh[1])
     check("info explains the exception", "no keyframe" in run_node(P, plan_only=True)[2])
     # A removing shot that DOES have a keyframe still scrubs in place -- the picture
     # carries the starting state there, so the text does not have to.
-    check("a later removing shot still scrubs itself", "grey wool scarf" not in sh[2])
+    check("a later removing shot still scrubs itself",
+          "grey wool scarf" not in sh[2].split("Jon pulls")[0])
     # With a first_frame wired, shot 1 has a keyframe and behaves like the rest.
     sh_ff = [x for x in re.split(r"(?=\[Shot )", run_node(
         P, plan_only=True, first_frame=torch.rand(1, H, W, 3))[3]) if x.strip()]
     check("a wired first_frame restores the normal rule",
-          "quilted jacket" not in sh_ff[0])
+          "quilted jacket" not in sh_ff[0].split("Jon cuts")[0])
 
 
 def test_hardware_anchor_end_to_end():
@@ -1115,17 +1117,18 @@ def test_a_removal_says_whose_hands():
     sh = [s for s in run_node(P, plan_only=True, character_memory=mem)[3].split("---")
           if s.strip()]
     check("she undresses herself with her own hands",
-          "McKenna takes the shorts off during this shot" in sh[1], sh[1][-110:])
+          "McKenna takes the blue jeans shorts off during this shot" in sh[1], sh[1][-110:])
     # ASKING gives the hands to the other person. "She asks Dan to take it off" is
     # Dan's doing -- reading the asker as the agent is what put them back on her.
     check("asking hands it to the other person",
-          "Dan takes the belt off during this shot" in sh[2], sh[2][-110:])
+          "Dan takes the chastity belt off during this shot" in sh[2], sh[2][-110:])
     check("...and not to the one who asked",
-          "McKenna takes the belt off" not in sh[2], "")
+          "McKenna takes the chastity belt off" not in sh[2], "")
     # One person in the shot is that person, with no ambiguity to resolve.
     solo = run_node("A room.\n\nremove: coat\nMara takes off her coat.", plan_only=True,
                     character_memory="Mara: she, 22, a grey coat, white top.")[3]
-    check("a solo shot names her", "Mara takes the coat off during this shot" in solo, "")
+    check("a solo shot names her",
+          "Mara takes the grey coat off during this shot" in solo, "")
     # The unit rule, directly.
     beat = 'McKenna asks Dan to take the chastity belt off.'
     check("the agent is read from the beat",
