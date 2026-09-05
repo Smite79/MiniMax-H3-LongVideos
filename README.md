@@ -1,5 +1,9 @@
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/smite79)
 
+**This node is a constant work in progress! If you are noticing bugs or features that do
+not work, please ensure that you are pulling the most recent version and updating your
+workflows.**
+
 # H3-LongVideos
 
 Long **MiniMax-H3 video with synchronised audio** from a single prompt, in ComfyUI.
