@@ -1051,6 +1051,35 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_the_hold_names_its_wearer_once():
+    print("\n=== attributing the hardware costs one mention, not two ===")
+    # Reported as a second girl appearing at the moment of cuffing. own_hold rewrote
+    # the clause to "Every restraint on Mara" AND appended "The hardware is Mara's,
+    # worn on the body it was locked to" -- the same fact twice, at the cost of a
+    # second naming. A described person is a person the model draws; that is the
+    # basis of character_guard and it does not stop applying because the sentence
+    # doing the describing is a continuity guard.
+    out = S.own_hold(S.RESTRAINT_HOLD, ["Mara"], ["Mara", "Dan"])
+    check("the wearer is named", "Every restraint on Mara" in out)
+    check("...exactly once", len(re.findall(r"\bMara\b", out)) == 1, )
+    # The dropped sentence also put a bare "the body" into the text, attached to
+    # nobody, in the one shot where a second figure was turning up.
+    check("no unattached body is introduced", "the body" not in out.lower())
+    # What must survive is the half the rewrite cannot do: excluding everyone else.
+    # That is what stopped one character's hardware turning up on another.
+    check("everyone else is still excluded",
+          "Everyone else in the shot has on exactly what their own entry lists" in out)
+    # One person described: no ambiguity to resolve, so no words spent on it.
+    check("a solo shot is left alone",
+          S.own_hold(S.RESTRAINT_HOLD, ["Mara"], ["Mara"]) == S.RESTRAINT_HOLD)
+    check("nobody wearing it, nothing added",
+          S.own_hold(S.RESTRAINT_HOLD, [], ["Mara", "Dan"]) == S.RESTRAINT_HOLD)
+    check("no hold, nothing to attribute", S.own_hold("", ["Mara"], ["Mara", "Dan"]) == "")
+    # Two wearers still read as English.
+    two = S.own_hold(S.RESTRAINT_HOLD, ["Mara", "Kate"], ["Mara", "Kate", "Dan"])
+    check("two wearers are joined properly", "Every restraint on Mara and Kate" in two)
+
+
 def test_the_shot_that_puts_hardware_on():
     print("\n=== putting the cuffs on is not wearing them ===")
     # Reported: she was meant to be caught and THEN restrained, and came out
@@ -1787,7 +1816,14 @@ def test_hardware_belongs_to_somebody():
         "Nora: 34, she, red hair.\nVictor: he, 41, overalls") == [])
     two = S.own_hold(S.RESTRAINT_HOLD, ["Nora"], ["Nora", "Victor"])
     check("with two people the hold names the wearer", "restraint on Nora" in two)
-    check("...and says whose the hardware is", "The hardware is Nora's" in two)
+    # Whose it is comes from the rewrite above and nowhere else now. It used to say it
+    # a second time as well ("The hardware is Nora's, worn on the body it was locked
+    # to"), which was one more naming of her -- and a described person is a person the
+    # model draws, guard sentence or not. Reported as a second girl at the cuffing.
+    check("...once, not twice", len(re.findall(r"\bNora\b", two)) == 1)
+    check("...and no unattached body is introduced", "the body" not in two.lower())
+    check("...while everyone else is still excluded",
+          "Everyone else in the shot has on exactly what their own entry lists" in two)
     check("...pinning the other to their own entry",
           "exactly what their own entry lists" in two)
     # Positively phrased: naming who wears it is what excludes everyone else, where
@@ -2070,6 +2106,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
     test_a_fall_says_what_takes_the_landing()

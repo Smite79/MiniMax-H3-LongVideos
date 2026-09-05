@@ -726,9 +726,13 @@ def test_hardware_stays_on_its_owner():
                                             character_memory=mem)[3]) if x.strip()]
     check("the shot with one person keeps the plain hold",
           "Every restraint stays whole" in sh[0])
-    check("...and spends no words naming whose", "hardware is Nora's" not in sh[0])
+    check("...and spends no words naming whose", "Every restraint on Nora" not in sh[0])
     check("the shot with two names the wearer", "Every restraint on Nora" in sh[1])
-    check("...and says whose the hardware is", "The hardware is Nora's" in sh[1])
+    # Once. The second sentence saying the same thing cost another naming of her, and
+    # a described person is a person the model draws -- reported as a second girl
+    # appearing at the moment of cuffing.
+    check("...naming her once, not twice",
+          len(re.findall(r"\bNora\b", sh[1].split("Nora:")[-1])) == 1, sh[1][-90:])
     check("...pinning the other to his own entry",
           "exactly what their own entry lists" in sh[1])
     # And his entry is still there to be pinned to.
@@ -781,6 +785,34 @@ def _prompts_sent(P, **kw):
     finally:
         S.build_conditioning = orig
     return seen, out[3]
+
+
+def test_a_sheet_that_claims_hardware_too_early():
+    print("\n=== the sheet listing cuffs she has not been put in yet ===")
+    # Why the applying fix does not reach a scene written this way: the sheet lists
+    # the hardware, the sheet goes into EVERY shot, so she is restrained from shot 1
+    # and the cuffing shot is told the restraint is already fastened. That renders as
+    # restrained first and caught afterwards. The sheet is the author's standing
+    # description and the beat is the author's action -- the node reports the clash
+    # rather than picking a winner.
+    mem = "Mara: she, 22, grey dress, handcuffs on her wrists.\nDan: he, 41."
+    P = ("A bare room.\n\nMara backs away from Dan.\n\n"
+         "Dan catches her and cuffs her wrists behind her back.")
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    check("the clash is reported", "already lists it as worn" in info, "")
+    check("...naming the shot that stages it", "shot(s) 2 stage hardware going ON" in info, "")
+    # The sheet really is in the shot before it happens -- that is the point.
+    sh = [s for s in script.split("---") if s.strip()]
+    check("the cuffs are described before they go on", "handcuffs" in sh[0].lower(), "")
+    # A clean sheet gets the applying clause and no complaint.
+    clean = run_node(P, plan_only=True, character_memory="Mara: she, 22.\nDan: he, 41.")
+    check("a clean sheet raises nothing", "already lists it as worn" not in clean[2], "")
+    check("...and gets both ends on the applying shot",
+          "hardware goes on during this shot" in clean[3], "")
+    # Reported once. It is one authoring decision, not one per shot.
+    many = run_node(P + "\n\nDan locks the cuffs tighter.\n\nDan checks them again.",
+                    plan_only=True, character_memory=mem)[2]
+    check("said once, not per shot", many.count("already lists it as worn") == 1, "")
 
 
 def test_caught_first_then_restrained():
@@ -1816,6 +1848,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_a_sheet_that_claims_hardware_too_early()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
     test_an_unbound_fall_is_told_what_catches_it()
