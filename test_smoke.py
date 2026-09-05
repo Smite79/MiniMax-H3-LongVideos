@@ -847,6 +847,84 @@ def test_a_sheet_that_claims_hardware_too_early():
     check("said once, not per shot", many.count("already lists it as worn") == 1, "")
 
 
+def test_the_audit_findings_stay_fixed():
+    print("\n=== nine defects found by audit, each held down ===")
+    mem3 = "Mara: she, 22.\nKate: she, 20.\nDan: he, 41."
+    def sh(P, **kw):
+        return [s for s in run_node(P, plan_only=True, **kw)[3].split("---") if s.strip()]
+
+    # 1. restrained_who latched only at the FIRST transition, so a second person
+    #    cuffed later was never recorded and their hardware went undescribed forever.
+    got = sh("A room.\n\nDan cuffs Mara's wrists.\n\nDan cuffs Kate's wrists too.\n\n"
+             "Kate sits alone.\n\nMara looks up.", character_memory=mem3)
+    check("a second person cuffed later is held too",
+          all("closed and fastened" in s or "hardware goes on" in s for s in got),
+          str([("closed and fastened" in s) for s in got]))
+
+    # 2. worn_item was one string, so a second item overwrote the first and the cuffs
+    #    stopped being named from the gag onward.
+    # Two people, not three: with two women on the sheet "her" is ambiguous, the guard
+    # resolves nobody, and that is a separate problem the node already reports.
+    last = sh("A room.\n\nDan cuffs her wrists.\n\nDan gags her with duct tape.\n\n"
+              "Mara sits still.",
+              character_memory="Mara: she, 22.\nDan: he, 41.")[-1].lower()
+    check("both items stay named", "cuff" in last and "tape" in last, last[-90:])
+    # Mixed hardware and soft goods is described as hardware: steel that is only
+    # "tied and holding" is steel nobody has said is closed.
+    check("...and cuffs with tape are still closed and fastened",
+          "closed and fastened" in last, last[-90:])
+
+    # 3. A displaced outer garment never uncovered what was under it: the beat showed
+    #    the thong in its own words and the layering hid it again the next shot.
+    m = "Mara: she, 22, denim shorts, a black thong."
+    got = sh("A room.\n\nMara stands.\n\nMara pulls her shorts down to show the thong.\n\n"
+             "Mara waits.\n\nMara pulls them back up.\n\nMara stands.", character_memory=m)
+    check("displacement uncovers what is under it",
+          "thong" in got[2].lower(), got[2][-80:])
+    check("...and putting it back covers it again",
+          "thong" not in got[4].lower(), got[4][-80:])
+
+    # 4. `gone` only ever grew, so an add: could not re-cover.
+    got = sh("A room.\n\nMara pulls off her shorts.\n\nMara waits.\n\n"
+             "add: her denim shorts are back on\nMara pulls her shorts on.\n\nMara stands.",
+             character_memory=m)
+    check("an add: re-hides the layer under it", "thong" not in got[3].lower(), "")
+
+    # 5. Stockings stop at the thigh and cover no waistband.
+    check("stockings do not cover a belt",
+          not S.implied_layers("Mara: she, stockings, a chastity belt."))
+    check("...while tights do",
+          S.implied_layers("Mara: she, tights, a chastity belt.").get("chastity belt"))
+
+    # 6. One of two speaking made the shot a speaking shot, so the LISTENER's mouth
+    #    was left free -- which is where invented lip-sync lands.
+    one = sh('A room.\n\nMara says: "Wait." Dan listens.',
+             character_memory="Mara: she, 22.\nDan: he, 41.")[0]
+    check("the listener's mouth is closed", "Only Mara speaks" in one, one[-80:])
+    both = sh('A room.\n\nMara says: "Wait." Dan says: "No."',
+              character_memory="Mara: she, 22.\nDan: he, 41.")[0]
+    check("...and nobody is closed when both speak", "Only" not in both, "")
+
+    # 7. Rope is tied, not closed and fastened.
+    rope = sh("A room.\n\nHer wrists are tied above her head with rope.\n\nMara pulls at it.",
+              character_memory="Mara: she, 22.")[1]
+    check("rope is tied, not fastened shut",
+          "tied and holding" in rope and "closed and fastened" not in rope, rope[-90:])
+
+    # 8. Whether the chain actually restarted was invisible.
+    on = run_node("A room.\n\nMara pulls off her coat.\n\nMara waits.", plan_only=True,
+                  restart_after_removal=True,
+                  character_memory="Mara: she, 22, a grey coat, white top.")[2]
+    check("a restart is reported", "start FRESH" in on, "")
+
+    # 9. The gaze target was stated once and dropped, while every other state latches.
+    got = sh("A room.\n\nMara watches the TV.\n\nMara sits still.\n\nMara walks out.",
+             character_memory="Mara: she, 22.")
+    check("the look is held while she stays put",
+          "turned to the TV" in got[1], got[1][-70:])
+    check("...and let go when she leaves", "eyes and the head" not in got[2], "")
+
+
 def test_no_cuffs_described_without_their_wearer():
     print("\n=== a shot without the restrained person is not told about cuffs ===")
     # Reported as nasty duplicates. The hold latched for the whole film, so a shot
@@ -2103,6 +2181,7 @@ def main():
     test_a_state_in_the_scene_is_not_reasserted()
     test_the_cuffs_stay_in_the_picture()
     test_a_sheet_that_claims_hardware_too_early()
+    test_the_audit_findings_stay_fixed()
     test_no_cuffs_described_without_their_wearer()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()

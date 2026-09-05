@@ -524,8 +524,11 @@ _UNDER_BY_REGION = {
     "upper": (r"bra|bralette|brassiere|camisole|undershirt|vest|corset|bustier"),
 }
 _OUTER_BY_REGION = {
+    # Tights and pantyhose DO cover a waistband; stockings and hold-ups do not --
+    # they stop at the thigh. Listing them together hid a chastity belt under a
+    # pair of stockings, which covers nothing of it.
     "lower": (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|"
-              r"tights|pantyhose|hosiery|stockings|jeggings|culottes|"
+              r"tights|pantyhose|jeggings|culottes|"
               r"tracksuit\s+bottoms|dungarees|overalls|dress|gown|robe"),
     "upper": (r"top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|hoodie|"
               r"cardigan|jacket|coat|dress|gown|robe|dungarees|overalls|tunic"),
@@ -573,9 +576,17 @@ def reveal_clause(items):
             f"shows there now, still on and unchanged.")
 
 
-def hidden_layers(covers, gone):
-    """Garments still underneath something that has not come off yet."""
-    return [u for u, o in (covers or {}).items() if o not in gone and u not in gone]
+def hidden_layers(covers, gone, moved=()):
+    """Garments still underneath something that is still covering them.
+
+    `moved` is outer garments the beats have DISPLACED -- pulled down, pushed
+    aside. Those are still worn, so `gone` never learns about them, and the
+    layer beneath stayed hidden while the beat was busy showing it off: "pulls
+    her shorts down to show the thong" described the thong in that one shot,
+    from the author's own words, and hid it again in the next."""
+    aside = {m.lower() for m in (moved or ())}
+    return [u for u, o in (covers or {}).items()
+            if o not in gone and u not in gone and o.lower() not in aside]
 
 
 def merge_sheets(*sources):
@@ -1002,6 +1013,30 @@ def device_voice_clause(beat):
     thing = re.sub(r"\s+", " ", m.group(0))
     return (f" The voice in this shot is the {thing}'s, coming out of it across the "
             f"room, and the people listening hold still and let it play.")
+
+
+def speakers_in(beat, sheet=""):
+    """Who this beat gives a line to. [] when it names nobody.
+
+    A shot where one of two people speaks is a SPEAKING shot, so the mouth guard
+    stood down for both -- and the listener's mouth was left as free as the
+    speaker's. That is the commonest scene there is, and the lip-sync problem the
+    guard exists for lands squarely on the person saying nothing."""
+    b, out = beat or "", []
+    for n, _ in sheet_lines(sheet):
+        if not n:
+            continue
+        if re.search(r"\b" + re.escape(n) + r"\b(?:\s+[\w,']+){0,2}?\s+"
+                     r"(?:says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|"
+                     r"calls?|called|repl(?:y|ies|ied)|answers?|answered|adds?|added|"
+                     r"murmurs?|mutters?|muttered|tells?|told|begs?|begged|snaps?|"
+                     r"snapped|breathes?|hisses?)\b", b, re.I):
+            out.append(n)
+    return out
+
+
+MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays closed, "
+                     "jaws still.")
 
 
 def has_speech(beat):
@@ -2253,7 +2288,15 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
 
     Every guarantee survives: the thing is named so it gets drawn, it is closed, it is
     the same object in the same material, and it is where it was fastened."""
-    plural = bool(item) and item.endswith("s") and not item.endswith("ss")
+    # More than one piece of hardware reads as a list, and a list is plural however
+    # its last word ends: "The cuffs, duct tape stays closed" was what a comma-joined
+    # subject produced before this.
+    items = [i.strip() for i in (item or "").split(",") if i.strip()]
+    if len(items) > 1:
+        item = ", ".join(items[:-1]) + " and " + items[-1]
+        plural = True
+    else:
+        plural = bool(item) and item.endswith("s") and not item.endswith("ss")
     who = ""
     if wearers and len(described) >= 2:
         who = (wearers[0] if len(wearers) == 1
@@ -2265,7 +2308,17 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
         subject = f"Every restraint on {who}" if who else "Every restraint"
         verb = "stays"
     it, was = ("they", "were") if plural else ("it", "was")
-    out = f" {subject} {verb} closed and fastened as {it} {was} put on"
+    # Rope is TIED. It is not closed and it is not fastened, and saying so of a cord
+    # describes a mechanism that is not there -- the same class of error as telling a
+    # strip of tape it sits in the mouth. Hardware closes; soft goods hold.
+    # ALL of it, not any of it. Cuffs and tape together are still cuffs, and steel
+    # that is only "tied and holding" is steel nobody has said is closed.
+    _soft_word = re.compile(r"\b(?:rope|ropes|cord|cords|twine|string|strap|straps|"
+                            r"tape|scarf|belt|stocking|stockings|zip\s*ties?|"
+                            r"cable\s*ties?|laces?)\b", re.I)
+    soft = bool(items) and all(_soft_word.search(i) for i in items)
+    shut = "tied and holding as" if soft else "closed and fastened as"
+    out = f" {subject} {verb} {shut} {it} {was} put on"
     if anchor:
         out += f", holding the wrists {anchor}"
     if posed:
@@ -2598,6 +2651,32 @@ def look_target(beat):
             continue
         return target
     return ""
+
+
+# Going somewhere ends a look. Held across it, "the eyes are on the TV" follows
+# somebody out of the room and into the next scene.
+_MOVES_OFF = re.compile(
+    r"\b(?:walks?|walked|runs?|ran|steps?|stepped|moves?|moved|crosses|crossed|"
+    r"leaves?|left|exits?|exited|goes|went|heads?|headed|climbs?|climbed|"
+    r"follows?|followed)\b", re.I)
+
+
+# The look VERBS on their own, with no target required. _LOOK_AT needs a nameable
+# object, so "looks at her" reads as no look at all -- and the latch then held a
+# television she had just turned away from.
+_LOOK_VERB = re.compile(
+    r"\b(?:look(?:s|ed|ing)?|star(?:e|es|ed|ing)|gaz(?:e|es|ed|ing)|"
+    r"glanc(?:e|es|ed|ing)|peer(?:s|ed|ing)?|watch(?:es|ed|ing)?|"
+    r"stud(?:y|ies|ied|ying))\b", re.I)
+
+
+def looks_somewhere(beat):
+    """Does this beat stage a look at all, nameable target or not?
+
+    "Mara looks at her" names no target this node can restate -- but it does
+    move the look, and holding the previous target across it says her eyes are
+    on a television she has just turned away from."""
+    return bool(_LOOK_VERB.search(beat or ""))
 
 
 def gaze_hold(target):
@@ -4434,6 +4513,7 @@ class H3LongVideos:
         restrained_who = set()    # who is actually in the hardware
         anchored = ""             # where fastened limbs are held
         worn_item = ""            # the hardware, in the author's words
+        worn_items = []           # ...each piece of it, in order
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
@@ -4443,6 +4523,7 @@ class H3LongVideos:
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
+        looking_at = ""           # the target, held until it changes
         fall_shots = []           # shots told what takes the landing
         device_shots = []         # shots whose line belongs to a machine
         applied_shots = []        # shots that put the hardware on
@@ -4458,6 +4539,8 @@ class H3LongVideos:
         mouth_shut = []             # shots told every mouth is closed
         muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
+        restarted = []              # shots started fresh after a removal
+        restored = []               # garments an add: put back on
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
         # an object. A sheet LABELS them, which beats scanning prose for capitals --
         # that way "Medium shadows" is not a member of the cast, and a name with an
@@ -4629,6 +4712,28 @@ class H3LongVideos:
                              f"Add 'remove: {maybe[0]}' to that beat")
             if adds:
                 shown.extend(a for a in adds if a not in shown)
+                # An `add:` that names something previously removed is putting it
+                # back ON. `gone` only ever grew, so the layering could never
+                # re-cover what it uncovered: shorts taken off and then added back
+                # left the thong described for the rest of the film.
+                # NOT removed from `gone`. The scene stays scrubbed, or the sheet
+                # describes the thing again alongside the add: line that put it
+                # back -- two mentions, and with a tagged object two copies of its
+                # <Picture N>, which is the duplicate-reference hazard.
+                #
+                # Layering is told separately: for covering purposes the garment is
+                # back on, so what is under it is hidden again.
+                _back = [g for g in gone
+                         if any(names_any(a, [g]) for a in adds)
+                         and g not in restored]
+                if _back:
+                    restored.extend(_back)
+                    notes.append(
+                        f"shot {len(shots) + 1} puts " + ", ".join(_back)
+                        + " back on, so anything it covers is hidden again from "
+                          "here. A garment coming back has to un-cover as well as "
+                          "re-cover, or the layer under it stays described for the "
+                          "rest of the run")
                 notes.append(f"added to the scene from shot {len(shots) + 1} on: "
                              + "; ".join(adds))
             # The scrub applies to the removing shot too -- but only because that
@@ -4645,6 +4750,12 @@ class H3LongVideos:
                             and not (restart_after_removal
                                      and (i_shot - 1) in stripped_shots))
             visible = gone if has_keyframe else [g for g in gone if g not in toks]
+            # Whether the chain actually broke was invisible. restart_after_removal
+            # costs a visible cut, so it should be possible to confirm it happened
+            # without reading the code -- and to see it did NOT when it should have.
+            if (i_shot > 0 and restart_after_removal
+                    and (i_shot - 1) in stripped_shots):
+                restarted.append(i_shot + 1)
             if toks and not has_keyframe:
                 notes.append(f"shot {i_shot + 1} takes something off and has no keyframe, "
                              f"so {', '.join(toks)} stays described as worn HERE -- the "
@@ -4652,7 +4763,13 @@ class H3LongVideos:
                              f"is scrubbed from the next shot on")
             # A garment still underneath something stays out of the text: described,
             # it gets drawn, and it is drawn through whatever is over it.
-            covered = hidden_layers(covers, visible)
+            # A displaced outer garment is still WORN, so `gone` never hears about
+            # it -- but it is no longer covering what is under it. Without this a
+            # beat pulling the shorts down to show the thong described the thong
+            # in that shot only, and the layering hid it again in the next.
+            covered = hidden_layers(covers,
+                                    [g for g in visible if g not in restored],
+                                    displaced.keys())
             # A BEAT that names a covered garment. Beats are passed through word for
             # word and never scrubbed -- that is the node's oldest promise -- so the
             # layering can take the belt out of the sheet and the beat can put it
@@ -4716,14 +4833,19 @@ class H3LongVideos:
                     restrained = posed = rigid_latched = False
                     anchored = ""
                     worn_item = ""
+                    worn_items = []
                     restrained_who = set()
                 elif restraint_present(body) or restraint_present(shot_scene):
                     restrained = True
-                    # Only at the moment it GOES ON. Re-reading it every shot
-                    # added whoever happened to be present -- so the shot where
-                    # the man alone checks the cuffs marked HIM as wearing them,
-                    # and the gate below let the hold through again.
-                    if not _was_restrained:
+                    # At the moment hardware GOES ON -- every time, not only the
+                    # first. Latching once meant a second person cuffed in a later
+                    # beat never joined the set, so their hardware was applied and
+                    # then never described again for the rest of the film.
+                    #
+                    # Still not re-read on shots that merely MENTION restraints:
+                    # that was the original fault, where the man alone checking the
+                    # cuffs was marked as wearing them.
+                    if not _was_restrained or restraint_going_on(body):
                         _new = restrained_by_beat(body, active)
                         restrained_who |= (_new if _new else set(active))
             # The shot where the hardware GOES ON. Newly restrained -- so it was not on
@@ -4737,9 +4859,14 @@ class H3LongVideos:
             # On shot 1 the latch is empty by definition, so a sheet reading "wrists
             # cuffed behind back" would otherwise let a beat that locks a SECOND item
             # on declare the first one off at the first frame.
+            # Every item, not just the newest. worn_item was a single string, so
+            # "cuffs her wrists" then "gags her with duct tape" overwrote the
+            # cuffs -- and from that shot on the cuffs were never named again,
+            # which is hardware that stops being drawn.
             _named_item = hardware_named(body) if restrained else ""
-            if _named_item:
-                worn_item = _named_item
+            if _named_item and _named_item not in worn_items:
+                worn_items.append(_named_item)
+            worn_item = ", ".join(worn_items)
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(shot_scene)
                              and restraint_going_on(body))
@@ -4778,7 +4905,21 @@ class H3LongVideos:
             # about the eyes and the head. One mention in the beat loses to a
             # near-clean reference asking for the portrait's pose, and the
             # portrait looks at the lens because photographs of people do.
-            _gaze = gaze_hold(look_target(body)) if hold_gaze else ""
+            # LATCHED, like every other state here. A look was stated once and then
+            # dropped, so somebody watching a screen across four shots was told
+            # where their eyes were in the first one only -- and the portrait pull
+            # that made this necessary does not stop after one shot.
+            #
+            # Cleared by a beat that moves the look somewhere else, or one that
+            # moves the person: walking away ends it, and holding a stale target
+            # across that would be worse than saying nothing.
+            _look_now = look_target(body) if hold_gaze else ""
+            if _look_now:
+                looking_at = _look_now
+            elif (looks_somewhere(body) or arrives_in(body) or falls_in(body)
+                  or turns_in(body, cast) or _MOVES_OFF.search(body or "")):
+                looking_at = ""
+            _gaze = gaze_hold(looking_at) if (hold_gaze and looking_at) else ""
             if _gaze:
                 gaze_shots.append(len(shots) + 1)
             _anchor_now = limb_anchor(body) if restrained else ""
@@ -5015,6 +5156,19 @@ class H3LongVideos:
             _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
                                     and (not _speaks or _device_line)
                                     and not _voiced) else ""
+            # One of two people speaking still leaves the OTHER one's mouth free. The
+            # shot is a speaking shot, so the guard stood down for everybody in it --
+            # and the listener is exactly who the invented lip-sync lands on. Name the
+            # speaker and close the rest, which needs the speaker to be identifiable:
+            # an unattributed line could belong to either of them.
+            if (not _mouth and mouths_shut_when_no_line and _speaks and not _voiced
+                    and not _device_line):
+                _talkers = speakers_in(body, shot_sheet)
+                _silent = [n for n in (_described or []) if n not in _talkers]
+                if _talkers and _silent:
+                    _mouth = MOUTH_HOLD_OTHERS.format(
+                        who=_talkers[0] if len(_talkers) == 1
+                        else ", ".join(_talkers[:-1]) + " and " + _talkers[-1])
             if _mouth:
                 mouth_shut.append(len(shots) + 1)
             _device = device_voice_clause(body) if (_device_line and _has_people) else ""
@@ -5201,6 +5355,14 @@ class H3LongVideos:
                 f"entry in an attribute list, and against a prior that says trousers "
                 f"coming off means bare skin, a list entry does not compete. Said only "
                 f"on the shot that uncovers it; after that it is simply worn")
+        if restarted:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in restarted)} start FRESH rather "
+                f"than from the previous shot's last frame, because the shot before "
+                f"took something off -- that is restart_after_removal, and it is what "
+                f"stops a garment being inherited back through the keyframe. It costs "
+                f"a visible cut at each of those points. Turn it off to keep the "
+                f"chain unbroken and accept the risk")
         if exposed_by_beat:
             notes.append(
                 "a beat NAMES something the wardrobe says is covered: "
