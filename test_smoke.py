@@ -2238,6 +2238,56 @@ def test_av_stays_in_sync():
           run_node("A room.\n\nOne.\n\nTwo.")[2])
 
 
+def test_no_garment_is_ever_invented():
+    """END TO END: no garment word reaches a prompt unless the author wrote it.
+
+    Reported repeatedly -- legwear appearing in shots that never asked for it. The
+    unit tests cover each builder alone; this one reads the finished script and
+    asserts against the AUTHOR'S OWN vocabulary, which is the only check that
+    catches a word introduced by a path nobody thought to test."""
+    print("\n=== nothing is invented ===")
+    garment = re.compile(
+        r"\b(leggings|stockings|tights|pantyhose|hold-?ups|nylons|hosiery|socks|"
+        r"panties|knickers|thong|briefs|boxers|underwear|undies|bra|bralette|"
+        r"corset|camisole|shorts|trousers|jeans|slacks|chinos|skirt|kilt|joggers|"
+        r"dress|gown|robe|jumper|sweater|sweatshirt|hoodie|cardigan|jacket|coat|"
+        r"shirt|blouse|t-shirt|tee|top|tunic|boots|shoes|trainers|sneakers|"
+        r"sandals|heels|gloves|mittens|scarf|hat|belt)\b", re.I)
+    cases = (
+        ("a request, nothing removed",
+         "McKenna: she, 22, crop top, chastity belt, blue jeans shorts.\n"
+         "Dan: he, 40, t-shirt.\n\n"
+         "McKenna stands by the chair.\n\n"
+         'McKenna approaches Dan. "Will you take the chastity belt off?"\n\n'
+         "McKenna sits in the chair."),
+        ("a strip with nothing underneath",
+         "McKenna: she, 22, crop top, blue jeans shorts.\n\n"
+         "McKenna stands.\n\n"
+         "Dan pulls off her jeans shorts.\n\n"
+         "McKenna sits."),
+        ("a strip with a layer underneath",
+         "Kate: she, 30, blouse, panties, skirt.\n\n"
+         "Kate stands.\n\n"
+         "Kate takes off her skirt.\n\n"
+         "Kate walks away."),
+        ("one garment only",
+         "Mara: she, 25, red dress.\n\n"
+         "Mara stands in the room.\n\n"
+         "Mara takes off her dress.\n\n"
+         "Mara sits down."),
+        ("no garment at all",
+         "Jon: he, 50.\n\n"
+         "Jon walks in.\n\n"
+         "Jon sits down."),
+    )
+    for name, P in cases:
+        allowed = {w.lower() for w in garment.findall(P)}
+        script = run_node(P, plan_only=True)[3]
+        invented = {w.lower() for w in garment.findall(script)} - allowed
+        check("nothing invented: %s" % name, not invented,
+              "invented %s" % sorted(invented))
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2343,6 +2393,7 @@ def main():
     test_finished_shots_are_held_in_half_precision()
     test_detail_trend()
     test_timing_report()
+    test_no_garment_is_ever_invented()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
