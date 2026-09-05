@@ -340,6 +340,18 @@ resets at every cut.
 | `tiled_decode`, `cleanup_between_shots` | lower VRAM; leave on |
 | `upscale`, `latent_upscale` | optional, off by default |
 
+### If the widgets read NaN
+
+Widget values are restored **by position**, with no names stored. Converting a widget
+to an input — or a node gaining or losing one — slides every value after it into the
+wrong slot: a scheduler's name lands in `sampler_name`, a seed in `scheduler`, and a
+number with nowhere to go reads as NaN.
+
+The node checks this before rendering and stops with the list of widgets that are out
+of position. **Right-click the node → "Fix node (recreate)"**, or convert any widget you
+turned into an input back to a widget, then set your values and save the workflow again.
+Nothing is wrong with the model or the prompt.
+
 ## Outputs
 
 | slot | what it is |

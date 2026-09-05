@@ -1215,6 +1215,38 @@ def test_a_machines_line_is_not_the_actors_line():
     check("no machine, no clause", S.device_voice_clause("Mara says: 'Hello.'") == "")
 
 
+def test_a_shifted_workflow_is_named_not_rendered():
+    print("\n=== widget values out of position are caught, not guessed at ===")
+    # Reported with a screenshot: cfg NaN, sampler_name "beta", scheduler 48. That is
+    # not corruption, it is a one-position slide -- shot_seconds had been converted to
+    # an input, so its value dropped out of the list and every value after it moved up
+    # one slot. sane_widgets repairs the NUMBERS, which is the visible symptom, but it
+    # cannot see the cause and cannot help the widgets whose values are WORDS.
+    opts = S.combo_options(S.H3LongVideos.INPUT_TYPES())
+    check("the choice widgets are found", "sampler_name" in opts and "resolution" in opts)
+    bad = S.misaligned_widgets(
+        {"sampler_name": "beta", "scheduler": 48, "resolution": 0.7}, opts)
+    check("a scheduler in the sampler slot is caught",
+          any(n == "sampler_name" for n, _, _ in bad))
+    check("a seed in the scheduler slot is caught",
+          any(n == "scheduler" for n, _, _ in bad))
+    check("a number in the resolution slot is caught",
+          any(n == "resolution" for n, _, _ in bad))
+    # A healthy workflow must pass untouched, or this fires on everybody.
+    good = {k: v[0] for k, v in opts.items()}
+    check("valid choices raise nothing", S.misaligned_widgets(good, opts) == [])
+    check("a widget that was not sent is not judged",
+          S.misaligned_widgets({}, opts) == [])
+    # The message has to say what to DO. A correct diagnosis nobody can act on is
+    # the same as no diagnosis.
+    msg = S.alignment_error(bad)
+    check("it names the cause", "restored by POSITION" in msg)
+    check("...and the fix", "Fix node (recreate)" in msg)
+    check("...and clears the model and the prompt of blame",
+          "Nothing is wrong with the model or the prompt" in msg)
+    check("nothing wrong, no message", S.alignment_error([]) == "")
+
+
 def test_what_is_exposed_is_not_also_removed():
     print("\n=== a garment the beat reveals is not one it takes off ===")
     # Reported: a removal going straight to bare skin, past what the sheet said was
@@ -2275,6 +2307,7 @@ def main():
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
+    test_a_shifted_workflow_is_named_not_rendered()
     test_what_is_exposed_is_not_also_removed()
     test_underwear_goes_under()
     test_pulling_something_down_is_not_falling()
