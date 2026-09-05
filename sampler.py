@@ -4770,6 +4770,7 @@ class H3LongVideos:
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
+        staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
         crowded = []              # (shot, clauses dropped for room)
         absent_hold = []          # shots where the wearer is not on screen
@@ -5310,7 +5311,13 @@ class H3LongVideos:
             # the sheet keeps describing it the way it was WORN -- and the sheet is
             # re-stamped into every shot, which pulls it back up. Latch the state the
             # beat left it in and restate that instead.
-            for _g, _how in displaced_garments(body, shot_scene):
+            _staged_here = displaced_garments(body, shot_scene)
+            if _staged_here:
+                # The shot that STAGES a displacement -- the garment is being moved
+                # on screen in it. Recorded because the render loop must not capture
+                # a subject reference from it: moved_shots starts the shot AFTER.
+                staging_shots.add(len(shots) + 1)
+            for _g, _how in _staged_here:
                 _was = displaced.get(_g, "")
                 # Put back up again is a restore, not a new displacement.
                 if _was == "pulled down" and _how in ("pulled up", "pulled back"):
@@ -6183,9 +6190,33 @@ class H3LongVideos:
             # The MIDDLE frame, not the last: somebody walking out during the shot is
             # gone by the last frame -- which is the whole failure -- and somebody
             # walking in is missing from the first.
+            #
+            # ...and not from a shot whose WARDROBE is unusual. A captured frame is
+            # sent later as a subject reference, and a reference outranks the sheet:
+            # it is a picture of what the person looks like. Captured where a garment
+            # was displaced, removed, or newly uncovered, it is a picture of them
+            # dressed differently from the sheet -- and the shot that receives it
+            # renders the garment the way the PICTURE has it, which is a garment the
+            # prompt never described. Reported as clothing invented several shots in,
+            # because that is exactly when a recovery first fires.
+            # Read from the per-shot records, NOT from the text loop's own variables:
+            # that loop finished long before this one started, so its `toks` and
+            # `displaced` hold the last shot's values for every shot down here, and
+            # `_bare` has since been reused for something else entirely.
+            #
+            # moved_shots holds the shots that CARRY the displacement guard, which
+            # starts the shot AFTER the one that stages it -- and the staging shot is
+            # the worst one to capture from, since the garment is being moved on
+            # screen in it. Its own beat is what says so.
+            _n = i + 1
+            _wardrobe_normal = not (i in stripped_shots
+                                    or _n in moved_shots
+                                    or _n in revealed_shots
+                                    or _n in bared_shots
+                                    or _n in staging_shots)
             try:
                 if (hand_src.shape[0] and shot_cast and i < len(shot_cast)
-                        and len(shot_cast[i]) == 1):
+                        and len(shot_cast[i]) == 1 and _wardrobe_normal):
                     _mid = hand_src.shape[0] // 2
                     _keep = hand_src[_mid:_mid + 1].detach().clamp(0.0, 1.0).to(
                         "cpu", copy=True)
