@@ -2984,7 +2984,7 @@ def names_any(text, tokens):
 # jumper" takes off the coat; the jumper is what becomes visible. The old version of
 # this node matched garment words anywhere in the beat and took both off, which is
 # the failure that made prose inference untrustworthy.
-def person_tags(text):
+def person_tags(text, objects=None):
     """The <Picture N> tags that belong to a PERSON rather than to an object.
 
     Decided by what stands immediately BEFORE the tag. A name -- capitalised, with or
@@ -3010,6 +3010,24 @@ def person_tags(text):
             head = w.group(1)[:1]
             if head.isalpha() and head.islower():
                 continue                      # the picture belongs to the object
+        # ...and the same claim written the other way round. "<Picture 2> a chastity
+        # belt" puts the tag in FRONT, where there is nothing before it to read, so
+        # the rule above called it the person's and the tag survived the belt going
+        # under the jeans -- which kept sending the belt's picture into every covered
+        # shot, to be drawn on top of them.
+        #
+        # Only ever for a tag standing directly in front of the thing being REMOVED,
+        # which is the one case where the answer is not in doubt. A tag with nothing
+        # before it and nothing of ours after it stays the person's, as it was.
+        # Only when there is NOTHING in front of it. "Kate is 20, <Picture 1> blonde
+        # crop top" also puts a tag before a garment, and that one is hers -- the age
+        # standing in front is what says so. Reading ahead there would take her
+        # identity reference off with the top.
+        if objects and w is None and not before.endswith(":"):
+            ahead = (text[m.end():]).lstrip()
+            if any(re.match(r"(?:(?:a|an|the|her|his|their)\s+)?(?:[\w-]+\s+){0,2}"
+                            + re.escape(o) + r"\b", ahead, re.I) for o in objects if o):
+                continue
         out.append(m.group(1))
     return out
 
@@ -3362,6 +3380,8 @@ def scrub_removed(text, tokens):
     # is only part of the sentence, so it gets the surgical treatment below.
     kept = []
     for sent in re.split(r"(?<=[.!?])\s+", text):
+        _label_tagged = bool(re.search(r"[A-Z][\w'’-]*\s*:\s*<\s*picture",
+                                       sent, re.I))
         frags = sent.split(",")
         out_frags = []
         for frag in frags:
@@ -3394,7 +3414,16 @@ def scrub_removed(text, tokens):
                 # The person's tag is the one in the fragment carrying their LABEL --
                 # "Nora: <Picture 1>" -- because that is where a sheet entry puts it.
                 # Any other tag belongs to whatever it is standing next to.
-                tags = [n for s in (gone or [frag]) for n in person_tags(s)]
+                # `live` is what is being removed, so a tag standing in front of
+                # one of those belongs to it and goes with it.
+                # A leading tag is the person's or the object's depending on the
+                # ENTRY, which a comma fragment cannot see. "Kate is 20,
+                # <Picture 1> blonde crop top" and "<Picture 2> a chastity belt"
+                # are the same shape once split. What tells them apart is whether
+                # the person is ALREADY tagged at their label: if she is, a later
+                # tag cannot be hers as well.
+                tags = [n for s in (gone or [frag])
+                        for n in person_tags(s, live if _label_tagged else None)]
                 piece = " and ".join(k for k in keep if k.strip())
                 if tags:
                     piece = ((piece + " ") if piece.strip() else "") + \
@@ -3433,7 +3462,18 @@ def scrub_removed(text, tokens):
         # Only a tag STANDING ON the removed words. A person's tag sits after their
         # label -- "Mara: <Picture 1>" -- never after a garment, so it cannot be taken
         # by this: losing it would cost that shot its identity reference.
-        out = re.sub(r"\b(?:(?:a|an|the|her|his|their)\s+)?(?:[\w-]+\s+){0,2}"
+        #
+        # A LEADING tag counts too. "<Picture 2> a chastity belt" is the same claim
+        # written the other way round, and taking only the trailing form left the tag
+        # standing when the belt went under the jeans -- so the image was still sent
+        # on every covered shot and drawn on top of them. The words stopping is not
+        # the same as the picture stopping.
+        #
+        # No comma may sit between: "Mara: <Picture 1>, blue jeans" has the person's
+        # tag in front of a garment, and consuming across the comma would take her
+        # identity reference with the jeans.
+        out = re.sub(r"(?:<\s*picture[\s_\-]*\d+\s*>\s*)?"
+                     r"\b(?:(?:a|an|the|her|his|their)\s+)?(?:[\w-]+\s+){0,2}"
                      + re.escape(t) + r"\b(?:\s*<\s*picture[\s_\-]*\d+\s*>)?",
                      "", out, flags=re.I)
     # Tidy what the deletion left behind, without touching anything it did not.

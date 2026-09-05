@@ -184,6 +184,12 @@ work in both orders — *"kicks off her boots"*, *"kicks her boots off"* — and
 there the wardrobe is read off the sheet and all of it comes off — for the people that
 beat names, and never the restraints.
 
+**Tag the person too, not just the object.** `<Picture 2> a chastity belt` with nobody
+tagged is read as an identity reference, because a lone tag usually is one — so it rides
+every shot. Give the person their own tag and the object's tag is unambiguous:
+`Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.` Either side of the
+noun works once the person is tagged.
+
 **Tag the picture of anything that gets covered.** Layering hides the *words*; it cannot
 hide a picture. An untagged reference goes into every shot, so an image of something
 currently underneath something else is still sent on the shots where it is covered — and

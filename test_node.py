@@ -217,6 +217,25 @@ def test_removals():
           S.picture_tags(S.scrub_removed(
               "A basement. Kate is 20, <Picture 1> blonde crop top, boots.",
               ["crop top"])) == [1])
+    # THE SAME CLAIM WRITTEN THE OTHER WAY ROUND. "<Picture 2> a chastity belt" puts
+    # the tag in front, where the rule above has nothing to read, so it was kept as
+    # the person's -- and the tag surviving meant the belt's picture was still sent
+    # into every shot where the belt was covered, and drawn on top of the jeans.
+    #
+    # A comma fragment cannot tell that from "Kate is 20, <Picture 1> blonde crop
+    # top", which is the same shape and IS hers. What separates them is the entry: if
+    # the person already carries a tag at their label, a later one cannot be hers too.
+    _lead = "Mara: <Picture 1>, she, blue jeans, <Picture 2> a chastity belt."
+    check("a leading tag goes with its object when the person is already tagged",
+          S.picture_tags(S.scrub_removed(_lead, ["chastity belt"])) == [1])
+    check("...and the trailing form still does",
+          S.picture_tags(S.scrub_removed(
+              "Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.",
+              ["chastity belt"])) == [1])
+    check("...while an object tag nothing removes stays",
+          S.picture_tags(S.scrub_removed(
+              "Mara: <Picture 1>, she, a locket <Picture 3>, blue jeans.",
+              ["jeans"])) == [1, 3])
     check("text with none of the tokens is untouched",
           S.scrub_removed("A basement with devices on the walls. Kate is 20.", ["jacket"])
           == "A basement with devices on the walls. Kate is 20.")
