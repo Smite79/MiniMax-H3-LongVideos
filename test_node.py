@@ -702,6 +702,50 @@ def test_how_clothes_actually_come_off():
           S.infer_removals("Mike tore the jacket off her.", sc) == ["jacket"])
 
 
+def test_bare_region():
+    """A garment coming off with nothing under it leaves the region UNSPECIFIED,
+    and an unspecified region is filled by the model's own prior. For legs that
+    prior is legwear: leggings and tights appeared that the prompt never asked
+    for, and the keyframe carried them into every later shot."""
+    check("shorts off, nothing under -> legs named bare",
+          "legs are bare" in S.bare_clause(["shorts"], {}, "crop top, shorts"))
+    check("jeans off -> legs named bare",
+          "legs are bare" in S.bare_clause(["jeans"], {}, "t-shirt, jeans"))
+    check("boots off -> feet named bare",
+          "feet and ankles are bare" in S.bare_clause(["boots"], {}, "jeans, boots"))
+    check("gloves off -> hands named bare",
+          "hands are bare" in S.bare_clause(["gloves"], {}, "coat, gloves"))
+    # Silent where something still covers the region: saying bare would strip a
+    # garment the character is still wearing.
+    check("a t-shirt still covers the torso",
+          S.bare_clause(["jacket"], {}, "jacket, t-shirt") == "")
+    check("tights still on cover the legs",
+          S.bare_clause(["shorts"], {}, "crop top, shorts, tights") == "")
+    # ...and silent where the sheet names a layer underneath: reveal_clause has
+    # that one, and the two saying different things about one region is worse
+    # than either. Underwear sits in the leg region without being legwear, so
+    # testing only the outer vocabulary let both speak.
+    check("panties underneath -> reveal_clause speaks, not this",
+          S.bare_clause(["shorts"], {"panties": "shorts"},
+                        "crop top, panties, shorts") == "")
+    check("a chastity belt underneath counts as a layer",
+          S.bare_clause(["shorts"], {"chastity belt": "shorts"},
+                        "crop top, chastity belt, shorts") == "")
+    check("jewellery has no region", S.bare_clause(["locket"], {}, "dress, locket") == "")
+    check("nothing removed, nothing said", S.bare_clause([], {}, "shorts") == "")
+    # It names a BODY PART and never a garment. At cfg 1 there is no negative
+    # prompt, so naming the unwanted thing is asking for it.
+    for _g, _w in ((["shorts"], "crop top, shorts"), (["jeans"], "tee, jeans"),
+                   (["boots"], "jeans, boots"), (["skirt"], "blouse, skirt")):
+        _c = S.bare_clause(_g, {}, _w).lower()
+        check(f"clause names no garment: {_g[0]!r}",
+              not any(w in _c for w in ("leggings", "tights", "stockings",
+                                        "panties", "underwear", "knickers")))
+    # Two regions read as prose, not as two capitalised sentences spliced.
+    check("two regions join grammatically",
+          "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
+
+
 def test_removal_completes():
     print("\n=== a removal has to finish inside its shot ===")
     # Scrubbing stops a garment being DESCRIBED. It does not tell the model to
@@ -2494,6 +2538,7 @@ def main():
     test_undressing_completely()
     test_a_name_with_no_entry()
     test_layers()
+    test_bare_region()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()

@@ -576,6 +576,76 @@ def revealed_by(covers, gone):
     return [u for u, o in (covers or {}).items() if o in (gone or [])]
 
 
+# Which region of the body a garment leaves uncovered when it comes off. Only what
+# the node can place with certainty; a garment it cannot place gets no clause, since
+# a wrong region is worse than none.
+_REGION_OF = (
+    (re.compile(r"\b(?:shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|"
+                r"joggers|tights|pantyhose|jeggings|culottes|tracksuit\s+bottoms)\b",
+                re.I), "legs", "The legs are bare from the hip down"),
+    (re.compile(r"\b(?:socks|stockings|hold-?ups|boots|shoes|trainers|sneakers|"
+                r"sandals|heels)\b", re.I), "feet", "The feet and ankles are bare"),
+    (re.compile(r"\b(?:top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|"
+                r"hoodie|cardigan|jacket|coat|tunic)\b", re.I), "torso",
+     "The arms and shoulders are bare"),
+    (re.compile(r"\b(?:gloves|mittens)\b", re.I), "hands", "The hands are bare"),
+)
+
+
+def bare_clause(gone, covers=None, worn=""):
+    """Say the uncovered region is BARE, when the sheet names nothing under it.
+
+    A removal clause is emphatic -- off the body, dropped out of frame -- and then
+    says nothing about what occupies the space it left. An unspecified region is
+    where the model's own prior fills in, and for legs that prior is legwear: the
+    shot invents leggings, tights or stockings that appear nowhere in the prompt,
+    and the keyframe then carries the invention into every later shot.
+
+    Positively phrased, and it names a BODY PART, never a garment. At cfg 1 there
+    is no negative prompt, so "no leggings" would be read as leggings; "the legs
+    are bare" fills the same region with something that is actually wanted.
+
+    Silent when the sheet already answers the question -- reveal_clause covers the
+    case where something IS underneath, and the two must never both speak -- and
+    silent when another garment the character still wears covers the same region."""
+    if not gone:
+        return ""
+    under = {str(u).lower() for u in (covers or {})}
+    said, out = set(), []
+    for item in gone:
+        item = str(item)
+        for rx, region, sentence in _REGION_OF:
+            if not rx.search(item) or region in said:
+                continue
+            # Something else still on the body covers this region: not bare.
+            if any(rx.search(w) for w in (worn or "").split(",")
+                   if not names_any(w, gone)):
+                said.add(region)
+                break
+            # The sheet named a layer underneath: reveal_clause has this one, and
+            # the two must never both speak. Matched against the region's UNDER
+            # vocabulary as well as its own -- panties sit in the leg region but
+            # are not legwear, and testing only the outer list let this clause
+            # call the legs bare while reveal_clause said the panties show.
+            if any(rx.search(u) or re.search(_UNDER_BY_REGION.get(
+                       "lower" if region == "legs" else
+                       "upper" if region == "torso" else "", "(?!)"), u, re.I)
+                   for u in under):
+                said.add(region)
+                break
+            said.add(region)
+            out.append(sentence)
+            break
+    if not out:
+        return ""
+    # One region is the normal case. Two is a full strip, and past that the clause
+    # would outweigh the beat it is protecting. Only the first stays capitalised:
+    # joined as written it read "and The feet and ankles are bare".
+    out = out[:2]
+    joined = out[0] + "".join(", and " + s[0].lower() + s[1:] for s in out[1:])
+    return " " + joined + ", with nothing else worn there."
+
+
 def reveal_clause(items):
     """Say what is underneath is what shows now, on the shot that uncovers it.
 
@@ -4621,6 +4691,7 @@ class H3LongVideos:
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
+        bared_shots = []          # ...and shots that uncover skin
         crowded = []              # (shot, clauses dropped for room)
         absent_hold = []          # shots where the wearer is not on screen
         exposed_by_beat = []      # (shot, garments the beat names while covered)
@@ -4902,6 +4973,15 @@ class H3LongVideos:
                                        if u not in visible and not names_any(u, toks)])
             if _revealed:
                 revealed_shots.append(len(shots) + 1)
+            # ...and when the sheet names NOTHING underneath, say the region is bare.
+            # Otherwise the shot says a garment is gone and leaves the space it left
+            # unspecified, which is where the model's own prior fills in -- legwear
+            # the prompt never asked for, carried on by the keyframe from there.
+            # Never both: reveal_clause speaks when something is under, this when
+            # nothing is.
+            _bare = "" if _revealed else bare_clause(toks, covers, shot_sheet)
+            if _bare:
+                bared_shots.append(len(shots) + 1)
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
             # Maya lies still" -- and a name fused to the end of an attribute list is
             # read as one more item in it.
@@ -5321,6 +5401,7 @@ class H3LongVideos:
             _guards = [
                 (1, "removal", tail),        # the beat's own action, completing
                 (2, "revealed", _revealed),  # what shows where it was
+                (2, "bare", _bare),          # ...or that nothing does
                 (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", fall),           # a body going down needs a landing
                 (5, "device", _device),      # a voice that is not hers
@@ -5474,6 +5555,17 @@ class H3LongVideos:
                 f"entry in an attribute list, and against a prior that says trousers "
                 f"coming off means bare skin, a list entry does not compete. Said only "
                 f"on the shot that uncovers it; after that it is simply worn")
+        if bared_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in bared_shots)} take off a garment "
+                f"with nothing named underneath it, so the shot is told that region is "
+                f"BARE. Left unsaid, the space a garment leaves is unspecified, and an "
+                f"unspecified region is filled by the model's own prior -- for legs "
+                f"that prior is legwear, so leggings or tights appear that the prompt "
+                f"never asked for, and the keyframe carries them into every later shot. "
+                f"It names a body part and never a garment: at cfg 1 there is no "
+                f"negative prompt, so naming the unwanted thing would summon it. Name "
+                f"an under-layer in the sheet and this gives way to that instead")
         if restarted:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in restarted)} start FRESH rather "
