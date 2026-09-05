@@ -2065,6 +2065,64 @@ def tight_framing(text):
     return bool(_TIGHT_FRAME.search(text or ""))
 
 
+# WHERE SOMEBODY IS LOOKING.
+#
+# Reported: "she is looking at the TV" rendered her looking off to the side, posing
+# for the camera. The beat says it once and nothing else in the shot agrees with it,
+# while a near-clean reference is asking for the portrait's pose -- and the portrait
+# looks at the lens, because photographs of people do. info already warned that a
+# referenced person can hold the portrait's gaze; nothing in the TEXT argued back.
+#
+# The model's own prior pulls the same way: a person in frame faces the camera unless
+# something says otherwise. So the target gets said a second time, as a physical fact
+# about the eyes and the head rather than as an activity.
+_GAZE_PREP = r"(?:at|to|towards?|into|onto|over\s+at)"
+_GAZE_TAIL = (r"(?=[.,;:!?]|\s+(?:and|as|while|when|who|which|that|with|for|from|in|on|"
+              r"before|after|until)\b|$)")
+_GAZE_DET = r"(?:the|a|an|her|his|their|its|that|this)\s+"
+_LOOK_AT = re.compile(
+    r"\b(?:look(?:s|ed|ing)?|star(?:e|es|ed|ing)|gaz(?:e|es|ed|ing)|"
+    r"glanc(?:e|es|ed|ing)|peer(?:s|ed|ing)?|squint(?:s|ed|ing)?)\s+"
+    r"(?:back\s+|down\s+|up\s+|over\s+|round\s+|around\s+|straight\s+|right\s+)?"
+    + _GAZE_PREP + r"\s+" + _GAZE_DET + r"([\w][\w\- ]{0,24}?)" + _GAZE_TAIL, re.I)
+# Verbs that carry their object without a preposition. "Watching the TV" is a gaze
+# instruction as much as "looking at the TV" is.
+_WATCH = re.compile(
+    r"\b(?:watch(?:es|ed|ing)?|stud(?:y|ies|ied|ying)|examin(?:e|es|ed|ing))\s+"
+    + _GAZE_DET + r"([\w][\w\- ]{0,24}?)" + _GAZE_TAIL, re.I)
+# Things that are not a place to look. "Looks at her" is a pronoun with no picture in
+# it, and restating a pronoun as a target says nothing the beat did not.
+_NOT_A_TARGET = frozenset(
+    "him her them it me us you himself herself themselves one other others "
+    "time moment thing things way".split())
+
+
+def look_target(beat):
+    """What this beat says somebody is looking at. '' when it names nothing."""
+    for pat in (_LOOK_AT, _WATCH):
+        m = pat.search(beat or "")
+        if not m:
+            continue
+        target = re.sub(r"\s+", " ", m.group(1)).strip(" -")
+        if not target or target.lower() in _NOT_A_TARGET:
+            continue
+        return target
+    return ""
+
+
+def gaze_hold(target):
+    """One sentence putting the eyes and the head on the thing the beat named.
+
+    Impersonal, like the hardware placement clause: naming the person again is one
+    more mention of a person, and that has its own cost. Says nothing about where the
+    camera is -- the shot may be looking straight down the line of sight -- only that
+    the head is turned to face what the eyes are on."""
+    if not target:
+        return ""
+    return (f" The look goes to the {target}: the eyes are on it and the head is "
+            f"turned to face it.")
+
+
 def forced_pose(text):
     """Does this text put a body into a position that hardware can enforce?"""
     return bool(_FORCED_POSE.search(text or ""))
@@ -3514,6 +3572,26 @@ class H3LongVideos:
                                "EFFORT IS EXEMPT. Straining, thrashing, a body under load "
                                "is vocal and its mouth should be open, so those shots keep "
                                "their audio and are never told to close."}),
+                # APPENDED. Saved workflows restore widgets by position.
+                "hold_gaze": ("BOOLEAN", {"default": True,
+                    "tooltip": "Put the eyes where the beat says they are looking.\n\n"
+                               "'She is looking at the TV' says it once, and two things "
+                               "pull the other way: the model's prior is that a person in "
+                               "frame faces the camera, and a near-clean reference is "
+                               "asking for the portrait's pose -- which looks at the lens, "
+                               "because photographs of people do. The result is somebody "
+                               "posing for the camera instead of watching what you "
+                               "named.\n\n"
+                               "On, a beat naming a thing to look at gets one more "
+                               "sentence saying the eyes are on it and the head is turned "
+                               "to face it. Stated as a physical fact rather than an "
+                               "activity, and impersonally -- naming the person again is "
+                               "one more mention of a person, which has its own cost.\n\n"
+                               "Reads 'looks at', 'stares at', 'glances at', 'peers into', "
+                               "'watching', 'studies'. It says nothing about where the "
+                               "camera is, so a shot looking straight down the line of "
+                               "sight is unaffected. Looking at a PERSON is left alone: "
+                               "restating a pronoun says nothing the beat did not."}),
             },
         }
 
@@ -3538,7 +3616,7 @@ class H3LongVideos:
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
-            mouths_shut_when_no_line=True, **_removed):
+            mouths_shut_when_no_line=True, hold_gaze=True, **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
@@ -3678,6 +3756,7 @@ class H3LongVideos:
         restrained = posed = rigid_latched = False
         anchored = ""             # where fastened limbs are held
         anchored_shots = []       # shots reminded of it
+        gaze_shots = []           # shots told where the look goes
         tight_shots = []          # ...where the framing also crops it
         # Scenery whose state a beat has CHANGED. After that the node stops asserting
         # the state it was written with, because it is no longer the state: a van
@@ -3932,6 +4011,13 @@ class H3LongVideos:
             # them SHUT and says nothing about position, so the only thing carrying
             # it was the picture -- and a close shot crops the anchor point straight
             # out of frame, which is the reported failure exactly.
+            # Where the beat says somebody is looking, said once more as a fact
+            # about the eyes and the head. One mention in the beat loses to a
+            # near-clean reference asking for the portrait's pose, and the
+            # portrait looks at the lens because photographs of people do.
+            _gaze = gaze_hold(look_target(body)) if hold_gaze else ""
+            if _gaze:
+                gaze_shots.append(len(shots) + 1)
             _anchor_now = limb_anchor(body) if restrained else ""
             if _anchor_now:
                 anchored = _anchor_now
@@ -4097,7 +4183,7 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            shot_text = (line + tail + anchors + _state + _sound + _mouth
+            shot_text = (line + tail + anchors + _gaze + _state + _sound + _mouth
                          + hold + _anchor + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
@@ -4209,6 +4295,15 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if gaze_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in gaze_shots)} name something to "
+                f"look at, so the eyes and the head are put on it in so many words. "
+                f"The beat says it once and two things pull the other way: a person in "
+                f"frame faces the camera unless something says otherwise, and a "
+                f"near-clean reference asks for the portrait's pose -- which looks at "
+                f"the lens, because photographs of people do. Nothing is said about "
+                f"where the camera is. Off with hold_gaze")
         if anchored_shots:
             notes.append(
                 f"fastened limbs held in place on shot(s) {', '.join(str(n) for n in anchored_shots)}"

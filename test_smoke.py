@@ -760,6 +760,26 @@ def _prompts_sent(P, **kw):
     return seen, out[3]
 
 
+def test_a_named_look_target_is_restated():
+    print("\n=== a beat that names something to look at gets it said twice ===")
+    P = ("A living room.\n\nMara sits on the sofa looking at the TV.\n\n"
+         "Mara looks at her.\n\nMara walks to the window.")
+    info, script = run_node(P, plan_only=True, character_memory="Mara: she, 30.")[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    check("the named target is restated", "The look goes to the TV" in sh[0], sh[0][-70:])
+    # It follows the beat rather than leading it -- ca75672: anatomy in the opening
+    # tokens is what a distilled LoRA settles composition on.
+    check("...after the beat, not before it",
+          sh[0].index("looking at the TV") < sh[0].index("The look goes to"), "")
+    check("a pronoun target adds nothing", "The look goes" not in sh[1], "")
+    check("a beat with no look adds nothing", "The look goes" not in sh[2], "")
+    check("info names the shot", "shot(s) 1 name something to look at" in info, "")
+    off = run_node(P, plan_only=True, character_memory="Mara: she, 30.",
+                   hold_gaze=False)[3]
+    check("the switch turns it off", "The look goes" not in off, "")
+    check("...and leaves the beat exactly as written", "looking at the TV" in off, "")
+
+
 def test_a_covered_object_does_not_send_its_picture():
     print("\n=== an object out of view does not carry its reference ===")
     # Reported: the object looked different when it came back into view. While it was
@@ -1690,6 +1710,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_a_named_look_target_is_restated()
     test_a_covered_object_does_not_send_its_picture()
     test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()
