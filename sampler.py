@@ -1947,8 +1947,21 @@ def turns_in(text, names=()):
 # So say what DOES take the landing. Positive, and it names no person: at cfg 1
 # there is no negative prompt, and "does not catch itself" names catching.
 FALL_HOLD = (" A bound body falls as one piece: the fastened limbs stay fastened and travel "
-             "with it, the arms staying in the hold, and the shoulder, hip or side takes "
-             "the landing.")
+             "with it, the arms staying in the hold, the shoulder, hip or side takes "
+             "the landing, and the legs fold together under the body.")
+
+# The same shot without the hardware. A falling body is the frame where limbs are
+# least determined -- fast motion, heavy occlusion, and a pose the model has to invent
+# the middle of -- and the reported result is a third leg, grown to brace a landing
+# nothing else was taking.
+#
+# Said as what the limbs DO, never as how many there are. Counting was tried in this
+# node's first life and removed -- the old subject-counting sentence is one of the
+# phrases test_verbatim still bans by name. A count is also a mention, and a mention
+# is a presence cue: naming legs to ask for two of them is a way of asking for legs.
+# Giving them a definite job is what stops the model inventing one.
+FALL_HOLD_FREE = (" The body falls as one piece: the arms stay with it and the shoulder, "
+                  "hip or side takes the landing, the legs folding together under it.")
 
 _FALL_CUE = re.compile(
     r"\b(?:falls?|fell|falling|drops?\s+to|dropped\s+to|collapse[sd]?|collapsing|"
@@ -3757,6 +3770,7 @@ class H3LongVideos:
         anchored = ""             # where fastened limbs are held
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
+        fall_shots = []           # shots told what takes the landing
         tight_shots = []          # ...where the framing also crops it
         # Scenery whose state a beat has CHANGED. After that the node stops asserting
         # the state it was written with, because it is no longer the state: a van
@@ -4037,7 +4051,18 @@ class H3LongVideos:
                                  and (gone or shown or restrained)) else ""
             # Going down with the hands fastened: say what takes the landing, or the
             # model frees the hands to break the fall and the hardware gives way.
-            fall = FALL_HOLD if (restrained and falls_in(body)) else ""
+            #
+            # A FREE body needs the landing named too, for a different reason. Reported:
+            # a third leg on the shot where she fell, grown to brace a landing nothing
+            # in the text was taking. A fall is the frame where limbs are least
+            # determined -- fast motion, heavy occlusion, and a middle the model has to
+            # invent -- so leaving it to work out what catches the body is leaving it
+            # free to add something that can.
+            _falls = falls_in(body)
+            fall = (FALL_HOLD if (restrained and _falls)
+                    else FALL_HOLD_FREE if _falls else "")
+            if fall:
+                fall_shots.append(len(shots) + 1)
             # Steel is not rope. Without being told, the model draws a chain slack --
             # sagging, stretching to wherever a limb is going, allowing movement the
             # hardware does not allow. Only where such hardware is actually named.
@@ -4295,6 +4320,16 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if fall_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in fall_shots)} put a body down, so "
+                f"the shot is told what takes the landing and what the legs do. A fall "
+                f"is the frame where limbs are least determined -- fast motion, heavy "
+                f"occlusion, and a middle the model has to invent -- and leaving it to "
+                f"work out what catches the body leaves it free to add something that "
+                f"can, which is where a spare limb comes from. Said as what the limbs "
+                f"DO, never as how many there are: a count is also a mention, and "
+                f"naming legs to ask for two is a way of asking for legs")
         if gaze_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in gaze_shots)} name something to "
