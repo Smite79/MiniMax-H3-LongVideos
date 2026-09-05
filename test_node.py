@@ -1051,6 +1051,50 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_fastened_limbs_keep_their_anchor():
+    print("\n=== where the cuffs are held, not just that they are shut ===")
+    # Reported: cuffs above the head in one shot, somewhere else in the next. The
+    # restraint hold keeps the hardware SHUT and says nothing about where it is, and
+    # _FORCED_POSE is about what the whole body is doing -- kneeling, hogtied. Cuffed
+    # wrists above the head is neither: the body can be standing, sitting or lying and
+    # the arms are still fixed at one point. So nothing carried the position except
+    # the picture, and a close shot crops the anchor straight out of it.
+    for _t in ("Mara is handcuffed above her head to the bed frame.",
+               "Her wrists are cuffed above her head.",
+               "Mara is cuffed behind her back.",
+               "Her arms are stretched up and locked to the rail.",
+               "Cuffed to the radiator."):
+        check(f"anchor read: {_t[:38]!r}", S.limb_anchor(_t))
+    check("both halves when both are written",
+          S.limb_anchor("handcuffed above her head to the bed frame")
+          == "above the head, at the bed frame")
+    check("the body-relative half alone",
+          S.limb_anchor("cuffed above her head") == "above the head")
+    check("the attachment point alone",
+          S.limb_anchor("cuffed to the radiator") == "at the radiator")
+    check("a plural anchor point is read",
+          "at the posts" in S.limb_anchor("chained to the posts"))
+    # A pose is not an anchor, and neither is an unrelated "to the".
+    for _t in ("Mara kneels on the floor.", "Mara walks to the window.",
+               "He hands her the keys to the car.", "She looks up at the ceiling."):
+        check(f"no anchor: {_t[:34]!r}", not S.limb_anchor(_t))
+    # The sentence.
+    cl = S.anchor_hold("above the head, at the bed frame")
+    check("the clause is one sentence", cl.count(".") == 1)
+    check("...and is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    check("...and says nothing about the body holding still",
+          not re.search(r"\b(?:still|motionless|frozen|does not move)\b", cl, re.I))
+    check("nothing anchored, nothing said", S.anchor_hold("") == "")
+    # Framing tight enough to lose the anchor, which is what the next shot inherits.
+    for _t in ("A close shot of her face.", "Close-up on her hands.",
+               "Tight on the lock.", "Her face fills the frame."):
+        check(f"tight frame: {_t[:32]!r}", S.tight_framing(_t))
+    for _t in ("Mara turns her head.", "A wide shot of the room.",
+               "The camera pulls back."):
+        check(f"not tight: {_t[:32]!r}", not S.tight_framing(_t))
+
+
 def test_only_a_beat_with_a_person_gets_a_mouth():
     print("\n=== a mouth clause needs a mouth to be about ===")
     # ca75672 removed the old lips-closed sentence for two reasons and this must not
@@ -1826,6 +1870,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_fastened_limbs_keep_their_anchor()
     test_only_a_beat_with_a_person_gets_a_mouth()
     test_a_tag_names_the_socket_it_is_wired_to()
     test_an_exit_and_a_shut_door_disagree()

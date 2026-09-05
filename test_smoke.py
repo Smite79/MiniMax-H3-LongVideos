@@ -760,6 +760,32 @@ def _prompts_sent(P, **kw):
     return seen, out[3]
 
 
+def test_the_anchor_survives_a_close_shot():
+    print("\n=== cuffs above the head are still above the head next shot ===")
+    P = ("A room.\n\nMara is handcuffed above her head to the bed frame.\n\n"
+         "A close shot of her face.\n\nMara turns her head.\n\n"
+         "remove: handcuffs\nMara sits up and rubs her wrists.")
+    info, script = run_node(P, plan_only=True, character_memory="Mara: she, 30.")[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    # The staging shot has the author's own words and gets no second sentence about it.
+    check("the staging shot is not argued with",
+          "fastened wrists stay" not in sh[0], "")
+    check("the next shot is told where they are",
+          "above the head, at the bed frame" in sh[1], sh[1][-80:])
+    # The one that matters: a close shot crops the anchor out of the picture, so the
+    # text is the only thing still carrying it.
+    check("...including the close shot", "fastened wrists stay" in sh[1], "")
+    check("...and the shot after that", "fastened wrists stay" in sh[2], "")
+    # It latches like the hardware and is released by the same `remove:`.
+    check("a removal lets go of it", "fastened wrists stay" not in sh[3], sh[3][-70:])
+    check("info names the held shots", "fastened limbs held in place on shot(s) 2, 3" in info, "")
+    check("...and names the tight framing", "frame tight enough to crop" in info, "")
+    # Nothing to anchor, nothing said -- this must not fire on ordinary shots.
+    plain = run_node("A room.\n\nMara waits.\n\nMara walks to the window.",
+                     plan_only=True, character_memory="Mara: she, 30.")[3]
+    check("an unrestrained scene is untouched", "fastened wrists stay" not in plain, "")
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -1625,6 +1651,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
