@@ -890,8 +890,10 @@ def test_restraints_hold():
           not re.search(r"\b(?:she|he|her|his|they)\b", S.RESTRAINT_HOLD, re.I))
     check("...and positive, since cfg 1 has no negative prompt",
           not re.search(r"\bno\b|\bnot\b|\bnever\b", S.RESTRAINT_HOLD, re.I))
-    check("...saying what holds", "whole and closed" in S.RESTRAINT_HOLD
-          and "fastened exactly as it was put on" in S.RESTRAINT_HOLD)
+    # The GUARANTEE, not the wording. These clauses were compressed on 2026-09-05
+    # after they had grown to 65% of a shot against a 12% beat; each guarantee is
+    # still made, each is now made once.
+    check("...saying what holds", "stays closed and fastened as it was put on" in S.RESTRAINT_HOLD)
 
 
 def test_hardware_has_somewhere_to_go():
@@ -977,7 +979,7 @@ def test_a_tape_gag_stays_tape():
     # keeping it made of tape, and it drifted to the commoner object over a face.
     for _name in ("RESTRAINT_HOLD", "CHAIN_HOLD", "CHAIN_POSE_HOLD"):
         check(f"{_name} holds the material too",
-              "keeps the material and shape" in getattr(S, _name))
+              "same object in the same material" in getattr(S, _name))
     # It must stay positive: at cfg 1 a negative is never evaluated.
     check("the form hold is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b", S.FORM_HOLD, re.I))
@@ -1295,7 +1297,12 @@ def test_underwear_goes_under():
     got = S.implied_layers("Mara: she, 22, blue denim shorts, white top, panties, "
                            "a chastity belt.")
     check("panties go under the shorts", got.get("panties") == "shorts")
-    check("...and so does the belt", got.get("chastity belt") == "shorts")
+    # NOT the chastity belt. It is a restraint, and a restraint left out of the text
+    # renders absent -- which is the bug the hardware latch exists for, rebuilt from
+    # the other side. Reported as the belt disappearing a few beats in. Cloth can be
+    # hidden and recovered from a description; hardware that stops being drawn is
+    # simply gone, and so is every beat that depended on it.
+    check("...but NOT the belt, which is hardware", "chastity belt" not in got)
     check("a dress covers both bra and knickers",
           S.implied_layers("Mara: a summer dress, a bra and knickers underneath.")
           == {"knickers": "dress", "bra": "dress"})
@@ -1860,8 +1867,8 @@ def test_chain_is_rigid():
                "a leather strap", "Maya lies still."):
         check(f"not rigid: {_t[:32]!r}", not S.rigid_hardware(_t))
     check("the clause is one sentence", S.CHAIN_HOLD.count(".") == 1)
-    check("...it keeps the links the same size", "links keep their size" in S.CHAIN_HOLD)
-    check("...holds the run straight", "straight and taut" in S.CHAIN_HOLD)
+    check("...it keeps the links the same size", "links keeping their size" in S.CHAIN_HOLD)
+    check("...holds the run taut", "run between them taut" in S.CHAIN_HOLD)
     check("...impersonal and positive",
           not re.search(r"\b(?:she|he|her|his|they|no|not|never)\b", S.CHAIN_HOLD, re.I))
     # It constrains the METAL. An earlier wording had the body reaching "only as far
@@ -1875,7 +1882,7 @@ def test_chain_is_rigid():
     # It subsumes the restraint hold rather than joining it: two clauses saying "whole
     # and closed" is twice the stasis for one guarantee.
     check("the chain clause carries the restraint guarantee itself",
-          "whole and closed" in S.CHAIN_HOLD and "fastened exactly as it was put on"
+          "stays closed and fastened as it was put on" in S.CHAIN_HOLD and "as it was put on"
           in S.CHAIN_HOLD)
     # A position hardware was locked to enforce. Saying the metal keeps its shape is
     # not enough: a chain that keeps its shape can still be drawn with slack, and
@@ -1888,14 +1895,14 @@ def test_chain_is_rigid():
                "Maya lies still."):
         check(f"no position forced: {_t[:34]!r}", not S.forced_pose(_t))
     check("the pose clause says the metal is at full length",
-          "drawn out to its full length" in S.CHAIN_POSE_HOLD)
+          "drawn to its full length" in S.CHAIN_POSE_HOLD)
     check("...that the position keeps", "the position that keeps" in S.CHAIN_POSE_HOLD)
     check("...and carries the restraint guarantee too",
-          "whole and closed" in S.CHAIN_POSE_HOLD)
+          "stays closed and fastened as it was put on" in S.CHAIN_POSE_HOLD)
     # It must NOT buy the position by freezing the body -- straining against it is
     # exactly what should happen, and this is the clause most at risk of stasis.
     check("...while leaving the body free to act",
-          "strains and pulls against it" in S.CHAIN_POSE_HOLD)
+          "strains against it" in S.CHAIN_POSE_HOLD)
     check("...and telling it to hold still nowhere",
           not re.search(r"\bstill\b|\bmotionless\b|\bdoes not move\b|\bbefore it stops\b",
                         S.CHAIN_POSE_HOLD, re.I))

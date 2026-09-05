@@ -410,11 +410,10 @@ def test_fall_keeps_the_hardware():
     check("...and keeps the metal rigid while it goes on",
           S.CHAIN_RIGID_TAIL.strip() in blocks[0], "")
     check("...and is not also told it is already fastened",
-          S.RESTRAINT_HOLD.strip() not in blocks[0]
-          and S.CHAIN_HOLD.strip() not in blocks[0], "")
+          "closed and fastened as" not in blocks[0], "")
     for i, b in enumerate(blocks[1:], 2):
         check(f"shot {i} holds the restraint",
-              S.RESTRAINT_HOLD.strip() in b or S.CHAIN_HOLD.strip() in b)
+              "closed and fastened as" in b)
     # The fall clause is per-beat -- it only earns its tokens where a body goes down.
     check("the fall beat says what takes the landing", fall in blocks[1])
     check("...the beat that puts them on does not", fall not in blocks[0])
@@ -546,19 +545,20 @@ def test_chain_hold_end_to_end():
          "Maya pulls against the chain.\n\n"
          "Maya lies still.")
     sh = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3]) if x.strip()]
-    chain = S.CHAIN_HOLD.strip()
+    chain = "links keeping their size"
     check("every shot with the hardware holds it rigid", all(chain in s for s in sh))
     # It REPLACES the restraint hold instead of joining it -- both say "whole and
     # closed", and two clauses for one guarantee is twice the stasis in the prompt.
     check("...instead of repeating the restraint hold",
-          all(S.RESTRAINT_HOLD.strip() not in s for s in sh))
+          all("the run between them" in s for s in sh))
     check("...while still carrying its guarantee",
-          all("whole and closed" in s for s in sh))
+          all("closed and fastened as it was put on" in s
+              or "closed and fastened as they were put on" in s for s in sh))
     # Rope flexes. Saying it holds a straight line would be wrong, so it does not.
     soft = run_node("A basement.\n\nMaya: 27, a rope around her wrists.\n\n"
                     "Maya lies still.", plan_only=True)[3]
     check("rope is not claimed to be rigid", chain not in soft)
-    check("...but it is still held whole", S.RESTRAINT_HOLD.strip() in soft)
+    check("...but it is still held whole", "closed and fastened as" in soft)
     # Steel locked on in shot 1 is still steel in shot 5. Tested per shot rather than
     # latched, the shot naming the chain got the rigid clause and every shot after it
     # fell back to the soft one -- which is where the slack came back from.
@@ -571,7 +571,7 @@ def test_chain_hold_end_to_end():
     # idea of the object gets set.
     # The content, not the exact sentence: the applying shot carries it as its own
     # sentence and the standing clause carries it after a semicolon.
-    _rigid = "links keep their size and the run between them stays straight and taut"
+    _rigid = "the run between them"
     check("the metal is rigid from the shot that names it",
           all(_rigid in s for s in later))
     check("rigidity latches past the shot that names it",
@@ -579,7 +579,7 @@ def test_chain_hold_end_to_end():
     check("...and that first shot is the one putting it on",
           S.RESTRAINT_GOING_ON.strip() in later[0], later[0][-90:])
     check("...and the soft clause is not used instead",
-          all(S.RESTRAINT_HOLD.strip() not in s for s in later))
+          all("the run between them" in s for s in later))
     # A position the hardware enforces latches too: the chain that put a body in a
     # squat is still that length three shots later, so the squat is still the position.
     posed = [x for x in re.split(r"(?=\[Shot )", run_node(
@@ -588,12 +588,12 @@ def test_chain_hold_end_to_end():
         "Maya strains against the chain, trying to stand.\n\nMaya breathes hard.",
         plan_only=True)[3]) if x.strip()]
     check("a forced position keeps for the rest of the run",
-          all(S.CHAIN_POSE_HOLD.strip() in s for s in posed))
+          all("drawn to its full length" in s for s in posed))
     check("...replacing the plain chain clause rather than joining it",
           all(chain not in s for s in posed))
     # No position forced: the plain clause, so an unposed chain does not freeze anyone.
     check("a chain with no position forced stays plain",
-          all(S.CHAIN_POSE_HOLD.strip() not in s for s in later))
+          all("drawn to its full length" not in s for s in later))
     # Hardware with nothing restrained by it is scenery, not a restraint.
     loose = run_node("A yard with a chain-link fence.\n\nMaya walks past it.",
                      plan_only=True)[3]
@@ -725,7 +725,7 @@ def test_hardware_stays_on_its_owner():
           re.split(r"(?=\[Shot )", run_node(P, plan_only=True, anchor="A workshop.",
                                             character_memory=mem)[3]) if x.strip()]
     check("the shot with one person keeps the plain hold",
-          "Every restraint stays whole" in sh[0])
+          "Every restraint stays closed" in sh[0])
     check("...and spends no words naming whose", "Every restraint on Nora" not in sh[0])
     check("the shot with two names the wearer", "Every restraint on Nora" in sh[1])
     # Once. The second sentence saying the same thing cost another naming of her, and
@@ -799,24 +799,24 @@ def test_the_cuffs_stay_in_the_picture():
          "Mara sits on the crate.\n\nMara looks at the door.")
     sh = [s for s in run_node(P, plan_only=True, character_memory=mem)[3].split("---")
           if s.strip()]
-    check("before it goes on, nothing is claimed", "still on her" not in sh[0], "")
+    check("before it goes on, nothing is claimed", "The cuffs stay" not in sh[0], "")
     check("the applying shot says it in the beat", "cuffs" in sh[1].lower(), "")
-    check("...and is not told it a second time", "still on her" not in sh[1], "")
+    check("...and is not told it a second time", "The cuffs stay" not in sh[1], "")
     for i in (2, 3):
         check(f"shot {i + 1} names the hardware", "cuffs" in sh[i].lower(), sh[i][-70:])
-        check(f"...as the object, not just a category", "still on her" in sh[i], "")
+        check(f"...as the object, not just a category", "The cuffs stay" in sh[i], "")
     # A removal lets go of it, like every other latch here.
     P2 = ("A bare room.\n\nDan cuffs her wrists behind her back.\n\nMara sits.\n\n"
           "remove: cuffs\nDan takes the cuffs off.\n\nMara stands up.\n\nMara walks out.")
     sh2 = [s for s in run_node(P2, plan_only=True, character_memory=mem)[3].split("---")
            if s.strip()]
-    check("held while they are on", "still on her" in sh2[1], "")
+    check("held while they are on", "The cuffs stay" in sh2[1], "")
     check("let go after the removal",
-          all("still on her" not in s for s in sh2[2:]), "")
+          all("The cuffs stay" not in s for s in sh2[2:]), "")
     # Nothing restrained anywhere: this must not fire on an ordinary scene.
     plain = run_node("A room.\n\nMara waits.\n\nMara walks to the window.",
                      plan_only=True, character_memory=mem)[3]
-    check("an unrestrained scene is untouched", "still on her" not in plain, "")
+    check("an unrestrained scene is untouched", "The cuffs stay" not in plain, "")
 
 
 def test_a_sheet_that_claims_hardware_too_early():
@@ -853,7 +853,7 @@ def test_caught_first_then_restrained():
     def kinds(P):
         script = run_node(P, plan_only=True, character_memory=mem)[3]
         return [("APPLY" if "hardware goes on during this shot" in s
-                 else "HOLD" if "Every restraint" in s else "-")
+                 else "HOLD" if "closed and fastened as" in s else "-")
                 for s in script.split("---") if s.strip()]
     got = kinds("A living room.\n\nMara runs for the door. Dan catches her and cuffs "
                 "her wrists.\n\nMara stands by the wall.\n\nMara pulls against the cuffs.")
@@ -881,7 +881,7 @@ def test_a_television_keeps_its_own_voice():
     info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
     sh = [s for s in script.split("---") if s.strip()]
     check("the voice is given back to the set", "the TV's" in sh[0], sh[0][-90:])
-    check("...and the mouths are held closed", "Every mouth" in sh[0], "")
+    check("...and the mouths are held closed", "Mouths in the shot" in sh[0], "")
     # The branch must STAY OPEN. The set is supposed to be heard -- silencing it
     # would trade one wrong thing for another. Checked on its own, because the empty
     # room later in this prompt IS silenced and should be.
@@ -893,9 +893,9 @@ def test_a_television_keeps_its_own_voice():
           '"Storms tonight."' in sh[0], "")
     # Her own line is untouched: she is speaking, and her mouth must move.
     check("her own line is left alone", "the TV's" not in sh[1], "")
-    check("...and her mouth is not held shut", "Every mouth" not in sh[1], "")
+    check("...and her mouth is not held shut", "Mouths in the shot" not in sh[1], "")
     # Nobody in the beat, nothing about mouths -- ca75672 again.
-    check("an empty room is told nothing about mouths", "Every mouth" not in sh[2], "")
+    check("an empty room is told nothing about mouths", "Mouths in the shot" not in sh[2], "")
     check("info names the shot", "shot(s) 1 have a spoken line that belongs" in info, "")
     off = run_node(P, plan_only=True, character_memory=mem,
                    mouths_shut_when_no_line=False)[3]
@@ -969,7 +969,11 @@ def test_underwear_is_hidden_until_it_is_not():
     sh = [s.lower() for s in script.split("---") if s.strip()]
     check("while the shorts are on, the panties are not described",
           "panties" not in sh[0], sh[0][-90:])
-    check("...nor the belt", "chastity belt" not in sh[0], "")
+    # The BELT is not hidden, ever. It is hardware, and hardware left out of the text
+    # renders absent -- the bug the hardware latch exists for, rebuilt from the other
+    # side. Cloth can be hidden and recovered from a description; a belt that stops
+    # being drawn is gone, and so is every beat that depended on it being there.
+    check("...but the belt is never hidden", "chastity belt" in sh[0], sh[0][-90:])
     check("...while the shorts themselves are", "shorts" in sh[0], "")
     # The shot that takes them off is where both become visible, and it has to say so
     # or the reveal happens against a body the text says is bare.
@@ -1073,17 +1077,18 @@ def test_a_named_look_target_is_restated():
          "Mara looks at her.\n\nMara walks to the window.")
     info, script = run_node(P, plan_only=True, character_memory="Mara: she, 30.")[2:4]
     sh = [s for s in script.split("---") if s.strip()]
-    check("the named target is restated", "The look goes to the TV" in sh[0], sh[0][-70:])
+    check("the named target is restated",
+          "The eyes and the head are turned to the TV" in sh[0], sh[0][-70:])
     # It follows the beat rather than leading it -- ca75672: anatomy in the opening
     # tokens is what a distilled LoRA settles composition on.
     check("...after the beat, not before it",
-          sh[0].index("looking at the TV") < sh[0].index("The look goes to"), "")
-    check("a pronoun target adds nothing", "The look goes" not in sh[1], "")
-    check("a beat with no look adds nothing", "The look goes" not in sh[2], "")
+          sh[0].index("looking at the TV") < sh[0].index("The eyes and the head"), "")
+    check("a pronoun target adds nothing", "The eyes and the head" not in sh[1], "")
+    check("a beat with no look adds nothing", "The eyes and the head" not in sh[2], "")
     check("info names the shot", "shot(s) 1 name something to look at" in info, "")
     off = run_node(P, plan_only=True, character_memory="Mara: she, 30.",
                    hold_gaze=False)[3]
-    check("the switch turns it off", "The look goes" not in off, "")
+    check("the switch turns it off", "The eyes and the head" not in off, "")
     check("...and leaves the beat exactly as written", "looking at the TV" in off, "")
 
 
@@ -1135,21 +1140,21 @@ def test_the_anchor_survives_a_close_shot():
     sh = [s for s in script.split("---") if s.strip()]
     # The staging shot has the author's own words and gets no second sentence about it.
     check("the staging shot is not argued with",
-          "fastened wrists stay" not in sh[0], "")
+          "holding the wrists" not in sh[0], "")
     check("the next shot is told where they are",
           "above the head, at the bed frame" in sh[1], sh[1][-80:])
     # The one that matters: a close shot crops the anchor out of the picture, so the
     # text is the only thing still carrying it.
-    check("...including the close shot", "fastened wrists stay" in sh[1], "")
-    check("...and the shot after that", "fastened wrists stay" in sh[2], "")
+    check("...including the close shot", "holding the wrists" in sh[1], "")
+    check("...and the shot after that", "holding the wrists" in sh[2], "")
     # It latches like the hardware and is released by the same `remove:`.
-    check("a removal lets go of it", "fastened wrists stay" not in sh[3], sh[3][-70:])
+    check("a removal lets go of it", "holding the wrists" not in sh[3], sh[3][-70:])
     check("info names the held shots", "fastened limbs held in place on shot(s) 2, 3" in info, "")
     check("...and names the tight framing", "frame tight enough to crop" in info, "")
     # Nothing to anchor, nothing said -- this must not fire on ordinary shots.
     plain = run_node("A room.\n\nMara waits.\n\nMara walks to the window.",
                      plan_only=True, character_memory="Mara: she, 30.")[3]
-    check("an unrestrained scene is untouched", "fastened wrists stay" not in plain, "")
+    check("an unrestrained scene is untouched", "holding the wrists" not in plain, "")
 
 
 def test_mouths_stay_shut_with_no_line():
@@ -1171,19 +1176,19 @@ def test_mouths_stay_shut_with_no_line():
     MEM = "Kate: she, 30, red coat."
     info, script = run_node(P, plan_only=True, character_memory=MEM)[2:4]
     sh = [s for s in script.split("---") if s.strip()]
-    mouth = [i + 1 for i, s in enumerate(sh) if "Every mouth in the shot stays closed" in s]
+    mouth = [i + 1 for i, s in enumerate(sh) if "Mouths in the shot stay closed" in s]
     check("the wordless shot with a person is told to close", mouth == [1], str(mouth))
-    check("the speaking shot is not", "Every mouth in the shot stays closed" not in sh[1], "")
+    check("the speaking shot is not", "Mouths in the shot stay closed" not in sh[1], "")
     # ca75672, which this must not undo: a mouth sentence on a beat with nobody in it
     # describes a person who is not there, and the only way to satisfy it is to draw a
     # face into an empty frame. The AUDIO half has no such limit -- an empty room still
     # babbles -- so shot 3 is silenced without being told anything about mouths.
     check("the scenery beat is told nothing about mouths",
-          "Every mouth in the shot stays closed" not in sh[2], "")
+          "Mouths in the shot stay closed" not in sh[2], "")
     check("...but is still silenced", "sound is" not in sh[2], "")
     # Effort is vocal and its mouth SHOULD be open. Silencing a straining body was a
     # bug once already -- it renders as a flat, unreacting face.
-    check("a straining body is left alone", "Every mouth in the shot stays closed" not in sh[3], "")
+    check("a straining body is left alone", "Mouths in the shot stay closed" not in sh[3], "")
     check("...and keeps its audio", "sound" in sh[3].lower(), "")
     # The written sound on a wordless shot is given up, because conditioning the
     # branch is the only thing that actually settles the mouth.
@@ -1193,7 +1198,7 @@ def test_mouths_stay_shut_with_no_line():
     # The switch puts it all back.
     off = run_node(P, plan_only=True, character_memory=MEM,
                    mouths_shut_when_no_line=False)[3]
-    check("off, nothing is told to close", "Every mouth in the shot stays closed" not in off, "")
+    check("off, nothing is told to close", "Mouths in the shot stay closed" not in off, "")
     check("off, the written sound comes back",
           "sound" in [s for s in off.split("---") if s.strip()][2].lower(), "")
     # Positively phrased: at cfg 1 no negative is evaluated, so an absence cannot be
@@ -1823,7 +1828,7 @@ def test_room_tone_under_every_shot():
     check("...in the closed form, because it has no line",
           "The only sound" in off_sh[2])
     check("...while on, that shot is silenced so the mouth cannot move",
-          "The only sound" not in sh[2] and "Every mouth in the shot stays closed" in sh[2])
+          "The only sound" not in sh[2] and "Mouths in the shot stay closed" in sh[2])
     check("...and info explains the mouth", "stops the mouth moving" in info)
     # A scene naming no space gets no bed, and the silence guard still applies.
     plain = run_node("Two people talking.\n\nHe waits.\n\nShe waits.", plan_only=True)[2]
