@@ -251,6 +251,16 @@ talking.
 **The cost: that shot gives up the sound you wrote for it.** `info` names those shots.
 Turn the switch off to keep the ambience and accept the mouth.
 
+**A line that belongs to a machine.** `The TV says: "Storms tonight."` is a quote, so
+the shot reads as a speaking one — which opens the branch *and* turns the mouth guard
+off, and the only face in frame gets handed the line. Write the set as the speaker and
+the voice is given back to it, the mouths are held closed, and the audio still plays:
+the television is meant to be heard. Reads *television, TV, radio, screen, speaker,
+stereo, intercom, phone, laptop, PA*.
+
+A line anybody in the room might have stays theirs — including an unattributed quote,
+which is read as a person talking. Muting a real line is worse than a mouth moving.
+
 Two exemptions, both deliberate. A beat staging **effort** — *strains, thrashes* — is
 vocal, so its mouth should be open and it keeps its audio. And a **scenery** beat with
 nobody in it is told nothing about mouths: describing a mouth for a person who is not

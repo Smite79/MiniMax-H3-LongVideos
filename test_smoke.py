@@ -760,6 +760,35 @@ def _prompts_sent(P, **kw):
     return seen, out[3]
 
 
+def test_a_television_keeps_its_own_voice():
+    print("\n=== the line on the TV does not come out of her mouth ===")
+    mem = "Mara: she, 30."
+    P = ('A living room.\n\nMara sits on the sofa. The TV says: "Storms tonight."\n\n'
+         'Mara says: "Again?"\n\nThe TV plays in the empty room.')
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    check("the voice is given back to the set", "the TV's" in sh[0], sh[0][-90:])
+    check("...and the mouths are held closed", "Every mouth" in sh[0], "")
+    # The branch must STAY OPEN. The set is supposed to be heard -- silencing it
+    # would trade one wrong thing for another. Checked on its own, because the empty
+    # room later in this prompt IS silenced and should be.
+    solo = run_node('A living room.\n\nMara sits on the sofa. '
+                    'The TV says: "Storms tonight."',
+                    plan_only=True, character_memory=mem)[2]
+    check("the shot is not silenced", "conditioned on real silence" not in solo, "")
+    check("...and the line reaches the model as written",
+          '"Storms tonight."' in sh[0], "")
+    # Her own line is untouched: she is speaking, and her mouth must move.
+    check("her own line is left alone", "the TV's" not in sh[1], "")
+    check("...and her mouth is not held shut", "Every mouth" not in sh[1], "")
+    # Nobody in the beat, nothing about mouths -- ca75672 again.
+    check("an empty room is told nothing about mouths", "Every mouth" not in sh[2], "")
+    check("info names the shot", "shot(s) 1 have a spoken line that belongs" in info, "")
+    off = run_node(P, plan_only=True, character_memory=mem,
+                   mouths_shut_when_no_line=False)[3]
+    check("the switch turns it off", "the TV's" not in off, "")
+
+
 def test_an_unbound_fall_is_told_what_catches_it():
     print("\n=== a fall with no hardware in it still names the landing ===")
     # FALL_HOLD only ever fired on a RESTRAINED fall -- the concern there was the
@@ -1738,6 +1767,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_a_television_keeps_its_own_voice()
     test_an_unbound_fall_is_told_what_catches_it()
     test_a_named_look_target_is_restated()
     test_a_covered_object_does_not_send_its_picture()
