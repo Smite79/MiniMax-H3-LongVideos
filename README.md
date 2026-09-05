@@ -184,6 +184,13 @@ work in both orders — *"kicks off her boots"*, *"kicks her boots off"* — and
 there the wardrobe is read off the sheet and all of it comes off — for the people that
 beat names, and never the restraints.
 
+**Moved is not removed.** *"Pulls down her shorts"*, *"pushes up her top"*, *"shoves the
+coat aside"* leave the garment **on**, so it stays in the scene and later shots are told
+where it now sits. Taken as a removal it would be scrubbed instead, and a garment that
+stops being described is one the model re-invents — the same pair coming back a
+different pair. Putting it back (*"pulls them back up"*) releases it; a real removal
+(*"pulls off"*, *"steps out of"*) or a `remove:` empties it for good.
+
 Directives go on their own line inside a beat:
 
 ```

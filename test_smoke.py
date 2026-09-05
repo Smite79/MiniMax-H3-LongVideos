@@ -902,6 +902,44 @@ def test_a_television_keeps_its_own_voice():
     check("the switch turns it off", "the TV's" not in off, "")
 
 
+def test_a_garment_moved_is_not_a_garment_gone():
+    print("\n=== shorts pulled down stay on, and stay described ===")
+    # Reported: the shorts changed appearance in the next beat. "Pulls down her
+    # shorts" was read as a full removal, so the shot was told they come off and are
+    # "dropped out of frame", and the entry was scrubbed from the scene -- leaving
+    # every later shot describing nothing where something still was. An undescribed
+    # garment is one the model re-invents, which is the same pair coming back a
+    # different pair.
+    mem = "Mara: she, 22, blue denim shorts, white top."
+    P = ("A room.\n\nMara stands and pulls down her shorts.\n\n"
+         "Mara steps to the window.\n\nMara looks back.")
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    check("the shorts are not taken off",
+          "come off during this shot" not in sh[0]
+          and "comes off during this shot" not in sh[0], sh[0][-80:])
+    check("...and are not scrubbed from the scene",
+          all("shorts" in s.lower() for s in sh), "")
+    check("the later shots say where they now sit",
+          all("Still on the body" in s for s in sh[1:]), "")
+    check("...and the staging shot is not told it twice",
+          "Still on the body" not in sh[0], "")
+    check("info names the shots", "MOVED rather than taken off" in info, "")
+    # Put back up: the latch lets go, by name or by pronoun.
+    for _put in ("Mara pulls her shorts back up.", "Mara pulls them back up."):
+        back = run_node("A room.\n\nMara pulls down her shorts.\n\nMara waits.\n\n"
+                        + _put + "\n\nMara walks out.",
+                        plan_only=True, character_memory=mem)[3]
+        got = ["yes" if "Still on the body" in s else "no"
+               for s in back.split("---") if s.strip()]
+        check(f"restored by {_put[:28]!r}", got == ["no", "yes", "no", "no"], str(got))
+    # A real removal still empties the wardrobe and says so.
+    off = run_node("A room.\n\nMara pulls off her shorts.\n\nMara waits.",
+                   plan_only=True, character_memory=mem)[3]
+    check("a real removal still removes", "off during this shot" in off, "")
+    check("...and stops describing them", "shorts" not in off.split("---")[1].lower(), "")
+
+
 def test_undressing_does_not_drop_her():
     print("\n=== taking a garment off does not put a body on the floor ===")
     # Whole-path, because the unit test cannot show the clause reaching the shot. The
@@ -1903,6 +1941,7 @@ def main():
     test_a_sheet_that_claims_hardware_too_early()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
+    test_a_garment_moved_is_not_a_garment_gone()
     test_undressing_does_not_drop_her()
     test_an_unbound_fall_is_told_what_catches_it()
     test_a_named_look_target_is_restated()

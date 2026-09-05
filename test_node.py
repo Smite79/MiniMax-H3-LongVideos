@@ -508,10 +508,22 @@ def test_removal_needs_a_particle():
     sc = ("A bare basement. Kate, 20, blonde, black shiny latex crop top, "
           "white cotton shorts, brown leather boots, a grey coat.")
     for _b in ("Dan cuts off her shorts.", "Dan pulls off her boots.",
-               "Dan pulls down her shorts.", "Dan removes her coat.",
-               "Dan unzips her coat.", "Dan strips off her coat.",
-               "Dan throws her coat away."):
+               "Dan removes her coat.", "Dan unzips her coat.",
+               "Dan strips off her coat.", "Dan throws her coat away."):
         check(f"a removal still fires: {_b[:32]!r}", S.infer_removals(_b, sc))
+    # DOWN is not off. "Pulls down her shorts" leaves them on the body, around the
+    # thighs -- reported as the shorts changing appearance in the next beat, because
+    # counting it as a removal scrubbed them out of the scene and the next shot
+    # described nothing where something still was. It is the same fault this test was
+    # written for, arriving through the particle instead of the bare verb.
+    #
+    # Missing a removal is the cheaper error here and the node says so elsewhere: a
+    # garment wrongly kept is described slightly wrong, a garment wrongly dropped is
+    # re-invented from nothing.
+    for _b in ("Dan pulls down her shorts.", "Dan pulls her shorts down.",
+               "Dan pushes up her crop top."):
+        check(f"down is displacement, not removal: {_b[:34]!r}",
+              not S.infer_removals(_b, sc) and S.displaced_garments(_b, sc))
     # The particle's POSITION settles the ambiguous case: straight after the verb
     # it removes, trailing after the object only "off" and "away" do.
     check("'takes her coat off' removes it",
