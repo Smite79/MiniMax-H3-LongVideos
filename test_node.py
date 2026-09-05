@@ -1051,6 +1051,42 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_the_shot_that_puts_hardware_on():
+    print("\n=== putting the cuffs on is not wearing them ===")
+    # Reported: she was meant to be caught and THEN restrained, and came out
+    # restrained and then bolting for the door. The applying shot was handed the
+    # standing hold -- "fastened exactly as it was put on, and still fastened at the
+    # last frame" -- which read at frame 1 says the cuffs are already closed. So they
+    # close first and the struggle happens around them, in whatever order is left.
+    for _b in ("Dan catches her and cuffs her wrists.", "Dan handcuffs her.",
+               "Dan locks the cuffs on her wrists.", "Dan puts the handcuffs on her.",
+               "Dan snaps the cuffs shut.", "Dan straps her ankles together.",
+               "Dan buckles the collar on."):
+        check(f"staged: {_b[:40]!r}", S.restraint_going_on(_b))
+    # Nearly every one of those words is a noun too, and a beat about restraints is
+    # full of the noun. Read as verbs they turn an ordinary struggling shot into an
+    # applying one, and it is then told the hardware is OFF at the first frame -- on
+    # somebody who has been in cuffs for five shots. A determiner marks the noun.
+    for _b in ("Mara pulls against the cuffs.", "Mara strains at her cuffs.",
+               "The chains hang from the beam.", "She twists in the straps.",
+               "Mara stands by the wall, her wrists cuffed.",
+               "Mara is handcuffed to the rail.",
+               "Her wrists are chained above her head.",
+               "Mara walks to the window."):
+        check(f"not staged: {_b[:40]!r}", not S.restraint_going_on(_b))
+    # The clause: both ends, one sentence, nothing about holding still.
+    cl = S.RESTRAINT_GOING_ON
+    check("it names both ends", "first frame" in cl and "by the last" in cl)
+    check("...in one sentence", cl.count(".") == 1)
+    check("...positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    check("...and asks no body to hold still",
+          not re.search(r"\b(?:still|motionless|frozen)\b", cl, re.I))
+    # It must not claim the hardware is already fastened, which is the whole fault.
+    check("...and does not assert it is already on",
+          "still fastened at the last frame" not in cl)
+
+
 def test_a_machines_line_is_not_the_actors_line():
     print("\n=== a voice out of a television is not hers ===")
     # Reported: she appeared to be mouthing what was on the TV. H3 is joint, so the
@@ -2034,6 +2070,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
     test_a_fall_says_what_takes_the_landing()
     test_the_look_goes_where_the_beat_says()

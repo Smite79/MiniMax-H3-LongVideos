@@ -400,7 +400,19 @@ def test_fall_keeps_the_hardware():
     # The hold latches: once a restraint goes on it is held for the rest of the run.
     # Cuffs are rigid hardware, so the chain clause carries the guarantee here -- it
     # says "whole and closed" itself, and emitting both would say it twice.
-    for i, b in enumerate(blocks, 1):
+    #
+    # Shot 1 is the shot that PUTS them on, and it gets both ends instead of the
+    # standing hold. The standing hold asserts the cuffs are fastened as they were put
+    # on and still fastened at the last frame, which read at frame 1 says they are
+    # already closed -- so they close first and the catching happens around them.
+    check("the applying shot is told both ends",
+          S.RESTRAINT_GOING_ON.strip() in blocks[0], blocks[0][-90:])
+    check("...and keeps the metal rigid while it goes on",
+          S.CHAIN_RIGID_TAIL.strip() in blocks[0], "")
+    check("...and is not also told it is already fastened",
+          S.RESTRAINT_HOLD.strip() not in blocks[0]
+          and S.CHAIN_HOLD.strip() not in blocks[0], "")
+    for i, b in enumerate(blocks[1:], 2):
         check(f"shot {i} holds the restraint",
               S.RESTRAINT_HOLD.strip() in b or S.CHAIN_HOLD.strip() in b)
     # The fall clause is per-beat -- it only earns its tokens where a body goes down.
@@ -553,8 +565,19 @@ def test_chain_hold_end_to_end():
     later = [x for x in re.split(r"(?=\[Shot )", run_node(
         "A basement.\n\nMaya: 27, grey coat.\n\nJon locks a chain around her waist.\n\n"
         "Maya walks to the window.\n\nMaya looks down.", plan_only=True)[3]) if x.strip()]
+    # The shot that locks it on gets both ends rather than the standing clause, but
+    # the METAL is rigid throughout -- steel is steel while it is being closed, and
+    # letting it go soft on the shot that introduces the object is where the model's
+    # idea of the object gets set.
+    # The content, not the exact sentence: the applying shot carries it as its own
+    # sentence and the standing clause carries it after a semicolon.
+    _rigid = "links keep their size and the run between them stays straight and taut"
+    check("the metal is rigid from the shot that names it",
+          all(_rigid in s for s in later))
     check("rigidity latches past the shot that names it",
-          all(chain in s for s in later))
+          all(chain in s for s in later[1:]))
+    check("...and that first shot is the one putting it on",
+          S.RESTRAINT_GOING_ON.strip() in later[0], later[0][-90:])
     check("...and the soft clause is not used instead",
           all(S.RESTRAINT_HOLD.strip() not in s for s in later))
     # A position the hardware enforces latches too: the chain that put a body in a
@@ -758,6 +781,32 @@ def _prompts_sent(P, **kw):
     finally:
         S.build_conditioning = orig
     return seen, out[3]
+
+
+def test_caught_first_then_restrained():
+    print("\n=== the shot that puts the cuffs on gets both ends ===")
+    mem = "Mara: she, 30.\nDan: he, 41."
+    def kinds(P):
+        script = run_node(P, plan_only=True, character_memory=mem)[3]
+        return [("APPLY" if "hardware goes on during this shot" in s
+                 else "HOLD" if "Every restraint" in s else "-")
+                for s in script.split("---") if s.strip()]
+    got = kinds("A living room.\n\nMara runs for the door. Dan catches her and cuffs "
+                "her wrists.\n\nMara stands by the wall.\n\nMara pulls against the cuffs.")
+    check("the applying shot is told both ends", got[0] == "APPLY", str(got))
+    check("...and every shot after gets the standing hold",
+          got[1:] == ["HOLD", "HOLD"], str(got))
+    # Already wearing it: the standing hold is right and "off at the first frame"
+    # would be a lie about somebody who has been in cuffs since the scene began.
+    worn = kinds("A room. Mara is handcuffed to the rail.\n\n"
+                 "Mara pulls against the cuffs.\n\nMara looks at the door.")
+    check("hardware already worn is never called new", "APPLY" not in worn, str(worn))
+    check("...and still gets the standing hold", worn == ["HOLD", "HOLD"], str(worn))
+    plain = kinds("A room.\n\nMara walks to the window.\n\nMara sits down.")
+    check("no hardware, no clause either way", plain == ["-", "-"], str(plain))
+    info = run_node("A living room.\n\nDan catches her and cuffs her wrists.",
+                    plan_only=True, character_memory=mem)[2]
+    check("info names the shot", "shot(s) 1 put the hardware ON" in info, "")
 
 
 def test_a_television_keeps_its_own_voice():
@@ -1767,6 +1816,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
     test_an_unbound_fall_is_told_what_catches_it()
     test_a_named_look_target_is_restated()

@@ -1880,6 +1880,56 @@ def beat_puts_somebody_on_screen(beat, sheet=""):
 
 FORM_HOLD = ", and each piece keeps the material and shape it was put on with."
 
+# THE SHOT WHERE THE HARDWARE GOES ON IS NOT A SHOT WHERE IT IS ALREADY ON.
+#
+# Reported: she was meant to be caught and then restrained, and came out restrained
+# and then bolting for the door. The applying shot was being handed the standing hold
+# -- "fastened exactly as it was put on, and still fastened at the last frame" -- and
+# read at frame 1 that says the cuffs are already closed. So they close first and the
+# struggle happens around them, in whatever order is left.
+#
+# Same fault as a door told it is shut without being told when, and the same fix:
+# name both ends. This replaces the standing hold on that one shot; from the next
+# shot the latch takes over and the hold is correct, because by then it IS on.
+RESTRAINT_GOING_ON = (" The hardware goes on during this shot: it is open and off the "
+                      "body at the first frame, and closed on it by the last.")
+# The rigid half of CHAIN_HOLD, on its own. Steel is steel while it is being locked
+# on, so the applying shot keeps this even though it must not be told the thing is
+# already fastened -- dropping it there let the chain go soft for exactly the shot
+# that introduces it, which is where a model's idea of the object gets set.
+CHAIN_RIGID_TAIL = (" Its links keep their size and the run between them stays straight "
+                    "and taut.")
+# Applying it, as opposed to describing it already worn. The tense is what separates
+# them: "Dan cuffs her" stages the act, "her wrists cuffed" and "is handcuffed to the
+# rail" describe a state that already holds. Getting that backwards would put "free at
+# the first frame" on a woman who has been in cuffs for five shots.
+# Nearly every one of these is a noun as well as a verb, and the noun is what a beat
+# about restraints is full of: "pulls against the cuffs", "the chains hang", "her
+# straps". Read as verbs those turn an ordinary struggling shot into an applying one,
+# and it is then told the hardware is off at the first frame -- the exact inversion
+# this is here to prevent, on a woman who has been in cuffs for five shots.
+#
+# A determiner in front is what marks the noun. You do not "the cuffs" anybody.
+_A_DETERMINER = (r"(?<!\bthe\s)(?<!\bher\s)(?<!\bhis\s)(?<!\ba\s)(?<!\bmy\s)"
+                 r"(?<!\bits\s)(?<!\btheir\s)(?<!\byour\s)(?<!\bthose\s)"
+                 r"(?<!\bthese\s)(?<!\bsome\s)(?<!\bboth\s)")
+_APPLY_NOW = re.compile(
+    _A_DETERMINER +
+    r"\b(?:cuffs|handcuffs|chains|ties|binds|locks|straps|tapes|gags|shackles|"
+    r"fastens|secures|padlocks|buckles|clamps|clips|snaps|trusses|lashes|wraps|"
+    r"cinches|tightens)\b", re.I)
+_APPLY_PHRASE = re.compile(
+    r"\b(?:put|puts|putting|pull|pulls|pulling|force|forces|forcing|get|gets|"
+    r"getting|work|works|snap|snaps)\s+(?:[\w,']+\s+){0,4}?"
+    r"(?:on|onto|around|behind|together|shut|closed)\b", re.I)
+
+
+def restraint_going_on(beat):
+    """Does this beat stage hardware being APPLIED, rather than already worn?"""
+    b = beat or ""
+    return bool(_APPLY_NOW.search(b) or _APPLY_PHRASE.search(b))
+
+
 RESTRAINT_HOLD = (" Every restraint stays whole and closed, fastened exactly as it was put "
                   "on, still fastened at the last frame") + FORM_HOLD
 
@@ -3840,6 +3890,7 @@ class H3LongVideos:
         gaze_shots = []           # shots told where the look goes
         fall_shots = []           # shots told what takes the landing
         device_shots = []         # shots whose line belongs to a machine
+        applied_shots = []        # shots that put the hardware on
         tight_shots = []          # ...where the framing also crops it
         # Scenery whose state a beat has CHANGED. After that the node stops asserting
         # the state it was written with, because it is no longer the state: a van
@@ -4068,6 +4119,7 @@ class H3LongVideos:
             # does not mention the cuffs does not mean they came off, and a cuff that
             # renders open is not a detail that drifts -- it is the scene ceasing to
             # make sense. Cleared only by a `remove:` that names the hardware.
+            _was_restrained = restrained
             if hold_restraints:
                 if names_any(RESTRAINT_HOLD_KEY, toks) or any(
                         restraint_present(t) for t in toks):
@@ -4075,6 +4127,20 @@ class H3LongVideos:
                     anchored = ""
                 elif restraint_present(body) or restraint_present(shot_scene):
                     restrained = True
+            # The shot where the hardware GOES ON. Newly restrained -- so it was not on
+            # before -- and the beat stages the act rather than describing it worn. On
+            # that one shot the standing hold is a lie about the first frame, and a
+            # first frame that already has the cuffs closed leaves the struggle to
+            # happen in whatever order is left over. That is being caught after being
+            # restrained instead of before.
+            #
+            # "Already on" has to include what the SCENE says, not only the latch.
+            # On shot 1 the latch is empty by definition, so a sheet reading "wrists
+            # cuffed behind back" would otherwise let a beat that locks a SECOND item
+            # on declare the first one off at the first frame.
+            _applying = bool(restrained and not _was_restrained
+                             and not restraint_present(shot_scene)
+                             and restraint_going_on(body))
             # Rigidity latches like the hardware itself. Steel locked on in shot 1 is
             # still steel in shot 5, and a beat that does not happen to say "chain"
             # does not mean the chain became rope -- but tested per shot, that is
@@ -4191,7 +4257,13 @@ class H3LongVideos:
             # The chain clause SUBSUMES the restraint hold -- it says "whole and closed"
             # itself. Emitting both said it twice, which is twice the stasis for one
             # guarantee.
-            hold = chain if chain else (RESTRAINT_HOLD if restrained else "")
+            # On the shot that PUTS the hardware on, both ends instead of the standing
+            # hold: the chain clause is about a chain that is already taut, and the
+            # restraint hold asserts a first frame that has not happened yet.
+            hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") if _applying
+                    else chain if chain else (RESTRAINT_HOLD if restrained else ""))
+            if _applying:
+                applied_shots.append(len(shots) + 1)
             # ...and say WHOSE. Unattributed, "every restraint stays fastened" is an
             # instruction about whoever is on screen, so hardware locked onto one
             # character turned up on the other, over their clothes. Read from the sheet
@@ -4401,6 +4473,17 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if applied_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in applied_shots)} put the hardware "
+                f"ON, so they are told both ends -- open and off at the first frame, "
+                f"closed on the body by the last -- instead of the standing hold. The "
+                f"standing hold says the restraint is fastened as it was put on and "
+                f"still fastened at the last frame, which read at frame 1 means it is "
+                f"already closed. A first frame that already has the cuffs on leaves "
+                f"the catching and the struggling to happen in whatever order is left, "
+                f"which is being restrained and THEN caught. From the next shot the "
+                f"standing hold is correct again, because by then it is on")
         if device_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in device_shots)} have a spoken "
