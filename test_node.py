@@ -1297,12 +1297,17 @@ def test_underwear_goes_under():
     got = S.implied_layers("Mara: she, 22, blue denim shorts, white top, panties, "
                            "a chastity belt.")
     check("panties go under the shorts", got.get("panties") == "shorts")
-    # NOT the chastity belt. It is a restraint, and a restraint left out of the text
-    # renders absent -- which is the bug the hardware latch exists for, rebuilt from
-    # the other side. Reported as the belt disappearing a few beats in. Cloth can be
-    # hidden and recovered from a description; hardware that stops being drawn is
-    # simply gone, and so is every beat that depended on it.
-    check("...but NOT the belt, which is hardware", "chastity belt" not in got)
+    # The belt goes under too. It was briefly taken out of this list on the theory
+    # that hardware must never be undescribed -- but a belt worn under jeans is not
+    # undescribed, it is COVERED, and it comes back by the same route as any other
+    # layer: the cover comes off, the reveal clause names it, and it is in the scene
+    # from then on. Nothing here treats it as a restraint, so no hold names it while
+    # it is out of sight and bleeds it back through.
+    check("...and so does the belt", got.get("chastity belt") == "shorts")
+    # The outer half has to include what people actually write for legs.
+    for _outer in ("jeans", "tights", "leggings", "trousers", "a skirt"):
+        _sc = f"Mara: she, 22, {_outer}, a chastity belt, a top."
+        check(f"a belt goes under {_outer!r}", S.implied_layers(_sc).get("chastity belt"))
     check("a dress covers both bra and knickers",
           S.implied_layers("Mara: a summer dress, a bra and knickers underneath.")
           == {"knickers": "dress", "bra": "dress"})

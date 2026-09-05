@@ -515,11 +515,12 @@ _UNDER_BY_REGION = {
     # that stops being drawn does not come back looking slightly wrong, it is gone,
     # and so is every beat that depended on it being there.
     "lower": (r"panties|knickers|thong|g-?string|briefs|boxers|boxer\s+shorts|"
-              r"underwear|undies|jockstrap|loincloth"),
+              r"underwear|undies|jockstrap|loincloth|chastity\s+belts?"),
     "upper": (r"bra|bralette|brassiere|camisole|undershirt|vest|corset|bustier"),
 }
 _OUTER_BY_REGION = {
     "lower": (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|"
+              r"tights|pantyhose|hosiery|stockings|jeggings|culottes|"
               r"tracksuit\s+bottoms|dungarees|overalls|dress|gown|robe"),
     "upper": (r"top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|hoodie|"
               r"cardigan|jacket|coat|dress|gown|robe|dungarees|overalls|tunic"),

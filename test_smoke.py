@@ -969,11 +969,10 @@ def test_underwear_is_hidden_until_it_is_not():
     sh = [s.lower() for s in script.split("---") if s.strip()]
     check("while the shorts are on, the panties are not described",
           "panties" not in sh[0], sh[0][-90:])
-    # The BELT is not hidden, ever. It is hardware, and hardware left out of the text
-    # renders absent -- the bug the hardware latch exists for, rebuilt from the other
-    # side. Cloth can be hidden and recovered from a description; a belt that stops
-    # being drawn is gone, and so is every beat that depended on it being there.
-    check("...but the belt is never hidden", "chastity belt" in sh[0], sh[0][-90:])
+    # The belt goes under as well: worn beneath jeans it is COVERED, not forgotten,
+    # and it comes back by the same route as any other layer -- the cover comes off,
+    # the reveal clause names it, and it stays in the scene from then on.
+    check("...nor the belt", "chastity belt" not in sh[0], sh[0][-90:])
     check("...while the shorts themselves are", "shorts" in sh[0], "")
     # The shot that takes them off is where both become visible, and it has to say so
     # or the reveal happens against a body the text says is bare.
