@@ -670,6 +670,36 @@ def test_how_clothes_actually_come_off():
           S.infer_removals("Mike pulls off her boots.", sc) == ["boots"])
     check("'unzips her jacket and pulls it off' still reads",
           S.infer_removals("Mike unzips her jacket and pulls it off.", sc) == ["jacket"])
+    # ASKING for a garment to come off is not it coming off. The beat carries a
+    # removal verb and a garment the sheet lists, which is everything the reader
+    # needs, so a request stripped the garment and the shot was told it is away by
+    # the last frame -- it fell off the moment she asked. Where the answer is no,
+    # this inverted the script.
+    for _b in ("Kate asks Mike to take the jacket off.",
+               "Kate begs Mike to unlock the jacket.",
+               "Kate asks him to remove the jacket. He shakes his head.",
+               "Kate pleads with him to take off the jacket.",
+               "Kate wants him to take the jacket off.",
+               "Mike tells her to take the jacket off.",
+               "Kate asks for the jacket to come off.",
+               "Kate whispers to him to take the jacket off."):
+        check(f"asked for, not done: {_b[:38]!r}", S.infer_removals(_b, sc) == [])
+    # ...but asked AND then obeyed, in the beat's own words, still comes off. The
+    # request ends at its clause, and a comma before a conjunction ends one as
+    # surely as a full stop does.
+    check("asked, then done in the next sentence",
+          S.infer_removals("Kate asks him to unlock the jacket. He takes the "
+                           "jacket off.", sc) == ["jacket"])
+    check("asked, then done after a comma",
+          S.infer_removals("Kate begs him to remove the jacket, and he removes "
+                           "the jacket.", sc) == ["jacket"])
+    # The request reader is word-bounded: 'for' inside 'Before' and 'to' inside
+    # 'tore' are not requests, and reading them as such lost real removals.
+    check("'Before he takes...' is still a removal",
+          S.infer_removals("Before he takes the jacket off, he pauses.", sc)
+          == ["jacket"])
+    check("'tore the jacket off' is still a removal",
+          S.infer_removals("Mike tore the jacket off her.", sc) == ["jacket"])
 
 
 def test_removal_completes():

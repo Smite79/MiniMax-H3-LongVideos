@@ -3282,6 +3282,40 @@ def displaced_hold(items):
     return f" Still on the body and {said}, left exactly where the beat put them."
 
 
+# A REQUEST is not the thing happening. "McKenna asks Dan to take the chastity belt
+# off" contains a removal verb and a garment the scene says is worn, which is all
+# infer_removals needs -- so asking for it stripped it, and the shot was then told the
+# belt comes off and is away by the last frame. She asks, and it falls off.
+#
+# Worse where the answer is no: "she asks him to remove the belt. He shakes his head."
+# took the belt off anyway, which is the script's meaning inverted.
+#
+# Only the verb inside the REQUEST is discounted. A beat that asks and is then obeyed
+# in its own words -- "she asks him to unlock it, and he does" -- still has a removal
+# in the second half, and that half is read normally.
+_REQUEST = re.compile(
+    r"\b(?:asks?|asked|asking|begs?|begged|begging|pleads?|pleaded|pleading|"
+    r"wants?|wanted|wishes|wished|tells?|told|orders?|ordered|demands?|demanded|"
+    r"whispers?|whispered|says?|said|shouts?|shouted|screams?|screamed)\b"
+    r"[^.;!?]{0,60}?\bto\s+(?=[a-z])"
+    r"|\b(?:asks?|asked|begs?|begged|pleads?|pleaded)\b[^.;!?]{0,40}?\bfor\b", re.I)
+
+
+def _in_a_request(text, at):
+    """Is the removal verb at `at` inside a request rather than an action?"""
+    start = max((m.end() for m in _REQUEST.finditer(text or "") if m.end() <= at),
+                default=None)
+    if start is None:
+        return False
+    # Only up to the end of that clause: a request in one sentence does not reach
+    # into the next, where the thing may actually be done. ", and he removes it"
+    # is a new clause too, so a comma before a conjunction ends the request as
+    # surely as a full stop does -- otherwise asking and then being obeyed inside
+    # one sentence reads as pure request and the removal is lost.
+    stop = re.search(r"[.;!?]|,\s*(?:and|then|so|but)\b", (text or "")[start:])
+    return at <= (start + stop.start() if stop else len(text or ""))
+
+
 def infer_removals(beat, scene):
     """Garments this beat takes off, read from its own prose. [] when none.
 
@@ -3297,6 +3331,9 @@ def infer_removals(beat, scene):
         return []
     found = []
     for m in _REMOVAL_PROSE.finditer(beat):
+        # Asked for is not done. See _in_a_request.
+        if _in_a_request(beat, m.start()):
+            continue
         tail = beat[m.end():]
         cut = _OBJECT_END.search(tail)
         span = tail[:cut.start()] if cut else tail
