@@ -1935,9 +1935,18 @@ _APPLY_PHRASE = re.compile(
 # It only became visible after the sheet stopped listing the item: the sheet was what
 # had been naming it in every shot. Taking it off the sheet is right, since the sheet
 # put the cuffs in the shots before they went on; naming it here is what that costs.
+#
+# Ordered LONGEST FIRST inside each start position, so "duct tape gag" is latched
+# whole. Matching the bare "gag" out of it made every later shot say "the gag is
+# still on her" -- and a gag with no material named is a gag the model draws however
+# it likes, which is a strip of tape turning into something else. The material IS the
+# object here, the same way the form hold has to say what a thing is made of.
+_TAPE = r"(?:duct|gaffer|packing|masking|electrical|parcel)"
 _HARDWARE_NOUN = re.compile(
-    r"\b(?:(steel|metal|leather|nylon|plastic|padded|heavy|thin|black|chrome)\s+)?"
-    r"(handcuffs|cuffs|manacles|shackles|leg\s+irons|chains|chain|ropes|rope|cords|"
+    r"\b(?:(steel|metal|leather|nylon|plastic|padded|heavy|thin|black|chrome|"
+    r"ball|ring|bit|rubber|canvas|webbing)\s+)?"
+    r"(" + _TAPE + r"\s+tape\s+gags?|tape\s+gags?|" + _TAPE + r"\s+tape|tapes|tape|"
+    r"handcuffs|cuffs|manacles|shackles|leg\s+irons|chains|chain|ropes|rope|cords|"
     r"cord|straps|strap|collars|collar|gags|gag|blindfolds|blindfold|"
     r"spreader\s+bars|spreader\s+bar|zip\s+ties|zip\s+tie|cable\s+ties|cable\s+tie)\b",
     re.I)
@@ -1945,10 +1954,22 @@ _HARDWARE_NOUN = re.compile(
 
 def hardware_named(text):
     """The hardware this text names, as written. '' when it names none."""
-    m = _HARDWARE_NOUN.search(text or "")
-    if not m:
+    # The MOST SPECIFIC thing named anywhere in the beat, not the first one. "gags her
+    # with duct tape" names the verb before the material, and taking the leftmost gave
+    # "gags" -- so every later shot said "the gags are still on her" and the tape, the
+    # part that decides what it looks like, was never mentioned again.
+    best = ""
+    for m in _HARDWARE_NOUN.finditer(text or ""):
+        phrase = re.sub(r"\s+", " ", " ".join(g for g in m.groups() if g)).strip()
+        if len(phrase) > len(best):
+            best = phrase
+    if not best:
         return ""
-    return re.sub(r"\s+", " ", " ".join(g for g in m.groups() if g)).strip().lower()
+    item = best.lower()
+    # "tapes her mouth shut" is the verb, and the thing it leaves behind is tape.
+    # Only reached on a shot already read as restrained, so an ordinary "tapes the
+    # box shut" never arrives here.
+    return "tape" if item == "tapes" else item
 
 
 def hardware_still_on(item):
