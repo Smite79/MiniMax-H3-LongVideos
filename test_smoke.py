@@ -902,6 +902,33 @@ def test_a_television_keeps_its_own_voice():
     check("the switch turns it off", "the TV's" not in off, "")
 
 
+def test_a_shifted_workflow_stops_before_rendering():
+    print("\n=== a slid workflow fails with an explanation, not a bad render ===")
+    # The exact shape from the report: values slid up one slot after a widget was
+    # converted to an input. Rendering anyway would use a scheduler as a sampler and
+    # settings nobody picked, and the output would look like a broken model.
+    try:
+        run_node("A room.\n\nMara waits.", plan_only=True,
+                 resolution=0.7, sampler_name="beta", scheduler=48,
+                 shot_length=True, cfg=float("nan"))
+        check("it refuses to render", False, "no error raised")
+    except RuntimeError as e:
+        msg = str(e)
+        check("it refuses to render", True, "")
+        check("...naming the widgets that are wrong",
+              "sampler_name" in msg and "scheduler" in msg, "")
+        check("...the cause", "restored by POSITION" in msg, "")
+        check("...and the fix", "Fix node (recreate)" in msg, "")
+    # It must not fire on a healthy graph, or nobody can render at all.
+    ok = run_node("A room.\n\nMara waits.", plan_only=True)
+    check("a healthy workflow is untouched", "PLAN ONLY" in ok[2], "")
+    # A NaN in a NUMBER is still repaired rather than refused -- that one is
+    # recoverable, and sane_widgets says so in info.
+    num = run_node("A room.\n\nMara waits.", plan_only=True, pace=float("nan"))
+    check("a NaN number is still repaired, not refused",
+          "not a usable number" in num[2], "")
+
+
 def test_the_removal_shot_says_what_is_under():
     print("\n=== taking the shorts off shows the panties, not skin ===")
     # Reported: the shorts come off and the render goes straight to bare, past the
@@ -1994,6 +2021,7 @@ def main():
     test_a_sheet_that_claims_hardware_too_early()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
+    test_a_shifted_workflow_stops_before_rendering()
     test_the_removal_shot_says_what_is_under()
     test_underwear_is_hidden_until_it_is_not()
     test_a_garment_moved_is_not_a_garment_gone()

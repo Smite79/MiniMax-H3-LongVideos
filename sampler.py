@@ -3607,6 +3607,57 @@ _WIDGET_RANGE = {
 }
 
 
+def misaligned_widgets(values, options):
+    """[(widget, value, what it should have been)] for choices that are not choices.
+
+    sane_widgets repairs a NUMBER that arrives as NaN, and that is the visible symptom
+    of a positional shift. It cannot see the cause, and it cannot help the widgets
+    whose values are WORDS: a shift puts a scheduler's name into sampler_name and a
+    seed into scheduler, and those pass straight through into the render.
+
+    A combo holding a value that is not one of its own options is not a preference
+    this node can honour. It is proof the list is out of step -- values are restored
+    by POSITION, so converting one widget to an input, or adding or removing one,
+    slides every value after it into the wrong slot."""
+    bad = []
+    for name, choices in (options or {}).items():
+        if name not in values:
+            continue
+        got = values[name]
+        if got not in choices:
+            bad.append((name, got, choices))
+    return bad
+
+
+def combo_options(spec):
+    """{widget: [options]} for every choice widget the node declares."""
+    out = {}
+    for section in ("required", "optional"):
+        for name, decl in (spec or {}).get(section, {}).items():
+            if decl and isinstance(decl[0], list):
+                out[name] = list(decl[0])
+    return out
+
+
+def alignment_error(bad):
+    """The message for a workflow whose widget values have slid out of position."""
+    if not bad:
+        return ""
+    shown = "; ".join(f"{n} = {v!r}, which is not one of {c[:3]}"
+                      + ("..." if len(c) > 3 else "") for n, v, c in bad[:3])
+    return (
+        "H3 Long Videos: this node's saved widget values are out of position. "
+        + shown + ".\n\n"
+        "Widget values are restored by POSITION, with no names stored, so converting "
+        "a widget to an input -- or adding or removing one -- slides every value after "
+        "it into the wrong slot. A scheduler's name lands in sampler_name, a seed in "
+        "scheduler, and a number with nowhere to go reads as NaN.\n\n"
+        "To fix it: right-click the node and choose 'Fix node (recreate)', or convert "
+        "any widget you turned into an input back to a widget. Then set the values you "
+        "want and save the workflow again. Nothing is wrong with the model or the "
+        "prompt, and rendering with these values would use settings you did not pick.")
+
+
 def sane_widgets(values):
     """(repaired values, notes) for the numeric widgets.
 
@@ -3990,7 +4041,18 @@ class H3LongVideos:
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
         notes = []
-        # Before anything reads them. A widget value that arrives as NaN -- which is
+        # BEFORE the numbers are repaired, because the numbers are the symptom and
+        # this is the cause. A combo holding something that is not one of its own
+        # options cannot be honoured, and rendering anyway would use settings nobody
+        # chose -- a scheduler's name in sampler_name, a seed in scheduler.
+        _bad = misaligned_widgets(
+            dict(resolution=resolution, sampler_name=sampler_name, scheduler=scheduler,
+                 shot_length=shot_length, upscale=upscale, latent_upscale=latent_upscale,
+                 upscale_model=upscale_model),
+            combo_options(self.INPUT_TYPES()))
+        if _bad:
+            raise RuntimeError(alignment_error(_bad))
+        # A widget value that arrives as NaN -- which is
         # what a positional shift in a saved workflow produces -- would otherwise flow
         # into the frame arithmetic and come out as a shot length of nan.
         _fixed, _fixnotes = sane_widgets(dict(
