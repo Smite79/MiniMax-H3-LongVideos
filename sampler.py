@@ -540,22 +540,34 @@ def implied_layers(scene):
     Only where BOTH are named: underwear with nothing over it is on show, and saying
     it is hidden would be describing away something the author dressed them in."""
     covers = {}
-    text = scene or ""
-    for region, unders in _UNDER_BY_REGION.items():
-        over = None
-        # The HEAD noun, which in English is the last one: "blue jeans shorts" is a
-        # pair of shorts, not a pair of jeans. Taking the first match recorded the
-        # cover as "jeans" while a removal names it "shorts", so the two never lined
-        # up -- the belt was hidden correctly and then never uncovered, because the
-        # garment that came off was not the one the pairing was holding it under.
-        for m in re.finditer(r"\b(?:" + _OUTER_BY_REGION[region] + r")\b", text, re.I):
-            over = m.group(0).lower()
-        if not over:
+    # ONE PERSON AT A TIME. This read the whole scene as a single wardrobe, so one
+    # character's jeans covered another character's belt -- and which garment won
+    # depended on the ORDER the sheet lines happened to be written in. A sheet that
+    # put the man second hid her belt under his trousers.
+    #
+    # Split on lines so each entry is judged alone. Text that is not an entry -- the
+    # scene paragraph -- is still read as one block, since a location describing
+    # clothing is describing whoever is in it.
+    for line in (scene or "").split("\n"):
+        text = line.strip()
+        if not text:
             continue
-        for m in re.finditer(r"\b(?:" + unders + r")\b", text, re.I):
-            under = re.sub(r"\s+", " ", m.group(0).lower())
-            if under != over:
-                covers.setdefault(under, over)
+        for region, unders in _UNDER_BY_REGION.items():
+            over = None
+            # The HEAD noun, which in English is the last one: "blue jeans shorts" is
+            # a pair of shorts, not a pair of jeans. Taking the first match recorded
+            # the cover as "jeans" while a removal names it "shorts", so the two never
+            # lined up -- the belt was hidden correctly and then never uncovered,
+            # because the garment that came off was not the one it was held under.
+            for m in re.finditer(r"\b(?:" + _OUTER_BY_REGION[region] + r")\b",
+                                 text, re.I):
+                over = m.group(0).lower()
+            if not over:
+                continue
+            for m in re.finditer(r"\b(?:" + unders + r")\b", text, re.I):
+                under = re.sub(r"\s+", " ", m.group(0).lower())
+                if under != over:
+                    covers.setdefault(under, over)
     return covers
 
 

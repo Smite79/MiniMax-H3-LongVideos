@@ -1433,6 +1433,21 @@ def test_underwear_goes_under():
     # holding up.
     check("an ordinary belt is not underwear",
           not S.implied_layers("Mara: she, 22, jeans, a belt."))
+    # ONE PERSON AT A TIME. This read the whole scene as a single wardrobe, so one
+    # character's jeans covered another character's belt -- and which garment won
+    # depended on the order the sheet lines happened to be written in.
+    check("his jeans do not cover her belt",
+          S.implied_layers("McKenna: she, a chastity belt.\nDan: he, blue jeans.") == {})
+    for _order in ("McKenna: she, chastity belt, blue jeans shorts.\nDan: he, blue jeans.",
+                   "Dan: he, blue jeans.\nMcKenna: she, chastity belt, blue jeans shorts."):
+        check(f"her own shorts, whichever line comes first: {_order[:18]!r}",
+              S.implied_layers(_order) == {"chastity belt": "shorts"})
+    # The head noun is the LAST word: "blue jeans shorts" is a pair of shorts, and a
+    # removal names it "shorts". Recorded as "jeans" the two never lined up, so the
+    # belt was hidden correctly and then never uncovered.
+    check("the cover is the head noun",
+          S.implied_layers("Mara: she, chastity belt, blue jeans shorts.")
+          == {"chastity belt": "shorts"})
     check("a dress covers both bra and knickers",
           S.implied_layers("Mara: a summer dress, a bra and knickers underneath.")
           == {"knickers": "dress", "bra": "dress"})
