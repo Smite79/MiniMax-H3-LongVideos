@@ -504,8 +504,19 @@ def test_removing_shot_without_a_keyframe():
           "quilted jacket" in sh[0])
     check("...and the layer under it is not yet showing",
           "grey wool scarf" not in sh[0])
+    # WHOSE HANDS, where the beat names them. An agentless "the jacket comes off"
+    # describes a garment removing itself, which is what a belt dropping to the floor
+    # on its own looked like.
     check("...and it is still told to come off",
-          "jacket comes off during this shot" in sh[0])
+          "jacket off during this shot" in sh[0] or "jacket comes off during this shot" in sh[0])
+    # WHOSE HANDS -- and the limit on that. The agent can only be somebody the SHEET
+    # describes, because that is the cast the guard resolves. Jon acts in this beat
+    # but has no entry, so the only person in the shot is Maya and the clause names
+    # her. Undressing herself is a defensible reading of a prompt that never says who
+    # Jon is; naming a person the shot does not describe would be worse, since a
+    # described person is a person the model draws.
+    check("...by the hands of somebody the sheet describes",
+          "Maya takes the jacket off during this shot" in sh[0], sh[0][-120:])
     check("the next shot has lost it", "quilted jacket" not in sh[1])
     check("...and shows what was under it", "grey wool scarf" in sh[1])
     check("info explains the exception", "no keyframe" in run_node(P, plan_only=True)[2])
@@ -1086,6 +1097,42 @@ def test_a_beat_can_name_what_the_layering_hid():
     quiet = run_node("A room.\n\nMara stands.\n\nMara waits.", plan_only=True,
                      character_memory=mem)[2]
     check("no mention, no warning", "says is covered" not in quiet, "")
+
+
+def test_a_removal_says_whose_hands():
+    print("\n=== a garment does not take itself off ===")
+    # Reported: she asks to have the chastity belt taken off, and it drops off on its
+    # own. The removal clause named no agent -- "the belt comes off during this shot
+    # and is away by the last frame, dropped out of frame" is true of a belt falling
+    # to the floor by itself, and that is what it rendered. The beat named the person;
+    # the clause was simply not carrying it.
+    mem = ("McKenna: she, 22, Shiny white crop top, chastity belt, blue jeans shorts.\n"
+           "Dan: he, 41, dark coat.")
+    P = ("A room.\n\nMcKenna stands.\n\n"
+         "remove: shorts\nMcKenna takes off her shorts.\n\n"
+         'McKenna asks Dan to take the chastity belt off. "Please take it off."\n'
+         "remove: belt\n\nMcKenna waits.")
+    sh = [s for s in run_node(P, plan_only=True, character_memory=mem)[3].split("---")
+          if s.strip()]
+    check("she undresses herself with her own hands",
+          "McKenna takes the shorts off during this shot" in sh[1], sh[1][-110:])
+    # ASKING gives the hands to the other person. "She asks Dan to take it off" is
+    # Dan's doing -- reading the asker as the agent is what put them back on her.
+    check("asking hands it to the other person",
+          "Dan takes the belt off during this shot" in sh[2], sh[2][-110:])
+    check("...and not to the one who asked",
+          "McKenna takes the belt off" not in sh[2], "")
+    # One person in the shot is that person, with no ambiguity to resolve.
+    solo = run_node("A room.\n\nremove: coat\nMara takes off her coat.", plan_only=True,
+                    character_memory="Mara: she, 22, a grey coat, white top.")[3]
+    check("a solo shot names her", "Mara takes the coat off during this shot" in solo, "")
+    # The unit rule, directly.
+    beat = 'McKenna asks Dan to take the chastity belt off.'
+    check("the agent is read from the beat",
+          S.removal_agent(beat, ["McKenna", "Dan"], "McKenna") == "Dan")
+    check("...and without a wearer the first named acts",
+          S.removal_agent(beat, ["McKenna", "Dan"], None) == "McKenna")
+    check("no cast, no agent claimed", S.removal_agent(beat, []) == "")
 
 
 def test_the_only_tag_being_on_a_covered_thing():
@@ -2267,6 +2314,7 @@ def main():
     test_a_shifted_workflow_stops_before_rendering()
     test_the_removal_shot_says_what_is_under()
     test_a_beat_can_name_what_the_layering_hid()
+    test_a_removal_says_whose_hands()
     test_the_only_tag_being_on_a_covered_thing()
     test_an_object_tag_works_without_a_face_picture()
     test_an_untagged_picture_defeats_the_layering()

@@ -1973,7 +1973,43 @@ _HAS_VERB = re.compile(
     r"cuts?|pulls?|takes?|steps?|turns?|looks?|comes?|goes)\b", re.I)
 
 
-def off_by_last_frame(items):
+# WHOSE HANDS take a garment off. A removal clause with no agent describes the
+# garment removing itself -- "the belt comes off during this shot and is away by the
+# last frame" is true of a belt that drops to the floor on its own, and that is what
+# it rendered. Reported after a beat where she ASKS somebody to unlock it.
+#
+# The beat names the person; the clause was just not carrying it. Only where the beat
+# is unambiguous about who acts, which is why asking is read as the OTHER person's
+# hands: "she asks Dan to take it off" is Dan's doing, not hers.
+_ASKS = re.compile(r"\b(?:asks?|asked|begs?|begged|tells?|told|wants?|wanted|"
+                   r"pleads?|pleaded|has|have|had|gets?|got)\b", re.I)
+
+
+def removal_agent(beat, cast, wearer=None):
+    """Who takes the garment off in this beat. '' when the beat does not say.
+
+    A beat with one person in it is that person undressing. With two, the one who is
+    NOT the wearer is doing it when the wearer asks -- and when nobody asks, whoever
+    the beat names first is acting, the same reading restrained_by_beat uses."""
+    people = [n for n in (cast or []) if n]
+    if not people:
+        return ""
+    if len(people) == 1:
+        return people[0]
+    b = beat or ""
+    others = [n for n in people if n != wearer]
+    # "She asks Dan to take it off" -- the request is hers, the hands are his.
+    if wearer and others and _ASKS.search(b):
+        return others[0]
+    first, at = "", len(b) + 1
+    for n in people:
+        m = re.search(r"\b" + re.escape(n) + r"\b", b, re.I)
+        if m and m.start() < at:
+            first, at = n, m.start()
+    return first or people[0]
+
+
+def off_by_last_frame(items, agent=""):
     """State that a removal FINISHES inside this shot. Empty when nothing came off.
 
     Scrubbing the scene stops a garment being described. It does not tell the model
@@ -1992,8 +2028,16 @@ def off_by_last_frame(items):
     what = " and ".join(f"the {i}" for i in items)
     plural = len(items) > 1 or bool(_PLURAL_ITEM.search(items[-1]))
     verb, are = ("come", "are") if plural else ("comes", "is")
-    sentence = (f"{what} {verb} off during this shot and {are} away by the last frame, "
-                f"fully removed and no longer on the body, dropped out of frame.")
+    # Named hands where the beat gives them. Without an agent this says a garment
+    # comes off by itself, and a belt with nobody touching it drops to the floor.
+    if agent:
+        sentence = (f"{agent} takes {what} off during this shot, with {agent}'s own "
+                    f"hands, and {what} {are} away by the last frame -- fully removed "
+                    f"and no longer on the body.")
+    else:
+        sentence = (f"{what} {verb} off during this shot and {are} away by the last "
+                    f"frame, fully removed and no longer on the body, dropped out of "
+                    f"frame.")
     # BOUND the action. Saying what comes off does not say where to STOP, and an
     # action with time left over runs on to whatever is next: a hand that finishes
     # one garment starts on the next one, or on the body under it. Said as what
@@ -4844,7 +4888,22 @@ class H3LongVideos:
             # A full strip says it once rather than reciting the wardrobe: listing
             # eight garments coming off is eight more mentions of clothing in a shot
             # whose point is that there is none.
-            tail = BARE_HOLD if (bare and toks) else off_by_last_frame(toks)
+            # WHOSE HANDS. Without an agent the clause says a garment comes off by
+            # itself, and a belt nobody is touching drops to the floor -- reported on
+            # a beat where she ASKS to have it taken off, which the clause turned into
+            # it removing itself. The wearer is read from the sheet where the item is
+            # listed, so "she asks Dan" gives the hands to Dan and not to her.
+            _wearer = next((n for n, ln in sheet_lines(shot_sheet)
+                            if n and names_any(ln, toks)), None)
+            # `active`, not `_described`: that is assigned further down the loop, so
+            # reading it here gets the PREVIOUS shot's cast -- which on this shot meant
+            # Dan was not in it, the "asks" rule never applied, and the clause gave the
+            # hands back to the person doing the asking.
+            _agent = removal_agent(
+                body, active if character_guard else
+                [n for n, _ in sheet_lines(shot_sheet) if n], _wearer) if toks else ""
+            tail = (BARE_HOLD if (bare and toks)
+                    else off_by_last_frame(toks, _agent))
             # Once hardware is on, it stays on. Latched, not re-detected: a beat that
             # does not mention the cuffs does not mean they came off, and a cuff that
             # renders open is not a detail that drifts -- it is the scene ceasing to
