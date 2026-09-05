@@ -1068,6 +1068,20 @@ def test_the_hardware_keeps_being_named():
               S.hardware_named(_t) == _want)
     check("nothing named, nothing latched",
           not S.hardware_named("Mara walks to the window."))
+    # The MATERIAL is the object for tape. Latching the bare "gag" out of "duct tape
+    # gag" made every later shot say "the gag is still on her", and a gag with no
+    # material named is drawn however the model likes -- which is a strip of tape
+    # becoming something else, the same drift the form hold was written for.
+    for _t, _want in (("Dan puts a duct tape gag on her.", "duct tape gag"),
+                      ("Dan puts a tape gag on her.", "tape gag"),
+                      ("Dan tapes her mouth shut.", "tape"),
+                      ("Dan pushes a ball gag into her mouth.", "ball gag")):
+        check(f"material kept: {_t[:34]!r} -> {S.hardware_named(_t)!r}",
+              S.hardware_named(_t) == _want)
+    # The most specific thing named anywhere, not the first one: "gags her with duct
+    # tape" puts the verb before the material, and the leftmost match was "gags".
+    check("the material beats an earlier verb",
+          S.hardware_named("Dan gags her with duct tape.") == "duct tape")
     # The sentence. It says the thing is ON and VISIBLE, which is what went missing.
     cl = S.hardware_still_on("handcuffs")
     check("the object is named", "The handcuffs" in cl)
