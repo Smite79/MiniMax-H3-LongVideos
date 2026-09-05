@@ -902,6 +902,37 @@ def test_a_television_keeps_its_own_voice():
     check("the switch turns it off", "the TV's" not in off, "")
 
 
+def test_the_removal_shot_says_what_is_under():
+    print("\n=== taking the shorts off shows the panties, not skin ===")
+    # Reported: the shorts come off and the render goes straight to bare, past the
+    # underwear the sheet named. The removal clause is emphatic and specific -- off
+    # the body, dropped out of frame -- while the layer beneath is one entry in an
+    # attribute list, and against a prior that says trousers coming off means bare
+    # skin, a list entry does not compete.
+    mem = "Mara: she, 22, blue denim shorts, white top, black panties."
+    P = "A room.\n\nMara stands.\n\nMara pulls off her shorts.\n\nMara turns."
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    check("the removing shot is told what shows there",
+          "what shows there now" in sh[1], sh[1][-90:])
+    check("...naming the layer", "panties underneath" in sh[1].lower(), "")
+    check("...and saying it stays on", "still on" in sh[1], "")
+    check("said only on the shot that uncovers it",
+          "what shows there now" not in sh[0] and "what shows there now" not in sh[2], "")
+    check("info names the shot", "take off a garment that was covering" in info, "")
+    # Nothing underneath: there is nothing to promise, and promising anyway would
+    # dress her in something the sheet never gave her.
+    bare = run_node("A room.\n\nMara pulls off her shorts.\n\nMara turns.",
+                    plan_only=True,
+                    character_memory="Mara: she, 22, blue denim shorts, white top.")[3]
+    check("nothing underneath, nothing claimed", "what shows there now" not in bare, "")
+    # A full strip takes the cover AND what was under it. Saying the panties show
+    # would put back the garment the beat was most explicit about removing.
+    strip = run_node("A room.\n\nMara undresses completely.\n\nMara turns.",
+                     plan_only=True, character_memory=mem)[3]
+    check("a full strip promises nothing", "what shows there now" not in strip, "")
+
+
 def test_underwear_is_hidden_until_it_is_not():
     print("\n=== underwear stays out of the text while something is over it ===")
     mem = "Mara: she, 22, blue denim shorts, white top, panties, a chastity belt."
@@ -1963,6 +1994,7 @@ def main():
     test_a_sheet_that_claims_hardware_too_early()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
+    test_the_removal_shot_says_what_is_under()
     test_underwear_is_hidden_until_it_is_not()
     test_a_garment_moved_is_not_a_garment_gone()
     test_undressing_does_not_drop_her()

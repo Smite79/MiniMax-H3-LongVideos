@@ -1215,6 +1215,44 @@ def test_a_machines_line_is_not_the_actors_line():
     check("no machine, no clause", S.device_voice_clause("Mara says: 'Hello.'") == "")
 
 
+def test_what_is_exposed_is_not_also_removed():
+    print("\n=== a garment the beat reveals is not one it takes off ===")
+    # Reported: a removal going straight to bare skin, past what the sheet said was
+    # underneath. The removal verb's object span ran past "to show" and took the
+    # jumper with the coat -- so the one garment the beat exists to reveal was
+    # scrubbed from the wardrobe, and every shot after it described nothing there.
+    #
+    # The comma form already ended the span correctly, which is why only one of the
+    # two phrasings was broken.
+    sc = "Mara: she, 22, a grey coat, a navy jumper."
+    for _b in ("Mara pulls off her coat to show the jumper underneath.",
+               "Mara pulls off her coat, showing the jumper underneath.",
+               "Mara pulls off her coat to reveal the jumper."):
+        check(f"only the coat comes off: {_b[:38]!r}",
+              S.infer_removals(_b, sc) == ["coat"])
+        check(f"...and the jumper is the one exposed: {_b[:26]!r}",
+              S.exposed_by(_b, sc) == ["jumper"])
+    # Both really coming off is still both coming off.
+    check("two removals still read as two",
+          S.infer_removals("Mara pulls off her coat and her jumper.", sc)
+          == ["coat", "jumper"])
+    # The sentence that tells the shot what fills the space.
+    cl = S.reveal_clause(["panties"])
+    check("the under layer is named", "The panties underneath" in cl)
+    check("...as what is seen there", "what shows there now" in cl)
+    check("...and as still on", "still on" in cl)
+    check("...in one sentence", cl.count(".") == 1)
+    check("...positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    check("singular agrees", "underneath is what shows" in S.reveal_clause(["jumper"]))
+    check("nothing revealed, nothing said", S.reveal_clause([]) == "")
+    # revealed_by is what feeds it: the cover has come off, so what was under shows.
+    covers = {"panties": "shorts"}
+    check("uncovered by the shorts coming off",
+          S.revealed_by(covers, ["shorts"]) == ["panties"])
+    check("...and not while they are still on", S.revealed_by(covers, []) == [])
+
+
 def test_underwear_goes_under():
     print("\n=== underwear is not drawn through the clothes over it ===")
     # Reported: panties, underwear and a chastity belt showing through the clothes.
@@ -2237,6 +2275,7 @@ def main():
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
+    test_what_is_exposed_is_not_also_removed()
     test_underwear_goes_under()
     test_pulling_something_down_is_not_falling()
     test_a_fall_says_what_takes_the_landing()
