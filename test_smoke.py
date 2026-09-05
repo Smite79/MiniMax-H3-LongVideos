@@ -2288,6 +2288,34 @@ def test_no_garment_is_ever_invented():
               "invented %s" % sorted(invented))
 
 
+def test_a_garment_keeps_its_description():
+    """END TO END: a displaced garment keeps the sheet's words, and a garment put
+    back stops being described as displaced.
+
+    Reported as shorts coming back "a different kind". They were not re-invented by
+    the model out of nothing: the node itself named them twice, once fully from the
+    sheet and once bare from the beat."""
+    print("\n=== a garment keeps its description ===")
+    sheet = ("McKenna: she, 22, Shiny white crop top, blue jeans shorts, "
+             "black leather boots.\n\n")
+    # The beat uses the SHORT name; the guard must still use the sheet's.
+    s = run_node(sheet + "McKenna stands.\n\n"
+                 "McKenna pulls the shorts down.\n\n"
+                 "McKenna looks at the window.", plan_only=True)[3]
+    check("the displacement carries the sheet's full name",
+          "blue jeans shorts pulled down" in s)
+    check("...and never a bare one beside it", "the shorts pulled" not in s)
+    # Put back up, under a different name than it went down under.
+    s2 = run_node(sheet + "McKenna stands.\n\n"
+                  "McKenna pulls her blue jeans shorts down.\n\n"
+                  "McKenna pulls the shorts back up.\n\n"
+                  "McKenna sits.", plan_only=True)[3]
+    last = s2.split("[Shot 4]")[-1]
+    check("a garment put back is no longer displaced", "pulled down" not in last)
+    check("...and is not both up and down at once",
+          not ("pulled down" in last and "pulled up" in last))
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2394,6 +2422,7 @@ def main():
     test_detail_trend()
     test_timing_report()
     test_no_garment_is_ever_invented()
+    test_a_garment_keeps_its_description()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

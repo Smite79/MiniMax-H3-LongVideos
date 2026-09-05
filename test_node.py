@@ -767,6 +767,36 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_the_sheet_names_the_garment():
+    """Anything the node says about a garment uses the SHEET's words, not the
+    beat's. A beat says "pulls the shorts back up" for what the sheet dressed her
+    in as "blue jeans shorts"; the guard echoed the beat, so the shot carried a
+    bare "the shorts" beside the sheet's full name. A model handed two differently
+    named garments draws two, and the shorts came back a different colour and cut
+    -- invented out of the node's own text."""
+    sc = ("McKenna: she, 22, Shiny white crop top, blue jeans shorts, "
+          "black leather boots.")
+    check("the sheet's full name is recovered from the head noun",
+          S.scene_name_for("shorts", sc) == "blue jeans shorts")
+    check("...for a two-word modifier too",
+          S.scene_name_for("boots", sc) == "black leather boots")
+    check("a garment the sheet never names has no name",
+          S.scene_name_for("skirt", sc) == "")
+    # An entry ends at its comma: a name reaching back into the previous item
+    # would attach one garment's colour to another.
+    check("modifiers do not cross a comma",
+          "crop" not in S.scene_name_for("shorts", sc))
+    check("an article is not description",
+          S.scene_name_for("coat", "Kate: she, 30, the grey coat.") == "grey coat")
+    # The displacement itself carries the sheet's name, whatever the beat called it.
+    _d = dict(S.displaced_garments("McKenna pulls the shorts down.", sc))
+    check("a displacement is stored under the sheet's name",
+          "blue jeans shorts" in _d)
+    _d2 = dict(S.displaced_garments("McKenna pulls her blue jeans shorts down.", sc))
+    check("...and the full name still matches itself",
+          "blue jeans shorts" in _d2)
+
+
 def test_removal_completes():
     print("\n=== a removal has to finish inside its shot ===")
     # Scrubbing stops a garment being DESCRIBED. It does not tell the model to
@@ -2560,6 +2590,7 @@ def main():
     test_a_name_with_no_entry()
     test_layers()
     test_bare_region()
+    test_the_sheet_names_the_garment()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()

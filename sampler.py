@@ -669,9 +669,14 @@ def hidden_layers(covers, gone, moved=()):
     layer beneath stayed hidden while the beat was busy showing it off: "pulls
     her shorts down to show the thong" described the thong in that one shot,
     from the author's own words, and hid it again in the next."""
-    aside = {m.lower() for m in (moved or ())}
+    # Compared on the HEAD NOUN. `covers` holds the outer garment as implied_layers
+    # read it ("shorts") while a displacement is keyed by the sheet's full name
+    # ("denim shorts"), and an exact match between the two never fires -- the layer
+    # underneath stayed hidden on the very shot the beat pulled the cover off.
+    aside = {str(m).lower().split()[-1] for m in (moved or ()) if str(m).strip()}
     return [u for u, o in (covers or {}).items()
-            if o not in gone and u not in gone and o.lower() not in aside]
+            if o not in gone and u not in gone
+            and str(o).lower().split()[-1] not in aside]
 
 
 def merge_sheets(*sources):
@@ -3297,6 +3302,38 @@ _DISPLACE = re.compile(
     r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then)\b|$)", re.I)
 
 
+def scene_name_for(head, scene):
+    """The sheet's OWN full name for a garment, found by its head noun. "" if absent.
+
+    A beat calls a thing whatever is convenient -- "the shorts" for what the sheet
+    dressed her in as "blue jeans shorts". Anything the node then says about it has
+    to use the SHEET's words: a shot carrying both names is a shot describing two
+    garments, and the model draws the bare one however it likes. That is a garment
+    invented out of the node's own text, which is the worst kind.
+
+    The entry is read back from the sheet: its modifiers are the words before the
+    head noun in the same comma-separated item, and no further -- a name from the
+    entry before it would attach one garment's colour to another."""
+    head = (head or "").strip().lower()
+    if not head or not scene:
+        return ""
+    best = ""
+    for line in str(scene).split("\n"):
+        # Only the wardrobe side of "Name: she, 22, blue jeans shorts".
+        line = line.split(":", 1)[-1]
+        for item in re.split(r"[,;.]", line):
+            item = re.sub(r"\s+", " ", item).strip()
+            if not item or item.split()[-1].lower() != head:
+                continue
+            # Drop a leading article or possessive; they are not description.
+            item = re.sub(r"^(?:a|an|the|her|his|their|its)\s+", "", item, flags=re.I)
+            # The longest entry wins: a sheet that names it twice described it most
+            # fully once, and the fuller name is the one worth carrying.
+            if len(item) > len(best):
+                best = item
+    return best.lower()
+
+
 def displaced_garments(beat, scene):
     """[(garment, how)] this beat MOVES without taking off. [] when none.
 
@@ -3318,6 +3355,13 @@ def displaced_garments(beat, scene):
         if len(head) < 3 or head not in low:
             continue
         seen.add(thing)
+        # ...and it is the SCENE'S name that gets carried forward, not the beat's.
+        # A beat says "pulls the shorts back up" for what the sheet calls "blue
+        # jeans shorts", and the guard echoed the beat: the shot then carried a
+        # bare "the shorts" beside the sheet's full name, and a model handed two
+        # differently-named garments draws two different garments. The shorts came
+        # back in a different colour and cut -- invented, from the node's own text.
+        thing = scene_name_for(head, scene) or thing
         # "back up" and "back down" say the direction in their second word.
         way = re.sub(r"^back\s+", "", re.sub(r"\s+", " ", way))
         out.append((thing, "pulled " + way if way in ("down", "up", "aside", "back")
@@ -5282,8 +5326,15 @@ class H3LongVideos:
             # one thing it can mean, and leaving it displaced is the error that shows.
             if len(displaced) == 1 and puts_it_back(body):
                 displaced.clear()
+            # The shot that STAGES the displacement already says so in the beat, and
+            # saying it again is telling it twice. Matched on the HEAD NOUN: the key
+            # is the sheet's full name ("blue denim shorts") while the beat says
+            # "her shorts", so comparing whole names stopped recognising the beat
+            # that was staging it and the staging shot got the guard as well.
+            _body_low = (body or "").lower()
             _moved = displaced_hold([(g, h) for g, h in displaced.items()
-                                     if g not in (body or "").lower()])
+                                     if not re.search(r"\b" + re.escape(g.split()[-1])
+                                                      + r"\b", _body_low)])
             if _moved:
                 moved_shots.append(len(shots) + 1)
 
