@@ -45,7 +45,6 @@ import node_helpers
 
 H3_FPS = 24                    # H3 renders 24 fps, always
 AUDIO_LATENT_FPS = 40          # audio latent frames per second
-VAE_SPATIAL = 16               # video VAE spatial downsample
 RES_MULTIPLE = 32
 KEYFRAME_SAFE_AUG = 0.99       # below this, a ref aug would soften the keyframe too
 AUTO_TILE_T = 8                # temporal chunk for a tiled decode
@@ -976,11 +975,21 @@ _NOT_A_NAME = (r"(?!(?:The|A|An|It|This|That|These|Those|There|Then|Here|His|Her
                r"Someone|Nobody|Everyone|"
                r"TV|TVs|PA|Television|Televisions|Telly|Radio|Radios|Screen|Screens|"
                r"Speaker|Speakers|Stereo|Intercom|Phone|Telephone|Laptop|Monitor)\b)")
+# The verbs that give somebody a line. ONE list: this was written out three times
+# -- in _PERSON_SAYS, in the sheet-name check inside speech_is_a_devices, and in
+# speakers_in -- and the three had already drifted apart. The middle copy was
+# missing a dozen of them, so "Mara murmured: ..." read as a person speaking in
+# two places and not in the third, which decides whether a line belongs to a
+# person or to a television.
+_SAYS = (r"says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|calls?|"
+         r"called|repl(?:y|ies|ied)|answers?|answered|adds?|added|murmurs?|"
+         r"murmured|mutters?|muttered|tells?|told|begs?|begged|snaps?|snapped|"
+         r"breathes?|breathed|hisses|hissed")
+
+
 _PERSON_SAYS = re.compile(
-    r"\b(?:he|she|they|i|we|you|" + _NOT_A_NAME + r"[A-Z][\w-]+)\s+(?:[\w,']+\s+){0,2}?"
-    r"(?:says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|calls?|called|"
-    r"repl(?:y|ies|ied)|answers?|answered|adds?|added|murmurs?|muttered|mutters?|"
-    r"tells?|told|begs?|begged|snaps?|snapped|breathes?|hisses?)\b")
+    r"\b(?:he|she|they|i|we|you|" + _NOT_A_NAME + r"[A-Z][\w-]+)\s+"
+    r"(?:[\w,']+\s+){0,2}?(?:" + _SAYS + r")\b")
 
 
 def speech_is_a_devices(beat, sheet=""):
@@ -997,8 +1006,7 @@ def speech_is_a_devices(beat, sheet=""):
     # only catches when the name happens to be capitalised in the beat.
     for n, _ in sheet_lines(sheet):
         if n and re.search(r"\b" + re.escape(n) + r"\b(?:\s+[\w,']+){0,2}?\s+"
-                           r"(?:says?|said|asks?|asked|whispers?|shouts?|calls?)\b",
-                           b, re.I):
+                           r"(?:" + _SAYS + r")\b", b, re.I):
             return False
     return True
 
@@ -1027,10 +1035,7 @@ def speakers_in(beat, sheet=""):
         if not n:
             continue
         if re.search(r"\b" + re.escape(n) + r"\b(?:\s+[\w,']+){0,2}?\s+"
-                     r"(?:says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|"
-                     r"calls?|called|repl(?:y|ies|ied)|answers?|answered|adds?|added|"
-                     r"murmurs?|mutters?|muttered|tells?|told|begs?|begged|snaps?|"
-                     r"snapped|breathes?|hisses?)\b", b, re.I):
+                     r"(?:" + _SAYS + r")\b", b, re.I):
             out.append(n)
     return out
 
@@ -2148,22 +2153,6 @@ def hardware_named(text):
     return "tape" if item == "tapes" else item
 
 
-def hardware_still_on(item):
-    """One sentence keeping the thing itself in the picture, not just its effect.
-
-    Named because "every restraint stays whole and closed" describes a category. A
-    model given a category and no object renders the behaviour and leaves the object
-    out, which is a woman moving as though cuffed with nothing on her wrists."""
-    if not item:
-        return ""
-    # No "closed" and no "locked": rope is tied and a blindfold is neither. Say it is
-    # ON and VISIBLE, which is the whole of what went missing, and leave the fastening
-    # to the hold beside it -- that is the clause whose job it is.
-    plural = item.endswith("s") and not item.endswith("ss")
-    return (f" The {item} {'are' if plural else 'is'} still on her, in plain sight "
-            f"where {'they were' if plural else 'it was'} put.")
-
-
 def restraint_going_on(beat):
     """Does this beat stage hardware being APPLIED, rather than already worn?"""
     b = beat or ""
@@ -2583,16 +2572,6 @@ def limb_anchor(text):
     if where and point:
         return f"{where}, {point}"
     return where or point
-
-
-def anchor_hold(where):
-    """One sentence keeping the fastened limbs where they were fastened.
-
-    Said on the shots AFTER the one that staged it -- the staging shot has the
-    author's own words and does not need this arguing beside them."""
-    if not where:
-        return ""
-    return f" The fastened wrists stay {where}, where they were locked."
 
 
 # Framing tight enough to crop an anchor point out of shot. Worth naming because the
@@ -4928,11 +4907,14 @@ class H3LongVideos:
             # Said only on the shots AFTER the one that staged it. The staging shot
             # has the author's own words for this and does not need a second
             # sentence arguing beside them.
-            _anchor = anchor_hold(anchored) if (restrained and anchored
-                                                and not _anchor_now) else ""
-            if _anchor:
+            # Where the limbs are held is inside the restraint sentence now. What is
+            # still worth reporting is that it is being held, and where the framing
+            # is tight enough to crop the anchor out of the picture the chain hands
+            # on -- so those key off the latch rather than off a clause.
+            _holding = bool(restrained and anchored and not _anchor_now)
+            if _holding:
                 anchored_shots.append(len(shots) + 1)
-            if _anchor and tight_framing(body):
+            if _holding and tight_framing(body):
                 tight_shots.append(len(shots) + 1)
             # A turn shows a surface the keyframe never pinned, and the model fills
             # it from a clothed prior. Only on shots that turn, and only once there
@@ -5024,8 +5006,7 @@ class H3LongVideos:
             # a restraint exists with no object to draw -- which renders as the
             # behaviour without the hardware. Skipped where the text already names
             # it, and where nothing has been seen to name.
-            _still = (hardware_still_on(worn_item)
-                      if (restrained and worn_item and not _named_item) else "")
+
             # A garment MOVED rather than removed. It stays in the scene text, so
             # the sheet keeps describing it the way it was WORN -- and the sheet is
             # re-stamped into every shot, which pulls it back up. Latch the state the
@@ -5050,8 +5031,7 @@ class H3LongVideos:
                                      if g not in (body or "").lower()])
             if _moved:
                 moved_shots.append(len(shots) + 1)
-            if _still:
-                named_shots.append(len(shots) + 1)
+
             # ...and say WHOSE. Unattributed, "every restraint stays fastened" is an
             # instruction about whoever is on screen, so hardware locked onto one
             # character turned up on the other, over their clothes. Read from the sheet
@@ -5079,7 +5059,7 @@ class H3LongVideos:
                 # on wrists belonging to nobody the text mentions, and the model
                 # draws the person that sentence implies -- which is the duplicate.
                 # It latches, so the shot they come back in has it again.
-                hold = _still = _anchor = ""
+                hold = ""
                 absent_hold.append(len(shots) + 1)
             elif not _applying and restrained:
                 hold = restraint_sentence(
@@ -5089,7 +5069,8 @@ class H3LongVideos:
                     # is the redundancy this merge exists to remove.
                     _wearers, _described, anchor=("" if _anchor_now else anchored),
                     rigid=bool(rigid), posed=bool(posed))
-                _still = _anchor = ""
+                if worn_item and not _named_item:
+                    named_shots.append(len(shots) + 1)
             else:
                 hold = own_hold(hold, _wearers, _described)
             # What you wrote wins: a beat that already describes its own sound is left
@@ -5205,8 +5186,6 @@ class H3LongVideos:
                 (5, "device", _device),      # a voice that is not hers
                 (6, "moved", _moved),        # a garment left where it was put
                 (7, "anchors", anchors),     # hardware with nowhere to sit
-                (8, "hardware", _still),     # normally merged into the hold
-                (9, "limbs", _anchor),       # likewise
                 (10, "state", _state),
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),

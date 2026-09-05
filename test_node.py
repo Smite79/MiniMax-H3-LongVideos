@@ -1115,22 +1115,25 @@ def test_the_hardware_keeps_being_named():
     # tape" puts the verb before the material, and the leftmost match was "gags".
     check("the material beats an earlier verb",
           S.hardware_named("Dan gags her with duct tape.") == "duct tape")
-    # The sentence. It says the thing is ON and VISIBLE, which is what went missing.
-    cl = S.hardware_still_on("handcuffs")
+    # The sentence that carries it. hardware_still_on was a separate clause saying the
+    # thing was on and visible; the merge folded that in, where naming the item is the
+    # SUBJECT rather than another sentence about it. Removed once it was measured
+    # reaching a prompt zero times in 672 runs while still being built on every shot.
+    cl = S.restraint_sentence("handcuffs", [], ["Mara"])
     check("the object is named", "The handcuffs" in cl)
-    check("...and said to be visible", "in plain sight" in cl)
     check("...in one sentence", cl.count(".") == 1)
     check("...positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
-    # Fastening belongs to the hold beside it. Rope is tied and a blindfold is
-    # neither closed nor locked, so this clause must not claim either.
-    for _item in ("rope", "blindfold", "collar", "chain"):
-        _c = S.hardware_still_on(_item)
-        check(f"{_item}: no fastening claimed",
-              not re.search(r"\b(?:closed|locked)\b", _c, re.I))
-    check("singular agrees", S.hardware_still_on("collar").startswith(" The collar is"))
-    check("plural agrees", S.hardware_still_on("cuffs").startswith(" The cuffs are"))
-    check("nothing to name, nothing said", S.hardware_still_on("") == "")
+    check("singular agrees",
+          S.restraint_sentence("collar", [], ["Mara"]).startswith(" The collar stays"))
+    check("plural agrees",
+          S.restraint_sentence("cuffs", [], ["Mara"]).startswith(" The cuffs stay"))
+    # Rope is tied, not closed -- and mixed with hardware the hardware wording wins,
+    # because steel that is only "tied and holding" is steel nobody has said is shut.
+    check("rope is tied, not closed",
+          "tied and holding" in S.restraint_sentence("rope", [], ["Mara"]))
+    check("...and cuffs with tape are still closed",
+          "closed and fastened" in S.restraint_sentence("cuffs, duct tape", [], ["Mara"]))
 
 
 def test_memory_is_asked_for_honestly():
@@ -1636,14 +1639,17 @@ def test_fastened_limbs_keep_their_anchor():
     for _t in ("Mara kneels on the floor.", "Mara walks to the window.",
                "He hands her the keys to the car.", "She looks up at the ceiling."):
         check(f"no anchor: {_t[:34]!r}", not S.limb_anchor(_t))
-    # The sentence.
-    cl = S.anchor_hold("above the head, at the bed frame")
+    # Where it holds rides inside the restraint sentence now. anchor_hold was a second
+    # sentence repeating the same subject, and the merge removed it.
+    cl = S.restraint_sentence("cuffs", [], ["Mara"], anchor="above the head")
+    check("the anchor is carried", "holding the wrists above the head" in cl)
     check("the clause is one sentence", cl.count(".") == 1)
     check("...and is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
     check("...and says nothing about the body holding still",
-          not re.search(r"\b(?:still|motionless|frozen|does not move)\b", cl, re.I))
-    check("nothing anchored, nothing said", S.anchor_hold("") == "")
+          not re.search(r"\b(?:motionless|frozen|does not move)\b", cl, re.I))
+    check("nothing anchored, nothing added",
+          "holding the wrists" not in S.restraint_sentence("cuffs", [], ["Mara"]))
     # Framing tight enough to lose the anchor, which is what the next shot inherits.
     for _t in ("A close shot of her face.", "Close-up on her hands.",
                "Tight on the lock.", "Her face fills the frame."):
