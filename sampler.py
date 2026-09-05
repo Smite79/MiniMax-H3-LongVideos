@@ -543,9 +543,13 @@ def implied_layers(scene):
     text = scene or ""
     for region, unders in _UNDER_BY_REGION.items():
         over = None
+        # The HEAD noun, which in English is the last one: "blue jeans shorts" is a
+        # pair of shorts, not a pair of jeans. Taking the first match recorded the
+        # cover as "jeans" while a removal names it "shorts", so the two never lined
+        # up -- the belt was hidden correctly and then never uncovered, because the
+        # garment that came off was not the one the pairing was holding it under.
         for m in re.finditer(r"\b(?:" + _OUTER_BY_REGION[region] + r")\b", text, re.I):
             over = m.group(0).lower()
-            break
         if not over:
             continue
         for m in re.finditer(r"\b(?:" + unders + r")\b", text, re.I):
@@ -5596,7 +5600,21 @@ class H3LongVideos:
         # Tags PLACE the references. With none written anywhere, placing by tag would
         # place them nowhere -- a connected reference that silently does nothing at
         # all. The old node fell back rather than no-op, and so does this.
-        _tagged = any(picture_tags(s) for s in shots)
+        # Judged on what was WRITTEN, not on what survives scrubbing.
+        #
+        # A tag on a covered garment is removed from every shot that hides it --
+        # correctly, since the tag has to leave with the thing it names. But if
+        # that was the only tag in the sheet, the check below then saw no tags
+        # anywhere and fell back to "untagged references ride EVERY shot", which
+        # sent the picture straight back into the shots that had just hidden it.
+        # Reported as a chastity belt drawn over the shorts by somebody whose only
+        # reference was the belt.
+        #
+        # The author tagged something. That the layering consumed it later is not
+        # a reason to start placing pictures everywhere.
+        _written = "\n".join([scene or ""] + list(beats))
+        _tagged = bool(picture_tags(_written)
+                       or any(picture_tags(s) for s in shots))
         _tagged_names = {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}
         if refs_all and not _tagged:
             notes.append(

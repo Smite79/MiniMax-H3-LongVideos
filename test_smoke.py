@@ -1088,6 +1088,45 @@ def test_a_beat_can_name_what_the_layering_hid():
     check("no mention, no warning", "says is covered" not in quiet, "")
 
 
+def test_the_only_tag_being_on_a_covered_thing():
+    print("\n=== the belt is the only tagged thing, and it is under the shorts ===")
+    # The reported sheet, verbatim. Two faults met in it, and each hid the other.
+    sheet = ("McKenna: she, 22, Shiny white crop top, chastity belt <picture 2>, "
+             "blue jeans shorts.")
+    # 1. "blue jeans shorts" is a pair of SHORTS. Taking the first outer match made the
+    #    cover "jeans" while a removal names it "shorts", so the two never lined up and
+    #    the belt was hidden correctly and then never uncovered.
+    check("the cover is the head noun, not the first word",
+          S.implied_layers(sheet) == {"chastity belt": "shorts"},
+          str(S.implied_layers(sheet)))
+    check("...so taking the shorts off uncovers it",
+          S.hidden_layers(S.implied_layers(sheet), ["shorts"]) == [])
+    # 2. The belt's tag is the ONLY tag. Layering scrubs the belt on every covered
+    #    shot and the tag goes with it -- correctly -- and the node then saw no tags
+    #    anywhere and fell back to "untagged references ride EVERY shot", sending the
+    #    belt's picture into exactly the shots that had just hidden it.
+    BELT = torch.full((1, H, W, 3), 0.80)
+    rows = []
+    ob = S.build_conditioning
+    def spy(clip, vae, audio_vae, p, *a, **k):
+        rows.append((p, len(k.get("refs") or [])))
+        return ob(clip, vae, audio_vae, p, *a, **k)
+    S.build_conditioning = spy
+    try:
+        run_node("A room.\n\nMcKenna stands.\n\nMcKenna waits.\n\n"
+                 "remove: shorts\nMcKenna takes off her shorts.\n\nMcKenna turns.",
+                 character_memory=sheet + "\nDan: he, 41.", ref_image_2=BELT)
+    finally:
+        S.build_conditioning = ob
+    check("no picture while it is covered",
+          rows[0][1] == 0 and rows[1][1] == 0, str([n for _, n in rows]))
+    check("...and no words either",
+          not any("chastity" in p.lower() for p, _ in rows[:2]), "")
+    check("the picture arrives when the shorts come off", rows[2][1] == 1, "")
+    check("...and stays after", rows[3][1] == 1, "")
+    check("...described too", all("chastity" in p.lower() for p, _ in rows[2:]), "")
+
+
 def test_an_object_tag_works_without_a_face_picture():
     print("\n=== a tagged object is placed even when nobody is tagged ===")
     # A picture is not always somebody's face. With the person untagged, the belt's
@@ -2228,6 +2267,7 @@ def main():
     test_a_shifted_workflow_stops_before_rendering()
     test_the_removal_shot_says_what_is_under()
     test_a_beat_can_name_what_the_layering_hid()
+    test_the_only_tag_being_on_a_covered_thing()
     test_an_object_tag_works_without_a_face_picture()
     test_an_untagged_picture_defeats_the_layering()
     test_underwear_is_hidden_until_it_is_not()
