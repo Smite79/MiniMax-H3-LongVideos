@@ -5059,6 +5059,26 @@ class H3LongVideos:
                    if guard_words > beat_words * 3 else ""))
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
                     if r is not None]
+        # A reference nothing tags rides EVERY shot -- including the ones where a
+        # garment it may depict is covered. Layering can hide the words; it cannot
+        # hide a picture, and the picture wins. Reported as a chastity belt drawn on
+        # top of the jeans while the text had correctly stopped mentioning it.
+        #
+        # The node cannot know what an untagged image shows, so it cannot withhold it
+        # on its own. Tagging is what puts it under the layering's control, and that
+        # is the one thing that fixes this.
+        if refs_all and covers and not _PICTURE_TAG.search(f"{scene}\n" + "\n".join(beats)):
+            notes.append(
+                f"{len(refs_all)} reference image(s) and not one <Picture N> tag anywhere, "
+                f"while the wardrobe has layers in it ("
+                + "; ".join(f"{u} under {o}" for u, o in list(covers.items())[:3])
+                + "). An untagged reference goes into EVERY shot, so a picture of "
+                  "something that is currently underneath something else is still sent "
+                  "on the shots where it is covered -- and the text having stopped "
+                  "describing it does not stop the model drawing it. That is an under "
+                  "layer rendered on top. Tag the image onto the thing it shows -- "
+                  "'a chastity belt <Picture 2>' -- and it is sent only where that "
+                  "thing is actually visible")
 
         lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat", pace)
         # How much of a SPEAKING shot the line does not cover. The branch is free for

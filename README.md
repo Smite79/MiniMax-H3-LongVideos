@@ -184,6 +184,13 @@ work in both orders — *"kicks off her boots"*, *"kicks her boots off"* — and
 there the wardrobe is read off the sheet and all of it comes off — for the people that
 beat names, and never the restraints.
 
+**Tag the picture of anything that gets covered.** Layering hides the *words*; it cannot
+hide a picture. An untagged reference goes into every shot, so an image of something
+currently underneath something else is still sent on the shots where it is covered — and
+the model draws what it is shown. Write `a chastity belt <Picture 2>` and the image is
+sent only where the belt is actually visible. `info` warns when references are untagged
+and the wardrobe has layers in it.
+
 **Underwear goes under.** List it and the outer layer together — *"denim shorts, white
 top, panties, a chastity belt"* — and the under layer is left out of the text until the
 thing over it comes off. A layer the model is told about is a layer it draws, and it

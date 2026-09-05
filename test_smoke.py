@@ -983,6 +983,36 @@ def test_the_removal_shot_says_what_is_under():
     check("a full strip promises nothing", "what shows there now" not in strip, "")
 
 
+def test_an_untagged_picture_defeats_the_layering():
+    print("\n=== an untagged reference is sent even where its garment is covered ===")
+    # Reported: the belt drawn on top of the jeans, with "chastity belt" spelled the
+    # way the layering matches. The words were right -- the belt had stopped being
+    # described -- and the PICTURE was still going in. An untagged reference rides
+    # every shot, so an image of something currently underneath something else is
+    # sent on the shots where it is covered, and the model draws what it is shown.
+    img = lambda v: torch.full((1, H, W, 3), v)
+    P = "A room.\n\nMara stands.\n\nMara pulls off her jeans."
+    untagged = run_node(P, plan_only=True, ref_image_1=img(0.1), ref_image_2=img(0.8),
+                        character_memory="Mara: she, 22, blue jeans, a chastity belt.")[2]
+    check("the clash is reported",
+          "not one <Picture N> tag anywhere" in untagged, "")
+    check("...naming the layer it will override",
+          "chastity belt under jeans" in untagged, "")
+    check("...and saying what fixes it", "<Picture 2>" in untagged, "")
+    # Tagged, the layering controls the image and there is nothing to warn about.
+    tagged = run_node(P, plan_only=True, ref_image_1=img(0.1), ref_image_2=img(0.8),
+                      character_memory="Mara: <Picture 1>, she, 22, blue jeans, "
+                                       "a chastity belt <Picture 2>.")[2]
+    check("a tagged wardrobe raises nothing",
+          "not one <Picture N> tag anywhere" not in tagged, "")
+    # No layers to defeat: an untagged reference is then just an untagged reference,
+    # which the node already warns about separately.
+    flat = run_node(P, plan_only=True, ref_image_1=img(0.1),
+                    character_memory="Mara: she, 22, a white top and boots.")[2]
+    check("no layers, no layer warning",
+          "not one <Picture N> tag anywhere" not in flat, "")
+
+
 def test_underwear_is_hidden_until_it_is_not():
     print("\n=== underwear stays out of the text while something is over it ===")
     mem = "Mara: she, 22, blue denim shorts, white top, panties, a chastity belt."
@@ -2051,6 +2081,7 @@ def main():
     test_a_television_keeps_its_own_voice()
     test_a_shifted_workflow_stops_before_rendering()
     test_the_removal_shot_says_what_is_under()
+    test_an_untagged_picture_defeats_the_layering()
     test_underwear_is_hidden_until_it_is_not()
     test_a_garment_moved_is_not_a_garment_gone()
     test_undressing_does_not_drop_her()
