@@ -787,6 +787,38 @@ def _prompts_sent(P, **kw):
     return seen, out[3]
 
 
+def test_the_cuffs_stay_in_the_picture():
+    print("\n=== the hardware is named on every shot it is on ===")
+    # Reported after the sheet stopped listing the item: the cuffs disappeared while
+    # she still looked restrained. The sheet had been the thing naming the object in
+    # every shot. Taking it off the sheet is right -- it put the cuffs in the shots
+    # before they went on -- and naming it here is what that costs.
+    mem = "Mara: she, 22, grey dress.\nDan: he, 41."
+    P = ("A bare room.\n\nMara backs away from Dan.\n\n"
+         "Dan catches her and cuffs her wrists behind her back.\n\n"
+         "Mara sits on the crate.\n\nMara looks at the door.")
+    sh = [s for s in run_node(P, plan_only=True, character_memory=mem)[3].split("---")
+          if s.strip()]
+    check("before it goes on, nothing is claimed", "still on her" not in sh[0], "")
+    check("the applying shot says it in the beat", "cuffs" in sh[1].lower(), "")
+    check("...and is not told it a second time", "still on her" not in sh[1], "")
+    for i in (2, 3):
+        check(f"shot {i + 1} names the hardware", "cuffs" in sh[i].lower(), sh[i][-70:])
+        check(f"...as the object, not just a category", "still on her" in sh[i], "")
+    # A removal lets go of it, like every other latch here.
+    P2 = ("A bare room.\n\nDan cuffs her wrists behind her back.\n\nMara sits.\n\n"
+          "remove: cuffs\nDan takes the cuffs off.\n\nMara stands up.\n\nMara walks out.")
+    sh2 = [s for s in run_node(P2, plan_only=True, character_memory=mem)[3].split("---")
+           if s.strip()]
+    check("held while they are on", "still on her" in sh2[1], "")
+    check("let go after the removal",
+          all("still on her" not in s for s in sh2[2:]), "")
+    # Nothing restrained anywhere: this must not fire on an ordinary scene.
+    plain = run_node("A room.\n\nMara waits.\n\nMara walks to the window.",
+                     plan_only=True, character_memory=mem)[3]
+    check("an unrestrained scene is untouched", "still on her" not in plain, "")
+
+
 def test_a_sheet_that_claims_hardware_too_early():
     print("\n=== the sheet listing cuffs she has not been put in yet ===")
     # Why the applying fix does not reach a scene written this way: the sheet lists
@@ -1848,6 +1880,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_the_cuffs_stay_in_the_picture()
     test_a_sheet_that_claims_hardware_too_early()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()

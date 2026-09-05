@@ -1051,6 +1051,41 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_the_hardware_keeps_being_named():
+    print("\n=== a restraint that is never named is not drawn ===")
+    # Reported: the handcuffs disappeared while she still looked restrained. The holds
+    # say "every restraint stays whole and closed" and never name the thing, so a shot
+    # after the applying one is told a restraint EXISTS without being told what it is.
+    # The model renders the consequence -- hands held, restrained posture -- and no
+    # object, because no object was described.
+    for _t, _want in (("Dan catches her and cuffs her wrists behind her back.", "cuffs"),
+                      ("Dan locks steel handcuffs on her.", "steel handcuffs"),
+                      ("Jon locks a chain around her waist.", "chain"),
+                      ("Her wrists are bound with rope.", "rope"),
+                      ("Dan buckles the leather collar on.", "leather collar"),
+                      ("Dan fits a blindfold over her eyes.", "blindfold")):
+        check(f"named: {_t[:36]!r} -> {S.hardware_named(_t)!r}",
+              S.hardware_named(_t) == _want)
+    check("nothing named, nothing latched",
+          not S.hardware_named("Mara walks to the window."))
+    # The sentence. It says the thing is ON and VISIBLE, which is what went missing.
+    cl = S.hardware_still_on("handcuffs")
+    check("the object is named", "The handcuffs" in cl)
+    check("...and said to be visible", "in plain sight" in cl)
+    check("...in one sentence", cl.count(".") == 1)
+    check("...positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    # Fastening belongs to the hold beside it. Rope is tied and a blindfold is
+    # neither closed nor locked, so this clause must not claim either.
+    for _item in ("rope", "blindfold", "collar", "chain"):
+        _c = S.hardware_still_on(_item)
+        check(f"{_item}: no fastening claimed",
+              not re.search(r"\b(?:closed|locked)\b", _c, re.I))
+    check("singular agrees", S.hardware_still_on("collar").startswith(" The collar is"))
+    check("plural agrees", S.hardware_still_on("cuffs").startswith(" The cuffs are"))
+    check("nothing to name, nothing said", S.hardware_still_on("") == "")
+
+
 def test_the_hold_names_its_wearer_once():
     print("\n=== attributing the hardware costs one mention, not two ===")
     # Reported as a second girl appearing at the moment of cuffing. own_hold rewrote
@@ -2106,6 +2141,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_the_hardware_keeps_being_named()
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
     test_a_machines_line_is_not_the_actors_line()
