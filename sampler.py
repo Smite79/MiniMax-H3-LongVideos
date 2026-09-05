@@ -539,6 +539,26 @@ def implied_layers(scene):
     return covers
 
 
+def revealed_by(covers, gone):
+    """Under-layers brought into view because the thing over them has just come off."""
+    return [u for u, o in (covers or {}).items() if o in (gone or [])]
+
+
+def reveal_clause(items):
+    """Say what is underneath is what shows now, on the shot that uncovers it.
+
+    The removal clause is emphatic and specific -- off the body, dropped out of frame
+    -- while the layer beneath is one item in an attribute list. Against a model whose
+    prior for trousers coming off is bare skin, a list entry does not compete. It has
+    to be told what fills the space the garment left."""
+    if not items:
+        return ""
+    said = " and ".join(f"the {i}" for i in items[:2])
+    plural = len(items) > 1 or items[0].endswith("s")
+    return (f" {said[0].upper()}{said[1:]} underneath {'are' if plural else 'is'} what "
+            f"shows there now, still on and unchanged.")
+
+
 def hidden_layers(covers, gone):
     """Garments still underneath something that has not come off yet."""
     return [u for u, o in (covers or {}).items() if o not in gone and u not in gone]
@@ -2976,7 +2996,17 @@ def infer_removals(beat, scene):
                          scene, re.I):
                 continue
             found.append(low)
-    return found
+    # A garment the beat says is EXPOSED cannot also be one it takes off. "Pulls off
+    # her coat to show the jumper underneath" ran the removal verb's object span past
+    # "to show" and took the jumper with it -- so the one garment the beat exists to
+    # reveal was scrubbed from the wardrobe, and every shot after it described bare
+    # skin where the jumper was. Reported as a removal going straight past what the
+    # sheet said was underneath.
+    #
+    # The comma form (", showing the jumper") already ended the span correctly, which
+    # is why this only bit one phrasing of the two.
+    shown_off = exposed_by(beat, scene)
+    return [f for f in found if f not in shown_off]
 
 
 # Clothing, for the one case that names no garment at all: "strips out of their
@@ -4097,6 +4127,7 @@ class H3LongVideos:
         worn_item = ""            # the hardware, in the author's words
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
+        revealed_shots = []       # shots that uncover a layer
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
@@ -4310,6 +4341,21 @@ class H3LongVideos:
             # A garment still underneath something stays out of the text: described,
             # it gets drawn, and it is drawn through whatever is over it.
             covered = hidden_layers(covers, visible)
+            # The shot that UNCOVERS one says so. Reported: the shorts come off and
+            # the render goes straight to bare skin, past the underwear the sheet
+            # named. The removal clause is emphatic and specific -- off the body,
+            # dropped out of frame -- while the layer beneath is one entry in an
+            # attribute list, and against a model whose prior for trousers coming
+            # off is nudity, a list entry does not compete. Only on the shot that
+            # takes the cover off; after that it is simply worn.
+            # ...and not when the under-layer is coming off in the same breath. A full
+            # strip takes the cover AND what was under it, and "the panties underneath
+            # are what shows there now" would put back the one garment the beat was
+            # most explicit about removing.
+            _revealed = reveal_clause([u for u in revealed_by(covers, toks)
+                                       if u not in visible and not names_any(u, toks)])
+            if _revealed:
+                revealed_shots.append(len(shots) + 1)
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
             # Maya lies still" -- and a name fused to the end of an attribute list is
             # read as one more item in it.
@@ -4629,9 +4675,9 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            shot_text = (line + tail + _moved + anchors + _gaze + _state + _sound
-                         + _device + _mouth + hold + _still + _anchor
-                         + fall + turn).strip()
+            shot_text = (line + tail + _revealed + _moved + anchors + _gaze
+                         + _state + _sound + _device + _mouth + hold + _still
+                         + _anchor + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
@@ -4742,6 +4788,15 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if revealed_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in revealed_shots)} take off a "
+                f"garment that was covering another, so the shot is told what shows "
+                f"there now. The removal clause is emphatic and specific -- off the "
+                f"body, dropped out of frame -- while the layer underneath is one "
+                f"entry in an attribute list, and against a prior that says trousers "
+                f"coming off means bare skin, a list entry does not compete. Said only "
+                f"on the shot that uncovers it; after that it is simply worn")
         if moved_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in moved_shots)} carry a garment "
