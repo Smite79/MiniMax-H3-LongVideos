@@ -102,6 +102,13 @@ reproducing a portrait, gaze included.
 
 ### Restraints and where they hold
 
+**The shot that puts hardware on is told both ends** — open and off the body at the
+first frame, closed on it by the last — instead of the standing hold. The standing hold
+says the restraint is fastened as it was put on and still fastened at the last frame,
+which read at frame 1 means it is *already closed*: the cuffs snap on immediately and
+the catching and struggling happen around them, in whatever order is left. From the next
+shot the standing hold is right again, because by then it is on.
+
 Say where fastened limbs are held — *"cuffed above her head to the bed frame"*, *"cuffed
 behind her back"* — and every later shot is told the same, until a `remove:` names the
 hardware. Without it the hold only kept the cuffs **shut**; the position was carried by
