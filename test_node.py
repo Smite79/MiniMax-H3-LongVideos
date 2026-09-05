@@ -1051,6 +1051,44 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_a_machines_line_is_not_the_actors_line():
+    print("\n=== a voice out of a television is not hers ===")
+    # Reported: she appeared to be mouthing what was on the TV. H3 is joint, so the
+    # face follows the audio branch -- and the branch has no idea a voice belongs to
+    # a device. 'The TV says: "..."' made it a speaking shot, which opened the branch
+    # AND turned off the mouth guard, so the only face in frame was handed the line.
+    sheet = "Mara: she, 30.\nDan: he, 41."
+    for _b in ('Mara sits on the sofa. The TV says: "Storms tonight."',
+               'The radio announces: "Line four is delayed."',
+               'The intercom crackles: "Come to the desk."',
+               'The television plays: "...and back after this."',
+               'Mara watches the screen. The TV goes: "Breaking news."'):
+        check(f"the machine has it: {_b[:40]!r}", S.speech_is_a_devices(_b, sheet))
+    # If a person might have the line, the person keeps it. Muting somebody's real
+    # line is far worse than a mouth moving, so every doubtful case goes their way --
+    # including a quote with nothing attributing it at all.
+    for _b in ('Mara says: "Look at that."',
+               'Mara sits by the TV. She says: "Turn it up."',
+               'The TV says: "Storms tonight." Mara says: "Again?"',
+               'The TV says: "Storms." She whispers: "No."',
+               'Dan asks: "Is it on?"',
+               '"Turn it off," Mara mutters at the television.',
+               'Mara watches the TV. "I hate this."'):
+        check(f"the person keeps it: {_b[:40]!r}", not S.speech_is_a_devices(_b, sheet))
+    # No quote at all is not a device line either -- there is no line to reassign.
+    check("no line, nothing to attribute",
+          not S.speech_is_a_devices("Mara watches the TV.", sheet))
+    # The clause.
+    cl = S.device_voice_clause('The TV says: "Storms tonight."')
+    check("the machine is named", "the TV's" in cl)
+    check("...as the author spelled it", "tv's" not in cl)
+    check("...and the listeners are given something to do",
+          "hold still" in cl and "listening" in cl)
+    check("...and it is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    check("no machine, no clause", S.device_voice_clause("Mara says: 'Hello.'") == "")
+
+
 def test_a_fall_says_what_takes_the_landing():
     print("\n=== a falling body is told what catches it ===")
     # Reported: a third leg on the shot where she fell, grown to brace a landing
@@ -1996,6 +2034,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_a_machines_line_is_not_the_actors_line()
     test_a_fall_says_what_takes_the_landing()
     test_the_look_goes_where_the_beat_says()
     test_an_object_tag_leaves_with_its_object()

@@ -860,6 +860,74 @@ def sound_clause(phrases, only=False):
     return f" It sounds like {heard}."
 
 
+# A LINE THAT IS NOT COMING OUT OF ANYBODY IN THE ROOM.
+#
+# Reported: she appeared to be mouthing what was on the television. H3 is joint, so
+# the face follows the audio branch -- and the branch has no idea a voice belongs to
+# a device. A shot with 'The TV says: "..."' in it reads as a speaking shot, which
+# opens the branch AND suppresses the mouth guard, so the only face in frame gets
+# handed the line.
+#
+# The branch must stay open: the television is supposed to be heard. What has to
+# change is who the voice is attributed to.
+_TALKER_DEVICE = (r"(?:televisions?|tvs?|telly|screens?|radios?|speakers?|stereos?|"
+                  r"tannoys?|intercoms?|phones?|telephones?|laptops?|monitors?|"
+                  r"record\s+players?|pa\s+systems?|answerphones?|announcements?)")
+_DEVICE_SAYS = re.compile(
+    r"\b" + _TALKER_DEVICE + r"\b(?:\s+[\w,']+){0,3}?\s+"
+    r"(?:says?|said|announces?|announced|blares?|blared|plays?|played|calls?|called|"
+    r"reads?|talks?|talking|goes|went|crackles?|drones?|repeats?|asks?)\b", re.I)
+# Somebody in the room speaking. Kept deliberately generous: if there is any chance a
+# person has the line, the person keeps it. Muting a real line is far worse than a
+# mouth moving, and this decides whether the mouth guard applies.
+# The capitalised-word branch is a stand-in for a name, so it has to refuse the words
+# that are capitalised for being at the start of a sentence -- "The TV says" was
+# reading as a person called The -- and the machines themselves, which are capitalised
+# as often as not ("TV", "PA").
+_NOT_A_NAME = (r"(?!(?:The|A|An|It|This|That|These|Those|There|Then|Here|His|Her|Their|"
+               r"Its|Our|My|Your|When|While|As|But|And|One|Now|So|No|Yes|Somebody|"
+               r"Someone|Nobody|Everyone|"
+               r"TV|TVs|PA|Television|Televisions|Telly|Radio|Radios|Screen|Screens|"
+               r"Speaker|Speakers|Stereo|Intercom|Phone|Telephone|Laptop|Monitor)\b)")
+_PERSON_SAYS = re.compile(
+    r"\b(?:he|she|they|i|we|you|" + _NOT_A_NAME + r"[A-Z][\w-]+)\s+(?:[\w,']+\s+){0,2}?"
+    r"(?:says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|calls?|called|"
+    r"repl(?:y|ies|ied)|answers?|answered|adds?|added|murmurs?|muttered|mutters?|"
+    r"tells?|told|begs?|begged|snaps?|snapped|breathes?|hisses?)\b")
+
+
+def speech_is_a_devices(beat, sheet=""):
+    """Is the only spoken line in this beat coming out of a machine?
+
+    False whenever a person might have it, including when nothing attributes the
+    line at all -- an unattributed quote in a beat about people is a person talking."""
+    b = beat or ""
+    if not has_speech(b) or not _DEVICE_SAYS.search(b):
+        return False
+    if _PERSON_SAYS.search(b):
+        return False
+    # A name from the sheet with a speech verb after it, which the pattern above
+    # only catches when the name happens to be capitalised in the beat.
+    for n, _ in sheet_lines(sheet):
+        if n and re.search(r"\b" + re.escape(n) + r"\b(?:\s+[\w,']+){0,2}?\s+"
+                           r"(?:says?|said|asks?|asked|whispers?|shouts?|calls?)\b",
+                           b, re.I):
+            return False
+    return True
+
+
+def device_voice_clause(beat):
+    """Say which machine the voice is coming out of, so no face is given it."""
+    m = re.search(r"\b" + _TALKER_DEVICE + r"\b", beat or "", re.I)
+    if not m:
+        return ""
+    # As the author spelled it. Lowercasing turned "TV" into "tv", and a set is not
+    # improved by the node correcting its capitalisation.
+    thing = re.sub(r"\s+", " ", m.group(0))
+    return (f" The voice in this shot is the {thing}'s, coming out of it across the "
+            f"room, and the people listening hold still and let it play.")
+
+
 def has_speech(beat):
     """Does this beat contain a scripted line?
 
@@ -3771,6 +3839,7 @@ class H3LongVideos:
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
         fall_shots = []           # shots told what takes the landing
+        device_shots = []         # shots whose line belongs to a machine
         tight_shots = []          # ...where the framing also crops it
         # Scenery whose state a beat has CHANGED. After that the node stops asserting
         # the state it was written with, because it is no longer the state: a van
@@ -4185,10 +4254,22 @@ class H3LongVideos:
             # ca75672. If the beat itself does not put a person in the shot, say
             # nothing about mouths and let the audio half do the work.
             _has_people = beat_puts_somebody_on_screen(body, sheet)
+            # A line that belongs to a MACHINE is not this shot's people speaking.
+            # Reported as somebody mouthing what was on the television: the quote
+            # made it a speaking shot, which opened the branch and turned the mouth
+            # guard off, so the only face in frame was handed the line. The branch
+            # still opens -- the set is meant to be heard -- but the mouths close and
+            # the voice is given back to the thing it came out of.
+            _device_line = (mouths_shut_when_no_line
+                            and speech_is_a_devices(body, sheet))
             _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
-                                    and not _speaks and not _voiced) else ""
+                                    and (not _speaks or _device_line)
+                                    and not _voiced) else ""
             if _mouth:
                 mouth_shut.append(len(shots) + 1)
+            _device = device_voice_clause(body) if (_device_line and _has_people) else ""
+            if _device:
+                device_shots.append(len(shots) + 1)
             # The held scenery goes in, so the shot is not asked to keep the doors
             # shut and to sound like a door swinging in the same breath.
             heard = ([] if (not auto_sound or _own)
@@ -4208,8 +4289,8 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            shot_text = (line + tail + anchors + _gaze + _state + _sound + _mouth
-                         + hold + _anchor + fall + turn).strip()
+            shot_text = (line + tail + anchors + _gaze + _state + _sound
+                         + _device + _mouth + hold + _anchor + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
@@ -4320,6 +4401,16 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if device_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in device_shots)} have a spoken "
+                f"line that belongs to a machine, not to anybody in the room. H3 is "
+                f"joint and the audio branch has no idea a voice came out of a set, so "
+                f"a quote made the shot a speaking one and the only face in frame was "
+                f"handed the line. The branch still opens -- the set is meant to be "
+                f"heard -- but the mouths are held closed and the voice is given back "
+                f"to the thing it came out of. A line anybody in the room might have "
+                f"stays theirs: an unattributed quote is a person talking")
         if fall_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in fall_shots)} put a body down, so "
