@@ -1399,6 +1399,18 @@ def test_underwear_goes_under():
     for _outer in ("jeans", "tights", "leggings", "trousers", "a skirt"):
         _sc = f"Mara: she, 22, {_outer}, a chastity belt, a top."
         check(f"a belt goes under {_outer!r}", S.implied_layers(_sc).get("chastity belt"))
+    # ...and the under half has to include how it is actually spelled. "chastity belt"
+    # was matched and "chastity-belt" was not, so the fix looked finished because the
+    # one spelling I happened to test was the one that worked.
+    for _spelling in ("a chastity belt", "chastity-belt", "a chastity device",
+                      "a chastity cage", "a steel chastity-belt"):
+        _sc = f"Mara: she, 22, blue jeans, {_spelling}, a top."
+        check(f"hidden however it is written: {_spelling!r}",
+              any("chastity" in k for k in S.implied_layers(_sc)))
+    # A plain waistband is outerwear and must not be hidden by the trousers it is
+    # holding up.
+    check("an ordinary belt is not underwear",
+          not S.implied_layers("Mara: she, 22, jeans, a belt."))
     check("a dress covers both bra and knickers",
           S.implied_layers("Mara: a summer dress, a bra and knickers underneath.")
           == {"knickers": "dress", "bra": "dress"})

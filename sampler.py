@@ -514,8 +514,13 @@ _UNDER_BY_REGION = {
     # Cloth can be hidden and recovered from a description. Hardware cannot: a belt
     # that stops being drawn does not come back looking slightly wrong, it is gone,
     # and so is every beat that depended on it being there.
+    # Hyphens and the other names for it. "chastity-belt" and "chastity device" were
+    # not matched, so a sheet that spelled it either of those way showed it through
+    # the jeans while "chastity belt" was correctly hidden -- the fix looked done
+    # because the one spelling I tested worked.
     "lower": (r"panties|knickers|thong|g-?string|briefs|boxers|boxer\s+shorts|"
-              r"underwear|undies|jockstrap|loincloth|chastity\s+belts?"),
+              r"underwear|undies|jockstrap|loincloth|"
+              r"chastity[\s-]*(?:belts?|devices?|cages?)"),
     "upper": (r"bra|bralette|brassiere|camisole|undershirt|vest|corset|bustier"),
 }
 _OUTER_BY_REGION = {
