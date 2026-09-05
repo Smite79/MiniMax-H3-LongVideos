@@ -902,6 +902,25 @@ def test_a_television_keeps_its_own_voice():
     check("the switch turns it off", "the TV's" not in off, "")
 
 
+def test_undressing_does_not_drop_her():
+    print("\n=== taking a garment off does not put a body on the floor ===")
+    # Whole-path, because the unit test cannot show the clause reaching the shot. The
+    # fall cue read "pulls down her shorts" as a body being put on the floor, and the
+    # shot was then told what takes the landing and how the legs fold under it.
+    mem = "Mara: she, 22, denim shorts.\nDan: he, 41."
+    P = ("A room.\n\nMara stands and pulls down her shorts.\n\n"
+         "Dan pushes her down onto the floor.")
+    sh = [s for s in run_node(P, plan_only=True, character_memory=mem)[3].split("---")
+          if s.strip()]
+    check("the undressing shot is not told to fall",
+          "falls as one piece" not in sh[0], sh[0][-80:])
+    check("...and the real fall still is", "falls as one piece" in sh[1], "")
+    # The removal itself must still work -- this only changes what reads as a FALL.
+    check("the garment still comes off", "shorts" in sh[0].lower(), "")
+    info = run_node(P, plan_only=True, character_memory=mem)[2]
+    check("only the real fall is reported", "shot(s) 2 put a body down" in info, "")
+
+
 def test_an_unbound_fall_is_told_what_catches_it():
     print("\n=== a fall with no hardware in it still names the landing ===")
     # FALL_HOLD only ever fired on a RESTRAINED fall -- the concern there was the
@@ -1884,6 +1903,7 @@ def main():
     test_a_sheet_that_claims_hardware_too_early()
     test_caught_first_then_restrained()
     test_a_television_keeps_its_own_voice()
+    test_undressing_does_not_drop_her()
     test_an_unbound_fall_is_told_what_catches_it()
     test_a_named_look_target_is_restated()
     test_a_covered_object_does_not_send_its_picture()

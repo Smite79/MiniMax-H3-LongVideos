@@ -2162,8 +2162,19 @@ _FALL_CUE = re.compile(
     r"went\s+down|slumps?|slumped|stumbles?|stumbled|overbalance[sd]?|"
     r"loses?\s+(?:her|his|their)\s+balance|lost\s+(?:her|his|their)\s+balance|"
     # ...and being put down by someone else: "pushes her over", "knocked him down".
+    #
+    # WHAT GOES DOWN HAS TO BE A PERSON. The object here used to be optional, so the
+    # verb and the direction could sit straight against each other -- and "pulls down
+    # her shorts" is a verb and a direction. Every undressing beat written that way
+    # was read as a body being put on the floor, and told what takes the landing and
+    # how the legs fold. She stands up to take her shorts off and the shot drops her.
+    #
+    # Two shapes, both requiring more than the bare pair: somebody named and then the
+    # direction, or a destination explicit enough to be nothing else ("pushed to the
+    # floor"), which is how the passive gets in without an object.
     r"(?:push|knock|shove|pull|drag|throw|thr[eo]w)(?:es|s|ed|n)?\s+"
-    r"(?:her|him|them|\w+\s+)?(?:over|down|to\s+the\s+(?:floor|ground))|"
+    r"(?:(?:her|him|them|herself|himself|themselves|[A-Z][\w-]+)\s+"
+    r"(?:over|down|to\s+the\s+(?:floor|ground))|to\s+the\s+(?:floor|ground))|"
     r"hits?\s+the\s+(?:floor|ground|deck))\b", re.I)
 
 
