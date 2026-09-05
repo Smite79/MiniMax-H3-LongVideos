@@ -3363,16 +3363,51 @@ def displaced_hold(items):
 # Only the verb inside the REQUEST is discounted. A beat that asks and is then obeyed
 # in its own words -- "she asks him to unlock it, and he does" -- still has a removal
 # in the second half, and that half is read normally.
+_ASK_VERB = (r"asks?|asked|asking|begs?|begged|begging|pleads?|pleaded|pleading|"
+             r"wants?|wanted|wishes|wished|tells?|told|orders?|ordered|demands?|"
+             r"demanded|whispers?|whispered|says?|said|shouts?|shouted|screams?|"
+             r"screamed")
 _REQUEST = re.compile(
-    r"\b(?:asks?|asked|asking|begs?|begged|begging|pleads?|pleaded|pleading|"
-    r"wants?|wanted|wishes|wished|tells?|told|orders?|ordered|demands?|demanded|"
-    r"whispers?|whispered|says?|said|shouts?|shouted|screams?|screamed)\b"
-    r"[^.;!?]{0,60}?\bto\s+(?=[a-z])"
-    r"|\b(?:asks?|asked|begs?|begged|pleads?|pleaded)\b[^.;!?]{0,40}?\bfor\b", re.I)
+    # "asks him TO take it off"
+    r"\b(?:" + _ASK_VERB + r")\b[^.;!?]{0,60}?\bto\s+(?=[a-z])"
+    # "asks FOR the belt to come off"
+    r"|\b(?:asks?|asked|begs?|begged|pleads?|pleaded)\b[^.;!?]{0,40}?\bfor\b"
+    # "asks IF he will unlock it" / "asks WHETHER he can" -- an indirect question
+    # has no "to" at all, so the first branch never saw it.
+    r"|\b(?:asks?|asked|asking|wonders?|wondered)\b[^.;!?]{0,40}?\b(?:if|whether)\b",
+    re.I)
+
+# SPEECH is a request too. "McKenna approaches Dan. \"Will you take the chastity belt
+# off?\"" has no asking verb before the removal at all -- the words are quoted, and a
+# line of dialogue asking for a thing is not the thing happening. Nor is an imperative:
+# "\"Take the chastity belt off.\"" is her telling him to, not him doing it.
+#
+# Only what is INSIDE the quotes. A beat that quotes a request and then narrates the
+# act -- "\"Take it off.\" He unlocks the belt." -- still has a removal outside them.
+_QUOTED = re.compile(r"\"[^\"]*\"|“[^”]*”|<d>.*?</d>", re.S)
+
+
+def _in_quotes(text, at):
+    """Is position `at` inside a span of dialogue?"""
+    return any(m.start() <= at < m.end() for m in _QUOTED.finditer(text or ""))
+
+
+# A question is a request whatever introduced it: "Will you take it off?" is asking,
+# and so is "Can you", "Would you", "Could you". Judged by the question MARK, which
+# is the one reliable mark of an interrogative in prose.
+_QUESTION = re.compile(r"[^.;!?]*\?")
+
+
+def _in_a_question(text, at):
+    """Is the removal verb at `at` inside a sentence that ends in a question mark?"""
+    return any(m.start() <= at < m.end() for m in _QUESTION.finditer(text or ""))
 
 
 def _in_a_request(text, at):
     """Is the removal verb at `at` inside a request rather than an action?"""
+    # Asked in someone's own words, or asked as a question: either way, not done.
+    if _in_quotes(text, at) or _in_a_question(text, at):
+        return True
     start = max((m.end() for m in _REQUEST.finditer(text or "") if m.end() <= at),
                 default=None)
     if start is None:

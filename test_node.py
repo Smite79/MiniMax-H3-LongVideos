@@ -700,6 +700,27 @@ def test_how_clothes_actually_come_off():
           == ["jacket"])
     check("'tore the jacket off' is still a removal",
           S.infer_removals("Mike tore the jacket off her.", sc) == ["jacket"])
+    # A request does not have to use an asking VERB. She approaches him and the
+    # words are quoted, or the sentence is simply a question -- both are asking,
+    # and the first version of this fix saw neither, so the belt still came off
+    # the moment she asked for it.
+    for _b in ('Kate walks up to Mike. "Will you take the jacket off?"',
+               'Kate goes to Mike and asks, "Can you take the jacket off?"',
+               "Kate asks if he will take the jacket off.",
+               "Kate asks whether he can take the jacket off.",
+               'Kate asks Mike: "Take the jacket off."',
+               '"Would you take the jacket off?"',
+               "<d>Please take the jacket off.</d>"):
+        check(f"asked, not done: {_b[:40]!r}", S.infer_removals(_b, sc) == [])
+    # ...and granted in the beat's own narration, it still comes off. Only what is
+    # INSIDE the quotes is speech, and only the question's own sentence is a
+    # question -- otherwise one line of dialogue disarmed the whole beat.
+    for _b in ('"Take the jacket off." Mike unlocks the jacket.',
+               'Kate asks him to take it off. Mike takes the jacket off.',
+               '"Will you take it off?" Mike pulls the jacket away.',
+               '"Are you ready?" Mike takes the jacket off.',
+               '"Hold still." Mike removes the jacket.'):
+        check(f"asked and granted: {_b[:40]!r}", S.infer_removals(_b, sc) == ["jacket"])
 
 
 def test_bare_region():
