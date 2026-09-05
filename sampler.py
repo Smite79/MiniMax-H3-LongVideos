@@ -2786,8 +2786,23 @@ def scrub_removed(text, tokens):
         # neighbours with it: removing "jacket" from "a grey jacket over a white
         # shirt" deleted the shirt too, and an undescribed garment is one the model
         # re-invents, which looks like the clothing changing by itself.
+        #
+        # AND THE OBJECT'S OWN TAG WITH IT. "a chastity belt <Picture 2>" is a picture
+        # OF the belt: take the words and leave the tag, and the shot carries a
+        # reference with nothing in the text accounting for it. The comma-list path
+        # above already knew this; this path did not, so any object written into a
+        # fragment with a verb -- "wearing a chastity belt <Picture 2>" -- was scrubbed
+        # to "wearing <Picture 2>". Reported as the object looking different when it
+        # came back into view: the shots where it was covered still sent its picture,
+        # unclaimed, and whatever those shots made of it is what the next shot
+        # inherited as a keyframe.
+        #
+        # Only a tag STANDING ON the removed words. A person's tag sits after their
+        # label -- "Mara: <Picture 1>" -- never after a garment, so it cannot be taken
+        # by this: losing it would cost that shot its identity reference.
         out = re.sub(r"\b(?:(?:a|an|the|her|his|their)\s+)?(?:[\w-]+\s+){0,2}"
-                     + re.escape(t) + r"\b", "", out, flags=re.I)
+                     + re.escape(t) + r"\b(?:\s*<\s*picture[\s_\-]*\d+\s*>)?",
+                     "", out, flags=re.I)
     # Tidy what the deletion left behind, without touching anything it did not.
     # Twice: removing a stranded verb can strand the conjunction in front of it
     # ("Kate is 20 and wears a grey jacket" -> "... and wears" -> "... and").
@@ -2806,6 +2821,9 @@ def scrub_removed(text, tokens):
         # A dropped entry can leave its comma flush against the next one. Not
         # before a digit, so a thousands separator survives ("1,500").
         out = re.sub(r",(?=[^\s,\d])", ", ", out)
+        # A dropped entry can leave the "and" that joined it to the next one
+        # stranded at the front of the survivor: "30, and a long coat".
+        out = re.sub(r"(,\s*)(?:and|or)\s+", lambda m: m.group(1), out, flags=re.I)
     out = re.sub(r"\s{2,}", " ", out)
     # Drop a sentence the deletion emptied, and one it reduced to a bare subject
     # ("She wears a red coat." -> "She.") -- which describes nobody and is one more
@@ -2815,7 +2833,12 @@ def scrub_removed(text, tokens):
         s = sent.strip()
         if not re.search(r"[A-Za-z0-9]", s):
             continue
-        if re.fullmatch(r"(?:he|she|they|it|[A-Z][\w-]*)\s*[.!?]?", s, re.I):
+        # ...including one left with only a copula: "She is wearing a belt." can
+        # come down to "She is.", which is the same empty mention with a verb on
+        # the end. The removal took everything the sentence was about.
+        if re.fullmatch(r"(?:he|she|they|it|[A-Z][\w-]*)"
+                        r"(?:\s+(?:is|are|was|were|has|have|had))?\s*[.!?]?",
+                        s, re.I):
             continue
         kept.append(s if s[-1] in ".!?" else s + ".")
     return " ".join(kept).strip()

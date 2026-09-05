@@ -1051,6 +1051,51 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_an_object_tag_leaves_with_its_object():
+    print("\n=== a scrubbed object takes its picture tag with it ===")
+    # Reported: the belt did not look the same when it came back into view. On the
+    # shots where it was COVERED, the scrubber took the words "a chastity belt" and
+    # left "<Picture 2>" standing on its own -- so those shots still carried the
+    # belt's reference with nothing in the text accounting for it. Whatever the model
+    # made of an unclaimed picture is what the next shot inherited as its keyframe.
+    #
+    # The comma-list path already knew to take the tag. The surgical path did not, so
+    # any object written into a fragment with a VERB fell through it.
+    for text, toks in (
+        ("Mara: <Picture 1>, she, 30, wearing a chastity belt <Picture 2>, and a coat.",
+         ["chastity belt"]),
+        ("Nora: <Picture 1>, 34, she, wearing a silver locket <Picture 2> and boots.",
+         ["locket"]),
+        ("She is wearing a silver locket <Picture 2>.", ["locket"]),
+        ("Nora: <Picture 1>, 34, she, a silver locket <Picture 2>, green jacket.",
+         ["locket"]),
+    ):
+        out = S.scrub_removed(text, toks)
+        check(f"the tag goes too: {toks[0]!r} in {text[:30]!r}", "<Picture 2>" not in out)
+    # The PERSON's tag must survive all of it -- losing it costs that shot its
+    # identity reference, which is a face drifting instead of an object.
+    for text, toks in (
+        ("Mara: <Picture 1>, she, 30, wearing a chastity belt <Picture 2>, and a coat.",
+         ["chastity belt"]),
+        ("Nora: <Picture 1>, 34, she, green jacket.", ["jacket"]),
+        ("Nora: <Picture 1> wearing a green jacket.", ["jacket"]),
+    ):
+        check(f"the person keeps theirs: {text[:34]!r}",
+              "<Picture 1>" in S.scrub_removed(text, toks))
+    # What is left has to read as English, or the leftovers describe something.
+    check("no stranded conjunction at the front of a list",
+          S.scrub_removed("Mara: <Picture 1>, she, 30, a belt <Picture 2>, and a coat.",
+                          ["belt"]).strip()
+          == "Mara: <Picture 1>, she, 30, a coat.")
+    check("a sentence emptied to a subject and copula is dropped",
+          S.scrub_removed("She is wearing a silver locket <Picture 2>.",
+                          ["locket"]).strip() == "")
+    check("...while a real sentence survives",
+          "green jacket" in S.scrub_removed(
+              "Nora: <Picture 1>, 34, she, a locket <Picture 2> and green jacket.",
+              ["locket"]))
+
+
 def test_fastened_limbs_keep_their_anchor():
     print("\n=== where the cuffs are held, not just that they are shut ===")
     # Reported: cuffs above the head in one shot, somewhere else in the next. The
@@ -1870,6 +1915,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_an_object_tag_leaves_with_its_object()
     test_fastened_limbs_keep_their_anchor()
     test_only_a_beat_with_a_person_gets_a_mouth()
     test_a_tag_names_the_socket_it_is_wired_to()

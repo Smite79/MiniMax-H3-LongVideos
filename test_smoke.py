@@ -760,6 +760,45 @@ def _prompts_sent(P, **kw):
     return seen, out[3]
 
 
+def test_a_covered_object_does_not_send_its_picture():
+    print("\n=== an object out of view does not carry its reference ===")
+    # Reported: the object looked different when it came back into view. While it was
+    # covered, the scrubber removed its WORDS and left its <Picture N> -- so the shot
+    # still sent the reference, unclaimed, and whatever the model made of a picture
+    # nothing accounted for became the keyframe the next shot was built on.
+    FACE = torch.full((1, H, W, 3), 0.10)
+    OBJ = torch.full((1, H, W, 3), 0.80)
+    which = lambda t: "FACE" if abs(float(t.mean()) - 0.10) < 0.01 else "OBJ"
+    mem = ("Mara: <Picture 1>, she, 30, wearing a silver locket <Picture 2>, "
+           "and a long coat.")
+    P = ("A room.\n\nMara stands by the window in her coat.\n\n"
+         "Mara takes off the coat, showing the locket.\n\nMara walks to the door.")
+    rows = []
+    ob = S.build_conditioning
+    def spy(clip, vae, audio_vae, prompt, *a, **k):
+        rows.append((prompt, [which(r) for r in (k.get("refs") or [])]))
+        return ob(clip, vae, audio_vae, prompt, *a, **k)
+    S.build_conditioning = spy
+    try:
+        run_node(P, character_memory=mem, ref_image_1=FACE, ref_image_2=OBJ)
+    finally:
+        S.build_conditioning = ob
+    check("the covered shot sends only the face", rows[0][1] == ["FACE"], str(rows[0][1]))
+    check("...and names no picture it does not carry",
+          sorted(set(re.findall(r"<Picture (\d+)>", rows[0][0]))) == ["1"], rows[0][0][:80])
+    check("...and does not describe the covered object",
+          "locket" not in rows[0][0].lower(), "")
+    # Back in view: the words and the picture return together.
+    check("the reveal brings the picture back", rows[1][1] == ["FACE", "OBJ"], str(rows[1][1]))
+    check("...claimed by the text",
+          sorted(set(re.findall(r"<Picture (\d+)>", rows[1][0]))) == ["1", "2"], "")
+    check("...and it stays for the shot after", rows[2][1] == ["FACE", "OBJ"], str(rows[2][1]))
+    # Every shot: as many references as the text names. The invariant this broke.
+    bad = [i + 1 for i, (p, imgs) in enumerate(rows)
+           if len(imgs) != len(set(re.findall(r"<Picture (\d+)>", p)))]
+    check("no shot carries a picture its text never names", not bad, str(bad))
+
+
 def test_the_anchor_survives_a_close_shot():
     print("\n=== cuffs above the head are still above the head next shot ===")
     P = ("A room.\n\nMara is handcuffed above her head to the bed frame.\n\n"
@@ -1651,6 +1690,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_a_covered_object_does_not_send_its_picture()
     test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()
     test_script_is_what_was_sent()
