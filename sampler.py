@@ -1758,7 +1758,14 @@ _UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
 
 _REMOVAL_PROSE = re.compile(
     r"\b(?:" + _UNDO_VERB + r")\b"
-    r"|\b(?:" + _STRIP_VERB + r")\s+(?:off|away|out\s+of|down)\b"
+    # "down" is NOT here. Pulling a garment down leaves it ON, around the thighs or
+    # the hips -- it is displaced, not removed. Counted as a removal it was scrubbed
+    # out of the scene, so every later shot stopped describing something that was
+    # still in the picture, and an undescribed garment is one the model re-invents.
+    # Reported as the shorts changing appearance in the next beat. The shot was also
+    # told they come off and are "dropped out of frame", which is not what the beat
+    # asked for at all. Displacement is handled below and keeps the garment described.
+    r"|\b(?:" + _STRIP_VERB + r")\s+(?:off|away|out\s+of)\b"
     r"|\b(?:" + _TRAILING_VERB + r")\b(?=[^.;!?]{0,40}?\b(?:off|away)\b)"
     # Over the head is off. The only way a garment goes over a head is coming off
     # or going on, and the strip verbs are one-directional. A LOOKAHEAD, because
@@ -2796,6 +2803,79 @@ def _is_entry_head(word, scene):
         if _ENTRY_END.match(tail):
             return True
     return False
+
+
+# A garment MOVED rather than taken off: pulled down, pushed up, shoved aside, left
+# hanging open. It is still on the body and still in the picture, so it has to go on
+# being described -- but described as it now is, or the next shot puts it back the way
+# the sheet says it was worn.
+# "back up" first, so it is matched whole. Written as two words it is the commonest
+# way anybody says a garment is being put right, and matching only "back" left the
+# trailing "up" outside the pattern -- so the restore looked like a new displacement.
+_DISPLACE_WAY = (r"back\s+up|back\s+down|down|up|aside|open|back|"
+                 r"off\s+(?:one|her|his|their)\s+shoulders?")
+_DISPLACE = re.compile(
+    r"\b(?:" + _STRIP_VERB + r"|push(?:es|ed|ing)?|shove[sd]?|roll(?:s|ed|ing)?|"
+    r"hitch(?:es|ed)?|hike[sd]?|open(?:s|ed)?|undo(?:es)?|unzip(?:s|ped)?)\s+"
+    r"(?:(" + _DISPLACE_WAY + r")\s+)?"
+    r"((?:the|her|his|their|a|an)\s+)?([\w][\w\- ]{0,28}?)"
+    r"(?:\s+(" + _DISPLACE_WAY + r"))?"
+    r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then)\b|$)", re.I)
+
+
+def displaced_garments(beat, scene):
+    """[(garment, how)] this beat MOVES without taking off. [] when none.
+
+    Same two conditions infer_removals uses, and for the same reason: the beat has
+    to stage it, and the scene has to already say the thing is worn. A displacement
+    invented for something nobody is wearing describes a garment into existence."""
+    if not beat or not scene:
+        return []
+    out, seen = [], set()
+    low = scene.lower()
+    for m in _DISPLACE.finditer(beat):
+        way = (m.group(1) or m.group(4) or "").lower().strip()
+        thing = re.sub(r"\s+", " ", (m.group(3) or "")).strip().lower()
+        if not way or not thing or thing in seen:
+            continue
+        # The garment has to be one the scene already dresses them in, and the head
+        # noun is what matches: "her denim shorts" is the scene's "blue denim shorts".
+        head = thing.split()[-1]
+        if len(head) < 3 or head not in low:
+            continue
+        seen.add(thing)
+        # "back up" and "back down" say the direction in their second word.
+        way = re.sub(r"^back\s+", "", re.sub(r"\s+", " ", way))
+        out.append((thing, "pulled " + way if way in ("down", "up", "aside", "back")
+                    else way))
+    return out
+
+
+# Putting it right without naming it: "pulls them back up". A pronoun cannot be
+# matched against the wardrobe, but if exactly one garment is displaced there is only
+# one thing it can mean -- and leaving it displaced is the error that shows.
+_PUT_BACK = re.compile(
+    r"\b(?:pull|tug|hitch|hike|yank|push)(?:s|ed|ing)?\s+"
+    r"(?:it|them|these|those)\s+(?:back\s+)?(?:up|down|closed|shut|together)\b"
+    r"|\b(?:pull|tug|hitch|hike|yank|push)(?:s|ed|ing)?\s+"
+    r"(?:it|them)\s+back\b", re.I)
+
+
+def puts_it_back(beat):
+    """Does this beat put a displaced garment right without naming it?"""
+    return bool(_PUT_BACK.search(beat or ""))
+
+
+def displaced_hold(items):
+    """Say where a moved garment now sits, so the next shot does not put it back.
+
+    Without this the garment is described by the sheet in the state it was WORN, and
+    the sheet is re-stamped into every shot -- so shorts pulled down are pulled back
+    up by the next beat, or come back looking like a different pair."""
+    if not items:
+        return ""
+    said = ", ".join(f"the {thing} {how}" for thing, how in items[:2])
+    return f" Still on the body and {said}, left exactly where the beat put them."
 
 
 def infer_removals(beat, scene):
@@ -3973,6 +4053,8 @@ class H3LongVideos:
         restrained = posed = rigid_latched = False
         anchored = ""             # where fastened limbs are held
         worn_item = ""            # the hardware, in the author's words
+        displaced = {}            # garment -> how it was moved
+        moved_shots = []          # shots reminded of it
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
@@ -4376,6 +4458,30 @@ class H3LongVideos:
             # it, and where nothing has been seen to name.
             _still = (hardware_still_on(worn_item)
                       if (restrained and worn_item and not _named_item) else "")
+            # A garment MOVED rather than removed. It stays in the scene text, so
+            # the sheet keeps describing it the way it was WORN -- and the sheet is
+            # re-stamped into every shot, which pulls it back up. Latch the state the
+            # beat left it in and restate that instead.
+            for _g, _how in displaced_garments(body, shot_scene):
+                _was = displaced.get(_g, "")
+                # Put back up again is a restore, not a new displacement.
+                if _was == "pulled down" and _how in ("pulled up", "pulled back"):
+                    displaced.pop(_g, None)
+                else:
+                    displaced[_g] = _how
+            # A real removal takes the garment out of the scene, so there is nothing
+            # left to describe as displaced.
+            for _g in [g for g in displaced if names_any(g, toks)]:
+                displaced.pop(_g, None)
+            # "pulls them back up" names nothing, and a pronoun cannot be matched
+            # against the wardrobe -- but with one garment displaced there is only
+            # one thing it can mean, and leaving it displaced is the error that shows.
+            if len(displaced) == 1 and puts_it_back(body):
+                displaced.clear()
+            _moved = displaced_hold([(g, h) for g, h in displaced.items()
+                                     if g not in (body or "").lower()])
+            if _moved:
+                moved_shots.append(len(shots) + 1)
             if _still:
                 named_shots.append(len(shots) + 1)
             # ...and say WHOSE. Unattributed, "every restraint stays fastened" is an
@@ -4475,7 +4581,7 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            shot_text = (line + tail + anchors + _gaze + _state + _sound
+            shot_text = (line + tail + _moved + anchors + _gaze + _state + _sound
                          + _device + _mouth + hold + _still + _anchor
                          + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
@@ -4588,6 +4694,16 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if moved_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in moved_shots)} carry a garment "
+                f"MOVED rather than taken off -- pulled down, pushed up, shoved aside. "
+                f"It is still on the body, so it stays in the scene and is described "
+                f"where the beat left it. Counted as a removal it would be scrubbed "
+                f"instead, and every later shot would describe nothing where something "
+                f"still is -- which is the garment coming back looking like a "
+                f"different one. Putting it back ('pulls them back up') releases it, "
+                f"and a real removal or a `remove:` empties it for good")
         if named_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in named_shots)} name the hardware "
