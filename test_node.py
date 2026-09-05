@@ -1114,6 +1114,69 @@ def test_the_hardware_keeps_being_named():
     check("nothing to name, nothing said", S.hardware_still_on("") == "")
 
 
+def test_memory_is_asked_for_honestly():
+    print("\n=== freeing VRAM asks for what the shot needs, not for everything ===")
+    # Reported: disk thrashing that slows the preload, on the ComfyUI drive.
+    #
+    # free_memory computes memory_to_free = memory_required - get_free_memory(device)
+    # (model_management.py:887), so passing 1e30 means "unload everything not kept",
+    # unconditionally, on every card. Before each decode that evicted the DiT three
+    # lines before the next shot needed it; before each sample it evicted the ~14.6GB
+    # text encoder and both VAEs, which the next shot immediately re-encodes with. On
+    # a machine whose RAM is full of finished frames, those come back from DISK once
+    # per shot. That is the thrashing.
+    # No real tensors here: this suite stubs torch. A latent only needs a shape
+    # and a dtype for either estimator to be asked.
+    class _Lat:
+        shape = (1, 16, 10, 96, 128)
+        dtype = "float16"
+    class _VAE:
+        vae_dtype = "float16"
+        def memory_used_decode(self, shape, dtype):
+            return 2500 * shape[-1] * shape[-2] * 2
+    lat = _Lat()
+    need = S._decode_headroom(_VAE(), lat)
+    check(f"the decode asks for a real number ({need:.0f} bytes)", 0 < need < 1e29)
+    check("...with headroom over the estimate", need > _VAE().memory_used_decode(lat.shape, None))
+    # The fallback must be the behaviour that has been running, not "free nothing":
+    # an estimate that frees too little turns a slow render into an OOM.
+    class _NoEstimate: pass
+    class _Raises:
+        vae_dtype = "float16"
+        def memory_used_decode(self, shape, dtype): raise RuntimeError("no")
+    check("no estimator falls back to the old behaviour",
+          S._decode_headroom(_NoEstimate(), lat) == 1e30)
+    check("a failing estimator does too", S._decode_headroom(_Raises(), lat) == 1e30)
+    # And the sampling side, which is the expensive one -- it is what evicts the
+    # text encoder.
+    calls = []
+    class _MM:
+        @staticmethod
+        def get_torch_device(): return "cpu"
+        @staticmethod
+        def free_memory(req, dev, keep_loaded=None): calls.append(req)
+        @staticmethod
+        def soft_empty_cache(*a): pass
+    class _Inner:
+        def memory_required(self, shape):
+            import math
+            return 2.0 * math.prod(shape) * 4
+    class _Model: model = _Inner()
+    _orig = S.mm
+    S.mm = _MM()
+    try:
+        S._evict_all_but(_Model(), {"samples": lat})
+        check(f"sampling asks for a real number ({calls[-1]:.0f} bytes)",
+              0 < calls[-1] < 1e29)
+        S._evict_all_but(_Model(), None)
+        check("no latent falls back", calls[-1] == 1e30)
+        class _Broken: model = object()
+        S._evict_all_but(_Broken(), {"samples": lat})
+        check("a model that cannot size itself falls back", calls[-1] == 1e30)
+    finally:
+        S.mm = _orig
+
+
 def test_the_hold_needs_its_wearer_on_screen():
     print("\n=== cuffs are not described in a shot with nobody wearing them ===")
     # Reported as nasty duplicates. `restrained` was a film-level latch: once anything
@@ -2344,6 +2407,7 @@ def main():
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
     test_the_hardware_keeps_being_named()
+    test_memory_is_asked_for_honestly()
     test_the_hold_needs_its_wearer_on_screen()
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()

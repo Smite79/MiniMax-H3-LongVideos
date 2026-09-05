@@ -1193,19 +1193,31 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
     about to be used, once per shot, on every card. Peak VRAM is identical either
     way, since the VAE has to be resident to decode; the round trip was pure cost.
 
-    Note what is NOT changed here: memory_required is still 1e30, which skips
-    ComfyUI's partially_unload path (model_management.py:811) and forces a full
-    detach + unpatch of everything else. That is the expensive half on a card with
-    headroom, and it cannot be sized honestly without measuring on real hardware."""
-    if free_first is not None:
-        try:
-            mm.free_memory(1e30, mm.get_torch_device(),
-                           keep_loaded=_resident(keep or (vae,)))
-        except Exception:
-            pass
+    memory_required is ASKED FOR HONESTLY, which it was not. It was 1e30, and
+    free_memory computes `memory_to_free = memory_required - get_free_memory(device)`
+    (model_management.py:887), so 1e30 means "unload everything not in keep_loaded",
+    every shot, in full -- skipping partially_unload entirely.
+
+    What that evicts is the DiT, three lines before the next shot needs it again. On
+    a machine whose RAM is already full of finished frames there is nowhere for it to
+    go but disk, so the reload is a read from the drive, once per shot. Reported as
+    thrashing that slows the preload, and it is exactly that: the same weights being
+    read back at every boundary.
+
+    The VAE knows what its own decode costs -- ComfyUI sizes it with
+    memory_used_decode and uses that number everywhere else. Asked for that instead,
+    a card with headroom frees NOTHING and the DiT simply stays. A card without
+    headroom frees what it needs and no more, which is what partially_unload is for.
+    1e30 remains the fallback for a VAE that cannot estimate itself."""
     latent = out_latent["samples"]
     if latent.is_nested:
         latent = latent.unbind()[0]
+    if free_first is not None:
+        try:
+            mm.free_memory(_decode_headroom(vae, latent), mm.get_torch_device(),
+                           keep_loaded=_resident(keep or (vae,)))
+        except Exception:
+            pass
     if tiled:
         # Temporal + spatial tiling. Without tile_t the VAE expands the WHOLE latent
         # clip at once, which on a 243-frame 1344x768 shot is the single largest
@@ -1271,6 +1283,31 @@ def _deep_cleanup():
         pass
 
 
+DECODE_HEADROOM = 1.25          # over ComfyUI's own estimate, for working allocations
+SAMPLE_HEADROOM = 1.35          # likewise for sampling, which is the longer stretch
+
+
+def _decode_headroom(vae, latent):
+    """VRAM this decode actually needs, by the VAE's own estimate. 1e30 if unknown.
+
+    ComfyUI sizes every VAE with memory_used_decode and uses that number itself, so
+    it is the honest figure to hand free_memory. The alternative -- and what was here
+    -- is 1e30, which means "unload everything" and evicts the DiT before every
+    decode, three lines before the next shot reloads it.
+
+    1e30 on failure rather than 0: a bad estimate that frees too little turns a slow
+    render into an OOM, and a wrong guess should fall back to the behaviour that has
+    been running, not to no freeing at all."""
+    try:
+        dtype = getattr(vae, "vae_dtype", None) or latent.dtype
+        need = float(vae.memory_used_decode(tuple(latent.shape), dtype))
+        if need > 0:
+            return need * DECODE_HEADROOM
+    except Exception:
+        pass
+    return 1e30
+
+
 def _resident(models):
     """The LoadedModel entries ComfyUI currently holds for `models`.
 
@@ -1292,7 +1329,7 @@ def _resident(models):
     return out
 
 
-def _evict_all_but(keep_model):
+def _evict_all_but(keep_model, latent=None):
     """Unload every model EXCEPT the diffusion model from the GPU.
 
     This is the fix for VRAM ratcheting across a long chain. soft_empty_cache()
@@ -1308,9 +1345,31 @@ def _evict_all_but(keep_model):
     a card where the DiT is most of the VRAM. Freeing explicitly, right after
     conditioning is built and before sampling, keeps only what the sampler needs.
 
-    Still 1e30, deliberately: see the note in _decode_video."""
+    ASKED FOR HONESTLY, and this is the expensive one. free_memory computes
+    `memory_to_free = memory_required - get_free_memory(device)`, so 1e30 meant
+    "unload everything but the DiT" on every shot, unconditionally -- on a 48GB card
+    with room for all of it as readily as on a 16GB one. What it unloads is the
+    ~14.6GB text encoder and both VAEs, and the next shot re-encodes the prompt and
+    the handoff keyframe, so all three come straight back. On a machine whose RAM is
+    already full of finished frames they come back from DISK, once per shot, which is
+    the thrashing this was reported as.
+
+    The DiT can size its own activations -- memory_required(shape) is what ComfyUI
+    itself calls before a load -- so ask for that. A card with room frees nothing and
+    keeps the encoder resident; a card without frees exactly as much as it must.
+    1e30 stays the fallback, because a bad estimate that frees too little turns a
+    slow render into an OOM."""
+    need = 1e30
     try:
-        mm.free_memory(1e30, mm.get_torch_device(),
+        if latent is not None:
+            shape = latent["samples"].shape if isinstance(latent, dict) else latent.shape
+            need = float(keep_model.model.memory_required(tuple(shape))) * SAMPLE_HEADROOM
+            if not (need > 0):
+                need = 1e30
+    except Exception:
+        need = 1e30
+    try:
+        mm.free_memory(need, mm.get_torch_device(),
                        keep_loaded=_resident([keep_model]))
     except Exception:
         try:
@@ -5483,7 +5542,7 @@ class H3LongVideos:
                     f"first degrades while sampling. The handoff is riding as an extra "
                     f"reference instead: continuity is weaker but nothing is corrupted. "
                     f"Raise it to {KEYFRAME_SAFE_AUG:g}+ for a real keyframe")
-            _evict_all_but(model)
+            _evict_all_but(model, latent)
             try:
                 _t0 = time.perf_counter()
                 out = sample_shot(model, cond, negative, latent, seed, steps, cfg,

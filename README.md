@@ -373,6 +373,12 @@ crowd the weights out, each shot boundary re-reads them from disk. `info` report
 the chain is holding. If the machine is thrashing: fewer frames per run, a lower
 `megapixels`, or a smaller diffusion quant.
 
+The node asks ComfyUI to free **what the shot needs**, sized by the model's and the
+VAE's own estimates. It used to ask for everything, which unloaded the text encoder and
+both VAEs before every sample and the diffusion model before every decode — all of them
+needed again moments later. On a card with headroom nothing is freed now and the weights
+stay put; on a card without, only as much goes as must.
+
 ## Other nodes here
 
 - **H3 Shot Length** — seconds to a valid H3 frame count (17k+5 grid, 362 cap).
