@@ -1962,8 +1962,19 @@ def own_hold(hold, wearers, described):
             ", ".join(names[:-1]) + " and " + names[-1]
 
     who = _and(wearers)
-    tail = (f" The hardware is {who}'s, worn on the body it was locked to. Everyone "
-            f"else in the shot has on exactly what their own entry lists.")
+    # ONE naming, not two. This used to add "The hardware is X's, worn on the body it
+    # was locked to" on top of rewriting the clause to "Every restraint on X" -- which
+    # says the same thing twice and costs a second mention of X in the shot.
+    #
+    # Reported as a second girl appearing at the moment of cuffing. A described person
+    # is a person the model draws; that is the whole basis of character_guard, and it
+    # does not stop applying because the describing sentence is a continuity guard.
+    # The dropped sentence also put a bare "the body" into the text, unattached to
+    # anybody, in the one shot where a second figure was turning up.
+    #
+    # What is KEPT is the half that does work the rewrite cannot: excluding everyone
+    # else. That is what stopped one character's hardware appearing on another.
+    tail = " Everyone else in the shot has on exactly what their own entry lists."
     return hold.replace("Every restraint", f"Every restraint on {who}", 1).rstrip() + tail
 
 # Hardware that means restraint on its own.
@@ -3891,6 +3902,7 @@ class H3LongVideos:
         fall_shots = []           # shots told what takes the landing
         device_shots = []         # shots whose line belongs to a machine
         applied_shots = []        # shots that put the hardware on
+        early_hardware = []       # ...where the sheet already claimed it
         tight_shots = []          # ...where the framing also crops it
         # Scenery whose state a beat has CHANGED. After that the node stops asserting
         # the state it was written with, because it is no longer the state: a van
@@ -4141,6 +4153,18 @@ class H3LongVideos:
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(shot_scene)
                              and restraint_going_on(body))
+            # The sheet claiming hardware the beat is only now putting on. The sheet
+            # goes into EVERY shot, so it is on her in the shots before it happens,
+            # and this shot is told it is already fastened rather than going on.
+            # Not the node's to resolve -- the sheet is the author's standing
+            # description and the beat is the author's action -- but it is exactly
+            # the shape that renders as being restrained first and caught after.
+            # Not gated on the latch: the sheet has already made her restrained
+            # from shot 1, which is the whole problem being reported. Recorded
+            # once -- it is one authoring decision, not one per shot.
+            if (not early_hardware and restraint_going_on(body)
+                    and restraint_present(shot_scene)):
+                early_hardware.append(len(shots) + 1)
             # Rigidity latches like the hardware itself. Steel locked on in shot 1 is
             # still steel in shot 5, and a beat that does not happen to say "chain"
             # does not mean the chain became rope -- but tested per shot, that is
@@ -4473,6 +4497,16 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if early_hardware:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in early_hardware)} stage hardware "
+                f"going ON, but the character sheet already lists it as worn. The sheet "
+                f"goes into every shot, so it is on them in the shots BEFORE this "
+                f"happens, and this shot is told the restraint is already fastened "
+                f"instead of being told both ends -- which renders as restrained first "
+                f"and caught afterwards. Take the hardware off the sheet entry and let "
+                f"the beat put it on; from the next shot it is held automatically. Your "
+                f"wording is never edited, so this one is yours")
         if applied_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in applied_shots)} put the hardware "
