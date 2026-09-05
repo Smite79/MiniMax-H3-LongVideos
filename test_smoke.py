@@ -1027,7 +1027,7 @@ def test_a_shifted_workflow_stops_before_rendering():
     # recoverable, and sane_widgets says so in info.
     num = run_node("A room.\n\nMara waits.", plan_only=True, pace=float("nan"))
     check("a NaN number is still repaired, not refused",
-          "not a usable number" in num[2], "")
+          "not usable numbers" in num[2], "")
 
 
 def test_the_removal_shot_says_what_is_under():

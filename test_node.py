@@ -2329,7 +2329,18 @@ def test_widget_values_are_usable():
         out, notes = S.sane_widgets({"pace": _bad})
         check(f"unusable value repaired: {_bad!r}", out["pace"] == 1.0 and bool(notes))
     check("...and the cause is named",
-          "by POSITION" in S.sane_widgets({"pace": float("nan")})[1][0])
+          "BY POSITION" in S.sane_widgets({"pace": float("nan")})[1][0])
+    # ONE note for all of them, not one paragraph each. A slid workflow produces
+    # several at once, and the same explanation three times over buries the notes
+    # that are about the film.
+    _many = S.sane_widgets({"pace": float("nan"), "steps": float("nan"),
+                            "megapixels": float("nan")})[1]
+    check("all of them in a single note", len([n for n in _many if "not usable" in n]) == 1)
+    check("...naming each widget", all(w in _many[0] for w in ("pace", "steps", "megapixels")))
+    # And saying it comes back until the GRAPH is fixed -- repairing the run does not
+    # repair the file, which is why it reappears at every restart.
+    check("...and that it returns until the node is recreated",
+          "every restart" in _many[0] and "Fix node (recreate)" in _many[0])
     # Out of range is a value the user chose, so it is clamped rather than discarded.
     check("below the minimum is clamped", S.sane_widgets({"pace": 0.01})[0]["pace"] == 0.25)
     check("above the maximum is clamped", S.sane_widgets({"pace": 9.0})[0]["pace"] == 2.0)

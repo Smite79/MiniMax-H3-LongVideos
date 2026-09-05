@@ -3984,7 +3984,7 @@ def sane_widgets(values):
     default; one that is merely out of range is clamped. Reported either way, because
     silently substituting a number the user did not choose is how a wrong render looks
     like a broken node."""
-    out, notes = dict(values), []
+    out, notes, unusable = dict(values), [], []
     for name, (default, lo, hi, cast) in _WIDGET_RANGE.items():
         if name not in out:
             continue
@@ -3997,17 +3997,27 @@ def sane_widgets(values):
                 raise ValueError("not a finite number")
         except (TypeError, ValueError):
             out[name] = default
-            notes.append(f"{name} came in as {raw!r}, which is not a usable number, so "
-                         f"the built-in default {default} was used. A saved workflow "
-                         f"restores widget values by POSITION, so this usually means the "
-                         f"node gained or lost a widget above this one -- open the node, "
-                         f"set the values you want, and save the workflow again")
+            unusable.append(f"{name} was {raw!r}, now {default}")
             continue
         clamped = min(max(num, lo), hi)
         if clamped != num:
             notes.append(f"{name} was {num:g}, outside {lo:g}..{hi:g}, so it was clamped "
                          f"to {clamped:g}")
         out[name] = cast(clamped)
+    # ONE note for all of them. This used to emit a paragraph per widget, and a
+    # workflow whose values have slid produces several at once -- the same
+    # explanation three or four times, at the top of every run, which buries the
+    # notes that are about the film. Said once, with the list.
+    if unusable:
+        notes.insert(0, "widget values that were not usable numbers, replaced with "
+                        "their defaults: " + "; ".join(unusable)
+                     + ". Values are restored BY POSITION with no names stored, so this "
+                       "means the node's widget list and the saved one disagree -- "
+                       "usually because a widget was converted to an input, or the node "
+                       "gained one. It repairs itself for THIS run only: the graph still "
+                       "holds the bad values, so it comes back every restart until the "
+                       "node is fixed. Right-click the node and choose 'Fix node "
+                       "(recreate)', set your values, and save the workflow")
     return out, notes
 
 
@@ -4046,7 +4056,15 @@ class H3LongVideos:
                                "which is why nothing here is phrased as a negation."}),
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "res_multistep"}),
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "simple"}),
+                # control_after_generate DECLARED, not left implicit. The frontend adds
+                # that control by itself for any INT named "seed", so it existed in the
+                # panel while the backend knew nothing about it -- the UI's widget list
+                # was one longer than this one, and widget values are restored BY
+                # POSITION. Declaring it is what ComfyUI's own KSampler does
+                # (nodes.py:1602), and it makes the two lists agree on where every
+                # later value belongs.
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff,
+                    "control_after_generate": True,
                     "tooltip": "One seed for the whole chain. Every shot is the same length, so "
                                "they share a noise field."}),
             },
