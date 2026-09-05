@@ -2003,6 +2003,68 @@ _FORCED_POSE = re.compile(
     r"on\s+(?:her|his|their)\s+(?:knees|haunches))\b", re.I)
 
 
+# WHERE the fastened limbs are held. Distinct from _FORCED_POSE, which is what the
+# whole body is doing -- kneeling, hogtied, bent over. Cuffed wrists above the head is
+# not a pose in that sense: the body can be standing, sitting or lying and the arms are
+# still fixed at one point.
+#
+# Reported: cuffs above the head in one shot, somewhere else in the next. The restraint
+# hold kept them shut and said nothing about where they were, so the only thing
+# carrying the position was the picture -- and the picture is the previous shot's last
+# frame, which a close shot crops the anchor point straight out of. Text is the only
+# thing that survives a tight frame.
+_LIMB_ANCHOR = (
+    (r"(?:above|over)\s+(?:her|his|their|the)\s+head|overhead|"
+     r"stretched\s+(?:up|upward)", "above the head"),
+    (r"behind\s+(?:her|his|their|the)\s+back", "behind the back"),
+    (r"in\s+front\s+of\s+(?:her|his|their)\s+(?:body|chest|waist)", "in front of the body"),
+    (r"(?:out\s+)?to\s+the\s+sides?|spread\s+wide", "out to the sides"),
+    (r"at\s+(?:her|his|their|the)\s+waist", "at the waist"),
+)
+# What they are fastened TO. Named separately because a shot can state one, the other,
+# or both, and the clause reads correctly with whichever it has.
+_ANCHOR_POINT = re.compile(
+    r"\bto\s+(?:the|a|an|her|his|their)\s+"
+    r"((?:bed\s*frames?|bed\s*heads?|headboards?|bed\s*posts?|beds?|rails?|railings?|"
+    r"bars?|posts?|rings?|hooks?|pipes?|radiators?|chairs?|tables?|beams?|frames?|"
+    r"grates?|grilles?|fences?))\b", re.I)
+
+
+def limb_anchor(text):
+    """Where fastened limbs are being held, as a phrase. '' when the text says none."""
+    t = text or ""
+    where = next((phrase for pat, phrase in _LIMB_ANCHOR
+                  if re.search(pat, t, re.I)), "")
+    m = _ANCHOR_POINT.search(t)
+    point = ("at the " + re.sub(r"\s+", " ", m.group(1).lower())) if m else ""
+    if where and point:
+        return f"{where}, {point}"
+    return where or point
+
+
+def anchor_hold(where):
+    """One sentence keeping the fastened limbs where they were fastened.
+
+    Said on the shots AFTER the one that staged it -- the staging shot has the
+    author's own words and does not need this arguing beside them."""
+    if not where:
+        return ""
+    return f" The fastened wrists stay {where}, where they were locked."
+
+
+# Framing tight enough to crop an anchor point out of shot. Worth naming because the
+# next shot starts from THIS shot's last frame: whatever a close shot cuts off, the
+# next shot inherits a picture without it, and only the text still knows.
+_TIGHT_FRAME = re.compile(
+    r"\bclose[-\s]?up|\bclose\s+(?:shot|on)\b|\btight\s+(?:on|shot)\b|"
+    r"\bfills?\s+the\s+frame\b|\bmacro\b", re.I)
+
+
+def tight_framing(text):
+    """Does this beat call for a frame close enough to lose the anchor point?"""
+    return bool(_TIGHT_FRAME.search(text or ""))
+
+
 def forced_pose(text):
     """Does this text put a body into a position that hardware can enforce?"""
     return bool(_FORCED_POSE.search(text or ""))
@@ -3591,6 +3653,9 @@ class H3LongVideos:
         sounded = []                # beats that ask for a sound of their own
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
+        anchored = ""             # where fastened limbs are held
+        anchored_shots = []       # shots reminded of it
+        tight_shots = []          # ...where the framing also crops it
         # Scenery whose state a beat has CHANGED. After that the node stops asserting
         # the state it was written with, because it is no longer the state: a van
         # opened in shot 2 must not be told it is shut in shot 3, and the scene
@@ -3822,6 +3887,7 @@ class H3LongVideos:
                 if names_any(RESTRAINT_HOLD_KEY, toks) or any(
                         restraint_present(t) for t in toks):
                     restrained = posed = rigid_latched = False
+                    anchored = ""
                 elif restraint_present(body) or restraint_present(shot_scene):
                     restrained = True
             # Rigidity latches like the hardware itself. Steel locked on in shot 1 is
@@ -3837,6 +3903,24 @@ class H3LongVideos:
             # squat is still the position.
             if rigid_latched and forced_pose(f"{body} {shot_scene}"):
                 posed = True
+            # WHERE the fastened limbs are held latches the same way, and for the
+            # same reason the pose does. Cuffs above the head are above the head
+            # three shots later: nothing let go of them. The restraint hold keeps
+            # them SHUT and says nothing about position, so the only thing carrying
+            # it was the picture -- and a close shot crops the anchor point straight
+            # out of frame, which is the reported failure exactly.
+            _anchor_now = limb_anchor(body) if restrained else ""
+            if _anchor_now:
+                anchored = _anchor_now
+            # Said only on the shots AFTER the one that staged it. The staging shot
+            # has the author's own words for this and does not need a second
+            # sentence arguing beside them.
+            _anchor = anchor_hold(anchored) if (restrained and anchored
+                                                and not _anchor_now) else ""
+            if _anchor:
+                anchored_shots.append(len(shots) + 1)
+            if _anchor and tight_framing(body):
+                tight_shots.append(len(shots) + 1)
             # A turn shows a surface the keyframe never pinned, and the model fills
             # it from a clothed prior. Only on shots that turn, and only once there
             # is something to hold -- a removal already made, or hardware on.
@@ -3991,7 +4075,7 @@ class H3LongVideos:
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
             shot_text = (line + tail + anchors + _state + _sound + _mouth
-                         + hold + fall + turn).strip()
+                         + hold + _anchor + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
@@ -4102,6 +4186,23 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if anchored_shots:
+            notes.append(
+                f"fastened limbs held in place on shot(s) {', '.join(str(n) for n in anchored_shots)}"
+                f" -- the shot that staged it said where, and every shot after it is "
+                f"told the same, because the restraint hold keeps the hardware SHUT and "
+                f"says nothing about where it is. Position was being carried by the "
+                f"picture alone, and the picture is the previous shot's last frame. "
+                f"Cleared by a `remove:` naming the hardware, like the hold itself")
+        if tight_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in tight_shots)} frame tight enough to "
+                f"crop the anchor point out. That matters past this shot: the next one "
+                f"starts from THIS one's last frame, so whatever the close framing cut "
+                f"off is missing from the picture the next shot inherits, and the text is "
+                f"the only thing that still knows where the limbs are fastened. It is "
+                f"being said. If the position still drifts, give the beat a wider frame "
+                f"so the anchor is in the picture the chain hands on")
         if mouth_shut:
             notes.append(
                 f"mouths held closed on shot(s) {', '.join(str(n) for n in mouth_shut)} -- "

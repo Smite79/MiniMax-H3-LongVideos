@@ -85,6 +85,18 @@ sitting on the crate"* — and the shot starts fresh instead, because there is n
 to inherit that has him in it; that costs a cut where the character appears, and `info`
 says when it happens.
 
+### Restraints and where they hold
+
+Say where fastened limbs are held — *"cuffed above her head to the bed frame"*, *"cuffed
+behind her back"* — and every later shot is told the same, until a `remove:` names the
+hardware. Without it the hold only kept the cuffs **shut**; the position was carried by
+the picture alone, and the picture is the previous shot's last frame.
+
+**Which is why a close shot loses it.** Tight framing crops the anchor point out, so the
+next shot inherits a picture that never showed it. The text now carries it instead, and
+`info` names the shots where the framing is that tight. If it still drifts, give that
+beat a wider frame.
+
 ### Describing a state
 
 **A state you write down is a state the model can render by arriving at it.** *"A van
@@ -263,7 +275,7 @@ resets at every cut.
 | `character_guard` | describe only the people a beat names |
 | `auto_remove` | read removals from the prose |
 | `restart_after_removal` | break the chain after a removal, so a garment cannot be inherited back |
-| `hold_restraints` | keep hardware fastened, and the same object, once it is on |
+| `hold_restraints` | keep hardware fastened, the same object, and where it was fastened |
 | `hold_scene_state` | put a described state at the first frame, and give a staged change both its ends |
 | `auto_sound` | add the sound an action implies |
 | `silence_nonspeech` | silence shots with no line and no sound |
