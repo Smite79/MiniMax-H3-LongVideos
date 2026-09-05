@@ -1924,6 +1924,49 @@ _APPLY_PHRASE = re.compile(
     r"(?:on|onto|around|behind|together|shut|closed)\b", re.I)
 
 
+# WHAT the hardware is, in the author's own words.
+#
+# Reported: the handcuffs disappeared while she still looked restrained. The holds say
+# "every restraint stays whole and closed" and never name the thing, so a shot after
+# the one that applied them is told a restraint EXISTS without being told what it is.
+# The model renders the consequence -- hands held, restrained posture -- and no object,
+# because no object was described.
+#
+# It only became visible after the sheet stopped listing the item: the sheet was what
+# had been naming it in every shot. Taking it off the sheet is right, since the sheet
+# put the cuffs in the shots before they went on; naming it here is what that costs.
+_HARDWARE_NOUN = re.compile(
+    r"\b(?:(steel|metal|leather|nylon|plastic|padded|heavy|thin|black|chrome)\s+)?"
+    r"(handcuffs|cuffs|manacles|shackles|leg\s+irons|chains|chain|ropes|rope|cords|"
+    r"cord|straps|strap|collars|collar|gags|gag|blindfolds|blindfold|"
+    r"spreader\s+bars|spreader\s+bar|zip\s+ties|zip\s+tie|cable\s+ties|cable\s+tie)\b",
+    re.I)
+
+
+def hardware_named(text):
+    """The hardware this text names, as written. '' when it names none."""
+    m = _HARDWARE_NOUN.search(text or "")
+    if not m:
+        return ""
+    return re.sub(r"\s+", " ", " ".join(g for g in m.groups() if g)).strip().lower()
+
+
+def hardware_still_on(item):
+    """One sentence keeping the thing itself in the picture, not just its effect.
+
+    Named because "every restraint stays whole and closed" describes a category. A
+    model given a category and no object renders the behaviour and leaves the object
+    out, which is a woman moving as though cuffed with nothing on her wrists."""
+    if not item:
+        return ""
+    # No "closed" and no "locked": rope is tied and a blindfold is neither. Say it is
+    # ON and VISIBLE, which is the whole of what went missing, and leave the fastening
+    # to the hold beside it -- that is the clause whose job it is.
+    plural = item.endswith("s") and not item.endswith("ss")
+    return (f" The {item} {'are' if plural else 'is'} still on her, in plain sight "
+            f"where {'they were' if plural else 'it was'} put.")
+
+
 def restraint_going_on(beat):
     """Does this beat stage hardware being APPLIED, rather than already worn?"""
     b = beat or ""
@@ -3897,6 +3940,8 @@ class H3LongVideos:
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
         anchored = ""             # where fastened limbs are held
+        worn_item = ""            # the hardware, in the author's words
+        named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
         fall_shots = []           # shots told what takes the landing
@@ -4137,6 +4182,7 @@ class H3LongVideos:
                         restraint_present(t) for t in toks):
                     restrained = posed = rigid_latched = False
                     anchored = ""
+                    worn_item = ""
                 elif restraint_present(body) or restraint_present(shot_scene):
                     restrained = True
             # The shot where the hardware GOES ON. Newly restrained -- so it was not on
@@ -4150,6 +4196,9 @@ class H3LongVideos:
             # On shot 1 the latch is empty by definition, so a sheet reading "wrists
             # cuffed behind back" would otherwise let a beat that locks a SECOND item
             # on declare the first one off at the first frame.
+            _named_item = hardware_named(body) if restrained else ""
+            if _named_item:
+                worn_item = _named_item
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(shot_scene)
                              and restraint_going_on(body))
@@ -4288,6 +4337,15 @@ class H3LongVideos:
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
             if _applying:
                 applied_shots.append(len(shots) + 1)
+            # Name the thing on shots that do not. The hold says a restraint stays
+            # fastened and never says WHAT, so a shot after the applying one is told
+            # a restraint exists with no object to draw -- which renders as the
+            # behaviour without the hardware. Skipped where the text already names
+            # it, and where nothing has been seen to name.
+            _still = (hardware_still_on(worn_item)
+                      if (restrained and worn_item and not _named_item) else "")
+            if _still:
+                named_shots.append(len(shots) + 1)
             # ...and say WHOSE. Unattributed, "every restraint stays fastened" is an
             # instruction about whoever is on screen, so hardware locked onto one
             # character turned up on the other, over their clothes. Read from the sheet
@@ -4386,7 +4444,8 @@ class H3LongVideos:
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
             shot_text = (line + tail + anchors + _gaze + _state + _sound
-                         + _device + _mouth + hold + _anchor + fall + turn).strip()
+                         + _device + _mouth + hold + _still + _anchor
+                         + fall + turn).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
@@ -4497,6 +4556,16 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if named_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in named_shots)} name the hardware "
+                f"itself, because their own text does not. The holds say a restraint "
+                f"stays whole and closed and never say WHAT it is, so a shot after the "
+                f"one that applied it is told a restraint exists with no object to "
+                f"draw -- and what renders is the consequence without the hardware: "
+                f"held hands and a restrained posture, bare wrists. Taken from your own "
+                f"wording at the shot that put it on, and released by a `remove:` "
+                f"naming it")
         if early_hardware:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in early_hardware)} stage hardware "

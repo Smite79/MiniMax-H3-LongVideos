@@ -102,6 +102,16 @@ reproducing a portrait, gaze included.
 
 ### Restraints and where they hold
 
+**Put the hardware on in a beat, not on the sheet.** A sheet entry listing handcuffs
+goes into *every* shot, including the ones before they are applied — so she wears them
+before she is caught, and the applying shot is told they are already fastened. `info`
+says when your sheet and your beat disagree like this.
+
+Once a beat puts hardware on, the node carries the item forward by name. The holds say
+a restraint stays fastened but never say *what* it is, and a shot told a restraint
+exists with no object to draw renders the consequence without the hardware: held hands
+and a restrained posture, bare wrists. A `remove:` naming the item releases it.
+
 **The shot that puts hardware on is told both ends** — open and off the body at the
 first frame, closed on it by the last — instead of the standing hold. The standing hold
 says the restraint is fastened as it was put on and still fastened at the last frame,
