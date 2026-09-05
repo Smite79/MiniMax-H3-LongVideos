@@ -1051,6 +1051,52 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_the_look_goes_where_the_beat_says():
+    print("\n=== the eyes go where the beat put them ===")
+    # Reported: "she is looking at the TV" rendered her looking off to the side,
+    # posing for the camera. The beat says it once and two things pull the other way:
+    # a person in frame faces the camera unless something says otherwise, and a
+    # near-clean reference asks for the portrait's pose -- which looks at the lens,
+    # because photographs of people do. info already warned about the second one;
+    # nothing in the text argued back.
+    for _t, _want in (("Mara sits on the sofa looking at the TV.", "TV"),
+                      ("She stares at the television screen.", "television screen"),
+                      ("Mara glances at the clock and stands up.", "clock"),
+                      ("She is watching the TV.", "TV"),
+                      ("He peers into the box.", "box"),
+                      ("Mara looks over at the window, then back.", "window"),
+                      ("She studies the map on the wall.", "map"),
+                      ("Mara looks down at the phone in her hand.", "phone")):
+        check(f"target read: {_t[:38]!r} -> {S.look_target(_t)!r}",
+              S.look_target(_t) == _want)
+    # "look" is a common word and most of its uses are not a gaze instruction. A
+    # false clause here describes a stare that the beat never asked for.
+    for _t in ("Mara looks tired.", "She is looking for the keys.",
+               "A look of fear crosses her face.", "He looks up.",
+               "It looks like rain.", "Mara walks to the window.",
+               "She takes a long look around."):
+        check(f"no target: {_t[:38]!r}", not S.look_target(_t))
+    # Looking at a PERSON is left alone: restating a pronoun says nothing the beat
+    # did not, and the other person is in frame to be looked at anyway.
+    for _t in ("Mara looks at her.", "She watches him.", "He stares at them."):
+        check(f"a pronoun is not a target: {_t[:32]!r}", not S.look_target(_t))
+    # The sentence.
+    cl = S.gaze_hold("TV")
+    check("the clause is one sentence", cl.count(".") == 1)
+    check("...and names the thing", "the TV" in cl)
+    check("...and is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
+    # It must not dictate framing -- the shot may be looking straight down the line
+    # of sight, and a clause about the camera would be wrong half the time.
+    check("...and says nothing about the camera",
+          not re.search(r"\bcamera|lens|frame\b", cl, re.I))
+    # Impersonal, like the hardware placement clause: naming the person again is one
+    # more mention of a person, which has its own cost.
+    check("...and names nobody",
+          not re.search(r"\b(?:she|he|her|his|they|their)\b", cl, re.I))
+    check("nothing named, nothing said", S.gaze_hold("") == "")
+
+
 def test_an_object_tag_leaves_with_its_object():
     print("\n=== a scrubbed object takes its picture tag with it ===")
     # Reported: the belt did not look the same when it came back into view. On the
@@ -1858,7 +1904,7 @@ def test_schema():
     # hold_scene_state.
     # A ceiling, not a target: the old node had 38 and nobody could find anything.
     # Every one added since the rebuild answers a reported failure.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 34)
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 35)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -1866,9 +1912,11 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-7:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-8:] == ["anchor", "character_memory", "character_guard",
                              "pace", "auto_sound", "hold_scene_state",
-                             "mouths_shut_when_no_line"])
+                             "mouths_shut_when_no_line", "hold_gaze"])
+    check("hold_gaze is offered, and on",
+          "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",
           "mouths_shut_when_no_line" in opt
           and opt["mouths_shut_when_no_line"][1]["default"] is True)
@@ -1915,6 +1963,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_the_look_goes_where_the_beat_says()
     test_an_object_tag_leaves_with_its_object()
     test_fastened_limbs_keep_their_anchor()
     test_only_a_beat_with_a_person_gets_a_mouth()

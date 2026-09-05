@@ -85,6 +85,21 @@ sitting on the crate"* — and the shot starts fresh instead, because there is n
 to inherit that has him in it; that costs a cut where the character appears, and `info`
 says when it happens.
 
+### Where somebody is looking
+
+*"She is looking at the TV"* says it once, and two things pull the other way: a person
+in frame faces the camera unless something says otherwise, and a near-clean reference
+asks for the **portrait's** pose — which looks at the lens, because photographs of people
+do. The result is somebody posing for the camera instead of watching what you named.
+
+`hold_gaze` (on) says it a second time, as a fact about the eyes and the head rather
+than an activity. It reads *looks at*, *stares at*, *glances at*, *peers into*,
+*watching*, *studies*. It says nothing about where the camera is, so a shot down the
+line of sight is unaffected, and looking at a **person** is left alone.
+
+If it still pulls to camera, `ref_noise_aug` is the dial — a near-clean reference is
+reproducing a portrait, gaze included.
+
 ### Restraints and where they hold
 
 Say where fastened limbs are held — *"cuffed above her head to the bed frame"*, *"cuffed
@@ -280,6 +295,7 @@ resets at every cut.
 | `auto_sound` | add the sound an action implies |
 | `silence_nonspeech` | silence shots with no line and no sound |
 | `mouths_shut_when_no_line` | silence a wordless shot even if you wrote it a sound, so the mouth cannot move |
+| `hold_gaze` | put the eyes on the thing the beat says they are looking at |
 | `trim_seam` | drop the duplicated frame at each cut |
 | `tiled_decode`, `cleanup_between_shots` | lower VRAM; leave on |
 | `upscale`, `latent_upscale` | optional, off by default |
