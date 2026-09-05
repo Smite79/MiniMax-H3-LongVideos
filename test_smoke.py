@@ -760,6 +760,34 @@ def _prompts_sent(P, **kw):
     return seen, out[3]
 
 
+def test_an_unbound_fall_is_told_what_catches_it():
+    print("\n=== a fall with no hardware in it still names the landing ===")
+    # FALL_HOLD only ever fired on a RESTRAINED fall -- the concern there was the
+    # hold giving way when the hands came up to break it. A free body falling had
+    # nothing said about it at all, and that is the shot the spare leg turned up on.
+    mem = "Mara: she, 30."
+    free = run_node("A room.\n\nMara trips and falls to the floor.",
+                    plan_only=True, character_memory=mem)[3]
+    check("a free fall is told what takes the landing",
+          "The body falls as one piece" in free, free[-90:])
+    check("...and it is not the bound wording",
+          "A bound body falls" not in free, "")
+    bound = run_node("A room.\n\nMara is handcuffed behind her back.\n\n"
+                     "Mara falls to the floor.", plan_only=True, character_memory=mem)[3]
+    last = [s for s in bound.split("---") if s.strip()][-1]
+    check("a bound fall keeps the bound wording", "A bound body falls" in last, "")
+    check("...and not both at once", "The body falls as one piece" not in last, "")
+    # It must not fire on shots that are not a fall -- every clause costs the beat
+    # some of the shot.
+    still = run_node("A room.\n\nMara walks to the window.\n\nMara drops the keys.",
+                     plan_only=True, character_memory=mem)[3]
+    check("no fall, no clause",
+          "falls as one piece" not in still and "bound body falls" not in still, "")
+    info = run_node("A room.\n\nMara trips and falls to the floor.",
+                    plan_only=True, character_memory=mem)[2]
+    check("info names the shot", "shot(s) 1 put a body down" in info, "")
+
+
 def test_a_named_look_target_is_restated():
     print("\n=== a beat that names something to look at gets it said twice ===")
     P = ("A living room.\n\nMara sits on the sofa looking at the TV.\n\n"
@@ -1710,6 +1738,7 @@ def main():
     test_a_tagged_object_comes_off_and_goes_back_on()
     test_hardware_stays_on_its_owner()
     test_a_state_in_the_scene_is_not_reasserted()
+    test_an_unbound_fall_is_told_what_catches_it()
     test_a_named_look_target_is_restated()
     test_a_covered_object_does_not_send_its_picture()
     test_the_anchor_survives_a_close_shot()

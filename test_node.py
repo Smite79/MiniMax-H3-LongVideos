@@ -1051,6 +1051,39 @@ def test_a_stated_state_is_not_an_event():
     check("nothing stated, nothing said", S.state_hold([]) == "")
 
 
+def test_a_fall_says_what_takes_the_landing():
+    print("\n=== a falling body is told what catches it ===")
+    # Reported: a third leg on the shot where she fell, grown to brace a landing
+    # nothing in the text was taking. A fall is the frame where limbs are least
+    # determined -- fast motion, heavy occlusion, and a middle the model invents --
+    # so leaving it to work out what catches the body leaves it free to add
+    # something that can.
+    for _n in ("FALL_HOLD", "FALL_HOLD_FREE"):
+        _h = getattr(S, _n)
+        check(f"{_n} names what takes the landing",
+              "shoulder, hip or side takes the landing" in _h)
+        # The legs are the part that grew, and they had no job in the old clause.
+        check(f"{_n} gives the legs something to do", "legs fold" in _h.lower())
+        check(f"{_n} is one sentence", _h.count(".") == 1)
+        check(f"{_n} is positively phrased",
+              not re.search(r"\bno\b|\bnot\b|\bnever\b", _h, re.I))
+        # COUNTING is the wrong tool and this node already learned that. "Exactly two
+        # people in this shot" is in the banned list test_verbatim enforces. A count
+        # is also a mention, and naming legs to ask for two is a way of asking for
+        # legs -- the same reason a removed garment stops being described at all.
+        check(f"{_n} counts nothing",
+              not re.search(r"\b(?:two|both|pair|exactly|only|single)\b", _h, re.I))
+    # A bound fall keeps what it always said: the hold does not give way to break it.
+    check("the bound clause still holds the hardware",
+          "fastened limbs stay fastened" in S.FALL_HOLD
+          and "arms staying in the hold" in S.FALL_HOLD)
+    # The free clause must NOT claim the arms are held -- they are not.
+    check("the free clause claims no hold",
+          "hold" not in S.FALL_HOLD_FREE and "fastened" not in S.FALL_HOLD_FREE)
+    check("...and is the shorter of the two",
+          len(S.FALL_HOLD_FREE.split()) < len(S.FALL_HOLD.split()))
+
+
 def test_the_look_goes_where_the_beat_says():
     print("\n=== the eyes go where the beat put them ===")
     # Reported: "she is looking at the TV" rendered her looking off to the side,
@@ -1963,6 +1996,7 @@ def main():
     test_hardware_has_somewhere_to_go()
     test_a_tape_gag_stays_tape()
     test_a_stated_state_is_not_an_event()
+    test_a_fall_says_what_takes_the_landing()
     test_the_look_goes_where_the_beat_says()
     test_an_object_tag_leaves_with_its_object()
     test_fastened_limbs_keep_their_anchor()
