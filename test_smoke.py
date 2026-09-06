@@ -2532,7 +2532,13 @@ def test_one_line_is_one_voice():
                      plan_only=True, character_memory=mem)[3]
     check("the speaker is named", "Only Kate speaks" in named)
     check("...and the shot is told there is one voice", "one voice in the shot" in named)
-    check("...and the other jaws are held", "every other mouth stays closed" in named)
+    check("...and the other jaws are held", "every other mouth closed" in named)
+    # A line is a second or two in a shot of five to ten, and the branch is open for
+    # all of it: told only that there is ONE voice, the model still had seconds to
+    # fill on either side and invented more talking to fill them. Reported as babble
+    # before the dialogue starts.
+    check("...and the line is said once", "the line said once" in named)
+    check("...with something to fill the rest", "room tone either side" in named)
     # <d>...</d> is the same case.
     tag = run_node("A room.\n\nKate turns to Sam. <d>Come here.</d>",
                    plan_only=True, character_memory=mem)[3]

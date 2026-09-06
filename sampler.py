@@ -1205,15 +1205,31 @@ def speakers_in(beat, sheet=""):
 # the model to render an absence, and at cfg 1 there is no negative prompt to carry
 # it. {who} is named ONCE -- naming a person twice in one shot is what put a second
 # copy of them in frame.
-MOUTH_HOLD_OTHERS = (" Only {who} speaks -- one voice in the shot, and every other "
-                     "mouth stays closed, jaws still.")
+# SAID ONCE, and what fills the rest. A line is a second or two; the shot is five
+# to ten, and the audio branch is open for all of it. Told only that there is one
+# voice, the model still has seconds of open branch to fill on either side of the
+# line -- and the only thing it knows is happening in this shot is somebody
+# talking, so it invents more talking to occupy the lead-in. Reported exactly that
+# way: babble before the dialogue starts.
+#
+# Two statements fix the gap, and both name something that IS there rather than an
+# absence, because at cfg 1 there is no negative prompt: the line is said ONCE, and
+# what occupies the time around it is ROOM TONE. A branch with a bed to lay down
+# does not need to invent a voice to fill the space.
+# The specific acoustic belongs to the sound clause, which already says it where
+# the scene names a space. Here it is the generic bed, so the sentence reads the
+# same whatever room this is.
+MOUTH_HOLD_OTHERS = (" Only {who} speaks -- one voice in the shot, the line said "
+                     "once, with room tone either side of it and every other mouth "
+                     "closed, jaws still.")
 
 # ...and when the line has no name on it. Two people, one line, nobody named: the
 # speaker cannot be identified, so neither mouth could be held and BOTH were free
 # to move -- which on a joint model is two voices in the stream and the second one
 # is the babble. Saying how many voices there are does not require knowing whose.
-ONE_VOICE = (" One voice in the shot -- only the person speaking has their mouth "
-             "moving, and every other jaw stays still.")
+ONE_VOICE = (" One voice in the shot, the line said once, with room tone either "
+             "side of it -- only the person speaking has their mouth moving, and "
+             "every other jaw stays still.")
 
 
 def has_speech(beat):
