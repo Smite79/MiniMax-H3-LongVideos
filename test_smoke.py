@@ -2690,6 +2690,41 @@ def test_the_silent_latent_looks_like_silence():
     S._SILENT_UNIT["lat"] = None
 
 
+def test_a_softened_handoff_is_not_a_keyframe():
+    """The removing shot keeps describing the garment when nothing anchors it.
+
+    The scrub applies to the removing shot too, and the only reason that is safe is
+    that the shot's KEYFRAME already shows the garment on at the start. Below
+    KEYFRAME_SAFE_AUG the handoff stops being a keyframe and rides as an extra
+    reference -- it says who somebody is, not what the opening frame holds -- so
+    the premise is false and scrubbing took the belt out of the text of the very
+    shot that removes it. It was gone a beat early with nothing holding it on."""
+    print("\n=== a softened handoff is not a keyframe ===")
+    # No outer garment over the belt: implied_layers would keep it out of the sheet
+    # until that garment came off, which is a different rule and would mask what
+    # this test is about.
+    P = ("A room.\n\nMcKenna: she, 22, crop top, chastity belt.\n\n"
+         "Dan: he, 30, shirt.\n\nMcKenna walks in.\n\nDan looks at her.\n\n"
+         "Dan unlocks the chastity belt.\n\nMcKenna sits down.")
+    soft = [x for x in re.split(r"(?=\[Shot )",
+                                run_node(P, plan_only=True, ref_noise_aug=0.95)[3])
+            if x.strip()]
+    check("softened: the removing shot still says it is worn",
+          "chastity belt" in soft[2].split("Dan unlocks")[0])
+    check("...and the next shot does not", "chastity belt" not in soft[3])
+    # At an anchoring aug the keyframe does hold the first frame, and scrubbing the
+    # removing shot is right: text saying it is worn would put it back at the end.
+    hard = [x for x in re.split(r"(?=\[Shot )",
+                                run_node(P, plan_only=True, ref_noise_aug=0.999)[3])
+            if x.strip()]
+    check("anchored: the removing shot is scrubbed",
+          "chastity belt" not in hard[2].split("Dan unlocks")[0])
+    check("...and it still comes off there", "comes off during this shot" in hard[2])
+    # The report has to name WHICH reason, or it cannot be acted on.
+    info = run_node(P, plan_only=True, ref_noise_aug=0.95)[2]
+    check("info names the aug", "ref_noise_aug 0.95 is below" in info)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2803,6 +2838,7 @@ def main():
     test_one_line_is_one_voice()
     test_the_plan_says_whether_silence_can_be_applied()
     test_the_silent_latent_looks_like_silence()
+    test_a_softened_handoff_is_not_a_keyframe()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

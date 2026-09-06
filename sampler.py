@@ -5681,8 +5681,19 @@ class H3LongVideos:
             # is not worn, take it off, and the thing under it is already showing.
             # The model renders that contradiction as a garment half present -- open,
             # or partly cut -- with the layer beneath it on display.
+            #
+            # ...and a keyframe that is not ANCHORING is no such picture either.
+            # Below KEYFRAME_SAFE_AUG the handoff stops being a keyframe and rides
+            # as an extra reference: it says who somebody is, not what the opening
+            # frame holds. Scrubbing on that assumption took the belt out of the
+            # text of the very shot that removes it, so the shot said it is not
+            # worn AND to take it off, and it was gone a beat early with nothing
+            # anchoring it on. Reported exactly that way.
             i_shot = len(shots)
+            _anchoring = (ref_noise_aug is None
+                          or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG)
             has_keyframe = ((i_shot > 0 or first_frame is not None)
+                            and _anchoring
                             and not (restart_after_removal
                                      and (i_shot - 1) in stripped_shots))
             visible = gone if has_keyframe else [g for g in gone if g not in toks]
@@ -5693,7 +5704,12 @@ class H3LongVideos:
                     and (i_shot - 1) in stripped_shots):
                 restarted.append(i_shot + 1)
             if toks and not has_keyframe:
-                notes.append(f"shot {i_shot + 1} takes something off and has no keyframe, "
+                _why = ("its opening frame is not anchored -- ref_noise_aug "
+                        f"{float(ref_noise_aug):g} is below {KEYFRAME_SAFE_AUG:g}, so "
+                        "the handoff rides as a reference rather than holding the "
+                        "first frame" if not _anchoring else
+                        "it has no keyframe")
+                notes.append(f"shot {i_shot + 1} takes something off and {_why}, "
                              f"so {', '.join(toks)} stays described as worn HERE -- the "
                              f"text is the only thing saying it was on to start with. It "
                              f"is scrubbed from the next shot on")
