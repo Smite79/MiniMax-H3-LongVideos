@@ -947,6 +947,33 @@ def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
     return lens, note
 
 
+def pace_clause(need, have):
+    """Spread a short action across a long shot. "" when the shot is not long.
+
+    thin_beats has always been able to SEE this -- one action sitting in a ten
+    second shot -- and only ever reported it. The shot was still told what happens
+    and nothing about when, so the action was performed at once and the spare
+    seconds filled by carrying on: the same movement repeated on whatever was
+    nearest. Reported as actions running way ahead of schedule.
+
+    A timing anchor, the same shape the node already uses for a door ("open at the
+    first frame and shut by the last") and for a removal ("away by the last
+    frame"). It names WHEN, not how fast: "slowly" is a style instruction and this
+    is not one -- it says the action occupies the shot it was given.
+
+    Only where the gap is real. thin_beats' own thresholds: at least 2.5 spare
+    seconds and a quarter again longer than the content, so a shot that only
+    slightly outlasts a long beat stays quiet."""
+    try:
+        need, have = float(need), float(have)
+    except (TypeError, ValueError):
+        return ""
+    if need <= 0 or (have - need) < 2.5 or have <= need * 1.25:
+        return ""
+    return (" What the beat stages runs at an even pace across the whole shot, "
+            "beginning at the first frame and still finishing on the last.")
+
+
 def thin_beats(beats, seconds):
     """Beats with far less content than the shot they are given.
 
@@ -5792,6 +5819,7 @@ class H3LongVideos:
         ambient_shots = []        # shots given the bed
         posture_shots = []        # shots told to keep a standing posture
         travel_shots = []         # shots that move between places
+        paced_shots = []          # shots told to spread their action
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
         crowded = []              # (shot, clauses dropped for room)
@@ -6336,6 +6364,16 @@ class H3LongVideos:
             # finishes, the shot renders the destination and cuts straight to it,
             # with the hallway between them missing. Named both ends, the way a
             # door's direction is.
+            # A short action in a long shot is performed at once and then carried
+            # on to fill the rest. Give it the whole shot to happen in.
+            # This beat's own length. plan_lengths sizes each beat independently,
+            # so asking it for one gives the same answer the whole run will --
+            # and `lens` itself is not computed until after this loop.
+            _have = plan_lengths([body], ceiling,
+                                 shot_length == "from the beat", pace)[0][0] / H3_FPS
+            _pace = pace_clause(beat_seconds(body), _have)
+            if _pace:
+                paced_shots.append(len(shots) + 1)
             _frm, _via, _to = travel_in(body)
             _travel = travel_anchor(_frm, _via, _to, here)
             if _travel:
@@ -6705,6 +6743,7 @@ class H3LongVideos:
                 (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", fall),           # a body going down needs a landing
                 (4, "travel", _travel),      # a journey needs both its ends
+                (5, "pace", _pace),          # ...and a short action needs the whole shot
                 (5, "device", _device),      # a voice that is not hers
                 (6, "moved", _moved),        # a garment left where it was put
                 (7, "anchors", anchors),     # hardware with nowhere to sit
@@ -6849,6 +6888,16 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if paced_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in paced_shots)} stage less than "
+                f"their length, so each is told its action runs across the whole "
+                f"shot. A shot told WHAT happens and nothing about WHEN performs it "
+                f"at once, and the cheapest way to fill the seconds left is to carry "
+                f"on -- the same movement repeated on whatever is nearest. It names "
+                f"when, never how fast: 'slowly' is a style instruction and this is "
+                f"not one. Give the beat more to do, or shorten the shot, and it "
+                f"stops being needed")
         if travel_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in travel_shots)} move between "

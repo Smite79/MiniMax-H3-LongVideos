@@ -2875,6 +2875,31 @@ def test_a_working_character_is_not_still_lying_down():
           "still sitting" in sh2[1])
 
 
+def test_pacing_reaches_the_thin_shots():
+    """END TO END: the pacing clause lands on shots that outlast their beat, and
+    on no others."""
+    print("\n=== pacing reaches the thin shots ===")
+    mem = "Kate: she, 30, coat."
+    P = ("A room.\n\nKate waits.\n\n"
+         "Kate walks in, drops her bag, takes off her coat, hangs it up and "
+         "crosses the room.\n\nKate looks at the window.")
+    # 'fixed' gives every shot the same length regardless of content, which is
+    # where a three second action lands in a ten second shot.
+    out = run_node(P, plan_only=True, character_memory=mem,
+                   shot_length="fixed", shot_seconds=10.0)
+    info, script = out[2], out[3]
+    paced = [i for i, b in enumerate(script.split("---"), 1)
+             if "even pace across the whole shot" in b]
+    check("the thin shots are paced", paced == [1, 3], str(paced))
+    check("...and the full one is not", 2 not in paced)
+    check("info names them", "stage less than their length" in info)
+    # Sizing from the beat already matches content, so nothing is thin and the
+    # clause stays out of the way.
+    fitted = run_node(P, plan_only=True, character_memory=mem)[3]
+    check("sizing from the beat needs no pacing",
+          "even pace across the whole shot" not in fitted)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2990,6 +3015,7 @@ def main():
     test_the_silent_latent_looks_like_silence()
     test_a_softened_handoff_is_not_a_keyframe()
     test_a_journey_reaches_the_shot()
+    test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
     test_a_working_character_is_not_still_lying_down()

@@ -889,6 +889,36 @@ def test_a_dropped_garment_is_not_a_fall():
                      "Kate falls to the floor."))
 
 
+def test_a_short_action_gets_the_whole_shot():
+    """Actions performed way ahead of schedule.
+
+    thin_beats could always SEE this -- one action sitting in a ten second shot --
+    and only ever reported it. The shot was told what happens and nothing about
+    when, so the action was performed at once and the spare seconds filled by
+    carrying on: the same movement repeated on whatever was nearest.
+
+    A timing anchor, the shape the node already uses for a door ("open at the first
+    frame and shut by the last") and a removal ("away by the last frame")."""
+    check("a short action in a long shot is paced", S.pace_clause(3.0, 10.0))
+    check("...and says when, not how fast",
+          "even pace" in S.pace_clause(3.0, 10.0)
+          and "slowly" not in S.pace_clause(3.0, 10.0))
+    check("...naming both ends",
+          "first frame" in S.pace_clause(3.0, 10.0)
+          and "last" in S.pace_clause(3.0, 10.0))
+    # Quiet where the gap is not real -- the same thresholds thin_beats uses, so
+    # the report and the clause never disagree.
+    check("a shot that fits its beat is left alone", S.pace_clause(8.0, 10.0) == "")
+    check("...and a small gap too", S.pace_clause(3.0, 5.0) == "")
+    check("...and an equal one", S.pace_clause(3.0, 3.0) == "")
+    check("a beat with no content asks for nothing", S.pace_clause(0.0, 10.0) == "")
+    check("rubbish in, nothing out", S.pace_clause(None, "x") == "")
+    # The clause and the report agree on which shots are thin.
+    _thin = S.thin_beats(["Kate waits."], 10.0)
+    check("thin_beats and pace_clause agree",
+          bool(_thin) == bool(S.pace_clause(S.beat_seconds("Kate waits."), 10.0)))
+
+
 def test_a_comma_separated_list_is_a_list_of_actions():
     """Scenes cut short: a beat's actions were undercounted, so the shot was sized
     for a fraction of what it stages and performed the rest inside that.
@@ -3220,6 +3250,7 @@ def main():
     test_an_action_lets_go_of_a_posture()
     test_one_person_undressing_is_one_person()
     test_a_comma_separated_list_is_a_list_of_actions()
+    test_a_short_action_gets_the_whole_shot()
     test_a_dropped_garment_is_not_a_fall()
     test_silence_reports_what_happened()
     test_the_audio_branch_has_its_own_last_step()
