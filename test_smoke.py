@@ -2410,6 +2410,38 @@ def test_a_garment_keeps_its_description():
           not ("pulled down" in last and "pulled up" in last))
 
 
+def test_a_removal_always_names_hands():
+    """END TO END: the removal clause names WHOSE hands, in a real prompt.
+
+    Reported as the action happening twice -- she takes the shorts off herself and
+    he takes them off as well. The beat named her; the clause named nobody, so the
+    shot carried two removals and the model gave the unattributed one to the other
+    person in the frame.
+
+    The cause was upstream of the agent logic, which was right all along: a sheet
+    paragraph folded into the scene never reaches pull_character_sheets -- it only
+    ever sees the beat -- so `sheet` was "" for the whole run, and the wearer and
+    the cast read off it came back empty for EVERY shot."""
+    print("\n=== a removal names whose hands ===")
+    two = ("McKenna: she, 22, Shiny white crop top, blue jean shorts.\n"
+           "Dan: he, 40, t-shirt, jeans.\n\n")
+    s1 = run_node(two + "McKenna takes off her jean shorts.", plan_only=True)[3]
+    check("she undresses herself",
+          "McKenna takes the blue jean shorts off during this shot" in s1)
+    s2 = run_node(two + "Dan pulls off her jean shorts.", plan_only=True)[3]
+    check("...and he does it when the beat says so",
+          "Dan takes the blue jean shorts off during this shot" in s2)
+    # No clause may go out with nobody's hands on it: that is the bug itself.
+    for _s, _lbl in ((s1, "hers"), (s2, "his")):
+        check("never agentless (%s)" % _lbl,
+              "The blue jean shorts come off during this shot" not in _s)
+    # One person in the shot is still that person.
+    solo = run_node("Mara: she, 25, red dress.\n\nMara takes off her dress.",
+                    plan_only=True)[3]
+    check("alone, it is still her hands",
+          "Mara takes the red dress off during this shot" in solo)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2518,6 +2550,7 @@ def main():
     test_no_garment_is_ever_invented()
     test_nothing_wearable_is_ever_added()
     test_a_garment_keeps_its_description()
+    test_a_removal_always_names_hands()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

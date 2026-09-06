@@ -5138,15 +5138,25 @@ class H3LongVideos:
             # a beat where she ASKS to have it taken off, which the clause turned into
             # it removing itself. The wearer is read from the sheet where the item is
             # listed, so "she asks Dan" gives the hands to Dan and not to her.
-            _wearer = next((n for n, ln in sheet_lines(shot_sheet)
+            # The sheet, or the SCENE when the sheet is empty. A sheet paragraph
+            # that was folded into the scene never reaches pull_character_sheets --
+            # it only ever sees the beat -- so `sheet` is "" for the whole run and
+            # shot_sheet with it. Both the wearer and the cast then came back empty
+            # and EVERY removal clause went out agentless: the beat says she takes
+            # the shorts off, the clause says they come off with no hands named, and
+            # with a second person in the shot the model gives that second removal to
+            # him. The action happens twice, once by each of them.
+            _who_sheet = shot_sheet if sheet_lines(shot_sheet) else scene
+            _wearer = next((n for n, ln in sheet_lines(_who_sheet)
                             if n and names_any(ln, toks)), None)
             # `active`, not `_described`: that is assigned further down the loop, so
             # reading it here gets the PREVIOUS shot's cast -- which on this shot meant
             # Dan was not in it, the "asks" rule never applied, and the clause gave the
             # hands back to the person doing the asking.
             _agent = removal_agent(
-                body, active if character_guard else
-                [n for n, _ in sheet_lines(shot_sheet) if n], _wearer) if toks else ""
+                body, (active if (character_guard and active) else
+                       [n for n, _ in sheet_lines(_who_sheet) if n]),
+                _wearer) if toks else ""
             tail = (BARE_HOLD if (bare and toks)
                     else off_by_last_frame(toks, _agent, scene))
             # Once hardware is on, it stays on. Latched, not re-detected: a beat that
