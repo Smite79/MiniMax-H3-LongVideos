@@ -6563,6 +6563,39 @@ class H3LongVideos:
         # as the exact per-shot text was wrong about the one shot most likely to be
         # under investigation, and it is the output the reader is told to check when a
         # shot renders somebody they did not ask for.
+        # CAN the silence conditioning actually be built? Every failure inside
+        # _silent_audio_latent returns None on purpose so a render never dies for a
+        # nicety -- which means a wrong VAE on the audio_vae input costs nothing at
+        # load time and silently unpins every line-free shot, and the first anybody
+        # knows of it is a shot with no dialogue that babbles.
+        #
+        # Probed HERE, before the plan is returned, because finding out should not
+        # cost a full render. The unit is cached, so a real render pays nothing for
+        # this and the answer is the same one the render would get.
+        if silence_nonspeech and n_silent:
+            if audio_vae is None:
+                notes.append(
+                    "SILENCE CANNOT BE APPLIED: no audio VAE is wired to the node's "
+                    "audio_vae input, so every shot listed above as conditioned on "
+                    "real silence has an audio branch that is NOT pinned. H3 is "
+                    "joint, so an unconditioned branch invents a voice and the "
+                    "picture lip-syncs to it -- a shot babbling with nothing "
+                    "scripted to say")
+            elif _silent_audio_latent(audio_vae, lens[0], H3_FPS) is None:
+                notes.append(
+                    "SILENCE CANNOT BE APPLIED: the VAE on the audio_vae input would "
+                    "not encode a silent second, so every shot listed above as "
+                    "conditioned on real silence has an audio branch that is NOT "
+                    "pinned -- and an unconditioned branch on a joint model invents "
+                    "a voice the picture then lip-syncs to. That input wants the "
+                    "MiniMax H3 AUDIO vae (minimax_h3_audio_vae.safetensors) in its "
+                    "own VAELoader; the video VAE loads without complaint and "
+                    "reports no sample rate")
+            else:
+                notes.append(
+                    f"silence can be applied: the audio VAE encodes silence, so the "
+                    f"{n_silent} shot(s) above are pinned to it rather than merely "
+                    f"told to be quiet")
         sent_text = list(shots)
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
         info = " | ".join(notes)

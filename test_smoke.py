@@ -2566,6 +2566,38 @@ def test_one_line_is_one_voice():
           named.split("Only Kate speaks")[1].split(".")[0].count("Kate") == 0)
 
 
+def test_the_plan_says_whether_silence_can_be_applied():
+    """A wrong VAE on audio_vae costs nothing at load time and silently unpins
+    every line-free shot -- and the first anybody knows of it is a shot with no
+    dialogue that babbles. Probed in the PLAN, so finding out does not cost a full
+    render."""
+    print("\n=== the plan says whether silence can be applied ===")
+    P = "A room.\n\nKate looks around.\n\nKate sits down."
+    mem = "Kate: she, 30, coat."
+    ok = run_node(P, plan_only=True, character_memory=mem,
+                  audio_vae=FakeAudioVAE())[2]
+    check("a working audio VAE reports it can", "silence can be applied" in ok)
+    check("...and does not cry wolf", "SILENCE CANNOT BE APPLIED" not in ok)
+    none = run_node(P, plan_only=True, character_memory=mem, audio_vae=None)[2]
+    check("a missing audio VAE is called out", "SILENCE CANNOT BE APPLIED" in none)
+    check("...naming the input", "audio_vae input" in none)
+    # The likeliest wiring mistake: the VIDEO vae on the audio input. It loads
+    # without complaint and reports no sample rate.
+    S._SILENT_UNIT["lat"] = None
+
+    class NotAnAudioVae:
+        def encode(self, x):
+            raise RuntimeError("not an audio vae")
+
+    wrong = run_node(P, plan_only=True, character_memory=mem,
+                     audio_vae=NotAnAudioVae())[2]
+    check("a VAE that cannot encode silence is called out",
+          "SILENCE CANNOT BE APPLIED" in wrong)
+    check("...and says which file the input wants",
+          "minimax_h3_audio_vae" in wrong)
+    S._SILENT_UNIT["lat"] = None
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2677,6 +2709,7 @@ def main():
     test_a_removal_always_names_hands()
     test_hands_and_holds_follow_the_beat()
     test_one_line_is_one_voice()
+    test_the_plan_says_whether_silence_can_be_applied()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
