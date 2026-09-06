@@ -3562,7 +3562,7 @@ _POSTURE_OF = (
     ("kneeling", re.compile(r"\b(?:kneels?|knelt|kneeling|"
                             r"(?:goes?|got|gets?)\s+down\s+on\s+(?:her|his|their)\s+knees)\b",
                             re.I)),
-    ("lying down", re.compile(r"\b(?:lies?|lay|lying|lies\s+down|lay\s+down|"
+    ("lying down", re.compile(r"\b(?:lies?|lay|lays?|laid|lying|laying|"
                               r"stretches?\s+out|sprawls?|sprawled)\b", re.I)),
     ("standing", re.compile(r"\b(?:stands?|stood|standing|"
                             r"(?:gets?|got)\s+(?:up|to\s+(?:her|his|their)\s+feet)|"
@@ -3573,6 +3573,15 @@ _POSTURE_OF = (
 _NOT_A_BODY = re.compile(r"\b(?:it|chair|table|box|case|bag|door|house|room|"
                          r"building|tree|bottle|glass|book|light|lamp)\s+\w{0,8}?\s*"
                          r"(?:stands?|lies?|sits?)\b", re.I)
+
+
+# Words that follow a posture verb but are never its object: they are the
+# direction the body goes, not the body.
+_POSE_DIRECTIONS = frozenset(
+    "down up back onto into on in over out away flat still there here".split())
+# ...and the pronouns that ARE an object.
+_OBJECT_PRONOUN = frozenset(
+    "her him them herself himself themselves".split())
 
 
 def posture_in(beat, cast):
@@ -3601,6 +3610,42 @@ def posture_in(beat, cast):
         prev = 0
         for at, pose in hits:
             span = part[prev:at]
+            # TRANSITIVE first. "Dana lies McKenna down" puts MCKENNA down -- the
+            # person going into the pose is the object, and reading the subject
+            # latched the wrong person, so every later shot said Dana was still
+            # lying down while the beat had her up and working. Same subject/object
+            # confusion as crediting an addressee with a line.
+            #
+            # Tight on purpose: the name has to sit between the verb and a
+            # direction or preposition. "sits down and looks at Dana" has "down"
+            # straight after the verb and Dana is nobody's object.
+            tail = part[at:]
+            # The object has to be a NAME on the sheet or a personal pronoun.
+            # Matching [A-Z]\w+ under re.I matches any word at all, so "lying down
+            # on the table" parsed as verb "lying", object "down", direction "on"
+            # -- and the pose landed on whoever was not acting.
+            obj = re.match(r"\w+\s+(?:the\s+)?([\w'-]+)\s+"
+                           r"(?:down|up|back|onto|into|on|in)\b", tail, re.I)
+            if obj and obj.group(1).lower() not in _POSE_DIRECTIONS:
+                word = obj.group(1)
+                named = [n for n in people
+                         if n.lower() == word.lower()]
+                if named:
+                    for n in named:
+                        out[n] = pose
+                    prev = at
+                    continue
+                if word.lower() not in _OBJECT_PRONOUN:
+                    obj = None          # not a name on the sheet, not a pronoun
+                # A pronoun object: resolvable only when it points at exactly one
+                # person who is NOT the one acting.
+                actor = [n for n in people
+                         if re.search(r"\b" + re.escape(n) + r"\b", span, re.I)]
+                others = [n for n in people if n not in actor]
+                if obj and len(others) == 1:
+                    out[others[0]] = pose
+                    prev = at
+                    continue
             here = [n for n in people
                     if re.search(r"\b" + re.escape(n) + r"\b", span, re.I)]
             if not here:

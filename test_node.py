@@ -955,6 +955,43 @@ def test_one_person_undressing_is_one_person():
           "Everything McKenna is wearing" in S.own_body(S.BARE_HOLD, "McKenna", cast))
 
 
+def test_a_transitive_posture_puts_the_object_down():
+    """"Dana lies McKenna down" puts MCKENNA down.
+
+    The posture reader took the name before the verb, so the person doing the
+    laying was latched as lying down -- and every later shot said she was still
+    lying down while the beat had her up and working. It is the same subject/object
+    confusion as crediting an addressee with somebody else's line."""
+    cast = ["McKenna", "Dana"]
+    for _b, _want in (("Dana lies McKenna down.", {"McKenna": "lying down"}),
+                      ("Dana lays McKenna down on the change table.",
+                       {"McKenna": "lying down"}),
+                      ("Dana sits McKenna down in the chair.",
+                       {"McKenna": "sitting"}),
+                      ("Dana laid her down on the table.",
+                       {"McKenna": "lying down"})):
+        check(f"the object goes down: {_b[:36]!r}", S.posture_in(_b, cast) == _want)
+    # Intransitive is still the subject, and a DIRECTION is not an object: matching
+    # a capitalised word under re.I matched any word at all, so "lying down on the
+    # table" read as verb + object "down" + direction "on" and the pose landed on
+    # whoever was not acting.
+    for _b, _want in (("McKenna is lying down on the change table.",
+                       {"McKenna": "lying down"}),
+                      ("McKenna lies on the bed.", {"McKenna": "lying down"}),
+                      ("McKenna sits down and looks at Dana.", {"McKenna": "sitting"}),
+                      ("Dana stands up.", {"Dana": "standing"}),
+                      ("McKenna and Dana sit down.",
+                       {"McKenna": "sitting", "Dana": "sitting"})):
+        check(f"the subject goes down: {_b[:36]!r}", S.posture_in(_b, cast) == _want)
+    # An active beat stages no posture at all, so nothing is latched from it.
+    check("handling things is not a posture",
+          S.posture_in("Dana takes out a diaper and places it on the table.",
+                       cast) == {})
+    # "lays" and "laid" are the transitive spellings and were matched by nothing.
+    check("lays is read", "lying down" in S.posture_in("Dana lays her down.",
+                                                       cast).values())
+
+
 def test_a_journey_has_two_ends():
     """A beat that walks somebody from one room to another is a staged change with
     two ends, exactly like a door opening. Told only where it FINISHES, the shot
@@ -3147,6 +3184,7 @@ def main():
     test_the_wearer_is_in_the_shot()
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
+    test_a_transitive_posture_puts_the_object_down()
     test_one_person_undressing_is_one_person()
     test_a_comma_separated_list_is_a_list_of_actions()
     test_a_dropped_garment_is_not_a_fall()
