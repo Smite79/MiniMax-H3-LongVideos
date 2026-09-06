@@ -270,6 +270,36 @@ def sheet_lines(sheet):
     return out
 
 
+# A beat about the GROUP. "They sit down", "both of them wait", "the two of them
+# walk out" -- none of these names anybody, and "they" sits in _PRONOUN_SET as a
+# SINGULAR group (the pronoun a nonbinary character declares), so a plural "they"
+# resolved to whoever the last beat happened to keep. One of the two people in the
+# shot then had no sheet line, and a person the text does not describe is a person
+# the model invents -- including their clothes. Reported as clothing invented for
+# somebody who had been out of shot.
+#
+# "each other" and "one another" are plural by definition: they need two people.
+_PLURAL_CUE = re.compile(
+    r"\b(?:both|each\s+other|one\s+another|the\s+two\s+of\s+(?:them|us|you)|"
+    r"the\s+pair\s+of\s+(?:them|us|you)|all\s+of\s+(?:them|us|you))\b", re.I)
+# ...and a bare they/them, which is only plural when nobody's sheet claims it.
+_THEY = re.compile(r"\b(?:they|them|their|theirs)\b", re.I)
+
+
+def group_beat(beat, rows):
+    """Does this beat talk about the people as a GROUP rather than an individual?
+
+    `rows` is sheet_lines(sheet). A they/them that some entry DECLARES as its own
+    pronoun is that person, not the group -- so it is only a group cue when nobody
+    on the sheet uses it."""
+    b = beat or ""
+    if _PLURAL_CUE.search(b):
+        return True
+    if not _THEY.search(b):
+        return False
+    return not any(sheet_pronoun(ln) == "they" for n, ln in (rows or []) if n)
+
+
 def sheet_for_beat(sheet, beat, previous=None):
     """(the sheet lines for the people this beat involves, the names kept).
 
@@ -290,6 +320,22 @@ def sheet_for_beat(sheet, beat, previous=None):
     # word "will" find a character called Will, and "grace" find Grace.
     named = [n for n, _ in rows
              if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "")]
+    # THE GROUP. A plural cue means more than one person is in the shot, so it can
+    # never resolve to a single name. Whoever the beat names plus whoever the last
+    # beat kept; if that still does not reach two, everyone on the sheet.
+    #
+    # Erring towards MORE people here on purpose: one too many is a person
+    # described who is not in frame, which the beat's own words contradict. One too
+    # few is a person in frame with no description at all, and that is the one the
+    # model dresses out of nothing.
+    if group_beat(beat, rows):
+        everyone = [n for n, _ in rows if n]
+        for n in (previous or []):
+            if n in everyone and n not in named:
+                named.append(n)
+        named = ([n for n in everyone if n in named] if len(named) >= 2
+                 else everyone)
+        return "\n".join(ln for n, ln in rows if n in named), named
     used = {m.group(0).lower() for m in _PRONOUN.finditer(beat or "")}
     if used:
         # Resolve a pronoun to the person whose sheet DECLARES it. Adding the whole

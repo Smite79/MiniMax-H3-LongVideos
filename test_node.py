@@ -767,6 +767,43 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_a_group_beat_keeps_the_group():
+    """"They sit down" is two people, so both need their sheet line.
+
+    "they" is in _PRONOUN_SET as a SINGULAR group -- the pronoun a nonbinary
+    character declares -- so a plural "they" resolved to whoever the last beat
+    happened to keep, and "both of them" / "the two of them" are not pronouns at
+    all and matched nothing. One of the two people in the shot was left with no
+    description, and a person the text does not describe is a person the model
+    invents, clothes included. Reported as clothing invented for somebody who had
+    been out of shot: they came back in a group beat and were never re-described."""
+    sheet = "Kate: she, 30, blue coat.\nSam: he, 34, black shirt."
+    for _b in ("They sit down.",
+               "Both of them sit.",
+               "The two of them wait.",
+               "They look at each other.",
+               "They walk out together.",
+               "All of them turn to the door."):
+        _, _who = S.sheet_for_beat(sheet, _b, ["Kate"])
+        check(f"the group is kept: {_b[:30]!r}", _who == ["Kate", "Sam"], )
+    # An individual beat still keeps one person: describing somebody who is not
+    # there puts them in the shot, which is the bug this guard exists for.
+    for _b, _want in (("She sits down.", ["Kate"]),
+                      ("Kate sits down.", ["Kate"]),
+                      ("Sam waits by the door.", ["Sam"]),
+                      ("Kate takes off her coat.", ["Kate"])):
+        _, _who = S.sheet_for_beat(sheet, _b, ["Kate"])
+        check(f"one person stays one: {_b[:28]!r}", _who == _want)
+    # A character who DECLARES they/them is not a group.
+    _nb = "Ash: they, 28, red coat.\nSam: he, 34, black shirt."
+    _, _who = S.sheet_for_beat(_nb, "They pick up their bag.", ["Ash"])
+    check("a declared they/them is one person", _who == ["Ash"])
+    check("...and group_beat says so",
+          not S.group_beat("They pick up their bag.", S.sheet_lines(_nb)))
+    check("...while it is a group where nobody declares it",
+          S.group_beat("They sit down.", S.sheet_lines(sheet)))
+
+
 def test_generic_clothes_come_off_too():
     """"Takes off his clothes" is a removal. It names no garment the sheet lists,
     so every path that matches a garment word had nothing to take off: his wardrobe
@@ -2768,6 +2805,7 @@ def main():
     test_a_removal_stays_on_one_person()
     test_the_shot_says_each_thing_once()
     test_generic_clothes_come_off_too()
+    test_a_group_beat_keeps_the_group()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
