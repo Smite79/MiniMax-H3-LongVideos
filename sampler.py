@@ -4576,8 +4576,8 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
             sil = _silent_audio_latent(audio_vae, fc, H3_FPS)
             if sil is None:
                 _SILENCE_STATUS["why"] = ("the audio VAE would not encode a silent "
-                                          "second -- wrong VAE on the audio_vae input, "
-                                          "or it reports no sample rate")
+                                          "second -- the wrong VAE is on the "
+                                          "audio_vae input")
             else:
                 kfs.append({"resolved_frame_index": 0, "audio_latent": sil})
                 _SILENCE_STATUS["applied"] += 1
@@ -6589,8 +6589,10 @@ class H3LongVideos:
                     "pinned -- and an unconditioned branch on a joint model invents "
                     "a voice the picture then lip-syncs to. That input wants the "
                     "MiniMax H3 AUDIO vae (minimax_h3_audio_vae.safetensors) in its "
-                    "own VAELoader; the video VAE loads without complaint and "
-                    "reports no sample rate")
+                    "own VAELoader. Every VAE carries an audio_sample_rate "
+                    "attribute, so a video VAE wired here passes every check "
+                    "until the encode itself fails -- which is caught and "
+                    "turned into no conditioning at all")
             else:
                 notes.append(
                     f"silence can be applied: the audio VAE encodes silence, so the "
