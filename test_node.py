@@ -767,6 +767,57 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_a_posture_carries_to_the_next_shot():
+    """A beat that sits somebody down ends its shot with them seated.
+
+    Reported as the end of one beat and the start of the next not matching: they
+    are standing at the end of a shot and sitting at the start of the next, or the
+    reverse. The scene-state reader tracks SCENERY -- doors, windows, drawers --
+    and nothing about the body, so no later shot was ever told what pose the last
+    beat left somebody in. The keyframe carries it as a picture, but the text is
+    what the model reconciles that against, and text saying nothing loses to a
+    reference saying something."""
+    cast = ["Kate", "Sam"]
+    for _b, _want in (("Kate sits down in the chair.", {"Kate": "sitting"}),
+                      ("Kate takes a seat.", {"Kate": "sitting"}),
+                      ("Kate kneels on the floor.", {"Kate": "kneeling"}),
+                      ("Kate lies down on the bed.", {"Kate": "lying down"}),
+                      ("Kate stands up.", {"Kate": "standing"}),
+                      ("Kate gets to her feet.", {"Kate": "standing"}),
+                      ("Kate and Sam sit down.",
+                       {"Kate": "sitting", "Sam": "sitting"})):
+        check(f"posture read: {_b[:32]!r}", S.posture_in(_b, cast) == _want)
+    # The SUBJECT is what precedes the verb. "Kate sits down and Sam stays by the
+    # door" seated them both when the whole sentence was searched for names.
+    check("a second person doing something else is not seated",
+          S.posture_in("Kate sits down and Sam stays by the door.", cast)
+          == {"Kate": "sitting"})
+    check("...and two postures in one beat land on the right people",
+          S.posture_in("Kate sits down and Sam stands by the window.", cast)
+          == {"Kate": "sitting", "Sam": "standing"})
+    # Furniture is not a body.
+    for _b in ("The chair stands in the corner.",
+               "The case lies on the table.",
+               "Sam looks at her.",
+               "Kate walks to the door."):
+        check(f"not a posture: {_b[:32]!r}", S.posture_in(_b, cast) == {})
+    # The hold names only people the shot DESCRIBES -- a pose belonging to somebody
+    # the text does not mention is a pose for nobody, and the model draws the
+    # person that sentence implies.
+    check("a pose for somebody not in the shot is not said",
+          S.posture_hold({"Kate": "sitting"}, ["Sam"]) == "")
+    check("...and is said for somebody who is",
+          "Kate is still sitting" in S.posture_hold({"Kate": "sitting"}, ["Kate"]))
+    # STANDING is the default pose. Holding it costs a naming of the person and
+    # buys nothing, and naming somebody twice in one shot is what put a second
+    # copy of them in frame.
+    check("standing is never held",
+          S.posture_hold({"Kate": "standing"}, ["Kate"]) == "")
+    check("...while sitting still is",
+          S.posture_hold({"Kate": "sitting", "Sam": "standing"},
+                         ["Kate", "Sam"]).count("still") == 1)
+
+
 def test_a_group_beat_keeps_the_group():
     """"They sit down" is two people, so both need their sheet line.
 
@@ -2806,6 +2857,7 @@ def main():
     test_the_shot_says_each_thing_once()
     test_generic_clothes_come_off_too()
     test_a_group_beat_keeps_the_group()
+    test_a_posture_carries_to_the_next_shot()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()

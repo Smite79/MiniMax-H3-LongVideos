@@ -3164,6 +3164,97 @@ _STATE_PRED = re.compile(r"\b(" + _STATE_THING + r")\s+" +
                          _STATE_WORD + r")\b", re.I)
 
 
+# POSTURE. The one piece of continuity the scene-state reader never covered: it
+# tracks scenery -- doors, windows, drawers -- and nothing about the body. A beat
+# that sits somebody down establishes a pose the next shot is never told about, so
+# the shot ends with them seated and the next one stands them back up. The keyframe
+# does carry the pose as a picture, but the TEXT is what the model reconciles it
+# against, and text that says nothing loses to a reference that says something.
+#
+# Deliberately coarse: four postures, no orientation, no limb detail. Naming more
+# than the pose is how a continuity clause turns into an instruction to hold still.
+_POSTURE_OF = (
+    ("sitting", re.compile(r"\b(?:sits?|sat|sitting|seats?\s+(?:her|him|them)self|"
+                           r"is\s+seated|takes?\s+a\s+seat|perch(?:es|ed)?)\b", re.I)),
+    ("kneeling", re.compile(r"\b(?:kneels?|knelt|kneeling|"
+                            r"(?:goes?|got|gets?)\s+down\s+on\s+(?:her|his|their)\s+knees)\b",
+                            re.I)),
+    ("lying down", re.compile(r"\b(?:lies?|lay|lying|lies\s+down|lay\s+down|"
+                              r"stretches?\s+out|sprawls?|sprawled)\b", re.I)),
+    ("standing", re.compile(r"\b(?:stands?|stood|standing|"
+                            r"(?:gets?|got)\s+(?:up|to\s+(?:her|his|their)\s+feet)|"
+                            r"rises?|rose|risen)\b", re.I)),
+)
+# A posture verb that is really about somewhere else: "the chair stands in the
+# corner", "the case lies on the table". Those set nobody's pose.
+_NOT_A_BODY = re.compile(r"\b(?:it|chair|table|box|case|bag|door|house|room|"
+                         r"building|tree|bottle|glass|book|light|lamp)\s+\w{0,8}?\s*"
+                         r"(?:stands?|lies?|sits?)\b", re.I)
+
+
+def posture_in(beat, cast):
+    """{name: posture} this beat puts somebody into. {} when it stages none.
+
+    Attributed by CLAUSE, so "Kate sits down and Sam stays by the door" does not
+    seat them both. A clause with a posture verb and no name belongs to whoever the
+    beat names first, which is the same reading the removal agent uses."""
+    b = str(beat or "")
+    people = [n for n in (cast or []) if n]
+    if not b or not people:
+        return {}
+    out = {}
+    for part in re.split(r"(?<=[.;!?])\s+", b):
+        if _NOT_A_BODY.search(part):
+            continue
+        # Every posture verb in the clause, in order, with the span of text that
+        # precedes it. The SUBJECT is the names in that span: "Kate sits down and
+        # Sam stays by the door" seated them both when the whole sentence was
+        # searched, because Sam is in it -- but he is after the verb, doing
+        # something else. "Kate and Sam sit down" still seats both, because both
+        # names precede the one verb.
+        hits = sorted(((m.start(), pose) for pose, rx in _POSTURE_OF
+                       for m in [rx.search(part)] if m),
+                      key=lambda h: h[0])
+        prev = 0
+        for at, pose in hits:
+            span = part[prev:at]
+            here = [n for n in people
+                    if re.search(r"\b" + re.escape(n) + r"\b", span, re.I)]
+            if not here:
+                # No name before the verb: the beat's first-named person is acting,
+                # and with one person in the shot there is nobody else it can be.
+                first = next((n for n in people
+                              if re.search(r"\b" + re.escape(n) + r"\b", b, re.I)), None)
+                here = [first] if first else (people[:1] if len(people) == 1 else [])
+            for n in here:
+                out[n] = pose
+            prev = at
+    return out
+
+
+def posture_hold(poses, described):
+    """One short sentence keeping people in the pose an earlier beat put them in.
+
+    Only for people this shot DESCRIBES -- a pose belonging to somebody the text
+    does not mention is a pose for nobody, and the model draws the person that
+    sentence implies. Short on purpose: this is latched, so it lands in every shot
+    after the one that stages it, and a long clause repeated is the guard bloat
+    this node was rebuilt to escape."""
+    # STANDING is not held. It is the default pose -- a model draws a standing
+    # person unless told otherwise -- so the clause buys nothing and costs a naming
+    # of the person, and a described person is a person the model draws: naming
+    # somebody twice in one shot is what put a second copy of them in frame.
+    # Sitting, kneeling and lying down are the poses that need saying.
+    who = [(n, p) for n, p in (poses or {}).items()
+           if n in set(described or []) and p != "standing"]
+    if not who:
+        return ""
+    if len(who) == 1:
+        return f" {who[0][0]} is still {who[0][1]}."
+    said = "; ".join(f"{n} is still {p}" for n, p in who[:2])
+    return f" {said}."
+
+
 def _state_key(thing):
     """One key for 'door' and 'doors', so a beat acting on either clears both."""
     t = (thing or "").lower()
@@ -5031,6 +5122,8 @@ class H3LongVideos:
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
+        poses = {}                # name -> the posture a beat put them in
+        posture_shots = []        # shots told to keep a standing posture
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
         crowded = []              # (shot, clauses dropped for room)
@@ -5520,6 +5613,31 @@ class H3LongVideos:
             _gaze = gaze_hold(looking_at) if (hold_gaze and looking_at) else ""
             if _gaze:
                 gaze_shots.append(len(shots) + 1)
+            # POSTURE, latched the way the gaze is. A beat that sits somebody down
+            # ends its shot with them seated; the next beat says nothing about it,
+            # so the shot was free to stand them back up -- reported as the end of
+            # one beat and the start of the next not matching. The keyframe does
+            # carry the pose as a picture, but the text is what the model
+            # reconciles it against, and text saying nothing loses to a reference
+            # saying something.
+            #
+            # Said only on the shots AFTER the one that stages it: the staging beat
+            # has the author's own words and does not need a sentence arguing
+            # beside them. Cleared by whatever the new beat stages instead.
+            _pose_now = posture_in(body, active if character_guard and active
+                                   else [n for n, _ in sheet_lines(_who_sheet) if n])
+            _posture = ("" if not hold_scene_state
+                        else posture_hold({n: p for n, p in poses.items()
+                                           if n not in _pose_now},
+                                          # `active`, not `_described`: that is
+                                          # assigned further down this loop, so
+                                          # reading it here gets the PREVIOUS
+                                          # shot's cast.
+                                          active if character_guard else
+                                          [n for n, _ in sheet_lines(_who_sheet) if n]))
+            if _posture:
+                posture_shots.append(len(shots) + 1)
+            poses.update(_pose_now)
             _anchor_now = limb_anchor(body) if restrained else ""
             if _anchor_now:
                 anchored = _anchor_now
@@ -5820,6 +5938,7 @@ class H3LongVideos:
                 (6, "moved", _moved),        # a garment left where it was put
                 (7, "anchors", anchors),     # hardware with nowhere to sit
                 (10, "state", _state),
+                (9, "posture", _posture),   # where the last beat left the body
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),
                 (13, "turn", turn),
@@ -5958,6 +6077,18 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if posture_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in posture_shots)} are told to keep "
+                f"the posture an earlier beat put somebody in -- seated, kneeling, "
+                f"lying down. The scene-state reader tracks scenery and nothing about "
+                f"the body, so a shot that ended with somebody seated was followed by "
+                f"one free to stand them up: the keyframe carries the pose as a "
+                f"picture, but the text is what the model reconciles it against, and "
+                f"text that says nothing loses to a reference that says something. "
+                f"Standing is never held -- it is the default pose, so the clause "
+                f"would cost a naming of the person and buy nothing. Off with "
+                f"hold_scene_state")
         if revealed_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in revealed_shots)} take off a "
