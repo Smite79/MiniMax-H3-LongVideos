@@ -1472,6 +1472,52 @@ def non_latin_in(text):
     return out
 
 
+# A LINE THAT ORDERS AN ACTION. "Dana says to McKenna: \"Take off your shorts and
+# lie down on the change table.\"" -- the node no longer STAGES that (the readers
+# refuse quoted speech), but the words are still in the shot, because beats are
+# passed through verbatim and that is the oldest promise this file makes. A video
+# model does not distinguish a quoted instruction from a stage direction: it
+# renders what the words describe, and the action arrives a beat early.
+#
+# The words cannot be removed. What can be added is something for the LISTENER to
+# be doing, so the shot has an answer for them other than the instruction --
+# positively phrased, because at cfg 1 "does not do it yet" names the thing.
+_ORDERED = re.compile(
+    r"\b(?:take|takes|taking|pull|pulls|remove|removes|undo|undoes|unfasten|"
+    r"unbuckle|unzip|slip|slips|step|steps|get|gets|lie|lies|lay|lays|sit|sits|"
+    r"kneel|kneels|stand|stands|turn|turns|come|comes|go|goes|put|puts|hold|"
+    r"holds|open|opens|close|closes)\b", re.I)
+
+
+def told_to_act(beat, speakers, described):
+    """Who is being TOLD to do something in this beat's dialogue. [] when nobody.
+
+    Only where the quoted line contains an action verb, and only for people the
+    shot describes who are not the one speaking -- the listener is the one whose
+    body the instruction is about, and the one the model will move early."""
+    b = str(beat or "")
+    if not b:
+        return []
+    said = " ".join(m.group(0) for m in _QUOTED.finditer(b))
+    if not said or not _ORDERED.search(said):
+        return []
+    talking = {n for n in (speakers or []) if n}
+    return [n for n in (described or []) if n and n not in talking]
+
+
+def told_hold(listeners):
+    """Give the listener something to be doing while the line is said."""
+    who = [n for n in (listeners or []) if n]
+    if not who:
+        return ""
+    # ONE naming each. A described person is a person the model draws, and naming
+    # somebody twice in one shot is what put a second copy of them in frame.
+    if len(who) == 1:
+        return f" {who[0]} listens, still, wearing what the sheet already lists."
+    said = ", ".join(who[:-1]) + " and " + who[-1]
+    return f" {said} listen, still, wearing what the sheet already lists."
+
+
 MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays "
                      "closed, jaws still.")
 
@@ -5833,6 +5879,7 @@ class H3LongVideos:
         unattributed = []         # shots whose line names no speaker
         mouth_named = []          # shots with a line, holding the OTHER mouths
         language_shots = []       # shots told which language the line is in
+        told_shots = []           # shots whose line orders somebody about
         poses = {}                # name -> the posture a beat put them in
         here = ""                 # the place the film is currently in
         # The film's ambient bed, read from the anchor and the scene rather
@@ -6728,6 +6775,15 @@ class H3LongVideos:
             # deliver the line in whatever language the model picks.
             _lang = (LANGUAGE_HOLD.format(lang=SPOKEN_LANGUAGE)
                      if (_speaks and not _voiced) else "")
+            # A quoted ORDER is still in the shot's words, and a model renders what
+            # the words describe. Give the listener something to be doing, so the
+            # instruction is not the only thing in the frame about their body.
+            _told = told_hold(told_to_act(
+                body, speakers_in(body, _who_sheet),
+                _described if character_guard else
+                [n for n, _ in sheet_lines(_who_sheet) if n])) if _speaks else ""
+            if _told:
+                told_shots.append(len(shots) + 1)
             if _lang:
                 language_shots.append(len(shots) + 1)
             _device = device_voice_clause(body) if (_device_line and _has_people) else ""
@@ -6774,6 +6830,7 @@ class H3LongVideos:
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language
+                (6, "told", _told),          # a listener given an order to ignore
                 (13, "turn", turn),
             ]
             _kept, _dropped = fit_guards(_guards, len(body.split()))
@@ -7099,6 +7156,20 @@ class H3LongVideos:
                 f"an open branch on a joint model can still put a voice in the gap. "
                 f"Write your own sound into a beat to override it, or turn auto_sound "
                 f"off to go back to silence")
+        if told_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in told_shots)} carry a line that "
+                f"ORDERS somebody to do something, so the listener is given "
+                f"something to be doing while it is said. The node does not stage "
+                f"what a quoted line asks for -- the readers refuse speech -- but "
+                f"the words are still in the shot, because beats go to the model "
+                f"verbatim, and a video model does not tell a quoted instruction "
+                f"from a stage direction: it renders what the words describe, and "
+                f"the action lands a beat early. The words cannot be removed "
+                f"without breaking the one promise this node makes about your text. "
+                f"If it still happens, put the order in narration instead -- 'Dana "
+                f"tells her to lie down' -- and keep the quoted line for something "
+                f"that is not an instruction")
         if language_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in language_shots)} carry a line, "

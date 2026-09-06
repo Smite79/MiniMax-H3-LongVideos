@@ -2935,6 +2935,17 @@ def test_an_instruction_is_not_the_action():
     idle_sh = [x for x in re.split(r"(?=\[Shot )",
                                    run_node(idle, plan_only=True,
                                             character_memory=mem)[3]) if x.strip()]
+    # The words of the order are still in the shot -- they have to be, beats go to
+    # the model verbatim -- so the LISTENER is given something to be doing, or the
+    # instruction is the only thing in the frame about their body.
+    check("the listener is given something to do",
+          "McKenna listens" in sh[0])
+    check("...and is named once, not twice",
+          sh[0].split("McKenna listens")[1].split(".")[0].count("McKenna") == 0)
+    check("...and a line with no order in it adds nothing",
+          "listens, still" not in run_node(
+              'A room.\n\nDana says: "Hello there."', plan_only=True,
+              character_memory=mem)[3])
     check("a spoken instruction latches nobody",
           "still lying down" not in idle_sh[1], idle_sh[1][-90:])
 
