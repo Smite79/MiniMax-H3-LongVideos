@@ -1732,6 +1732,15 @@ def flush_for_model_change(model):
 _SILENCE_STATUS = {"asked": 0, "applied": 0, "why": ""}
 
 
+# How much silence to encode, and how much of each end to throw away. The encoder
+# pads at the edges, so the first and last few latent frames carry an artifact that
+# is not silence: measured on the H3 audio VAE, the frame-to-frame delta runs 0.224
+# at the first join and 0.172 at the last against 0.002 in the interior. Four
+# frames off each end clears it with room to spare.
+_SILENT_SECONDS = 2
+_SILENT_EDGE = 4
+
+
 def _silent_audio_latent(audio_vae, frame_count, fps):
     """A keyframe audio latent of actual SILENCE, or None if it cannot be made.
 
@@ -1740,13 +1749,36 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
     branch invents a voice -- which the picture then lip-syncs to. The lips-closed
     sentence is arguing with a stream that has already decided someone is talking.
 
-    Seeding the keyframe's audio channel with encoded silence anchors that stream
-    instead. comfy/ldm/minimax/audio_vae.py encode() takes stereo [B, 2, L] at
-    32 kHz and returns [B, 32, 2, T] on the same 40 Hz grid temporal_shape() uses.
+    REBUILT 2026-09-05, from measurements against the real VAE rather than from
+    reasoning. The previous version encoded one second, kept a SINGLE interior
+    frame and repeated it, on the argument that silence is homogeneous. It is not,
+    in latent space: encoded silence has genuine frame-to-frame variation (delta
+    mean 0.002-0.004, max 0.021), and a repeated frame has a delta of exactly
+    0.000000. That is a flat signal no encoder produces, and a model handed
+    conditioning outside its own distribution has every reason to disregard it --
+    which is an audio branch back to inventing a voice, with the report saying
+    silence went on.
 
-    Everything here is defensive. The shape is CHECKED against what the layout
+    The fix that version was avoiding is real too: tiling the whole encoded second
+    end to end leaves a 25x spike at each join (0.554 against 0.022), once per
+    second, which is a metronome in the conditioning of a joint model.
+
+    So: encode two seconds, drop the padded ends, and PING-PONG the interior --
+    forward, reversed, forward. Every join repeats a frame, so there is no seam,
+    and the interior statistics are the encoder's own. Measured over a 9s shot:
+
+        one frame repeated   peak 0.000686   delta mean 0.000000   max 0.000000
+        whole 2s tiled       peak 0.000314   delta mean 0.017451   max 0.554715
+        interior ping-pong   peak 0.000566   delta mean 0.002039   max 0.021159
+
+    where the encoder's own interior is mean 0.0021, max 0.0212. Decoded peak
+    0.000566 on a +/-1.0 scale is about -65 dBFS: silence.
+
+    Everything here stays defensive. Shapes are CHECKED against what the layout
     expects rather than assumed, and any failure returns None so the shot falls
-    back to today's behaviour instead of breaking the render."""
+    back to an unconditioned branch instead of breaking the render -- the caller
+    reports when that happens, so it is no longer a silent failure.
+    """
     try:
         sr = int(getattr(audio_vae, "audio_sample_rate", 0) or 0)
         if sr <= 0:
@@ -1754,34 +1786,39 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         _, _, want_t = temporal_shape(frame_count, fps)
         if want_t <= 0:
             return None
-        unit = _SILENT_UNIT.get("lat")
-        if unit is None:
+        block = _SILENT_UNIT.get("lat")
+        if block is None:
             # CHANNELS LAST. comfy.sd.VAE.encode() does `pixel_samples.movedim(-1, 1)`
             # before handing off, so the audio VAE -- which wants [B, 2, L] -- must be
-            # given [B, L, 2]. Passing [B, 2, L] raises inside the encoder, and the
-            # first version did exactly that: swallowed by the guard below, so the
+            # given [B, L, 2]. Passing [B, 2, L] raises inside the encoder, and an
+            # early version did exactly that: swallowed by the guard below, so the
             # whole layer silently did nothing.
             #
-            # ONE SECOND, encoded ONCE. Silence is homogeneous, so the result tiles
-            # along time -- and encoding a full 15s shot instead cost a VAE pass big
-            # enough to OOM mid-render on a 16GB card, where the failure again
-            # degraded silently to no conditioning at all.
-            enc = audio_vae.encode(torch.zeros((1, sr, 2)))
-            if enc is None or enc.dim() != 4 or enc.shape[1] != 32 or enc.shape[-1] < 3:
+            # Two seconds, encoded ONCE and cached. Encoding a full 15s shot instead
+            # cost a VAE pass big enough to OOM mid-render on a 16GB card, where the
+            # failure again degraded silently to no conditioning at all.
+            enc = audio_vae.encode(torch.zeros((1, sr * _SILENT_SECONDS, 2)))
+            if enc is None or enc.dim() != 4 or enc.shape[1] != 32:
                 return None
-            # ONE STEADY FRAME, from the MIDDLE. The encoder's zero-padding leaves
-            # heavy edge artifacts -- measured deviation 0.351 at the first and last
-            # frames against 0.002 in the interior, ~170x -- and tiling the whole
-            # second therefore stamped a spike every 40 latent frames, which at 40Hz
-            # is once per SECOND. That is a metronome in the audio conditioning of a
-            # joint audio-video model, and the picture lip-syncs to it. Repeating a
-            # single interior frame gives conditioning that is genuinely constant.
-            mid = enc.shape[-1] // 2
-            _SILENT_UNIT["lat"] = enc[..., mid:mid + 1].detach().to("cpu").clone()
-        unit = _SILENT_UNIT["lat"]
-        if unit.shape[-1] != 1:
+            if enc.shape[-1] <= 2 * _SILENT_EDGE + 1:
+                return None
+            block = enc[..., _SILENT_EDGE:-_SILENT_EDGE].detach().to("cpu").clone()
+            _SILENT_UNIT["lat"] = block
+        n = block.shape[-1]
+        if n < 1:
             return None
-        return unit.repeat(1, 1, 1, want_t).clone()
+        # Forward, reversed, forward... Each join repeats a frame, so the seam that
+        # plain tiling leaves is gone while the interior variation is the encoder's.
+        pieces, have, i = [], 0, 0
+        while have < want_t:
+            piece = block if i % 2 == 0 else torch.flip(block, dims=[-1])
+            pieces.append(piece)
+            have += n
+            i += 1
+        out = torch.cat(pieces, dim=-1)[..., :want_t].clone()
+        if out.shape[-1] != want_t:
+            return None
+        return out
     except Exception:
         return None                         # never fail a render for a nicety
 

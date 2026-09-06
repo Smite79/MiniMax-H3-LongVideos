@@ -2602,6 +2602,78 @@ def test_the_plan_says_whether_silence_can_be_applied():
     S._SILENT_UNIT["lat"] = None
 
 
+def test_the_silent_latent_looks_like_silence():
+    """The conditioning has to look like what the encoder produces, not just decode
+    quietly. The old build kept ONE interior frame and repeated it, on the argument
+    that silence is homogeneous -- it is not, in latent space. Encoded silence has
+    frame-to-frame variation (mean 0.002-0.004, max 0.021); a repeated frame has a
+    delta of exactly zero, which is a signal no encoder makes, and a model handed
+    conditioning outside its own distribution has every reason to disregard it.
+
+    Checked with a stand-in whose encode has the same shape and the same edge
+    artifacts as the real VAE, so the shape of the fix is tested without loading a
+    checkpoint. The numbers in the docstring were measured against the real one.
+
+    This lives in the smoke suite because test_node stubs torch, and a stand-in
+    built from stub tensors cannot exercise a function that slices and flips."""
+    print("\n=== the silent latent looks like silence ===")
+
+    class EdgyVae:
+        """Encodes to [B, 32, 2, T] with big deltas at the ends, like the real one."""
+        audio_sample_rate = 32000
+
+        def encode(self, x):
+            n = x.shape[1] // 800
+            t = torch.arange(n, dtype=torch.float32)
+            base = 0.46 + 0.002 * torch.sin(t * 0.7)      # interior variation
+            base[:4] += torch.tensor([0.22, 0.10, 0.05, 0.03])   # padded head
+            base[-4:] += torch.tensor([0.03, 0.05, 0.10, 0.17])  # padded tail
+            return base.reshape(1, 1, 1, n).repeat(1, 32, 2, 1)
+
+    vae = EdgyVae()
+    S._SILENT_UNIT["lat"] = None
+    lat = S._silent_audio_latent(vae, 226, S.H3_FPS)
+    check("a latent is produced", lat is not None)
+    _, _, want_t = S.temporal_shape(226, S.H3_FPS)
+    check("...of exactly the length the layout wants", lat.shape[-1] == want_t)
+    check("...with the layout's channel count", lat.shape[1] == 32)
+    d = (lat[..., 1:] - lat[..., :-1]).abs()
+    check("it is NOT a flat signal", float(d.mean()) > 1e-5)
+    # The edges the encoder pads are thrown away, so no join carries their spike.
+    check("no seam spike from the padded ends", float(d.max()) < 0.05)
+    # Ping-pong: every join repeats a frame, so plain tiling's seam is gone.
+    S._SILENT_UNIT["lat"] = None
+    long = S._silent_audio_latent(vae, 462, S.H3_FPS)
+    dl = (long[..., 1:] - long[..., :-1]).abs()
+    check("a longer shot has no seam either", float(dl.max()) < 0.05)
+    check("...and is still the right length",
+          long.shape[-1] == S.temporal_shape(462, S.H3_FPS)[2])
+    # Still defensive: anything unexpected returns None rather than raising.
+    S._SILENT_UNIT["lat"] = None
+
+    class Broken:
+        audio_sample_rate = 32000
+
+        def encode(self, x):
+            raise RuntimeError("nope")
+
+    check("a failing encode returns None",
+          S._silent_audio_latent(Broken(), 226, S.H3_FPS) is None)
+    check("no sample rate returns None",
+          S._silent_audio_latent(object(), 226, S.H3_FPS) is None)
+
+    class TooShort:
+        audio_sample_rate = 32000
+
+        def encode(self, x):
+            return torch.zeros((1, 32, 2, 3))
+
+    S._SILENT_UNIT["lat"] = None
+    check("an encode too short to trim returns None",
+          S._silent_audio_latent(TooShort(), 226, S.H3_FPS) is None)
+    S._SILENT_UNIT["lat"] = None
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2714,6 +2786,7 @@ def main():
     test_hands_and_holds_follow_the_beat()
     test_one_line_is_one_voice()
     test_the_plan_says_whether_silence_can_be_applied()
+    test_the_silent_latent_looks_like_silence()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
