@@ -767,6 +767,38 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_a_removal_stays_on_one_person():
+    """A modifier inside one character's garment is not another character's garment.
+
+    "Dan pulls off her jeans shorts" names ONE garment. But "jeans" is also the head
+    of Dan's own entry, so the reader matched it against his sheet line and took HIS
+    trousers off too -- in a beat that never mentions him coming out of anything --
+    and they stayed off, because a removal is permanent. Reported as his pants coming
+    off automatically in the shot after."""
+    sc = ("McKenna: she, 22, Shiny white crop top, blue jeans shorts.\n"
+          "Dan: he, 40, t-shirt, jeans.")
+    check("'her jeans shorts' is one garment",
+          S.infer_removals("Dan pulls off her jeans shorts.", sc) == ["shorts"])
+    check("...whoever is doing it",
+          S.infer_removals("McKenna takes off her jeans shorts.", sc) == ["shorts"])
+    check("...and the other person keeps his",
+          "jeans" not in S.infer_removals("Dan pulls off her jeans shorts.", sc))
+    # The opposite failure would be worse: a garment that IS his still comes off.
+    check("he can still take his own off",
+          S.infer_removals("Dan takes off his jeans.", sc) == ["jeans"])
+    # Two garments genuinely coming off are still two.
+    check("two real garments are still two",
+          S.infer_removals("Dan takes off his jeans and his t-shirt.", sc)
+          == ["jeans", "t-shirt"])
+    check("...and a coordinated pair reads",
+          sorted(S.infer_removals("McKenna takes off her top and her shorts.", sc))
+          == ["shorts", "top"])
+    # The layering reader shares the defect and the fix.
+    check("the layer reader agrees",
+          "jeans" not in S.infer_layers(["Dan pulls off her jeans shorts to show "
+                                         "the thong."], sc))
+
+
 def test_a_removal_names_it_the_way_the_sheet_does():
     """The removal clause uses the SHEET's words. infer_removals keys a garment by
     its head noun -- "shorts" -- which is right for matching and wrong for prose:
@@ -2637,6 +2669,7 @@ def main():
     test_bare_region()
     test_the_sheet_names_the_garment()
     test_a_removal_names_it_the_way_the_sheet_does()
+    test_a_removal_stays_on_one_person()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()

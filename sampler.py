@@ -472,6 +472,10 @@ def exposed_by(beat, scene):
                 continue
             if _RESTRAINT_WORD.match(low) or not _is_entry_head(word, scene):
                 continue
+            # "jeans shorts" is one garment; "jeans" there is a modifier, and
+            # matching it against another character's entry took their trousers off.
+            if _modifier_of_a_named_entry(word, span, scene):
+                continue
             out.append(low)
     return out
 
@@ -3290,6 +3294,27 @@ def _is_entry_head(word, scene):
     return False
 
 
+def _modifier_of_a_named_entry(word, span, scene):
+    """Is `word` a MODIFIER of a longer garment the same span already names?
+
+    "Dan pulls off her jeans shorts" names one garment. But "jeans" is also the
+    head of Dan's own entry, so the reader matched it against his line and took
+    HIS jeans off as well -- in a beat that never mentions him. His trousers came
+    off automatically, and stayed off.
+
+    The span is what the beat says is coming off. If the word is immediately
+    followed there by another garment word, it is describing that one, not naming
+    a second: the phrase is "jeans shorts", and only "shorts" is the head.
+    """
+    m = re.search(r"\b" + re.escape(word) + r"\b\s+([\w-]{3,})", span or "", re.I)
+    if not m:
+        return False
+    nxt = m.group(1).lower().strip("-")
+    # ...and only when that following word is itself a garment the scene lists,
+    # so "jeans and boots" -- two garments -- is not read as one.
+    return bool(nxt and nxt not in _NOT_A_GARMENT and _is_entry_head(nxt, scene))
+
+
 # A garment MOVED rather than taken off: pulled down, pushed up, shoved aside, left
 # hanging open. It is still on the body and still in the picture, so it has to go on
 # being described -- but described as it now is, or the next shot puts it back the way
@@ -3530,6 +3555,12 @@ def infer_removals(beat, scene):
             # It has to be worn: the HEAD of something the scene lists, not a
             # modifier inside it and not half of a hyphenated compound.
             if not _is_entry_head(word, scene):
+                continue
+            # "her jeans shorts" is ONE garment. "jeans" there is a modifier, but it
+            # is also the head of Dan's own entry, so it matched his line and took
+            # HIS trousers off in a beat that never mentions him -- and they stayed
+            # off, because a removal is permanent.
+            if _modifier_of_a_named_entry(word, span, scene):
                 continue
             # ...and not a person or a place.
             if re.search(r"\b" + re.escape(word) + r"\b\s*(?:is|was|walks|stands|sits|=)",
