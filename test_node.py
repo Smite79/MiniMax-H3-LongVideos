@@ -889,6 +889,47 @@ def test_a_dropped_garment_is_not_a_fall():
                      "Kate falls to the floor."))
 
 
+def test_a_journey_has_two_ends():
+    """A beat that walks somebody from one room to another is a staged change with
+    two ends, exactly like a door opening. Told only where it FINISHES, the shot
+    renders the destination and starts there -- the living room is the bedroom at
+    the first frame and the hallway between them is never seen. Reported as scenes
+    being cut short and missing their detail."""
+    for _b, _want in (
+            ("She walks him down the hallway to the bedroom.", ("", "hallway", "bedroom")),
+            ("She leads him to the bedroom.", ("", "", "bedroom")),
+            ("They go from the living room to the kitchen.", ("living room", "", "kitchen")),
+            ("He walks out of the kitchen and up the stairs to the bedroom.",
+             ("kitchen", "stairs", "bedroom"))):
+        check(f"travel read: {_b[:38]!r}", S.travel_in(_b) == _want)
+    # A place named without MOVEMENT is not a journey.
+    for _b in ("She looks to the bedroom.",
+               "She sits in the living room.",
+               "The bedroom door is closed.",
+               "He waits."):
+        check(f"not travel: {_b[:34]!r}", S.travel_in(_b) == ("", "", ""))
+    # Both ends, and the middle where the beat gives one.
+    check("both ends are named",
+          "begins in the living room" in S.travel_anchor("living room", "", "bedroom")
+          and "ends in the bedroom" in S.travel_anchor("living room", "", "bedroom"))
+    check("...and the route between them",
+          "along the hallway" in S.travel_anchor("living room", "hallway", "bedroom"))
+    # The room an earlier beat established stands in for an unnamed origin: a
+    # journey with only a destination is the one that renders as a cut.
+    check("the established room is the origin",
+          "begins in the living room"
+          in S.travel_anchor("", "", "bedroom", here="living room"))
+    check("no origin anywhere, nothing said",
+          S.travel_anchor("", "", "bedroom") == "")
+    check("...and going nowhere says nothing",
+          S.travel_anchor("bedroom", "", "bedroom") == "")
+    # place_named is what latches the room when a beat only says where people are.
+    check("a place is read from 'in the X'",
+          S.place_named("McKenna finds Dan in the living room.") == "living room")
+    check("...and nothing where none is named",
+          S.place_named("McKenna waits.") == "")
+
+
 def test_a_posture_carries_to_the_next_shot():
     """A beat that sits somebody down ends its shot with them seated.
 
@@ -3039,6 +3080,7 @@ def main():
     test_a_group_beat_keeps_the_group()
     test_the_wearer_is_in_the_shot()
     test_a_posture_carries_to_the_next_shot()
+    test_a_journey_has_two_ends()
     test_a_dropped_garment_is_not_a_fall()
     test_silence_reports_what_happened()
     test_the_audio_branch_has_its_own_last_step()

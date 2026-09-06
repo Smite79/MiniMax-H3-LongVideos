@@ -2725,6 +2725,37 @@ def test_a_softened_handoff_is_not_a_keyframe():
     check("info names the aug", "ref_noise_aug 0.95 is below" in info)
 
 
+def test_a_journey_reaches_the_shot():
+    """END TO END: the travel clause lands in the shot, with the room the previous
+    beat established as its origin.
+
+    The unit tests exercise travel_anchor directly and passed with the clause
+    disconnected from the render loop, which is the failure that matters: a
+    journey given only its destination is one the model can satisfy by starting
+    there."""
+    print("\n=== a journey reaches the shot ===")
+    mem = "McKenna: she, 22, top.\nDan: he, 30, shirt."
+    P = ("A scene in a home.\n\n"
+         "McKenna finds Dan in the living room.\n\n"
+         "She takes his hand and walks him down the hallway to the bedroom.\n\n"
+         "They sit on the bed.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    info, script = out[2], out[3]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("the travelling shot is told where it begins",
+          "begins in the living room" in sh[1])
+    check("...and where it ends", "ends in the bedroom" in sh[1])
+    check("...and what it passes through", "along the hallway" in sh[1])
+    check("...and that it is not a cut", "not a cut" in sh[1])
+    # The origin came from the PREVIOUS beat: this one never names it.
+    check("the origin is latched from the earlier beat",
+          "living room" not in P.split("\n\n")[2])
+    # A shot that goes nowhere gets nothing.
+    check("a stationary shot carries no travel clause",
+          "The shot begins in" not in sh[0] and "The shot begins in" not in sh[2])
+    check("info names the travelling shots", "move between places" in info)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2839,6 +2870,7 @@ def main():
     test_the_plan_says_whether_silence_can_be_applied()
     test_the_silent_latent_looks_like_silence()
     test_a_softened_handoff_is_not_a_keyframe()
+    test_a_journey_reaches_the_shot()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

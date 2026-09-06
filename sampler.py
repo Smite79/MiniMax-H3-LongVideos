@@ -3591,6 +3591,90 @@ def state_acts(text):
     return [_state_key(t) for t, _ in state_changes(text)]
 
 
+# TRAVEL between places. A beat that walks somebody from one room to another is a
+# staged change with two ends, exactly like a door opening -- and told only where
+# it finishes, the shot renders the destination and cuts straight to it. Reported
+# as a scene starting in the living room and instantly being in the bedroom, with
+# the hallway between them missing.
+#
+# The same fix direction_anchor uses for doors: name BOTH ends, and the middle if
+# the beat gives one.
+_PLACE = (r"hallway|hall|corridor|passage|landing|stairs|staircase|steps|"
+          r"bedroom|bathroom|kitchen|living\s+room|lounge|dining\s+room|study|"
+          r"office|garage|basement|cellar|attic|loft|porch|garden|yard|driveway|"
+          r"street|car\s?park|lobby|foyer|doorway|door|room")
+# "to the bedroom", "into the kitchen" -- where it ENDS.
+_GOES_TO = re.compile(r"\b(?:to|into|toward|towards|through\s+to)\s+"
+                      r"(?:the|her|his|their|a)\s+(" + _PLACE + r")\b", re.I)
+# "down the hallway", "along the corridor" -- what it passes THROUGH.
+_GOES_VIA = re.compile(r"\b(?:down|along|across|through|up|via|past)\s+"
+                       r"(?:the|her|his|their|a)\s+(" + _PLACE + r")\b", re.I)
+# "from the living room", "out of the kitchen" -- where it STARTS.
+_GOES_FROM = re.compile(r"\b(?:from|out\s+of|leaves?|leaving)\s+"
+                        r"(?:the|her|his|their|a)?\s*(" + _PLACE + r")\b", re.I)
+# A verb that actually MOVES somebody. "looks to the bedroom" is not travel.
+_TRAVEL_VERB = re.compile(
+    r"\b(?:walk|walks|walked|walking|lead|leads|led|leading|take|takes|took|taking|"
+    r"go|goes|went|going|head|heads|headed|heading|move|moves|moved|moving|"
+    r"carry|carries|carried|carrying|follow|follows|followed|following|"
+    r"step|steps|stepped|stepping|climb|climbs|climbed|climbing|"
+    r"run|runs|ran|running|come|comes|came|coming)\b", re.I)
+
+
+def travel_in(beat):
+    """(from, via, to) for a beat that moves somebody between places.
+
+    All three may be "". Only when a MOVEMENT verb is present: "she looks to the
+    bedroom" names a place and goes nowhere."""
+    b = str(beat or "")
+    if not b or not _TRAVEL_VERB.search(b):
+        return ("", "", "")
+
+    def _one(rx):
+        m = rx.search(b)
+        return re.sub(r"\s+", " ", m.group(1)).strip().lower() if m else ""
+
+    to, via, frm = _one(_GOES_TO), _one(_GOES_VIA), _one(_GOES_FROM)
+    # A place cannot be two ends of the same journey.
+    if via and via == to:
+        via = ""
+    if frm and frm in (to, via):
+        frm = ""
+    return (frm, via, to)
+
+
+def travel_anchor(frm, via, to, here=""):
+    """Say where the shot starts, what it passes, and where it ends. "" if nowhere.
+
+    `here` is the room an earlier beat established, used when the beat names no
+    origin -- a journey with only a destination is what renders as a cut.
+
+    Short on purpose: this lands on travel beats, which already carry an action,
+    and the node's whole balance problem is continuity crowding the beat out."""
+    start = frm or here
+    if not to or start == to:
+        return ""
+    if via:
+        return (f" The shot begins in the {start}, moves along the {via}, and ends "
+                f"in the {to} -- one continuous move, not a cut.") if start else (
+                f" The shot moves along the {via} and ends in the {to} -- one "
+                f"continuous move, not a cut.")
+    if not start:
+        return ""
+    return (f" The shot begins in the {start} and ends in the {to} -- one "
+            f"continuous move, not a cut.")
+
+
+_IS_IN = re.compile(r"\b(?:in|inside|within|at)\s+(?:the|her|his|their|a)\s+("
+                    + _PLACE + r")\b", re.I)
+
+
+def place_named(text):
+    """The place this text says somebody is IN, without travelling. "" if none."""
+    m = _IS_IN.search(str(text or ""))
+    return re.sub(r"\s+", " ", m.group(1)).strip().lower() if m else ""
+
+
 def direction_anchor(changes):
     """Say which end of a staged change is which, for the ones that have a direction.
 
@@ -5422,7 +5506,9 @@ class H3LongVideos:
         unattributed = []         # shots whose line names no speaker
         mouth_named = []          # shots with a line, holding the OTHER mouths
         poses = {}                # name -> the posture a beat put them in
+        here = ""                 # the place the film is currently in
         posture_shots = []        # shots told to keep a standing posture
+        travel_shots = []         # shots that move between places
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
         crowded = []              # (shot, clauses dropped for room)
@@ -5939,6 +6025,18 @@ class H3LongVideos:
             # Said only on the shots AFTER the one that stages it: the staging beat
             # has the author's own words and does not need a sentence arguing
             # beside them. Cleared by whatever the new beat stages instead.
+            # WHERE the shot goes. A beat that walks somebody from one room to
+            # another is a staged change with two ends -- told only where it
+            # finishes, the shot renders the destination and cuts straight to it,
+            # with the hallway between them missing. Named both ends, the way a
+            # door's direction is.
+            _frm, _via, _to = travel_in(body)
+            _travel = travel_anchor(_frm, _via, _to, here)
+            if _travel:
+                travel_shots.append(len(shots) + 1)
+            # The room the next beat starts from: where this one ended, or where it
+            # simply says everyone is.
+            here = _to or _frm or place_named(body) or here
             _pose_now = posture_in(body, active if character_guard and active
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
             _posture = ("" if not hold_scene_state
@@ -6262,6 +6360,7 @@ class H3LongVideos:
                 (2, "bare", _bare),          # ...or that nothing does
                 (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", fall),           # a body going down needs a landing
+                (4, "travel", _travel),      # a journey needs both its ends
                 (5, "device", _device),      # a voice that is not hers
                 (6, "moved", _moved),        # a garment left where it was put
                 (7, "anchors", anchors),     # hardware with nowhere to sit
@@ -6405,6 +6504,15 @@ class H3LongVideos:
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
                 f"later shot is told the old one. Off with hold_scene_state.")
+        if travel_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in travel_shots)} move between "
+                f"places, so the shot is told where it BEGINS as well as where it "
+                f"ends. A journey given only its destination is a journey the model "
+                f"can satisfy by starting there -- the living room becomes the "
+                f"bedroom at the first frame and the hallway between them is never "
+                f"seen. Named both ends, it has to travel. The starting place is "
+                f"read from the beat, or from wherever the last one left everybody")
         if posture_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in posture_shots)} are told to keep "
