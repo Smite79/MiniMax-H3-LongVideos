@@ -15,6 +15,7 @@ Run: python test_smoke.py
 import importlib.util
 import io
 import os
+import itertools
 import re
 import sys
 import types
@@ -2241,6 +2242,96 @@ def test_av_stays_in_sync():
           run_node("A room.\n\nOne.\n\nTwo.")[2])
 
 
+def test_nothing_wearable_is_ever_added():
+    """No clothing is invented, WHATEVER the character memory says.
+
+    The hand-written cases below it check specific wardrobes. This one is the
+    general claim, and it is made two ways because either alone has a hole:
+
+      1. A SWEEP over awkward wardrobes x beat orderings, asserting the script's
+         garment vocabulary against the author's own. Catches a known garment word
+         appearing where the prompt never asked for it.
+
+      2. Every WORD the node adds that the prompt did not contain, checked for
+         anything wearable. A garment word that is in no hand-written list -- the
+         hole in (1) -- shows up here, because this asserts on what the node
+         actually emitted rather than on a list somebody remembered to write.
+
+    Reported repeatedly, and each earlier fix looked complete because the wardrobe
+    that exposed the next one was not in the tests."""
+    print("\n=== nothing wearable is ever added ===")
+    garment = re.compile(
+        r"\b(leggings|stockings|tights|pantyhose|hold-?ups|nylons|hosiery|socks|"
+        r"panties|knickers|thong|g-?string|briefs|boxers|underwear|undies|"
+        r"jockstrap|bra|bralette|brassiere|corset|bustier|camisole|undershirt|"
+        r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|joggers|jeggings|"
+        r"culottes|dungarees|overalls|dress|gown|robe|jumper|sweater|sweatshirt|"
+        r"hoodie|cardigan|jacket|coat|shirt|blouse|t-?shirt|tee|top|tunic|boots|"
+        r"shoes|trainers|sneakers|sandals|heels|gloves|mittens|scarf|hat|belt|"
+        r"apron|cape|poncho|shawl|swimsuit|bikini|leotard)\b", re.I)
+    wardrobes = (
+        # A tagged entry: the <Picture N> made the head noun "2" and broke the
+        # name lookup for exactly the garment a reference was pinning.
+        "McKenna: <Picture 1>, she, 22, Shiny white crop top, "
+        "chastity belt <Picture 2>, blue jeans shorts.",
+        "Kate: she, 30, blouse, panties, skirt.",
+        "Mara: she, 25, red dress.",
+        "Jon: he, 50.",
+        "Bea: she, 28, corset, stockings, garter belt, heels.",
+        "Ana: she, 19, a t-shirt, tights, ankle socks, trainers.",
+        "Dee: she, 40, sundress.\nEve: she, 41, sundress.",
+    )
+    beats = (
+        "{N} stands by the chair.",
+        "{N} takes off her clothes.",
+        "{N} pulls the skirt down.",
+        "{N} falls to the floor.",
+        "{N} sits, wrists bound above her head.",
+        "{N} walks out of frame.",
+        "{N} comes back in.",
+        "{N} is stripped bare.",
+        # Plain removals that leave a region with nothing named under it -- the
+        # bare-region clause fires here, and it is the one guard that talks about
+        # an uncovered part of the body, so it is the likeliest to name a garment.
+        "{N} takes off the skirt.",
+        "{N} takes off her tights.",
+        "{N} takes off the dress.",
+        "{N} takes off her boots.",
+    )
+    invented, added, runs = {}, {}, 0
+    for w in wardrobes:
+        n = w.split(":", 1)[0].strip()
+        for combo in itertools.islice(itertools.permutations(beats, 3), 0, 12):
+            P = w + "\n\n" + "\n\n".join(b.format(N=n) for b in combo)
+            try:
+                script = run_node(P, plan_only=True)[3]
+            except Exception as e:
+                invented.setdefault("RAISED " + repr(e)[:50], P[:60])
+                continue
+            runs += 1
+            allowed = {x.lower().replace("-", "") for x in garment.findall(P)}
+            for x in garment.findall(script):
+                x = x.lower().replace("-", "")
+                if x not in allowed:
+                    invented.setdefault(x, P[:60])
+            # ...and every word the node ADDS, so a garment word nobody listed
+            # above still surfaces.
+            src = {t for t in re.findall(r"[a-z][a-z-]{2,}", P.lower())}
+            for word in re.findall(r"[a-z][a-z-]{2,}", script.lower()):
+                if word not in src:
+                    added.setdefault(word, P[:60])
+    check(f"no garment invented across {runs} prompts", not invented,
+          f"invented {sorted(invented)[:6]}")
+    wearable = re.compile(
+        r"(leggings|stocking|tight|pantyhose|nylon|hosiery|sock|panti|knicker|"
+        r"thong|brief|boxer|underwear|undies|bra|corset|camisole|short|trouser|"
+        r"jean|skirt|kilt|jogger|dress|gown|robe|jumper|sweater|hoodie|cardigan|"
+        r"jacket|coat|shirt|blouse|tunic|boot|shoe|trainer|sneaker|sandal|heel|"
+        r"glove|mitten|scarf|apron|cape|poncho|shawl|bikini|leotard)", re.I)
+    hits = sorted(w for w in added if wearable.search(w))
+    check("no wearable word is ever ADDED by the node", not hits, f"added {hits[:6]}")
+
+
 def test_no_garment_is_ever_invented():
     """END TO END: no garment word reaches a prompt unless the author wrote it.
 
@@ -2425,6 +2516,7 @@ def main():
     test_detail_trend()
     test_timing_report()
     test_no_garment_is_ever_invented()
+    test_nothing_wearable_is_ever_added()
     test_a_garment_keeps_its_description()
     print()
     if _fails:
