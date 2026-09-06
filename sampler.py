@@ -863,8 +863,20 @@ BEAT_BASE_SEC = 0.8            # a little room to settle, not a whole beat of it
 SECONDS_PER_ACTION = 2.2       # screen time one staged action clause needs
 WORDS_PER_SEC = 2.5            # spoken delivery
 # A new coordinated verb phrase starts a new action.
+#
+# A PLAIN COMMA between verb phrases is one too, and it is the commonest way
+# anybody writes a sequence: "walks in, drops her bag, takes off her coat, hangs
+# it up". Only " and " used to split that, so ten actions counted as TWO and the
+# beat was sized for two -- the shot then performed all ten inside it, which is a
+# walk down a hallway arriving as a cut to the far end. Reported as scenes being
+# cut short and missing their detail.
+#
+# The comma has to be followed by an INFLECTED verb, so a list of adjectives or of
+# garments does not split: "a red, tattered coat" is one thing, and a character
+# sheet is not a sequence of actions.
 _CLAUSE_SPLIT = re.compile(
-    r"(?:[.!?;]+|,?\s+(?:and then|then|and|before|after|while|as|until)\s+|,\s+(?=\w+ing\b))")
+    r"(?:[.!?;]+|,?\s+(?:and then|then|and|before|after|while|as|until)\s+"
+    r"|,\s+(?=\w+(?:ing|es|s|ed)\b))")
 
 
 def beat_seconds(beat):
@@ -904,14 +916,30 @@ def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
     if not from_beat:
         return [ceiling_frames] * len(beats), ""
     pace = max(0.05, float(pace if pace else 1.0))
-    lens = []
+    lens, capped = [], []
     for b in beats:
         need = beat_seconds(b) * pace
         want = align_frame_count_nearest(int(round(need * H3_FPS))) if need else MIN_AUTO_FRAMES
+        # A beat that wants MORE than shot_seconds allows is compressed into it,
+        # silently. The shot then performs the whole beat faster -- a walk down a
+        # hallway becomes a cut to the far end -- and nothing in the report said the
+        # length was the reason. Reported as scenes being cut short.
+        if want > ceiling_frames:
+            capped.append((len(lens) + 1, want))
         lens.append(max(MIN_AUTO_FRAMES, min(want, ceiling_frames)))
     note = ""
+    if capped:
+        note = ("shot(s) "
+                + ", ".join(f"{n} (wants {w / H3_FPS:.1f}s)" for n, w in capped[:6])
+                + f" stage more than shot_seconds allows, so they are cut to "
+                  f"{ceiling_frames / H3_FPS:.1f}s and perform the whole beat faster "
+                  f"-- which is a walk down a hallway arriving as a cut to the far "
+                  f"end. Raise shot_seconds (H3's own ceiling is "
+                  f"{MAX_FRAMES / H3_FPS:.1f}s), or give the beat fewer actions and "
+                  f"let the next one carry the rest. ")
     if len(set(lens)) > 1:
-        note = ("shot lengths are sized from each beat ("
+        note += (
+                "shot lengths are sized from each beat ("
                 + ", ".join(f"{n}f/{n / H3_FPS:.1f}s" for n in lens)
                 + "). They differ, so one seed does not give them one noise field -- "
                   "noise is drawn to the latent's shape -- and surface detail resets at "

@@ -889,6 +889,41 @@ def test_a_dropped_garment_is_not_a_fall():
                      "Kate falls to the floor."))
 
 
+def test_a_comma_separated_list_is_a_list_of_actions():
+    """Scenes cut short: a beat's actions were undercounted, so the shot was sized
+    for a fraction of what it stages and performed the rest inside that.
+
+    A plain comma between verb phrases starts a new action, and it is the commonest
+    way anybody writes a sequence. Only " and " used to split, so "walks in, drops
+    her bag, takes off her coat, hangs it up..." counted as TWO actions and got 5.2
+    seconds for ten."""
+    dense = ("She walks in, drops her bag, takes off her coat, hangs it up, "
+             "crosses the room, opens the window, looks out, turns back, sits "
+             "down and picks up the remote.")
+    check("a dense beat asks for real time", S.beat_seconds(dense) > 15.0)
+    check("...and a one-action beat still does not",
+          S.beat_seconds("She waits.") <= 3.0)
+    # The comma must be followed by an INFLECTED verb, so lists of other things do
+    # not split -- a sheet is not a sequence of actions.
+    check("a character sheet is not a list of actions",
+          S.beat_seconds("McKenna: she, 22, Shiny white crop top, chastity belt, "
+                         "blue jean shorts.") <= 3.0)
+    # Sized shots follow, and the CEILING still holds.
+    _ceil = S.align_frame_count(int(round(11.0 * S.H3_FPS)))
+    _lens, _note = S.plan_lengths([dense], _ceil, True, 1.0)
+    check("a dense beat is capped by shot_seconds", _lens[0] == _ceil)
+    check("...and the report says it was capped",
+          "stage more than shot_seconds allows" in _note)
+    check("...naming what it wanted", "wants" in _note)
+    # Nothing is capped when it fits, and the note stays quiet.
+    _lens2, _note2 = S.plan_lengths(["She waits."], _ceil, True, 1.0)
+    check("a short beat is not capped",
+          "stage more than shot_seconds allows" not in _note2)
+    # 'fixed' still gives every shot the ceiling exactly.
+    _lens3, _ = S.plan_lengths([dense, "She waits."], _ceil, False, 1.0)
+    check("fixed mode is unaffected", _lens3 == [_ceil, _ceil])
+
+
 def test_a_journey_has_two_ends():
     """A beat that walks somebody from one room to another is a staged change with
     two ends, exactly like a door opening. Told only where it FINISHES, the shot
@@ -3081,6 +3116,7 @@ def main():
     test_the_wearer_is_in_the_shot()
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
+    test_a_comma_separated_list_is_a_list_of_actions()
     test_a_dropped_garment_is_not_a_fall()
     test_silence_reports_what_happened()
     test_the_audio_branch_has_its_own_last_step()
