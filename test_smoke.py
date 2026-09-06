@@ -1119,7 +1119,7 @@ def test_a_removal_says_whose_hands():
           if s.strip()]
     check("she undresses herself with her own hands",
           "McKenna takes off her shorts" in sh[1]
-          and "shorts are away by the last frame" in sh[1], sh[1][-110:])
+          and "away by the last frame" in sh[1], sh[1][-110:])
     # ASKING gives the hands to the other person. "She asks Dan to take it off" is
     # Dan's doing -- reading the asker as the agent is what put them back on her.
     check("asking hands it to the other person",
@@ -1131,7 +1131,7 @@ def test_a_removal_says_whose_hands():
                     character_memory="Mara: she, 22, a grey coat, white top.")[3]
     check("a solo shot names her",
           "Mara takes off her coat" in solo
-          and "grey coat is away by the last frame" in solo, "")
+          and "away by the last frame" in solo, "")
     # The unit rule, directly.
     beat = 'McKenna asks Dan to take the chastity belt off.'
     check("the agent is read from the beat",
@@ -2439,21 +2439,37 @@ def test_a_removal_always_names_hands():
     s1 = run_node(two + "McKenna takes off her jean shorts.", plan_only=True)[3]
     check("she undresses herself",
           "McKenna takes off her jean shorts" in s1
-          and "shorts are away by the last frame" in s1)
+          and "away by the last frame" in s1)
     s2 = run_node(two + "Dan pulls off her jean shorts.", plan_only=True)[3]
     check("...and he does it when the beat says so",
           "Dan pulls off her jean shorts" in s2
-          and "shorts are away by the last frame" in s2)
-    # No clause may go out with nobody's hands on it: that is the bug itself.
-    for _s, _lbl in ((s1, "hers"), (s2, "his")):
-        check("never agentless (%s)" % _lbl,
-              "The blue jean shorts come off during this shot" not in _s)
+          and "away by the last frame" in s2)
+    # WHOSE HANDS has to be somewhere in the shot -- that is the guarantee, and
+    # the beat supplies it here. The completion clause may then be agentless:
+    # restating who and what is the same removal written twice, which rendered
+    # it twice. What must never happen is a shot where NOBODY has the hands, so
+    # a beat that does not stage the removal still gets the named clause.
+    for _s, _who in ((s1, "McKenna"), (s2, "Dan")):
+        check("the hands are named in the shot (%s)" % _who, _who in _s)
+    _unstaged = run_node(two + "remove: shorts\nMcKenna stands by the door.",
+                         plan_only=True)[3]
+    check("a removal the beat does not stage still names the hands",
+          "McKenna takes the blue jean shorts off during this shot" in _unstaged)
+    # THE ACTION, not just the end state. This clause exists because scrubbing the
+    # scene stops a garment being DESCRIBED and does not tell the model to complete
+    # the removal -- the last frame is the next shot's keyframe, and a cut still in
+    # progress hands on a garment half worn. A version that said only "the shorts
+    # are away by the last frame" asserted the outcome and never the act, and
+    # garments stopped coming off.
+    for _s, _lbl in ((s1, "hers"), (s2, "his"), (_unstaged, "unstaged")):
+        check("the clause says the removal HAPPENS (%s)" % _lbl,
+              "off during this shot" in _s)
     # One person in the shot is still that person.
     solo = run_node("Mara: she, 25, red dress.\n\nMara takes off her dress.",
                     plan_only=True)[3]
     check("alone, it is still her hands",
           "Mara takes off her dress" in solo
-          and "red dress is away by the last frame" in solo)
+          and "away by the last frame" in solo)
 
 
 def test_hands_and_holds_follow_the_beat():
@@ -2480,7 +2496,7 @@ def test_hands_and_holds_follow_the_beat():
     sh = [x for x in s1.split("---") if x.strip()]
     check("her own coat is by her hands",
           "Kate takes off her coat" in sh[0]
-          and "blue coat is away by the last frame" in sh[0])
+          and "away by the last frame" in sh[0])
     check("...not the person she asks about something else",
           "Sam takes the blue coat off" not in sh[0])
     check("the garment she asked about is by his",
@@ -2488,7 +2504,7 @@ def test_hands_and_holds_follow_the_beat():
           or "Sam unties the scarf" in sh[1])
     check("...and the one she removes herself is hers",
           "Kate takes off her jumper" in sh[1]
-          and "grey jumper is away by the last frame" in sh[1])
+          and "away by the last frame" in sh[1])
 
     hw = "Kate: she, 30, coat, handcuffs.\nSam: he, 34, shirt."
     for _beats, _held, _lbl in (

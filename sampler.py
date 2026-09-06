@@ -2409,8 +2409,16 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
     # removal FINISHES in this shot. Restating who and what is the same action
     # written twice in one prompt, which is what rendered it twice.
     if beat and all(beat_stages_removal(beat, i, agent) for i in items):
-        return f" {what[0].upper()}{what[1:]} {are} away by the last frame -- fully " \
-               f"removed and no longer on the body."
+        # The AGENT is what the beat already gave; the ACTION is not. An earlier
+        # version of this cut both and returned only "the shorts are away by the
+        # last frame", which asserts an end state and never says the removal
+        # happens -- and the whole reason this clause exists is that scrubbing the
+        # scene does not tell the model to complete one. Garments stopped coming
+        # off. Say it agentlessly: the beat supplies the hands, this supplies the
+        # completion.
+        return (f" {what[0].upper()}{what[1:]} {verb} off during this shot and "
+                f"{are} away by the last frame -- fully removed and no longer on "
+                f"the body.")
     if agent:
         sentence = (f"{agent} takes {what} off during this shot, with {agent}'s own "
                     f"hands, and {what} {are} away by the last frame -- fully removed "
