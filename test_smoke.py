@@ -2031,9 +2031,13 @@ def test_sound_survives_silencing():
     info = run_node(P, audio_vae=vae)[2]
     check("the beat that describes a sound keeps its audio",
           "describe a sound IN THE BEAT" in info)
-    check("...and is counted", "1 shot(s) have no line but either describe a sound" in info)
-    check("the beat with none is silenced", "1 shot(s) have no quoted line and no sound"
-          in info)
+    # NAMED, not counted. "2 shot(s) have an open branch" tells a reader that two
+    # of eleven can babble and gives no way to find out which two -- and the note's
+    # own advice is that the beat's own sound wording opened it, which cannot be
+    # acted on without knowing which beat.
+    check("...and is named", "shot(s) 2 have no line but either describe a sound" in info)
+    check("the beat with none is silenced",
+          "shot(s) 1 have no quoted line and no sound" in info)
     check("...and the guidance says what silence actually is",
           "not 'no speech', it is 'no sound at all'" in info)
     check("...and how to score a scene", "DESCRIBE it in the prose" in info)

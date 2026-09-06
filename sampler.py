@@ -6385,11 +6385,19 @@ class H3LongVideos:
                 f"yourself. A shot with neither stays pinned to silence and gets no "
                 f"sound sentence, because the mouth follows the audio and an inference "
                 f"is not a good enough reason to let it move")
-        n_silent = sum(1 for s, snd in zip(speech, sounded) if not s and not snd)
-        n_kept = sum(1 for s, snd in zip(speech, sounded) if not s and snd)
+        # WHICH shots, not how many. "2 shot(s) have an open branch" told a reader
+        # that two of eleven can babble and gave them no way to find out which two
+        # -- and the whole point of the note is that the beat's own sound wording is
+        # what opened it, which cannot be acted on without knowing the beat.
+        _open_br = [i + 1 for i, (s_, snd) in enumerate(zip(speech, sounded))
+                    if not s_ and snd]
+        _pinned = [i + 1 for i, (s_, snd) in enumerate(zip(speech, sounded))
+                   if not s_ and not snd]
+        n_silent, n_kept = len(_pinned), len(_open_br)
         if silence_nonspeech and n_kept:
             notes.append(
-                f"{n_kept} shot(s) have no line but either describe a sound IN THE BEAT or "
+                f"shot(s) {', '.join(str(n) for n in _open_br)} have no line but either "
+                f"describe a sound IN THE BEAT or "
                 f"stage EFFORT, so their audio is left free to make it -- writing the "
                 f"sound, or the verb that produces one, is asking for audio on purpose. "
                 f"Those are the only shots without a line "
@@ -6398,7 +6406,8 @@ class H3LongVideos:
                 f"sound wording is what opened it")
         if silence_nonspeech and n_silent:
             notes.append(
-                f"{n_silent} shot(s) have no quoted line and no sound described, so they "
+                f"shot(s) {', '.join(str(n) for n in _pinned)} have no quoted line and no "
+                f"sound described, so they "
                 f"are conditioned on real silence -- which is not 'no speech', it is 'no "
                 f"sound at all': no footsteps, no room tone, nothing. H3 is joint, so the "
                 f"way to score a scene is to DESCRIBE it in the prose: 'boots on concrete, "
