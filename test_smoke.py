@@ -2815,6 +2815,29 @@ def test_undressing_does_not_spread():
     check("he is still dressed afterwards", "shirt, jeans" in sh[2])
 
 
+def test_a_working_character_is_not_still_lying_down():
+    """END TO END: the hold lets go when the beat contradicts it."""
+    print("\n=== a working character is not still lying down ===")
+    mem = "McKenna: she, 2, blonde.\nDana: she, 35, brunette, shirt, jeans."
+    P = ("A nursery.\n\nDana lies down on the sofa with McKenna.\n\n"
+         "Dana takes out a new blanket and places it on the change table.\n\n"
+         "Dana waits.")
+    sh = [x for x in re.split(r"(?=\[Shot )",
+                              run_node(P, plan_only=True, character_memory=mem)[3])
+          if x.strip()]
+    check("the working shot does not say she is lying down",
+          "Dana is still lying down" not in sh[1])
+    check("...nor the shot after it", "Dana is still lying down" not in sh[2])
+    # And a pose that is NOT contradicted is still held.
+    P2 = ("A nursery.\n\nDana and McKenna sit down on the sofa.\n\n"
+          "Dana and McKenna look at the window.\n\nDana and McKenna wait.")
+    sh2 = [x for x in re.split(r"(?=\[Shot )",
+                               run_node(P2, plan_only=True, character_memory=mem)[3])
+           if x.strip()]
+    check("a pose nothing contradicts is still held",
+          "still sitting" in sh2[1])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2932,6 +2955,7 @@ def main():
     test_a_journey_reaches_the_shot()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
+    test_a_working_character_is_not_still_lying_down()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

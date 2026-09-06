@@ -3660,6 +3660,48 @@ def posture_in(beat, cast):
     return out
 
 
+# Actions that CONTRADICT a posture. A latched pose survives until another one is
+# staged, and a beat can put somebody back on their feet without ever saying so:
+# "Dana takes out a new nappy and places it on the change table" is not something
+# anybody does lying down, but it names no posture, so "Dana is still lying down"
+# went on being said in every later shot. Reported exactly that way.
+#
+# Split by how strong the contradiction is. TRAVEL is incompatible with every
+# posture -- somebody walking across a room is not sitting, kneeling or lying.
+# HANDLING at arm's length is only incompatible with LYING: it is perfectly
+# possible to sit or kneel while picking something up.
+_HANDLES = re.compile(
+    r"\b(?:takes?|took|taking|picks?|picked|picking|places?|placed|placing|"
+    r"puts?|putting|sets?|setting|lifts?|lifted|lifting|carries|carried|"
+    r"carrying|fetch(?:es|ed|ing)?|hands?|handed|handing|passes|passed|"
+    r"opens?|opened|opening|closes?|closed|closing|pours?|poured|pouring)\b",
+    re.I)
+
+
+def posture_cleared(beat, poses):
+    """{name} whose latched posture this beat contradicts without restating one.
+
+    The beat is the author's own words and outranks a hold: where it puts somebody
+    on their feet, the hold has to let go or it argues with the shot it is standing
+    next to."""
+    b = str(beat or "")
+    out = set()
+    if not b:
+        return out
+    for name, pose in (poses or {}).items():
+        m = re.search(r"\b" + re.escape(name) + r"\b", b, re.I)
+        if not m:
+            continue
+        # What this beat has them doing, up to the end of the clause.
+        stop = re.search(r"[.;!?]", b[m.end():])
+        span = b[m.end():m.end() + (stop.start() if stop else len(b))]
+        if _TRAVEL_VERB.search(span):
+            out.add(name)
+        elif pose == "lying down" and _HANDLES.search(span):
+            out.add(name)
+    return out
+
+
 def posture_hold(poses, described):
     """One short sentence keeping people in the pose an earlier beat put them in.
 
@@ -6240,6 +6282,10 @@ class H3LongVideos:
             here = _to or _frm or place_named(body) or here
             _pose_now = posture_in(body, active if character_guard and active
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
+            # ...and let go of any the beat contradicts. A pose that survives an
+            # action nobody performs in it is a hold arguing with its own shot.
+            for _gone_pose in posture_cleared(body, poses):
+                poses.pop(_gone_pose, None)
             _posture = ("" if not hold_scene_state
                         else posture_hold({n: p for n, p in poses.items()
                                            if n not in _pose_now},

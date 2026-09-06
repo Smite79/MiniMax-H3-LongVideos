@@ -955,6 +955,38 @@ def test_one_person_undressing_is_one_person():
           "Everything McKenna is wearing" in S.own_body(S.BARE_HOLD, "McKenna", cast))
 
 
+def test_an_action_lets_go_of_a_posture():
+    """A latched pose survives until another is staged -- and a beat can put
+    somebody back on their feet without ever saying so. "Dana takes out a new
+    nappy and places it on the change table" is not something anybody does lying
+    down, but it names no posture, so "Dana is still lying down" went on being
+    said in every later shot."""
+    poses = {"McKenna": "lying down", "Dana": "lying down"}
+    for _b, _want in (
+            ("Dana takes out a new diaper and places it on the change table.",
+             {"Dana"}),
+            ("Dana walks to the drawer.", {"Dana"}),
+            ("McKenna picks up her toy.", {"McKenna"})):
+        check(f"the pose lets go: {_b[:38]!r}", S.posture_cleared(_b, poses) == _want)
+    # Somebody the beat does not put to work keeps their pose: the person on the
+    # table is still on the table while the other one is busy.
+    for _b in ("Dana looks at McKenna.",
+               "McKenna cries.",
+               "Dana strokes McKenna's hair.",
+               "Dana waits."):
+        check(f"the pose survives: {_b[:34]!r}", S.posture_cleared(_b, poses) == set())
+    # How strong the contradiction is depends on the pose. Travel is incompatible
+    # with all of them; handling something at arm's length only rules out lying --
+    # sitting or kneeling to pick a thing up is ordinary.
+    check("handling does not unseat a sitter",
+          S.posture_cleared("Dana picks up the bottle.", {"Dana": "sitting"}) == set())
+    check("...but walking does",
+          S.posture_cleared("Dana walks to the door.", {"Dana": "sitting"}) == {"Dana"})
+    check("...and handling does unseat somebody lying",
+          S.posture_cleared("Dana picks up the bottle.",
+                            {"Dana": "lying down"}) == {"Dana"})
+
+
 def test_a_transitive_posture_puts_the_object_down():
     """"Dana lies McKenna down" puts MCKENNA down.
 
@@ -3185,6 +3217,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_a_transitive_posture_puts_the_object_down()
+    test_an_action_lets_go_of_a_posture()
     test_one_person_undressing_is_one_person()
     test_a_comma_separated_list_is_a_list_of_actions()
     test_a_dropped_garment_is_not_a_fall()
