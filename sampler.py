@@ -1195,8 +1195,25 @@ def speakers_in(beat, sheet=""):
     return out
 
 
-MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays closed, "
-                     "jaws still.")
+# The mouth half AND the voice half. This said only that the other mouths stay
+# closed, which is the PICTURE -- and on a joint model the face follows the audio:
+# a second voice in the stream puts a second mouth in motion whatever the prose
+# says about jaws. So the shot has to be told how many voices there are, not just
+# how many mouths, and the prose is what conditions the audio branch.
+#
+# Positively phrased: "one voice" names what IS there. "Nobody else speaks" asks
+# the model to render an absence, and at cfg 1 there is no negative prompt to carry
+# it. {who} is named ONCE -- naming a person twice in one shot is what put a second
+# copy of them in frame.
+MOUTH_HOLD_OTHERS = (" Only {who} speaks -- one voice in the shot, and every other "
+                     "mouth stays closed, jaws still.")
+
+# ...and when the line has no name on it. Two people, one line, nobody named: the
+# speaker cannot be identified, so neither mouth could be held and BOTH were free
+# to move -- which on a joint model is two voices in the stream and the second one
+# is the babble. Saying how many voices there are does not require knowing whose.
+ONE_VOICE = (" One voice in the shot -- only the person speaking has their mouth "
+             "moving, and every other jaw stays still.")
 
 
 def has_speech(beat):
@@ -5122,6 +5139,7 @@ class H3LongVideos:
         displaced = {}            # garment -> how it was moved
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
+        unattributed = []         # shots whose line names no speaker
         poses = {}                # name -> the posture a beat put them in
         posture_shots = []        # shots told to keep a standing posture
         staging_shots = set()     # shots that MOVE a garment on screen
@@ -5900,6 +5918,13 @@ class H3LongVideos:
                     _mouth = MOUTH_HOLD_OTHERS.format(
                         who=_talkers[0] if len(_talkers) == 1
                         else ", ".join(_talkers[:-1]) + " and " + _talkers[-1])
+                elif not _talkers and len(_described or []) > 1:
+                    # A line with no name on it, and more than one person who could
+                    # be saying it. Whose mouth to hold is unknowable, but how many
+                    # voices there are is not -- and leaving it unsaid is what let
+                    # the listener talk too.
+                    _mouth = ONE_VOICE
+                    unattributed.append(len(shots) + 1)
             if _mouth:
                 mouth_shut.append(len(shots) + 1)
             _device = device_voice_clause(body) if (_device_line and _has_people) else ""
@@ -6089,6 +6114,15 @@ class H3LongVideos:
                 f"Standing is never held -- it is the default pose, so the clause "
                 f"would cost a naming of the person and buy nothing. Off with "
                 f"hold_scene_state")
+        if unattributed:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in unattributed)} carry a line that "
+                f"names no speaker, and more than one person is in them -- so which "
+                f"mouth to hold is unknowable and the shot is told only that there is "
+                f"ONE voice. H3 is joint, so an unheld mouth beside an open audio "
+                f"branch is where a second voice comes from, and that voice is the "
+                f"babble. Attribute the line -- 'Nora says: \"...\"' -- and the "
+                f"listener's mouth is held shut by name instead")
         if revealed_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in revealed_shots)} take off a "

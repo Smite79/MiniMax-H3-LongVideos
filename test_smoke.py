@@ -2514,6 +2514,48 @@ def test_hands_and_holds_follow_the_beat():
           "handcuffs" not in [x for x in _s.split("---") if x.strip()][-1])
 
 
+def test_one_line_is_one_voice():
+    """END TO END: when one person has the line, the other does not babble.
+
+    The guard said only that the other MOUTHS stay closed -- the picture half. On a
+    joint model the face follows the audio, so a second voice in the stream moves a
+    second mouth whatever the prose says about jaws. The shot now hears how many
+    voices there are, not just how many mouths, and the prose is what conditions
+    the audio branch.
+
+    And a line with NO name on it got no guard at all: whose mouth to hold was
+    unknowable, so both were free. How many voices there are does not require
+    knowing whose."""
+    print("\n=== one line is one voice ===")
+    mem = "Kate: she, 30, blue coat.\nSam: he, 34, black shirt."
+    named = run_node('A room.\n\nKate and Sam stand together. Kate says: "Come here."',
+                     plan_only=True, character_memory=mem)[3]
+    check("the speaker is named", "Only Kate speaks" in named)
+    check("...and the shot is told there is one voice", "one voice in the shot" in named)
+    check("...and the other jaws are held", "every other mouth stays closed" in named)
+    # <d>...</d> is the same case.
+    tag = run_node("A room.\n\nKate turns to Sam. <d>Come here.</d>",
+                   plan_only=True, character_memory=mem)[3]
+    check("a <d> line is attributed too", "Only Kate speaks" in tag)
+    # No name on the line, two people who could be saying it.
+    for _b in ('The two of them wait. "Now?"', "They face each other. <d>Now?</d>"):
+        _out = run_node("A room.\n\n" + _b, plan_only=True, character_memory=mem)
+        _info, _s = _out[2], _out[3]
+        check(f"unattributed still gets one voice: {_b[:26]!r}",
+              "One voice in the shot" in _s)
+        check("...and says so in info", "names no speaker" in _info)
+    # One person alone needs no guard: there is nobody else to babble, and a
+    # sentence about other mouths implies other people.
+    solo = run_node('A room.\n\nKate waits alone. "Now?"', plan_only=True,
+                    character_memory=mem)[3]
+    check("one person alone gets no mouth guard",
+          "One voice in the shot" not in solo and "Only Kate speaks" not in solo)
+    # The speaker is named ONCE. Naming a person twice in one shot is what put a
+    # second copy of them in frame.
+    check("the speaker is named once in the guard",
+          named.split("Only Kate speaks")[1].split(".")[0].count("Kate") == 0)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2624,6 +2666,7 @@ def main():
     test_a_garment_keeps_its_description()
     test_a_removal_always_names_hands()
     test_hands_and_holds_follow_the_beat()
+    test_one_line_is_one_voice()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
