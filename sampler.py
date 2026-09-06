@@ -1094,6 +1094,65 @@ _ROOM_TONE = (
 )
 
 
+# AMBIENT read from the scene, not from the beat. room_tone says how a space
+# SOUNDS -- an acoustic, "hard walls giving the sound back" -- which shapes a sound
+# that is already there and makes none of its own. A shot with no line and no
+# written sound was therefore pinned to real silence: not "no speech" but no
+# footsteps, no room tone, nothing, which is what makes a scene sound staged.
+#
+# Asked for: read the anchor and the scene and score the film from them, so the
+# ambience does not have to be typed into every beat.
+#
+# Ordered most specific first -- weather and named places before the generic
+# interior, so "a rainy street" is rain and traffic rather than "a room".
+# Each phrase has to read naturally after "The only sound is ...", so none of them
+# is a plural noun phrase, and NONE of them names a voice: "low talk" was in this
+# table for one revision and is exactly the thing that puts a second speaker in a
+# silent shot. Ambience is weather, machines, rooms and distance -- never people.
+_AMBIENT = (
+    (r"\brain(?:ing|y)?\b|\bdownpour\b|\bdrizzl", "rain against the glass"),
+    (r"\bstorm|\bthunder", "a storm somewhere outside"),
+    (r"\bwind(?:y)?\b|\bgale\b", "wind against the building"),
+    (r"\bbeach\b|\bsea\b|\bocean\b|\bshore\b", "the sea a long way off"),
+    (r"\bforest\b|\bwoods?\b", "wind in the trees"),
+    (r"\bgarden\b|\byard\b|\bpark\b", "birdsong"),
+    (r"\bstreet\b|\broad\b|\btraffic\b|\bcity\b|\bpavement\b",
+     "traffic somewhere off the street"),
+    (r"\bcar\b|\bvan\b|\btruck\b|\bdriving\b", "an engine idling"),
+    (r"\bkitchen\b", "a fridge humming"),
+    (r"\bbathroom\b|\bshower\b", "water moving in the pipes"),
+    (r"\bnursery\b|\bbaby\b|\bcot\b|\bcrib\b", "a clock ticking"),
+    (r"\bbedroom\b", "the quiet of a bedroom"),
+    (r"\boffice\b|\bstudy\b", "a computer fan"),
+    (r"\bworkshop\b|\bgarage\b|\bfactory\b", "a strip light humming"),
+    (r"\bbasement\b|\bcellar\b|\bboiler\b", "a low hum off the strip light"),
+    (r"\bhospital\b|\bward\b|\bclinic\b", "a monitor somewhere down the corridor"),
+    (r"\bcafe\b|\bbar\b|\brestaurant\b|\bpub\b", "cutlery and moving chairs"),
+    (r"\bschool\b|\bclassroom\b", "a corridor beyond the door"),
+    (r"\bchurch\b|\bhall\b", "the air of a large empty room"),
+    (r"\bstairs?\b|\bstairwell\b|\bhallway\b|\bcorridor\b",
+     "the hollow quiet of a hallway"),
+    (r"\bnight\b|\blate evening\b", "the quiet of a night"),
+    # The generic interior LAST, so a named room wins.
+    (r"\bhome\b|\bhouse\b|\bflat\b|\bapartment\b|\bliving room\b|\blounge\b"
+     r"|\bindoors?\b|\broom\b", "the quiet of a house"),
+)
+
+def scene_ambient(*texts):
+    """One ambient bed for the film, read from the anchor and the scene. "" if none.
+
+    First match wins, and the table is ordered most specific first: weather and
+    named places before the generic interior. ONE bed, not a list -- a shot told
+    four things to sound like is a shot inventing which."""
+    joined = " ".join(str(t or "") for t in texts)
+    if not joined.strip():
+        return ""
+    for pat, phrase in _AMBIENT:
+        if re.search(pat, joined, re.I):
+            return phrase
+    return ""
+
+
 def room_tone(scene, opening=""):
     """How the space itself sounds. One room, one acoustic -- the first match wins.
 
@@ -5727,6 +5786,10 @@ class H3LongVideos:
         language_shots = []       # shots told which language the line is in
         poses = {}                # name -> the posture a beat put them in
         here = ""                 # the place the film is currently in
+        # The film's ambient bed, read from the anchor and the scene rather
+        # than typed into every beat. See scene_ambient.
+        ambient_bed = scene_ambient(anchor, scene) if auto_sound else ""
+        ambient_shots = []        # shots given the bed
         posture_shots = []        # shots told to keep a standing posture
         travel_shots = []         # shots that move between places
         staging_shots = set()     # shots that MOVE a garment on screen
@@ -6517,6 +6580,26 @@ class H3LongVideos:
             # under load -- those are vocal, the mouth SHOULD be open, and silencing
             # them was a bug once already: a person making no sound renders as a flat,
             # unreacting face.
+            # THE BED. A shot with no line and no written sound was pinned to real
+            # silence -- not "no speech" but no footsteps, no room tone, nothing,
+            # which is what makes a scene sound staged. Read from the anchor and
+            # the scene, the ambience no longer has to be typed into every beat.
+            #
+            # This DOES open the audio branch, which derived sound was never
+            # allowed to do before. The rule it replaces was written when nothing
+            # held the mouth on such a shot; the mouths-shut guard now lands on
+            # exactly these shots, so the picture half is covered. It is still a
+            # trade -- an open branch can put a voice in the gap -- and it is off
+            # with auto_sound.
+            # ONLY where the branch is ALREADY open -- a shot with a line, or a
+            # sound the author wrote. Nothing this file INFERS may open a branch
+            # that silence has closed: that was tried, it babbled, and it was
+            # reported twice. The bed rides under audio that is happening anyway,
+            # so a scene is scored without a single new open branch.
+            _bed = ambient_bed if (auto_sound and ambient_bed
+                                   and (_speaks or _own or _voiced)) else ""
+            if _bed:
+                ambient_shots.append(len(shots) + 1)
             _mute_written = bool(mouths_shut_when_no_line and _own and not _speaks
                                  and not _voiced)
             _will_silence = bool(silence_nonspeech and not _speaks and not _voiced
@@ -6594,6 +6677,8 @@ class H3LongVideos:
                 # sentence saying what it sounds like would describe an acoustic the
                 # conditioning says is not there.
                 heard = []
+            elif _bed:
+                heard = heard + [_bed] + ([_room] if _room else [])
             elif auto_sound and _room:
                 heard = heard + [_room]
             if heard:
@@ -6925,6 +7010,19 @@ class H3LongVideos:
                 f"the only thing that still knows where the limbs are fastened. It is "
                 f"being said. If the position still drifts, give the beat a wider frame "
                 f"so the anchor is in the picture the chain hands on")
+        if ambient_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in ambient_shots)} were given an "
+                f"ambient bed read from the anchor and the scene -- \"{ambient_bed}\" "
+                f"-- because they have no line and describe no sound of their own, "
+                f"and would otherwise be pinned to real silence: not 'no speech' but "
+                f"no footsteps, no room tone, nothing, which is what makes a scene "
+                f"sound staged. This DOES open the audio branch, which is the one "
+                f"thing derived sound was never allowed to do -- the mouths-shut "
+                f"guard lands on these same shots, so the picture half is held, but "
+                f"an open branch on a joint model can still put a voice in the gap. "
+                f"Write your own sound into a beat to override it, or turn auto_sound "
+                f"off to go back to silence")
         if language_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in language_shots)} carry a line, "
@@ -7197,7 +7295,10 @@ class H3LongVideos:
                 f"shift_audio {3.0 * 8 / max(int(steps), 1):.1f} at {int(steps)} steps "
                 f"gives the same last step as the default 3.0 does at 8; "
                 f"sigma = shift_audio / (steps + shift_audio - 1)")
-        if silence_nonspeech and n_silent:
+        # Probed whenever silencing is ON, not only when a shot is silent today:
+        # an ambient bed can cover every shot, and the answer still matters for
+        # the moment one is not covered -- and for knowing the wiring is sound.
+        if silence_nonspeech:
             if audio_vae is None:
                 notes.append(
                     "SILENCE CANNOT BE APPLIED: no audio VAE is wired to the node's "

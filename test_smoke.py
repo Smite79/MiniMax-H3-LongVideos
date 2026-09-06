@@ -267,7 +267,8 @@ def test_references_and_silence():
     # and the beat and its line are there untouched. Asserting the whole string
     # made this fail every time an unrelated clause was added beside it.
     check("a shot with a line is not told that is all there is",
-          "It sounds like footsteps." in clip4.seen[1][0]
+          "It sounds like" in clip4.seen[1][0]
+          and "footsteps" in clip4.seen[1][0]
           and "the only sound" not in clip4.seen[1][0]
           and 'She walks in and says: "Now."' in clip4.seen[1][0], clip4.seen[1][0])
     clip3 = FakeCLIP()
