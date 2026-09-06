@@ -308,6 +308,35 @@ def group_beat(beat, rows):
     return not any(sheet_pronoun(ln) == "they" for n, ln in (rows or []) if n)
 
 
+def entry_heads(line):
+    """Every head noun in one sheet entry's wardrobe, whatever kind of thing it is.
+
+    garments_in knows garments and restraint_words knows hardware, and a chastity
+    belt is neither: it is in no garment list and "belt" is not a restraint word,
+    so both readers return nothing for it. This is the list used to decide WHOSE
+    thing a beat is handling, and for that the category does not matter -- only
+    that the sheet gave this person that item.
+
+    Age, pronoun and bare adjectives are not things: an entry has to end in a word
+    that could be a noun, and the numeric and pronoun entries are dropped."""
+    out = []
+    for item in re.split(r"[,;.]", str(line or "").split(":", 1)[-1]):
+        # A <Picture N> tag ANYWHERE in the entry, not just at its head. "chastity
+        # belt <Picture 2>" ends in "2>", so the head noun was the tag and the
+        # wearer was never matched -- the same trap scene_name_for hit.
+        item = re.sub(r"<\s*picture\s+\d+\s*>", " ", item, flags=re.I)
+        item = _LEADING_TAG.sub("", re.sub(r"\s+", " ", item)).strip()
+        if not item:
+            continue
+        head = item.split()[-1].lower().strip("-")
+        if (len(head) < 3 or head.isdigit() or head in _NOT_A_GARMENT
+                or head in {"she", "he", "they", "her", "his", "them", "old"}):
+            continue
+        if head not in out:
+            out.append(head)
+    return out
+
+
 def sheet_for_beat(sheet, beat, previous=None):
     """(the sheet lines for the people this beat involves, the names kept).
 
@@ -328,6 +357,21 @@ def sheet_for_beat(sheet, beat, previous=None):
     # word "will" find a character called Will, and "grace" find Grace.
     named = [n for n, _ in rows
              if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "")]
+    # THE WEARER of anything the beat handles. "Dan unlocks the chastity belt"
+    # names only Dan, so the shot described only Dan -- and her sheet line went,
+    # taking BOTH her <Picture N> tags with it. The shot then unlocked her belt
+    # while carrying no reference at all: the belt had nothing to look like, and
+    # she was in the frame undescribed and unpinned, which renders as somebody
+    # else. A garment cannot be acted on without the person wearing it.
+    #
+    # Head nouns only, and only from that person's own entry: "jeans" in Dan's
+    # entry must not pull McKenna in because her shorts are jean shorts.
+    for n, ln in rows:
+        if not n or n in named:
+            continue
+        if any(re.search(r"\b" + re.escape(g) + r"\b", beat or "", re.I)
+               for g in entry_heads(ln)):
+            named.append(n)
     # THE GROUP. A plural cue means more than one person is in the shot, so it can
     # never resolve to a single name. Whoever the beat names plus whoever the last
     # beat kept; if that still does not reach two, everyone on the sheet.
@@ -2378,6 +2422,30 @@ def beat_stages_removal(beat, item, agent=""):
     return False
 
 
+def scene_tag_for(head, scene):
+    """The <Picture N> tag on the sheet entry whose head noun is `head`. "" if none.
+
+    The tag lives INSIDE the wardrobe entry -- "chastity belt <Picture 2>" -- so
+    scrubbing the entry when the garment comes off takes the picture with it. That
+    is right for the description and wrong for the reference: the shot that takes a
+    thing off is the shot it is handled in and most needs to look like itself, and
+    without the tag it carries no image at all. Reported as the belt not matching
+    its reference on the shot that removes it."""
+    head = (head or "").strip().lower()
+    if not head or not scene:
+        return ""
+    for line in str(scene).split("\n"):
+        for item in re.split(r"[,;.]", line.split(":", 1)[-1]):
+            m = re.search(r"<\s*picture\s+\d+\s*>", item, re.I)
+            if not m:
+                continue
+            bare = re.sub(r"<\s*picture\s+\d+\s*>", " ", item, flags=re.I)
+            bare = re.sub(r"\s+", " ", bare).strip()
+            if bare and bare.split()[-1].lower() == head:
+                return m.group(0)
+    return ""
+
+
 def off_by_last_frame(items, agent="", scene="", beat=""):
     """State that a removal FINISHES inside this shot. Empty when nothing came off.
 
@@ -2399,7 +2467,15 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
     # compares -- but this sentence is PROSE the model reads, and "the shorts" beside
     # a sheet saying "blue jeans shorts" is two garments described, not one. The pair
     # that came back was the bare one, drawn however the model liked.
-    named = [scene_name_for(i, scene) or i for i in items]
+    # ...with the picture the sheet gave it. The entry is scrubbed on the removing
+    # shot, so this is the only place left that can claim the image -- and a shot
+    # carrying a reference whose tag it never names reads the picture as ANOTHER
+    # subject, which is a duplicate rather than a belt.
+    named = []
+    for i in items:
+        nm = scene_name_for(i, scene) or i
+        tag = scene_tag_for(i, scene)
+        named.append(f"{nm} {tag}" if tag else nm)
     what = " and ".join(f"the {i}" for i in named)
     plural = len(items) > 1 or bool(_PLURAL_ITEM.search(named[-1]))
     verb, are = ("come", "are") if plural else ("comes", "is")

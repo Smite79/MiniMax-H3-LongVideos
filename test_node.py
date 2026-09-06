@@ -940,6 +940,40 @@ def test_a_posture_carries_to_the_next_shot():
                          ["Kate", "Sam"]).count("still") == 1)
 
 
+def test_the_wearer_is_in_the_shot():
+    """A garment cannot be acted on without the person wearing it.
+
+    "Dan unlocks the chastity belt" names only Dan, so the shot described only Dan
+    -- and her sheet line went, taking BOTH her <Picture N> tags with it. The shot
+    then unlocked her belt while carrying no reference at all: the belt had nothing
+    to look like, and she was in frame undescribed and unpinned, which renders as
+    somebody else. Reported as duplicates in a beat and a belt that stopped
+    matching its image."""
+    sheet = ("McKenna: <Picture 1>, she, 22, Shiny white crop top, "
+             "chastity belt <Picture 2>, blue jean shorts.\n"
+             "Dan: he, 30, black t-shirt, jeans.")
+    for _b in ("Dan unlocks the chastity belt.",
+               "Dan takes the crop top off.",
+               "Dan picks up the shorts from the floor."):
+        _, _who = S.sheet_for_beat(sheet, _b, ["Dan"])
+        check(f"the wearer is kept: {_b[:34]!r}", sorted(_who) == ["Dan", "McKenna"])
+    # His OWN things do not pull her in, and neither does scenery.
+    for _b, _want in (("Dan takes off his jeans.", ["Dan"]),
+                      ("Dan puts on his t-shirt.", ["Dan"]),
+                      ("Dan looks out of the window.", ["Dan"]),
+                      ("McKenna sits down.", ["McKenna"])):
+        _, _who = S.sheet_for_beat(sheet, _b, ["Dan"])
+        check(f"nobody extra: {_b[:30]!r}", _who == _want)
+    # entry_heads has to see a tagged entry's noun. "chastity belt <Picture 2>"
+    # ends in "2>", so the head noun was the tag and the wearer never matched --
+    # the same trap scene_name_for hit.
+    check("a tagged entry still yields its head noun",
+          "belt" in S.entry_heads("McKenna: <Picture 1>, she, 22, Shiny white "
+                                  "crop top, chastity belt <Picture 2>, shorts."))
+    check("...and the age and pronoun are not things",
+          not ({"she", "22"} & set(S.entry_heads("K: she, 22, red coat."))))
+
+
 def test_a_group_beat_keeps_the_group():
     """"They sit down" is two people, so both need their sheet line.
 
@@ -1153,8 +1187,21 @@ def test_a_removal_names_it_the_way_the_sheet_does():
                            "volleyball shorts.") == "skin-tight black shiny PVC "
           "volleyball shorts")
     check("...so the removal clause carries it",
-          "The chastity belt comes off"
-          in S.off_by_last_frame(["belt"], "", _tagged))
+          "The chastity belt" in S.off_by_last_frame(["belt"], "", _tagged)
+          and "comes off" in S.off_by_last_frame(["belt"], "", _tagged))
+    # ...and the PICTURE with it. The tag lives inside the wardrobe entry, so
+    # scrubbing that entry on the removing shot takes the image too -- and the shot
+    # where a thing is handled is the shot it most needs to look like itself. A
+    # reference sent to a shot whose text never names it is read as another
+    # subject, which arrives as a duplicate rather than as the garment.
+    check("...and the picture the sheet gave it",
+          "<Picture 2>" in S.off_by_last_frame(["belt"], "", _tagged))
+    check("an untagged garment gets no tag",
+          "<Picture" not in S.off_by_last_frame(["shorts"], "", _tagged))
+    check("scene_tag_for finds the entry's own tag",
+          S.scene_tag_for("belt", _tagged) == "<Picture 2>")
+    check("...and none where the entry has none",
+          S.scene_tag_for("shorts", _tagged) == "")
     check("a garment the sheet does not name still reads",
           "The cape comes off" in S.off_by_last_frame(["cape"], "", sc))
     check("no scene, no expansion", "The shorts come off"
@@ -2990,6 +3037,7 @@ def main():
     test_the_shot_says_each_thing_once()
     test_generic_clothes_come_off_too()
     test_a_group_beat_keeps_the_group()
+    test_the_wearer_is_in_the_shot()
     test_a_posture_carries_to_the_next_shot()
     test_a_dropped_garment_is_not_a_fall()
     test_silence_reports_what_happened()
