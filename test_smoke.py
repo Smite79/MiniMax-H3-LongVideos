@@ -1118,7 +1118,8 @@ def test_a_removal_says_whose_hands():
     sh = [s for s in run_node(P, plan_only=True, character_memory=mem)[3].split("---")
           if s.strip()]
     check("she undresses herself with her own hands",
-          "McKenna takes the blue jeans shorts off during this shot" in sh[1], sh[1][-110:])
+          "McKenna takes off her shorts" in sh[1]
+          and "shorts are away by the last frame" in sh[1], sh[1][-110:])
     # ASKING gives the hands to the other person. "She asks Dan to take it off" is
     # Dan's doing -- reading the asker as the agent is what put them back on her.
     check("asking hands it to the other person",
@@ -1129,7 +1130,8 @@ def test_a_removal_says_whose_hands():
     solo = run_node("A room.\n\nremove: coat\nMara takes off her coat.", plan_only=True,
                     character_memory="Mara: she, 22, a grey coat, white top.")[3]
     check("a solo shot names her",
-          "Mara takes the grey coat off during this shot" in solo, "")
+          "Mara takes off her coat" in solo
+          and "grey coat is away by the last frame" in solo, "")
     # The unit rule, directly.
     beat = 'McKenna asks Dan to take the chastity belt off.'
     check("the agent is read from the beat",
@@ -1307,7 +1309,12 @@ def test_a_garment_moved_is_not_a_garment_gone():
     # A real removal still empties the wardrobe and says so.
     off = run_node("A room.\n\nMara pulls off her shorts.\n\nMara waits.",
                    plan_only=True, character_memory=mem)[3]
-    check("a real removal still removes", "off during this shot" in off, "")
+    # The guarantee is that the removal FINISHES in the shot -- the last frame is
+    # the next shot's keyframe. Not the exact sentence: where the beat already
+    # stages the act, the clause says only the part the beat leaves out, because
+    # restating who and what was the same removal written twice.
+    check("a real removal still removes",
+          "away by the last frame" in off and "fully removed" in off, "")
     check("...and stops describing them", "shorts" not in off.split("---")[1].lower(), "")
 
 
@@ -2427,10 +2434,12 @@ def test_a_removal_always_names_hands():
            "Dan: he, 40, t-shirt, jeans.\n\n")
     s1 = run_node(two + "McKenna takes off her jean shorts.", plan_only=True)[3]
     check("she undresses herself",
-          "McKenna takes the blue jean shorts off during this shot" in s1)
+          "McKenna takes off her jean shorts" in s1
+          and "shorts are away by the last frame" in s1)
     s2 = run_node(two + "Dan pulls off her jean shorts.", plan_only=True)[3]
     check("...and he does it when the beat says so",
-          "Dan takes the blue jean shorts off during this shot" in s2)
+          "Dan pulls off her jean shorts" in s2
+          and "shorts are away by the last frame" in s2)
     # No clause may go out with nobody's hands on it: that is the bug itself.
     for _s, _lbl in ((s1, "hers"), (s2, "his")):
         check("never agentless (%s)" % _lbl,
@@ -2439,7 +2448,8 @@ def test_a_removal_always_names_hands():
     solo = run_node("Mara: she, 25, red dress.\n\nMara takes off her dress.",
                     plan_only=True)[3]
     check("alone, it is still her hands",
-          "Mara takes the red dress off during this shot" in solo)
+          "Mara takes off her dress" in solo
+          and "red dress is away by the last frame" in solo)
 
 
 def test_hands_and_holds_follow_the_beat():
@@ -2465,13 +2475,16 @@ def test_hands_and_holds_follow_the_beat():
                   plan_only=True, character_memory=mem)[3]
     sh = [x for x in s1.split("---") if x.strip()]
     check("her own coat is by her hands",
-          "Kate takes the blue coat off during this shot" in sh[0])
+          "Kate takes off her coat" in sh[0]
+          and "blue coat is away by the last frame" in sh[0])
     check("...not the person she asks about something else",
           "Sam takes the blue coat off" not in sh[0])
     check("the garment she asked about is by his",
-          "Sam takes the wool scarf off during this shot" in sh[1])
+          "Sam takes the wool scarf off during this shot" in sh[1]
+          or "Sam unties the scarf" in sh[1])
     check("...and the one she removes herself is hers",
-          "Kate takes the grey jumper off during this shot" in sh[1])
+          "Kate takes off her jumper" in sh[1]
+          and "grey jumper is away by the last frame" in sh[1])
 
     hw = "Kate: she, 30, coat, handcuffs.\nSam: he, 34, shirt."
     for _beats, _held, _lbl in (

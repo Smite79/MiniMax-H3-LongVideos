@@ -1129,9 +1129,23 @@ def speakers_in(beat, sheet=""):
     for n, _ in sheet_lines(sheet):
         if not n:
             continue
-        if re.search(r"\b" + re.escape(n) + r"\b(?:\s+[\w,']+){0,2}?\s+"
+        # The gap may not contain a CONJUNCTION. "Kate approaches Sam and asks"
+        # gave the line to Sam: he is nearer the verb, but "and" starts a new
+        # predicate whose subject is still Kate, so the shot was told the wrong
+        # person speaks -- and the mouth guard then held the actual speaker's mouth
+        # shut. Filler like "then"/"quietly" is still allowed through.
+        if re.search(r"\b" + re.escape(n) + r"\b"
+                     r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?\s+"
                      r"(?:" + _SAYS + r")\b", b, re.I):
             out.append(n)
+    # Nobody matched, but somebody is speaking: the name that OPENS the beat is the
+    # subject. "Kate approaches Sam and asks: ..." is Kate's line.
+    if not out and has_speech(b):
+        first = re.match(r"\s*([A-Z][\w'-]*)\b", b)
+        if first:
+            who = first.group(1)
+            if any(n == who for n, _ in sheet_lines(sheet)):
+                out.append(who)
     return out
 
 
@@ -2115,7 +2129,47 @@ def removal_agent(beat, cast, wearer=None, item=""):
     return wearer or people[0]
 
 
-def off_by_last_frame(items, agent="", scene=""):
+def beat_stages_removal(beat, item, agent=""):
+    """Does the BEAT already say this garment comes off, by this agent's hands?
+
+    The clause exists to guarantee the removal FINISHES inside the shot -- the last
+    frame is the next shot's keyframe, and a cut mid-removal hands on a garment
+    still half worn. That guarantee is needed whether or not the beat stages it.
+
+    But when the beat already says "McKenna takes off her shorts and steps out of
+    them", the full clause repeats the whole action -- who, what, and that it comes
+    off -- and the shot carries the same removal twice. Two statements of one action
+    is an invitation to render it twice.
+
+    True when the beat names the garment's head noun near a removal verb, and either
+    names the agent or the beat has no other actor. The caller then says only the
+    part the beat does NOT cover: that it is finished by the last frame.
+    """
+    b = str(beat or "")
+    head = str(item or "").split()[-1] if item else ""
+    if not b or not head:
+        return False
+    if not re.search(r"\b" + re.escape(head) + r"\b", b, re.I):
+        return False
+    # A removal verb in the same sentence as the garment.
+    for part in re.split(r"(?<=[.;!?])\s+", b):
+        if not re.search(r"\b" + re.escape(head) + r"\b", part, re.I):
+            continue
+        if not _REMOVAL_PROSE.search(part):
+            continue
+        # ...and not merely ASKED for: a request is not the act. See _in_a_request.
+        m = _REMOVAL_PROSE.search(part)
+        if m and _in_a_request(part, m.start()):
+            continue
+        if not agent:
+            return True
+        return bool(re.search(r"\b" + re.escape(agent) + r"\b", part, re.I)
+                    # "she takes off her shorts" -- a pronoun for the only actor.
+                    or re.search(r"\b(?:she|he|they)\b", part, re.I))
+    return False
+
+
+def off_by_last_frame(items, agent="", scene="", beat=""):
     """State that a removal FINISHES inside this shot. Empty when nothing came off.
 
     Scrubbing the scene stops a garment being described. It does not tell the model
@@ -2142,6 +2196,12 @@ def off_by_last_frame(items, agent="", scene=""):
     verb, are = ("come", "are") if plural else ("comes", "is")
     # Named hands where the beat gives them. Without an agent this says a garment
     # comes off by itself, and a belt with nobody touching it drops to the floor.
+    # The beat already staged it: say only the part it does NOT cover -- that the
+    # removal FINISHES in this shot. Restating who and what is the same action
+    # written twice in one prompt, which is what rendered it twice.
+    if beat and all(beat_stages_removal(beat, i, agent) for i in items):
+        return f" {what[0].upper()}{what[1:]} {are} away by the last frame -- fully " \
+               f"removed and no longer on the body."
     if agent:
         sentence = (f"{agent} takes {what} off during this shot, with {agent}'s own "
                     f"hands, and {what} {are} away by the last frame -- fully removed "
@@ -3258,8 +3318,16 @@ def restraint_present(text):
     t = text or ""
     if _RESTRAINT_PLAIN.search(t):
         return True
-    return bool(_RESTRAINT_MAYBE.search(t)
-                and (_BINDING_VERB.search(t) or _BODY_PART.search(t)))
+    # SAME CLAUSE. Both halves were searched across the whole text, however far
+    # apart: a sheet listing a belt and a beat saying "she sits with her legs
+    # crossed" satisfied both, so the belt became restraint hardware and the hold
+    # latched from there -- every later shot told to keep fastened something that
+    # was never a restraint. The qualifier has to be near the hardware to qualify it.
+    for part in re.split(r"(?<=[.;!?])\s+", t):
+        if _RESTRAINT_MAYBE.search(part) and (_BINDING_VERB.search(part)
+                                              or _BODY_PART.search(part)):
+            return True
+    return False
 
 
 def names_any(text, tokens):
@@ -3453,7 +3521,11 @@ def scene_name_for(head, scene):
             # fully once, and the fuller name is the one worth carrying.
             if len(item) > len(best):
                 best = item
-    return best.lower()
+    # The author's OWN capitalisation. Lowercasing turned "PVC" into "pvc" and
+    # "Shiny white crop top" into all-lowercase -- a different token sequence than
+    # was written, for a brand or material name that is capitalised for a reason.
+    # Only the matching above is case-insensitive; what comes back is what they typed.
+    return best
 
 
 def displaced_garments(beat, scene):
@@ -5274,7 +5346,7 @@ class H3LongVideos:
                 _a = removal_agent(body, _cast_here, _w, _t)
                 _by_agent.setdefault(_a, []).append(_t)
             tail = (BARE_HOLD if (bare and toks)
-                    else "".join(off_by_last_frame(_items, _a, scene)
+                    else "".join(off_by_last_frame(_items, _a, scene, body)
                                  for _a, _items in _by_agent.items()))
             # Once hardware is on, it stays on. Latched, not re-detected: a beat that
             # does not mention the cuffs does not mean they came off, and a cuff that

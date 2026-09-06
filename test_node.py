@@ -767,6 +767,68 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_the_shot_says_each_thing_once():
+    """Three faults read off one real shot's prompt text.
+
+    ONE: the removal was stated twice -- the beat says "she takes off her shorts
+    and steps out of them", and the clause said the whole thing again, who and
+    what included. Two statements of one action invite it being rendered twice.
+    The clause now adds only what the beat leaves out: that it FINISHES here.
+
+    TWO: the author's capitalisation was destroyed. "PVC" came back "pvc", which
+    is a different token sequence than was written.
+
+    THREE: a belt became restraint hardware because a body part appeared anywhere
+    in the same text. "chastity belt" in the sheet and "she sits with her legs
+    crossed" in a beat armed the restraint hold, which then latched over something
+    that was never a restraint."""
+    sc = ("McKenna: she, 22, Shiny white crop top, "
+          "skin-tight black shiny PVC volleyball shorts.")
+    # ONE -- the beat already stages it, so only the completion is added.
+    _staged = S.off_by_last_frame(["shorts"], "McKenna",
+                                  sc, "McKenna takes off her shorts.")
+    check("a staged removal is not restated",
+          "takes the" not in _staged and "own hands" not in _staged)
+    check("...but it is still finished in this shot",
+          "away by the last frame" in _staged and "fully removed" in _staged)
+    # ...and where the beat does NOT stage it, the full clause with hands remains:
+    # an agentless removal is a garment taking itself off, which is its own bug.
+    _unstaged = S.off_by_last_frame(["shorts"], "McKenna", sc, "McKenna stands still.")
+    check("an unstaged removal still names the hands",
+          "McKenna takes the" in _unstaged and "own hands" in _unstaged)
+    # ...and asking for it is not staging it.
+    _asked = S.off_by_last_frame(["shorts"], "Dan", sc,
+                                 'McKenna asks: "Can you take the shorts off?"')
+    check("asking does not count as staging", "Dan takes the" in _asked)
+    # TWO -- the author's capitalisation.
+    check("PVC is not pvc",
+          S.scene_name_for("shorts", sc) == "skin-tight black shiny PVC volleyball shorts")
+    check("...and it reaches the clause", "PVC" in _staged)
+    # THREE -- the qualifier has to be in the hardware's own clause.
+    check("a belt is not armed by a distant body part",
+          not S.restraint_present("K: she, 30, chastity belt, shorts. "
+                                  "K sits with her legs crossed."))
+    check("...nor a leather belt by a distant neck",
+          not S.restraint_present("K: she, 30, leather belt. S rubs his neck."))
+    check("a belt locked ON a body part still counts",
+          S.restraint_present("K: she, 30, chastity belt locked on her hips."))
+    check("...and a binding verb still counts",
+          S.restraint_present("S locks the chastity belt."))
+    check("plain hardware is unaffected",
+          S.restraint_present("K sits with the handcuffs on."))
+    # FOUR -- the speaker is the clause's SUBJECT, not the name nearest the verb.
+    _sheet = "Kate: she, 30, coat.\nSam: he, 34, shirt."
+    check("'Kate approaches Sam and asks' is Kate speaking",
+          S.speakers_in('Kate approaches Sam and asks: "Can you help me?"',
+                        _sheet) == ["Kate"])
+    check("...and a plain attribution still reads",
+          S.speakers_in('Sam says to Kate: "Sure."', _sheet) == ["Sam"])
+    check("...and a quote after a name with no verb",
+          S.speakers_in('Kate approaches Sam. "Can you help me?"', _sheet) == ["Kate"])
+    check("...and a second sentence's speaker wins there",
+          S.speakers_in('Kate walks in. Sam says: "Hello."', _sheet) == ["Sam"])
+
+
 def test_a_removal_stays_on_one_person():
     """A modifier inside one character's garment is not another character's garment.
 
@@ -834,7 +896,13 @@ def test_a_removal_names_it_the_way_the_sheet_does():
           S.scene_name_for("belt", _tagged) == "chastity belt")
     check("...and the untagged ones are unaffected",
           S.scene_name_for("shorts", _tagged) == "blue jeans shorts"
-          and S.scene_name_for("top", _tagged) == "shiny white crop top")
+          and S.scene_name_for("top", _tagged) == "Shiny white crop top")
+    # The AUTHOR'S capitalisation survives: "PVC" is not "pvc", and a name written
+    # with a capital is a different token sequence than one without.
+    check("capitalisation is the author's",
+          S.scene_name_for("shorts", "K: she, 22, skin-tight black shiny PVC "
+                           "volleyball shorts.") == "skin-tight black shiny PVC "
+          "volleyball shorts")
     check("...so the removal clause carries it",
           "The chastity belt comes off"
           in S.off_by_last_frame(["belt"], "", _tagged))
@@ -2670,6 +2738,7 @@ def main():
     test_the_sheet_names_the_garment()
     test_a_removal_names_it_the_way_the_sheet_does()
     test_a_removal_stays_on_one_person()
+    test_the_shot_says_each_thing_once()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
