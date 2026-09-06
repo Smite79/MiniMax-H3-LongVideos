@@ -3681,7 +3681,20 @@ def posture_in(beat, cast):
     if not b or not people:
         return {}
     out = {}
-    for part in re.split(r"(?<=[.;!?])\s+", b):
+    # A CLOSING QUOTE ends a sentence too. 'Dana says: "Lie down." McKenna lies
+    # down' has its full stop inside the quotes, so a plain full-stop split left it
+    # as one clause -- and the subject span for the real "lies" reached back past
+    # the quote and picked up Dana as well.
+    #
+    # But splitting there also cuts the quote in half, and a half-open quote is one
+    # _in_a_request cannot see. So the clause gives the SUBJECT and the whole beat
+    # gives the QUOTES: each part carries its offset, and the request test is asked
+    # about the position in `b`.
+    at0 = 0
+    for part in re.split(r"(?<=[.;!?])[\"'”’]?\s+", b):
+        base = b.find(part, at0)
+        base = at0 if base < 0 else base
+        at0 = base + len(part)
         if _NOT_A_BODY.search(part):
             continue
         # Every posture verb in the clause, in order, with the span of text that
@@ -3690,8 +3703,17 @@ def posture_in(beat, cast):
         # searched, because Sam is in it -- but he is after the verb, doing
         # something else. "Kate and Sam sit down" still seats both, because both
         # names precede the one verb.
+        # A posture ASKED FOR is not one taken. 'Dana says: "lie down on the
+        # change table"' put McKenna down a beat early -- and both of them, since
+        # both names precede the verb. _in_a_request is the reader the removal
+        # side already uses: quoted speech, questions, and "tells her to sit"
+        # alike. Asking for a garment stopped removing it for the same reason.
+        # EVERY occurrence, not the first. Taking only the first meant that
+        # skipping a quoted "Lie down." threw away the real "McKenna lies down"
+        # that followed it, and the beat registered no posture at all.
         hits = sorted(((m.start(), pose) for pose, rx in _POSTURE_OF
-                       for m in [rx.search(part)] if m),
+                       for m in rx.finditer(part)
+                       if not _in_a_request(b, base + m.start())),
                       key=lambda h: h[0])
         prev = 0
         for at, pose in hits:

@@ -985,6 +985,37 @@ def test_one_person_undressing_is_one_person():
           "Everything McKenna is wearing" in S.own_body(S.BARE_HOLD, "McKenna", cast))
 
 
+def test_a_posture_told_is_not_a_posture_taken():
+    """Being told to lie down is not lying down.
+
+    'Dana says to McKenna: "Take off your shorts and lie down on the change
+    table."' put McKenna down a beat early -- and Dana with her, since both names
+    precede the verb. The removal reader has refused quoted speech since asking for
+    a garment stopped removing it; this is the same rule for the body, and it uses
+    the same reader."""
+    cast = ["McKenna", "Dana"]
+    for _b in ('Dana says to McKenna: "Take off your shorts and lie down on the '
+               'change table."',
+               "Dana asks McKenna to lie down.",
+               "Dana tells her to sit.",
+               "<d>Sit down.</d>",
+               'Dana says: "Everyone sit down."'):
+        check(f"asked for, not taken: {_b[:40]!r}", S.posture_in(_b, cast) == {})
+    # ...and the moment it IS taken, it registers.
+    check("told, then done",
+          S.posture_in('Dana says: "Lie down." McKenna lies down on the table.',
+                       cast) == {"McKenna": "lying down"})
+    check("...and the speaker is not put down with her",
+          "Dana" not in S.posture_in('Dana says: "Lie down." McKenna lies down '
+                                     'on the table.', cast))
+    check("a plain action still registers",
+          S.posture_in("McKenna lies down on the change table.", cast)
+          == {"McKenna": "lying down"})
+    check("...and a transitive one still puts the object down",
+          S.posture_in("Dana lays McKenna down on the change table.", cast)
+          == {"McKenna": "lying down"})
+
+
 def test_an_action_lets_go_of_a_posture():
     """A latched pose survives until another is staged -- and a beat can put
     somebody back on their feet without ever saying so. "Dana takes out a new
@@ -3248,6 +3279,7 @@ def main():
     test_a_journey_has_two_ends()
     test_a_transitive_posture_puts_the_object_down()
     test_an_action_lets_go_of_a_posture()
+    test_a_posture_told_is_not_a_posture_taken()
     test_one_person_undressing_is_one_person()
     test_a_comma_separated_list_is_a_list_of_actions()
     test_a_short_action_gets_the_whole_shot()

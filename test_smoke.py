@@ -2900,6 +2900,45 @@ def test_pacing_reaches_the_thin_shots():
           "even pace across the whole shot" not in fitted)
 
 
+def test_an_instruction_is_not_the_action():
+    """END TO END: a beat that TELLS somebody to undress and lie down does neither
+    until the beat that does it."""
+    print("\n=== an instruction is not the action ===")
+    mem = "McKenna: she, 22, shorts.\nDana: she, 35, jeans."
+    P = ("A public bathroom.\n\n"
+         "McKenna and Dana walk in. Dana says to McKenna: "
+         '"Take off your shorts and lie down on the change table." '
+         "Dana puts the bag on the change table.\n\n"
+         "McKenna takes off her shorts and lies down on the change table.\n\n"
+         # She has to be IN the last shot for her pose to be stated: a pose for
+         # somebody the text does not describe is a pose for nobody.
+         "Dana opens the bag and looks at McKenna.")
+    sh = [x for x in re.split(r"(?=\[Shot )",
+                              run_node(P, plan_only=True, character_memory=mem)[3])
+          if x.strip()]
+    check("the shorts are still on while she is only told",
+          "shorts" in sh[0].split("Dana says")[0])
+    check("...and nothing is taken off yet",
+          "off during this shot" not in sh[0])
+    check("...and nobody is lying down yet", "still lying down" not in sh[0])
+    # The beat that actually does it.
+    check("the next beat takes them off", "off during this shot" in sh[1])
+    # ...and the pose it sets is held afterwards, for her only.
+    check("the pose is held after that", "McKenna is still lying down" in sh[2])
+    check("...and the speaker is not lying down", "Dana is still lying" not in sh[2])
+    # ...and with NOTHING happening after the instruction, so a wrongly latched
+    # pose has nothing to clear it. Without the guard both of them are laid down
+    # by a sentence Dana only spoke.
+    idle = ("A public bathroom.\n\nMcKenna and Dana walk in. Dana says to McKenna: "
+            '"Take off your shorts and lie down on the change table."\n\n'
+            "McKenna and Dana wait.")
+    idle_sh = [x for x in re.split(r"(?=\[Shot )",
+                                   run_node(idle, plan_only=True,
+                                            character_memory=mem)[3]) if x.strip()]
+    check("a spoken instruction latches nobody",
+          "still lying down" not in idle_sh[1], idle_sh[1][-90:])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3019,6 +3058,7 @@ def main():
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
     test_a_working_character_is_not_still_lying_down()
+    test_an_instruction_is_not_the_action()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
