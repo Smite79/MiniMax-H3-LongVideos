@@ -767,6 +767,40 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_the_addressee_is_not_the_speaker():
+    """Verb-then-name is usually the ADDRESSEE, not the speaker.
+
+    Introduced by the inverted-attribution fix and caught in a render: "She tells
+    Dan to wait" credited Dan, so the shot said "Only Dan speaks; every other mouth
+    closed" -- which holds the actual speaker's mouth shut and moves the listener's.
+    The voice comes out of the wrong face, which is worse than crediting nobody."""
+    sheet = "McKenna: she, 22, top.\nDan: he, 30, shirt."
+    for _b in ('She tells Dan to wait. "Wait here."',
+               'She asks Dan: "Can you take this off?"',
+               'She begs Dan for help. "Please."'):
+        check(f"the addressee is not credited: {_b[:32]!r}",
+              S.speakers_in(_b, sheet) == ["McKenna"])
+    # A real inversion follows a CLOSING QUOTE, which is what tells them apart.
+    for _b in ('"Sure thing," says Dan.', '"Sure thing." says Dan.',
+               "<d>Sure thing.</d> says Dan."):
+        check(f"a real inversion still reads: {_b[:30]!r}",
+              S.speakers_in(_b, sheet) == ["Dan"])
+    # A pronoun in subject position beats a name that comes after it: taking the
+    # only NAME in the beat is what credited the listener.
+    check("a subject pronoun outranks a later name",
+          S.speakers_in('She tells Dan to wait. "Wait."', sheet) == ["McKenna"])
+    check("...and a name still wins when it comes first",
+          S.speakers_in('In the living room, Dan looks up. "Sure thing."', sheet)
+          == ["Dan"])
+    check("...and he resolves the same way",
+          S.speakers_in('He looks at her. "Fine."', sheet) == ["Dan"])
+    # Two people declaring the same pronoun resolves nobody: guessing is how a line
+    # lands on the wrong face.
+    _two = "Ann: she, 30, coat.\nBea: she, 31, coat."
+    check("an ambiguous pronoun credits nobody",
+          S.speakers_in('She waits. "Now?"', _two) == [])
+
+
 def test_the_audio_branch_has_its_own_last_step():
     """Babble starting at step 3 of 4 -- which is the FINAL step of a 4-step run.
 
@@ -2960,6 +2994,7 @@ def main():
     test_a_dropped_garment_is_not_a_fall()
     test_silence_reports_what_happened()
     test_the_audio_branch_has_its_own_last_step()
+    test_the_addressee_is_not_the_speaker()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()

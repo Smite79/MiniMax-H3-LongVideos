@@ -1197,11 +1197,20 @@ def speakers_in(beat, sheet=""):
     # looked for name-then-verb, so it resolved nobody -- and a line nobody is
     # credited with leaves both mouths free, which is where the second voice comes
     # from.
+    #
+    # ONLY AFTER A CLOSING QUOTE. Bare verb-then-name is far more often the
+    # ADDRESSEE than the speaker -- "she tells Dan", "she asks Dan", "she begs Dan"
+    # -- and crediting the addressee is worse than crediting nobody: the shot then
+    # says "Only Dan speaks; every other mouth closed", which holds the actual
+    # speaker's mouth shut and moves the listener's. The voice comes out of the
+    # wrong face. The quote is what marks the real inversion.
     if not out:
         for n, _ in sheet_lines(sheet):
             if not n:
                 continue
-            if re.search(r"\b(?:" + _SAYS + r")\s+" + re.escape(n) + r"\b", b, re.I):
+            if re.search(r"[\"'”’]|</d>", b) and re.search(
+                    r"(?:[\"'”’]|</d>)\s*[,.;]?\s*(?:" + _SAYS + r")\s+"
+                    + re.escape(n) + r"\b", b, re.I):
                 out.append(n)
     # Still nobody, and somebody is speaking. The name nearest the START of the beat
     # is the subject: "In the living room, Dan looks up. '...'" and "The door opens
@@ -1209,26 +1218,33 @@ def speakers_in(beat, sheet=""):
     # old fallback read only the beat's FIRST WORD, so any beat that opened with
     # scenery credited nobody.
     if not out and has_speech(b):
-        rows = [n for n, _ in sheet_lines(sheet) if n]
+        # Names AND declared pronouns, whichever comes FIRST. A name alone is not
+        # enough: "She tells Dan to wait" holds one name and he is the ADDRESSEE,
+        # so taking the only name credited the listener -- and the shot then said
+        # "Only Dan speaks", holding the actual speaker's mouth shut and moving
+        # his. A pronoun in subject position beats a name that comes after it.
         at = {}
-        for n in rows:
+        for n, ln in sheet_lines(sheet):
+            if not n:
+                continue
             m = re.search(r"\b" + re.escape(n) + r"\b", b)
             if m:
                 at[n] = m.start()
+            group = sheet_pronoun(ln)
+            if not group:
+                continue
+            # Only where this pronoun picks out ONE person: with two women on the
+            # sheet "she" resolves nobody, and guessing is how a line lands on the
+            # wrong face.
+            if sum(1 for _n, _l in sheet_lines(sheet)
+                   if _n and sheet_pronoun(_l) == group) != 1:
+                continue
+            pm = re.search(r"\b(?:" + "|".join(sorted(_PRONOUN_SET[group]))
+                           + r")\b", b, re.I)
+            if pm and (n not in at or pm.start() < at[n]):
+                at[n] = pm.start()
         if at:
             out.append(min(at, key=at.get))
-        else:
-            # No name at all. A pronoun the sheet DECLARES is still an attribution:
-            # "She approaches him. '...'" is hers when one entry says she.
-            used = {m.group(0).lower() for m in _PRONOUN.finditer(b)}
-            for group, words in _PRONOUN_SET.items():
-                if not used & words:
-                    continue
-                cands = [n for n, ln in sheet_lines(sheet)
-                         if n and sheet_pronoun(ln) == group]
-                if len(cands) == 1:
-                    out.append(cands[0])
-                    break
     return out
 
 
@@ -5279,6 +5295,7 @@ class H3LongVideos:
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
         unattributed = []         # shots whose line names no speaker
+        mouth_named = []          # shots with a line, holding the OTHER mouths
         poses = {}                # name -> the posture a beat put them in
         posture_shots = []        # shots told to keep a standing posture
         staging_shots = set()     # shots that MOVE a garment on screen
@@ -6049,6 +6066,11 @@ class H3LongVideos:
             # and the listener is exactly who the invented lip-sync lands on. Name the
             # speaker and close the rest, which needs the speaker to be identifiable:
             # an unattributed line could belong to either of them.
+            # WHICH hold this shot got. Both end up in _mouth, and reporting them
+            # together said a shot with a line had "no scripted line" -- the reader
+            # then cannot tell a silenced shot from one where the speaker is named,
+            # which are opposite situations.
+            _mouth_from_silence = bool(_mouth)
             if (not _mouth and mouths_shut_when_no_line and _speaks and not _voiced
                     and not _device_line):
                 _talkers = speakers_in(body, shot_sheet)
@@ -6065,7 +6087,8 @@ class H3LongVideos:
                     _mouth = ONE_VOICE
                     unattributed.append(len(shots) + 1)
             if _mouth:
-                mouth_shut.append(len(shots) + 1)
+                (mouth_shut if _mouth_from_silence
+                 else mouth_named).append(len(shots) + 1)
             _device = device_voice_clause(body) if (_device_line and _has_people) else ""
             if _device:
                 device_shots.append(len(shots) + 1)
@@ -6398,6 +6421,13 @@ class H3LongVideos:
                 f"the only thing that still knows where the limbs are fastened. It is "
                 f"being said. If the position still drifts, give the beat a wider frame "
                 f"so the anchor is in the picture the chain hands on")
+        if mouth_named:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in mouth_named)} have a line, so "
+                f"the shot is told who is speaking and every other mouth in it is "
+                f"held closed. One of two people speaking still leaves the OTHER "
+                f"one's mouth free, and the listener is exactly who invented "
+                f"lip-sync lands on")
         if mouth_shut:
             notes.append(
                 f"mouths held closed on shot(s) {', '.join(str(n) for n in mouth_shut)} -- "
