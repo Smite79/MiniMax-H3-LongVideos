@@ -282,8 +282,16 @@ def sheet_lines(sheet):
 _PLURAL_CUE = re.compile(
     r"\b(?:both|each\s+other|one\s+another|the\s+two\s+of\s+(?:them|us|you)|"
     r"the\s+pair\s+of\s+(?:them|us|you)|all\s+of\s+(?:them|us|you))\b", re.I)
-# ...and a bare they/them, which is only plural when nobody's sheet claims it.
-_THEY = re.compile(r"\b(?:they|them|their|theirs)\b", re.I)
+# ...and a bare THEY -- nominative only, and only when nobody's sheet claims it.
+#
+# NOT "them" or "their". Those are the object and possessive forms, and a garment
+# claims them as often as a person does: "takes off her shorts and steps out of
+# THEM" is the shorts, "puts THEIR keys down" is the keys. Reading either as the
+# group put the other character into a shot he was not in -- which is the very
+# failure the pronoun resolver below exists to avoid, reintroduced by the group
+# fix. A bare "they" cannot be an object, so it is always a subject and always
+# more than one person.
+_THEY = re.compile(r"\bthey\b", re.I)
 
 
 def group_beat(beat, rows):

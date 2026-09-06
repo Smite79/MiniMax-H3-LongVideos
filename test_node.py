@@ -872,6 +872,17 @@ def test_a_group_beat_keeps_the_group():
                "All of them turn to the door."):
         _, _who = S.sheet_for_beat(sheet, _b, ["Kate"])
         check(f"the group is kept: {_b[:30]!r}", _who == ["Kate", "Sam"], )
+    # "THEM" and "THEIR" are not group cues. They are the object and possessive
+    # forms, and a garment claims them as often as a person does -- "takes off her
+    # shorts and steps out of THEM" is the shorts. Reading either as the group put
+    # the other character into a shot he was not in, which is the failure this
+    # whole guard exists to prevent, reintroduced by the group fix itself.
+    for _b in ("Kate takes off her shorts and steps out of them.",
+               "Kate picks up the boots and puts them by the door.",
+               "Kate pulls the shorts down and kicks them away.",
+               "Kate looks at their reflection."):
+        _, _who = S.sheet_for_beat(sheet, _b, ["Kate"])
+        check(f"an object pronoun is not the group: {_b[:34]!r}", _who == ["Kate"])
     # An individual beat still keeps one person: describing somebody who is not
     # there puts them in the shot, which is the bug this guard exists for.
     for _b, _want in (("She sits down.", ["Kate"]),
