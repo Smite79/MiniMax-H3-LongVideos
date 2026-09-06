@@ -2442,6 +2442,65 @@ def test_a_removal_always_names_hands():
           "Mara takes the red dress off during this shot" in solo)
 
 
+def test_hands_and_holds_follow_the_beat():
+    """Two defects seen in one real script, on neutral text.
+
+    1. ONE agent for the whole beat. A beat that takes a coat off and then asks
+       about a scarf gave BOTH removals to the other person -- her own coat came
+       off by his hands. Attribution is per garment now, on the garment's own
+       clause, and the first-named-acts fallback reads that clause too.
+
+    2. The restraint hold could only be cleared by a `remove:` line. auto_remove
+       filters hardware out of infer_removals on purpose, so a script that unlocks
+       the cuffs IN ITS PROSE never cleared it: every later shot went on saying they
+       stay closed and fastened, over hardware the beat had put on the floor. And
+       clearing the latch alone was not enough -- the sheet still listed the cuffs,
+       so the next shot read them back out and latched again."""
+    print("\n=== hands and holds follow the beat ===")
+    mem = "Kate: she, 30, blue coat, wool scarf, grey jumper.\nSam: he, 34, shirt."
+    s1 = run_node("A hallway.\n\n"
+                  "Kate takes off her coat and hangs it up. She finds Sam and asks "
+                  'him: "Can you get this scarf off?"\n\n'
+                  "Sam unties the scarf. Kate takes off her jumper.",
+                  plan_only=True, character_memory=mem)[3]
+    sh = [x for x in s1.split("---") if x.strip()]
+    check("her own coat is by her hands",
+          "Kate takes the blue coat off during this shot" in sh[0])
+    check("...not the person she asks about something else",
+          "Sam takes the blue coat off" not in sh[0])
+    check("the garment she asked about is by his",
+          "Sam takes the wool scarf off during this shot" in sh[1])
+    check("...and the one she removes herself is hers",
+          "Kate takes the grey jumper off during this shot" in sh[1])
+
+    hw = "Kate: she, 30, coat, handcuffs.\nSam: he, 34, shirt."
+    for _beats, _held, _lbl in (
+            ("Kate sits with the handcuffs on.\n\nSam looks at the handcuffs.\n\n"
+             "Kate waits.", True, "a mention does not unlock them"),
+            ("Kate sits with the handcuffs on.\n\nKate tugs at the handcuffs.\n\n"
+             "Kate waits.", True, "nor does pulling at them"),
+            ("Kate sits with the handcuffs on.\n\nSam checks the handcuffs are "
+             "tight.\n\nKate waits.", True, "nor does checking them"),
+            ("Kate sits with the handcuffs on.\n\nSam unlocks the handcuffs.\n\n"
+             "Kate waits.", False, "unlocking them in the prose does"),
+            ("Kate sits with the handcuffs on.\n\nSam unlocks them. They drop to "
+             "the floor.\n\nKate waits.", False, "...by pronoun too"),
+            ("Kate sits with the handcuffs on.\n\nSam unfastens the handcuffs.\n\n"
+             "Kate waits.", False, "...and unfastening them"),
+            ("Kate sits with the handcuffs on.\n\nremove: handcuffs\nSam takes them "
+             "off.\n\nKate waits.", False, "a remove: line still works")):
+        _s = run_node("A room.\n\n" + _beats, plan_only=True, character_memory=hw)[3]
+        _last = [x for x in _s.split("---") if x.strip()][-1]
+        _on = bool(re.search(r"Every restraint[^.]*\.|The handcuffs stay[^.]*\.", _last))
+        check(_lbl, _on == _held, "held=%s want=%s" % (_on, _held))
+    # ...and the hardware leaves the SHEET, or the next shot reads it back out.
+    _s = run_node("A room.\n\nKate sits with the handcuffs on.\n\n"
+                  "Sam unlocks the handcuffs. They drop to the floor.\n\n"
+                  "Kate rubs her wrists.", plan_only=True, character_memory=hw)[3]
+    check("the hardware leaves the sheet",
+          "handcuffs" not in [x for x in _s.split("---") if x.strip()][-1])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2551,6 +2610,7 @@ def main():
     test_nothing_wearable_is_ever_added()
     test_a_garment_keeps_its_description()
     test_a_removal_always_names_hands()
+    test_hands_and_holds_follow_the_beat()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

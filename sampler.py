@@ -2064,7 +2064,23 @@ _ASKS = re.compile(r"\b(?:asks?|asked|begs?|begged|tells?|told|wants?|wanted|"
                    r"pleads?|pleaded|has|have|had|gets?|got)\b", re.I)
 
 
-def removal_agent(beat, cast, wearer=None):
+def _clause_about(beat, item=""):
+    """The sentence/clause of `beat` that names `item`; the whole beat if it does not.
+
+    An ask governs the garment it is ASKING about, not every garment in the beat.
+    "Kate takes off her coat ... and asks him to get the scarf off" has one removal
+    by her hands and one by his, and reading the ask against the whole beat gave
+    both to him."""
+    if not beat or not item:
+        return beat or ""
+    head = str(item).split()[-1]
+    for part in re.split(r"(?<=[.;!?])\s+", str(beat)):
+        if re.search(r"\b" + re.escape(head) + r"\b", part, re.I):
+            return part
+    return beat
+
+
+def removal_agent(beat, cast, wearer=None, item=""):
     """Who takes the garment off in this beat. '' when the beat does not say.
 
     A beat with one person in it is that person undressing. With two, the one who is
@@ -2077,15 +2093,26 @@ def removal_agent(beat, cast, wearer=None):
         return people[0]
     b = beat or ""
     others = [n for n in people if n != wearer]
-    # "She asks Dan to take it off" -- the request is hers, the hands are his.
-    if wearer and others and _ASKS.search(b):
+    # "She asks Dan to take it off" -- the request is hers, the hands are his. Only
+    # when the ask governs THIS garment: a beat that takes a coat off and then asks
+    # about a scarf had the ask applied to both, so her own coat came off by his
+    # hands. Scoped to the clause the garment is named in, and when the garment is
+    # not named there the beat's own first-named actor is used instead.
+    if wearer and others and _ASKS.search(_clause_about(b, item)):
         return others[0]
-    first, at = "", len(b) + 1
+    # First-named acts -- but in the GARMENT'S OWN clause, not the whole beat.
+    # "Sam unties the scarf. Kate takes off her jumper." names Sam first overall,
+    # so her jumper came off by his hands. The clause is what says who acts on what.
+    scope = _clause_about(b, item)
+    first, at = "", len(scope) + 1
     for n in people:
-        m = re.search(r"\b" + re.escape(n) + r"\b", b, re.I)
+        m = re.search(r"\b" + re.escape(n) + r"\b", scope, re.I)
         if m and m.start() < at:
             first, at = n, m.start()
-    return first or people[0]
+    if first:
+        return first
+    # Nobody is named in that clause: the wearer is undressing themselves.
+    return wearer or people[0]
 
 
 def off_by_last_frame(items, agent="", scene=""):
@@ -2296,6 +2323,64 @@ def hardware_named(text):
     # Only reached on a shot already read as restrained, so an ordinary "tapes the
     # box shut" never arrives here.
     return "tape" if item == "tapes" else item
+
+
+_UNDO_NOW = re.compile(
+    r"\b(?:unlocks?|unlocked|unlocking|uncuffs?|uncuffed|unbinds?|unbound|"
+    r"unties?|untied|untying|unbuckles?|unbuckled|unstraps?|unstrapped|"
+    r"unclips?|unclipped|unfastens?|unfastened|unshackles?|unshackled|"
+    r"ungags?|ungagged|releases?|released|frees?|freed|cuts?\s+(?:off|away|free)|"
+    r"slips?\s+off|takes?\s+off|pulls?\s+off|lifts?\s+(?:off|away))\b"
+    r"[^.;!?]{0,40}?"
+    r"\b(?:cuffs?|handcuffs?|chains?|ropes?|cords?|ties|straps?|tape|gags?|"
+    r"collars?|shackles?|clamps?|clips?|restraints?|belt|them|it)\b", re.I)
+# ...and the object-first form: "the cuffs come off", "the rope is untied".
+_UNDO_PHRASE = re.compile(
+    r"\b(?:cuffs?|handcuffs?|chains?|ropes?|cords?|ties|straps?|tape|gags?|"
+    r"collars?|shackles?|clamps?|clips?|restraints?)\b\s+"
+    r"(?:[\w,']+\s+){0,3}?"
+    r"\b(?:come|comes|came|drop|drops|dropped|fall|falls|fell)\s+"
+    r"(?:off|away|to\s+the\s+floor|to\s+the\s+ground)\b"
+    r"|\b(?:is|are|was|were|gets?|got)\s+"
+    r"(?:unlocked|untied|unbound|removed|taken\s+off|cut\s+(?:off|away|free))\b",
+    re.I)
+
+
+def restraint_words(line):
+    """The restraint HARDWARE named in one sheet entry, as its own head nouns.
+
+    Used to take hardware out of the sheet when a beat unlocks it: the hold can be
+    cleared, but while the entry still lists the cuffs the next shot reads them back
+    out of the scene text and latches the hold again."""
+    out = []
+    for item in re.split(r"[,;.]", str(line or "")):
+        item = _LEADING_TAG.sub("", re.sub(r"\s+", " ", item)).strip()
+        if not item:
+            continue
+        head = item.split()[-1].lower().strip("-")
+        if head and _RESTRAINT_WORD.match(head) and head not in out:
+            out.append(head)
+    return out
+
+
+def restraint_coming_off(beat):
+    """Does this beat stage hardware being TAKEN OFF, rather than merely mentioned?
+
+    The hold latches, and it was cleared only by an explicit `remove:` naming the
+    hardware -- deliberately, because a beat that does not mention cuffs is not a
+    beat that removes them. But auto_remove never puts hardware in `toks` (restraint
+    words are filtered out of infer_removals on purpose), so a script that unlocks
+    the cuffs IN ITS PROSE and writes no remove: line never cleared the latch: the
+    beat said they were unlocked and dropped to the floor, and every shot after went
+    on insisting they stay closed and fastened. Reported as the hold still firing
+    several shots after the hardware came off.
+
+    Narrow, like the apply patterns it mirrors: an UNDOING verb with the hardware or
+    a pronoun as its object. "She looks at the cuffs" or "the key is on the table"
+    must not clear a restraint that is still on.
+    """
+    b = beat or ""
+    return bool(_UNDO_NOW.search(b) or _UNDO_PHRASE.search(b))
 
 
 def restraint_going_on(beat):
@@ -4948,6 +5033,29 @@ class H3LongVideos:
             if auto_remove:
                 inferred = [t for t in infer_removals(body, scene)
                             if t not in toks and t not in gone]
+                # HARDWARE the beat itself unlocks. infer_removals filters restraint
+                # words out on purpose -- a cuff must not come off because a beat
+                # mentions it -- so a script that unlocks the cuffs in its prose and
+                # writes no remove: line left them in the sheet for ever. Clearing
+                # the hold was not enough: the sheet still listed them, so the next
+                # shot re-detected the restraint from the scene text and latched it
+                # again, over hardware the beat had put on the floor.
+                if hold_restraints and restraint_coming_off(body):
+                    # The WHOLE sheet, not this shot's. A shot that describes only
+                    # the person doing the unlocking has no entry for the person
+                    # wearing it, so nothing was found to remove and the next shot
+                    # read the hardware straight back out of her sheet.
+                    for _n, _ln in sheet_lines(sheet if sheet_lines(sheet) else scene):
+                        for _hw in restraint_words(_ln):
+                            # Only hardware THIS BEAT names, or one it refers to by
+                            # pronoun when the wearer has just one piece. "Sam cuts
+                            # the rope free" must not unlock her handcuffs.
+                            _named = re.search(r"\b" + re.escape(_hw) + r"\b",
+                                               body or "", re.I)
+                            _pron = (len(restraint_words(_ln)) == 1
+                                     and re.search(r"\b(?:them|it)\b", body or "", re.I))
+                            if (_named or _pron) and _hw not in toks and _hw not in gone:
+                                inferred.append(_hw)
                 if inferred:
                     toks = list(toks) + inferred
                     notes.append(f"shot {len(shots) + 1}: read '{', '.join(inferred)}' as "
@@ -5153,20 +5261,40 @@ class H3LongVideos:
             # reading it here gets the PREVIOUS shot's cast -- which on this shot meant
             # Dan was not in it, the "asks" rule never applied, and the clause gave the
             # hands back to the person doing the asking.
-            _agent = removal_agent(
-                body, (active if (character_guard and active) else
-                       [n for n, _ in sheet_lines(_who_sheet) if n]),
-                _wearer) if toks else ""
+            _cast_here = (active if (character_guard and active) else
+                          [n for n, _ in sheet_lines(_who_sheet) if n])
+            # PER GARMENT. One agent for the whole beat meant a beat that takes a
+            # coat off and then asks about a scarf gave BOTH to the other person --
+            # her own coat came off by his hands. Each garment is attributed on its
+            # own clause, and garments sharing an agent are said in one sentence.
+            _by_agent = {}
+            for _t in (toks if not bare else []):
+                _w = next((n for n, ln in sheet_lines(_who_sheet)
+                           if n and names_any(ln, [_t])), _wearer)
+                _a = removal_agent(body, _cast_here, _w, _t)
+                _by_agent.setdefault(_a, []).append(_t)
             tail = (BARE_HOLD if (bare and toks)
-                    else off_by_last_frame(toks, _agent, scene))
+                    else "".join(off_by_last_frame(_items, _a, scene)
+                                 for _a, _items in _by_agent.items()))
             # Once hardware is on, it stays on. Latched, not re-detected: a beat that
             # does not mention the cuffs does not mean they came off, and a cuff that
             # renders open is not a detail that drifts -- it is the scene ceasing to
             # make sense. Cleared only by a `remove:` that names the hardware.
             _was_restrained = restrained
             if hold_restraints:
-                if names_any(RESTRAINT_HOLD_KEY, toks) or any(
-                        restraint_present(t) for t in toks):
+                if (names_any(RESTRAINT_HOLD_KEY, toks)
+                        or any(restraint_present(t) for t in toks)
+                        # ...or the BEAT itself says the hardware comes off. Without
+                        # this the latch could only ever be cleared by a remove:
+                        # line, and a script that unlocks the cuffs in its own prose
+                        # kept being told they stay fastened -- for the rest of the
+                        # film, over hardware lying on the floor.
+                        # ...and only when this beat's undoing actually took a
+                        # piece of hardware out of the sheet. "Sam cuts the rope
+                        # free" reads as an undoing, but she wears handcuffs, and
+                        # clearing on the verb alone unlocked them.
+                        or (restraint_coming_off(body)
+                            and any(_RESTRAINT_WORD.match(str(t)) for t in toks))):
                     restrained = posed = rigid_latched = False
                     anchored = ""
                     worn_item = ""
