@@ -2940,8 +2940,11 @@ def test_an_instruction_is_not_the_action():
     # instruction is the only thing in the frame about their body.
     check("the listener is given something to do",
           "McKenna listens" in sh[0])
+    # Split defensively: with the clause absent this used to raise IndexError
+    # rather than report a failure, which hides the result behind a traceback.
+    _tail = sh[0].split("McKenna listens")
     check("...and is named once, not twice",
-          sh[0].split("McKenna listens")[1].split(".")[0].count("McKenna") == 0)
+          len(_tail) > 1 and _tail[1].split(".")[0].count("McKenna") == 0)
     check("...and a line with no order in it adds nothing",
           "listens, still" not in run_node(
               'A room.\n\nDana says: "Hello there."', plan_only=True,
