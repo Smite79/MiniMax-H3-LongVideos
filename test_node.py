@@ -924,6 +924,37 @@ def test_a_comma_separated_list_is_a_list_of_actions():
     check("fixed mode is unaffected", _lens3 == [_ceil, _ceil])
 
 
+def test_one_person_undressing_is_one_person():
+    """The second character copying the first.
+
+    strips_bare only says WHETHER somebody ends up with no clothes on. The wardrobe
+    was then read off the whole shot sheet, so a shot describing two people stripped
+    BOTH -- one character undressing undressed the other. And the clauses that come
+    with it named nobody: "Everything worn comes off during this shot" in a
+    two-person shot is an instruction about whoever is on screen."""
+    cast = ["McKenna", "Dan"]
+    for _b, _want in (
+            ("McKenna and Dan sit down. McKenna takes off her clothes.", ["McKenna"]),
+            ("Dan takes off his clothes and gets on the bed.", ["Dan"]),
+            ("McKenna watches as Dan undresses.", ["Dan"]),
+            ("McKenna and Dan undress.", ["McKenna", "Dan"])):
+        check(f"who undresses: {_b[:36]!r}",
+              sorted(S.strips_who(_b, cast)) == sorted(_want))
+    check("nobody undresses in a plain beat", S.strips_who("Dan waits.", cast) == [])
+    check("one person in the shot is that person",
+          S.strips_who("Somebody undresses.", ["Dan"]) == ["Dan"])
+    # own_body names whose body it is, and only where there is more than one.
+    _bare = " The legs are bare from the hip down, with nothing else worn there."
+    check("the body is attributed with two people",
+          S.own_body(_bare, "McKenna", cast).startswith(" McKenna's legs are bare"))
+    check("...and everyone else is pinned to their own entry",
+          "own entry lists" in S.own_body(_bare, "McKenna", cast))
+    check("...and a one-person shot is left alone",
+          S.own_body(_bare, "McKenna", ["McKenna"]) == _bare)
+    check("the full-strip hold is attributed too",
+          "Everything McKenna is wearing" in S.own_body(S.BARE_HOLD, "McKenna", cast))
+
+
 def test_a_journey_has_two_ends():
     """A beat that walks somebody from one room to another is a staged change with
     two ends, exactly like a door opening. Told only where it FINISHES, the shot
@@ -3116,6 +3147,7 @@ def main():
     test_the_wearer_is_in_the_shot()
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
+    test_one_person_undressing_is_one_person()
     test_a_comma_separated_list_is_a_list_of_actions()
     test_a_dropped_garment_is_not_a_fall()
     test_silence_reports_what_happened()

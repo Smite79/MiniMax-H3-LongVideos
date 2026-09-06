@@ -2970,6 +2970,37 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
     return out
 
 
+def own_body(clause, who, described):
+    """Say WHOSE body a bare-skin clause is about, when more than one is described.
+
+    "Everything worn comes off during this shot" and "The legs are bare from the
+    hip down" name nobody. With one person in the shot that is unambiguous; with
+    two it is an instruction about whoever is on screen, and the second character
+    undresses alongside the first. Reported as one character mimicking the other's
+    actions -- and it is the same defect own_hold was written for, in the clause
+    next door.
+
+    Positively phrased, like own_hold: naming whose body it is excludes everyone
+    else, where "nobody else undresses" asks the model to render an absence. The
+    other people are pinned to their own entries in one short sentence rather than
+    named individually, which costs a second mention of each."""
+    if not clause or not who or len(described or []) < 2:
+        return clause
+    names = [n for n in (who if isinstance(who, (list, tuple)) else [who]) if n]
+    if not names:
+        return clause
+    subject = names[0] if len(names) == 1 else \
+        ", ".join(names[:-1]) + " and " + names[-1]
+    body = clause.strip()
+    # "The legs are bare" -> "McKenna's legs are bare". "Everything worn comes off"
+    # -> "Everything McKenna is wearing comes off".
+    body = re.sub(r"^The\s+", f"{subject}'s ", body)
+    body = re.sub(r"^Everything worn\b", f"Everything {subject} is wearing", body)
+    return (" " + body
+            + f" Everyone else in the shot keeps on exactly what their own entry "
+              f"lists.")
+
+
 def own_hold(hold, wearers, described):
     """Attribute a hold to whoever actually wears the hardware.
 
@@ -4375,6 +4406,43 @@ _NAKED_CUE = re.compile(
     r"|\bwearing\s+nothing\b|\bwith\s+no\s+clothes\b|\bbare\s+skin\b", re.I)
 
 
+def strips_who(beat, cast):
+    """Who this beat undresses. [] when it cannot tell.
+
+    strips_bare only answers WHETHER somebody ends up with no clothes on. The
+    wardrobe was then read off the whole shot sheet, so in a shot describing two
+    people BOTH were stripped -- one character undressing made the other undress
+    too. Reported as the second character mimicking the first.
+
+    The subject is the name before the cue, the same reading posture_in uses. With
+    one person in the shot there is nobody else it can be."""
+    people = [n for n in (cast or []) if n]
+    b = str(beat or "")
+    if not people or not b:
+        return []
+    if len(people) == 1:
+        return people[:1]
+    m = _NAKED_CUE.search(b)
+    if not m:
+        return []
+    # The SUBJECT is the span between the last clause boundary and the cue, not the
+    # nearest name: "McKenna and Dan undress" is a compound subject and both are
+    # stripped, while "McKenna watches as Dan undresses" is Dan alone.
+    before = b[:m.start()]
+    cut = max((c.end() for c in
+               re.finditer(r"[.;!?]\s+|,\s*|\s+(?:as|while|and then|then|but)\s+",
+                           before)), default=0)
+    span = before[cut:]
+    here = [n for n in people
+            if re.search(r"\b" + re.escape(n) + r"\b", span, re.I)]
+    if here:
+        return here
+    # No name before it: the beat's own first-named person is acting.
+    first = next((n for n in people
+                  if re.search(r"\b" + re.escape(n) + r"\b", b, re.I)), None)
+    return [first] if first else []
+
+
 def strips_bare(text):
     """Does this beat say somebody ends up with no clothes on?"""
     return bool(_NAKED_CUE.search(text or ""))
@@ -5742,7 +5810,15 @@ class H3LongVideos:
             # back on. Here the garments are read off the sheet instead of the beat.
             bare = auto_remove and strips_bare(body)
             if bare:
-                stripped = [g for g in garments_in(shot_sheet)
+                # ...off THEIR OWN entry. Read off the whole shot sheet, a shot
+                # describing two people stripped both wardrobes, so one character
+                # undressing undressed the other as well.
+                _strippers = strips_who(body, active if character_guard and active
+                                        else [n for n, _ in sheet_lines(shot_sheet) if n])
+                _their_sheet = "\n".join(
+                    ln for n, ln in sheet_lines(shot_sheet) if n in set(_strippers)
+                ) or shot_sheet
+                stripped = [g for g in garments_in(_their_sheet)
                             if g not in toks and g not in gone]
                 if stripped:
                     toks = list(toks) + stripped
@@ -5907,7 +5983,10 @@ class H3LongVideos:
             # the prompt never asked for, carried on by the keyframe from there.
             # Never both: reveal_clause speaks when something is under, this when
             # nothing is.
-            _bare = "" if _revealed else bare_clause(toks, covers, shot_sheet)
+            # ...and not beside BARE_HOLD, which already says everything comes off.
+            # Both firing said it twice and attributed it twice.
+            _bare = ("" if (_revealed or bare)
+                     else bare_clause(toks, covers, shot_sheet))
             if _bare:
                 bared_shots.append(len(shots) + 1)
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
@@ -5949,6 +6028,15 @@ class H3LongVideos:
             _who_sheet = shot_sheet if sheet_lines(shot_sheet) else scene
             _wearer = next((n for n, ln in sheet_lines(_who_sheet)
                             if n and names_any(ln, toks)), None)
+            # WHOSE body is bare. Unattributed in a two-person shot this reads as
+            # an instruction about everyone on screen, and the second character
+            # undresses alongside the first. Done HERE because _wearer is what
+            # answers it, and `active` rather than `_described` because that is
+            # assigned further down the loop -- reading it here would get the
+            # PREVIOUS shot's cast.
+            _bare = own_body(_bare, _wearer or (active[:1] if active else []),
+                             active if character_guard else
+                             [n for n, _ in sheet_lines(_who_sheet) if n])
             # `active`, not `_described`: that is assigned further down the loop, so
             # reading it here gets the PREVIOUS shot's cast -- which on this shot meant
             # Dan was not in it, the "asks" rule never applied, and the clause gave the
@@ -5965,7 +6053,10 @@ class H3LongVideos:
                            if n and names_any(ln, [_t])), _wearer)
                 _a = removal_agent(body, _cast_here, _w, _t)
                 _by_agent.setdefault(_a, []).append(_t)
-            tail = (BARE_HOLD if (bare and toks)
+            tail = (own_body(BARE_HOLD, _wearer or (active[:1] if active else []),
+                             active if character_guard else
+                             [n for n, _ in sheet_lines(_who_sheet) if n])
+                    if (bare and toks)
                     else "".join(off_by_last_frame(_items, _a, scene, body)
                                  for _a, _items in _by_agent.items()))
             # Once hardware is on, it stays on. Latched, not re-detected: a beat that

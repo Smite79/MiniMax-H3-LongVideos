@@ -2795,6 +2795,26 @@ def test_a_line_is_spoken_in_one_language():
     check("...without being removed from the prompt", "NOT removed" in odd)
 
 
+def test_undressing_does_not_spread():
+    """END TO END: one character undressing leaves the other dressed."""
+    print("\n=== undressing does not spread ===")
+    mem = "McKenna: she, 22, crop top, shorts.\nDan: he, 30, shirt, jeans."
+    P = ("A room.\n\nMcKenna and Dan stand.\n\n"
+         "McKenna and Dan sit down. McKenna takes off her clothes.\n\nThey wait.")
+    sh = [x for x in re.split(r"(?=\[Shot )",
+                              run_node(P, plan_only=True, character_memory=mem)[3])
+          if x.strip()]
+    check("the other character keeps his wardrobe", "shirt, jeans" in sh[1])
+    check("...and hers is gone", "crop top" not in sh[1].split("Dan:")[0])
+    check("the clause says whose body it is",
+          "Everything McKenna is wearing" in sh[1])
+    check("...and pins everyone else to their own entry",
+          "own entry lists" in sh[1])
+    check("...once, not twice", sh[1].count("own entry lists") == 1)
+    # It stays gone for him on later shots too.
+    check("he is still dressed afterwards", "shirt, jeans" in sh[2])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2911,6 +2931,7 @@ def main():
     test_a_softened_handoff_is_not_a_keyframe()
     test_a_journey_reaches_the_shot()
     test_a_line_is_spoken_in_one_language()
+    test_undressing_does_not_spread()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
