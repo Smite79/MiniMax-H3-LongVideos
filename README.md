@@ -107,9 +107,9 @@ reproducing a portrait, gaze included.
 ### Restraints and where they hold
 
 **Put the hardware on in a beat, not on the sheet.** A sheet entry listing handcuffs
-goes into *every* shot, including the ones before they are applied — so she wears them
-before she is caught, and the applying shot is told they are already fastened. `info`
-says when your sheet and your beat disagree like this.
+goes into *every* shot, including the ones before they are applied — so they are worn
+before the arrest, and the applying shot is told they are already fastened. `info` says
+when your sheet and your beat disagree like this.
 
 Once a beat puts hardware on, the node carries the item forward by name. The holds say
 a restraint stays fastened but never say *what* it is, and a shot told a restraint
@@ -123,10 +123,10 @@ which read at frame 1 means it is *already closed*: the cuffs snap on immediatel
 the catching and struggling happen around them, in whatever order is left. From the next
 shot the standing hold is right again, because by then it is on.
 
-Say where fastened limbs are held — *"cuffed above her head to the bed frame"*, *"cuffed
-behind her back"* — and every later shot is told the same, until a `remove:` names the
-hardware. Without it the hold only kept the cuffs **shut**; the position was carried by
-the picture alone, and the picture is the previous shot's last frame.
+Say where fastened limbs are held — *"cuffed to the railing"*, *"cuffed behind his
+back"* — and every later shot is told the same, until a `remove:` names the hardware.
+Without it the hold only kept the cuffs **shut**; the position was carried by the
+picture alone, and the picture is the previous shot's last frame.
 
 **Which is why a close shot loses it.** Tight framing crops the anchor point out, so the
 next shot inherits a picture that never showed it. The text now carries it instead, and
@@ -184,34 +184,34 @@ work in both orders — *"kicks off her boots"*, *"kicks her boots off"* — and
 *"steps out of"*, *"lifts it over her head"*, and the undoing verbs *"unlocks"*,
 *"unbuckles"*, *"unlaces"*, *"undoes"*.
 
-*"undresses"*, *"strips out of their clothes"* and *"is naked"* name no garment, so
-there the wardrobe is read off the sheet and all of it comes off — for the people that
-beat names, and never the restraints.
+*"changes"*, *"takes off his clothes"* and *"gets undressed"* name no garment, so there
+the wardrobe is read off the sheet and all of it comes off — for the people that beat
+names, and never the restraints.
 
-**Tag the person too, not just the object.** `<Picture 2> a chastity belt` with nobody
-tagged is read as an identity reference, because a lone tag usually is one — so it rides
-every shot. Give the person their own tag and the object's tag is unambiguous:
-`Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.` Either side of the
+**Tag the person too, not just the object.** `<Picture 2> a leather satchel` with
+nobody tagged is read as an identity reference, because a lone tag usually is one — so
+it rides every shot. Give the person their own tag and the object's tag is unambiguous:
+`Mara: <Picture 1>, she, blue jeans, a leather satchel <Picture 2>.` Either side of the
 noun works once the person is tagged.
 
 **Tag the picture of anything that gets covered.** Layering hides the *words*; it cannot
 hide a picture. An untagged reference goes into every shot, so an image of something
 currently underneath something else is still sent on the shots where it is covered — and
-the model draws what it is shown. Write `a chastity belt <Picture 2>` and the image is
-sent only where the belt is actually visible. `info` warns when references are untagged
-and the wardrobe has layers in it.
+the model draws what it is shown. Write `a wool scarf <Picture 2>` and the image is sent
+only where the scarf is actually visible. `info` warns when references are untagged and
+the wardrobe has layers in it.
 
-**Underwear goes under.** List it and the outer layer together — *"denim shorts, white
-top, panties, a chastity belt"* — and the under layer is left out of the text until the
-thing over it comes off. A layer the model is told about is a layer it draws, and it
-draws it *through* whatever is on top. Paired by region, so a bra is not hidden by
-trousers, and underwear with nothing over it stays on show.
+**Under-layers go under.** List the layer and the thing over it together — *"a wool
+scarf, a quilted jacket"* — and the under layer is left out of the text until the thing
+over it comes off. A layer the model is told about is a layer it draws, and it draws it
+*through* whatever is on top. Paired by region, so a scarf is not hidden by trousers,
+and an under-layer with nothing over it stays on show.
 
-**Moved is not removed.** *"Pulls down her shorts"*, *"pushes up her top"*, *"shoves the
-coat aside"* leave the garment **on**, so it stays in the scene and later shots are told
-where it now sits. Taken as a removal it would be scrubbed instead, and a garment that
-stops being described is one the model re-invents — the same pair coming back a
-different pair. Putting it back (*"pulls them back up"*) releases it; a real removal
+**Moved is not removed.** *"Pushes up her sleeves"*, *"pulls down her hood"*, *"shoves
+the coat aside"* leave the garment **on**, so it stays in the scene and later shots are
+told where it now sits. Taken as a removal it would be scrubbed instead, and a garment
+that stops being described is one the model re-invents — the same coat coming back a
+different coat. Putting it back (*"pulls it back up"*) releases it; a real removal
 (*"pulls off"*, *"steps out of"*) or a `remove:` empties it for good.
 
 Directives go on their own line inside a beat:
