@@ -1673,6 +1673,16 @@ def flush_for_model_change(model):
             f"~{fp[2] / GB:.1f}GB): flushed all resident models and VRAM caches")
 
 
+# Whether the silence conditioning ACTUALLY went on, per run. _silent_audio_latent
+# is defensive by design -- every failure returns None so a render never dies for a
+# nicety -- but the info note reported the silence_nonspeech FLAG, not the result.
+# A shot whose latent could not be built was described as "conditioned on real
+# silence" while its audio branch was wide open, which is a shot that babbles with
+# no scripted line and nothing in the report saying why. Counted here so the note
+# can say what happened instead of what was asked for.
+_SILENCE_STATUS = {"asked": 0, "applied": 0, "why": ""}
+
+
 def _silent_audio_latent(audio_vae, frame_count, fps):
     """A keyframe audio latent of actual SILENCE, or None if it cannot be made.
 
@@ -4558,10 +4568,19 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     # and no sentence in the prompt outvotes a stream that has already decided
     # someone is talking. PackedLayout emits a video segment only when a keyframe
     # carries a `latent`, so an audio-only keyframe is legal and costs no frame.
-    if silent and audio_vae is not None:
-        sil = _silent_audio_latent(audio_vae, fc, H3_FPS)
-        if sil is not None:
-            kfs.append({"resolved_frame_index": 0, "audio_latent": sil})
+    if silent:
+        _SILENCE_STATUS["asked"] += 1
+        if audio_vae is None:
+            _SILENCE_STATUS["why"] = "no audio VAE is wired to the node"
+        else:
+            sil = _silent_audio_latent(audio_vae, fc, H3_FPS)
+            if sil is None:
+                _SILENCE_STATUS["why"] = ("the audio VAE would not encode a silent "
+                                          "second -- wrong VAE on the audio_vae input, "
+                                          "or it reports no sample rate")
+            else:
+                kfs.append({"resolved_frame_index": 0, "audio_latent": sil})
+                _SILENCE_STATUS["applied"] += 1
     if kfs:
         vals["minimax_keyframes"] = kfs
     if vals:
@@ -6566,6 +6585,7 @@ class H3LongVideos:
         _recovered = []             # (shot, name, source shot) actually pinned
         _handoff_claimed = []       # shots whose demoted handoff was named in the text
         shot_detail = []            # (detail, contrast) per shot, on its last frame
+        _SILENCE_STATUS.update(asked=0, applied=0, why="")
         _deep_cleanup()
 
         for i, shot_prompt in enumerate(shots):
@@ -6929,6 +6949,30 @@ class H3LongVideos:
                          "is the wrong way round at this step count. megapixels is the "
                          "lever that lowers both")
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(sent_text, 1))
+        # Whether the silence conditioning ACTUALLY went on. Reported from the
+        # result, not from the flag: every failure inside _silent_audio_latent
+        # returns None on purpose so a render never dies for a nicety, but that
+        # meant a shot with a wide-open audio branch was described as "conditioned
+        # on real silence" -- and a shot with no scripted line babbled with nothing
+        # in the report saying why. This is the one note that has to come after the
+        # loop, because before it there is no result to report.
+        if silence_nonspeech and _SILENCE_STATUS["asked"]:
+            _missed = _SILENCE_STATUS["asked"] - _SILENCE_STATUS["applied"]
+            if _missed > 0:
+                notes.append(
+                    f"SILENCE WAS ASKED FOR ON {_SILENCE_STATUS['asked']} shot(s) AND "
+                    f"WENT ON {_SILENCE_STATUS['applied']}: {_missed} shot(s) have no "
+                    f"line and an audio branch that is NOT pinned, because "
+                    f"{_SILENCE_STATUS['why'] or 'the silent latent could not be built'}"
+                    f". H3 is joint, so an unconditioned branch invents a voice and the "
+                    f"picture lip-syncs to it -- a shot babbling with nothing scripted "
+                    f"to say. The lips-closed sentence is still in the prompt and still "
+                    f"loses to the stream")
+            else:
+                notes.append(
+                    f"silence went on all {_SILENCE_STATUS['applied']} shot(s) that "
+                    f"asked for it -- their audio branch is pinned to encoded silence, "
+                    f"not merely told to be quiet")
         return (video, {"waveform": audio, "sample_rate": sr}, " | ".join(notes), script,
                 lens[0], total, len(shots), round(total / H3_FPS, 2))
 

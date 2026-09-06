@@ -767,6 +767,31 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_silence_reports_what_happened():
+    """The silence note reported the FLAG, not the result.
+
+    _silent_audio_latent is defensive on purpose -- every failure returns None so a
+    render never dies for a nicety. But the info then said a shot was "conditioned
+    on real silence" when its audio branch was wide open, and a shot with no
+    scripted line babbled with nothing in the report explaining why. H3 is joint:
+    an unconditioned branch invents a voice and the picture lip-syncs to it."""
+    check("a VAE with no sample rate yields no latent",
+          S._silent_audio_latent(object(), 121, 24) is None)
+    check("...and None from a missing VAE too",
+          S._silent_audio_latent(None, 121, 24) is None)
+    # The status the report reads.
+    check("the status tracker exists",
+          set(S._SILENCE_STATUS) == {"asked", "applied", "why"})
+    S._SILENCE_STATUS.update(asked=4, applied=4, why="")
+    check("nothing missed when all applied",
+          S._SILENCE_STATUS["asked"] - S._SILENCE_STATUS["applied"] == 0)
+    S._SILENCE_STATUS.update(asked=4, applied=1, why="no audio VAE is wired to the node")
+    check("a shortfall is countable",
+          S._SILENCE_STATUS["asked"] - S._SILENCE_STATUS["applied"] == 3)
+    check("...and carries a reason", S._SILENCE_STATUS["why"])
+    S._SILENCE_STATUS.update(asked=0, applied=0, why="")
+
+
 def test_a_dropped_garment_is_not_a_fall():
     """A garment let go of falls. So does a belt, a key, a coat. The fall guard
     tells the shot what takes the landing and what the legs do, so aiming it at an
@@ -2905,6 +2930,7 @@ def main():
     test_a_group_beat_keeps_the_group()
     test_a_posture_carries_to_the_next_shot()
     test_a_dropped_garment_is_not_a_fall()
+    test_silence_reports_what_happened()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
