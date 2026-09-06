@@ -3784,6 +3784,21 @@ _NAKED_CUE = re.compile(
     r"|\bstrips?\s+(?:out\s+of|off|down|naked|bare)\b|\bstripp(?:ed|ing)\s+"
     r"(?:out\s+of|off|down|naked|bare)\b"
     r"|\btakes?\s+(?:everything|it\s+all|all\s+of\s+it|the\s+lot)\s+off\b"
+    # A GENERIC garment word as the object. "Sam takes off his clothes" is the
+    # commonest way anybody writes this, and it named no garment the sheet lists,
+    # so every other path had nothing to remove: his wardrobe stayed in the scene
+    # text and was re-stamped into every later shot, which is the clothes still
+    # being on. Her named garments came off; his generic ones never did.
+    r"|\b(?:takes?|took|taking|pulls?|pulled|peels?|peeled|sheds?|shed|"
+    r"removes?|removed|gets?|got|slips?|slipped)\b"
+    r"(?:\s+(?:off|out\s+of))?\s+(?:his|her|their|its|the|all\s+(?:his|her|their))?"
+    r"\s*(?:clothes|clothing|garments|things|kit|outfit|gear)\b"
+    r"(?:\s+off)?"
+    # A bare "strips" only when it takes NO object: "Sam strips." undresses him,
+    # "she strips the paint off the door" and "strips a length of tape" do not.
+    # The object is what tells them apart, so anything but a clause end is out.
+    r"|\bstrips?\b(?=\s*[.,;!?]|\s*$)"
+    r"|\bstripp(?:ed|ing)\b(?=\s*[.,;!?]|\s*$)"
     r"|\bwearing\s+nothing\b|\bwith\s+no\s+clothes\b|\bbare\s+skin\b", re.I)
 
 

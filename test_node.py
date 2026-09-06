@@ -767,6 +767,34 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_generic_clothes_come_off_too():
+    """"Takes off his clothes" is a removal. It names no garment the sheet lists,
+    so every path that matches a garment word had nothing to take off: his wardrobe
+    stayed in the scene text and was re-stamped into every later shot. Reported as
+    her clothes coming off properly while his did not -- hers were named, his were
+    "his clothes"."""
+    for _b in ("Sam takes off his clothes.",
+               "Sam takes off his clothes and gets on the bed.",
+               "Sam takes his clothes off.",
+               "Sam removes his clothing.",
+               "Sam sheds his clothes.",
+               "Sam slips out of his clothes.",
+               "Sam strips.",
+               "Sam undresses.",
+               "Sam gets undressed."):
+        check(f"undressing: {_b[:38]!r}", S.strips_bare(_b))
+    # Clothes that are handled but not WORN, and the other senses of strip.
+    for _b in ("Sam picks up his clothes from the floor.",
+               "Sam folds the clothes.",
+               "Kate looks at the clothes on the rail.",
+               "She strips the paint off the door.",
+               "Sam peels a strip of tape from the roll.",
+               "Sam is stripping wire.",
+               "Sam takes off his jumper.",
+               "Sam waits."):
+        check(f"not undressing: {_b[:38]!r}", not S.strips_bare(_b))
+
+
 def test_the_shot_says_each_thing_once():
     """Three faults read off one real shot's prompt text.
 
@@ -2739,6 +2767,7 @@ def main():
     test_a_removal_names_it_the_way_the_sheet_does()
     test_a_removal_stays_on_one_person()
     test_the_shot_says_each_thing_once()
+    test_generic_clothes_come_off_too()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
