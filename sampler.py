@@ -1192,14 +1192,43 @@ def speakers_in(beat, sheet=""):
                      r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?\s+"
                      r"(?:" + _SAYS + r")\b", b, re.I):
             out.append(n)
-    # Nobody matched, but somebody is speaking: the name that OPENS the beat is the
-    # subject. "Kate approaches Sam and asks: ..." is Kate's line.
+    # INVERTED attribution: the verb comes first. '"Sure thing," says Dan.' is the
+    # commonest form in prose after the plain one, and the pattern above only ever
+    # looked for name-then-verb, so it resolved nobody -- and a line nobody is
+    # credited with leaves both mouths free, which is where the second voice comes
+    # from.
+    if not out:
+        for n, _ in sheet_lines(sheet):
+            if not n:
+                continue
+            if re.search(r"\b(?:" + _SAYS + r")\s+" + re.escape(n) + r"\b", b, re.I):
+                out.append(n)
+    # Still nobody, and somebody is speaking. The name nearest the START of the beat
+    # is the subject: "In the living room, Dan looks up. '...'" and "The door opens
+    # and Dan walks in. '...'" are both Dan, and neither begins with his name -- the
+    # old fallback read only the beat's FIRST WORD, so any beat that opened with
+    # scenery credited nobody.
     if not out and has_speech(b):
-        first = re.match(r"\s*([A-Z][\w'-]*)\b", b)
-        if first:
-            who = first.group(1)
-            if any(n == who for n, _ in sheet_lines(sheet)):
-                out.append(who)
+        rows = [n for n, _ in sheet_lines(sheet) if n]
+        at = {}
+        for n in rows:
+            m = re.search(r"\b" + re.escape(n) + r"\b", b)
+            if m:
+                at[n] = m.start()
+        if at:
+            out.append(min(at, key=at.get))
+        else:
+            # No name at all. A pronoun the sheet DECLARES is still an attribution:
+            # "She approaches him. '...'" is hers when one entry says she.
+            used = {m.group(0).lower() for m in _PRONOUN.finditer(b)}
+            for group, words in _PRONOUN_SET.items():
+                if not used & words:
+                    continue
+                cands = [n for n, ln in sheet_lines(sheet)
+                         if n and sheet_pronoun(ln) == group]
+                if len(cands) == 1:
+                    out.append(cands[0])
+                    break
     return out
 
 
@@ -1972,6 +2001,32 @@ def _direct_model_sampling(model, shift_video, shift_audio):
     ms.set_parameters(**kwargs)
     m.add_object_patch("model_sampling", ms)
     return m
+
+
+def last_audio_sigma(steps, shift_audio):
+    """How much audio noise is still left going into the FINAL sampling step.
+
+    The audio branch runs on its own shifted timeline: time_shift_sigma inverts the
+    video shift and re-applies the audio one, so what reaches the last step depends
+    on the STEP COUNT and shift_audio -- and not at all on shift_video, which is the
+    dial everybody reaches for.
+
+    The base grid's last position before zero is 1/steps, so
+
+        sigma_audio(last) = shift_audio / (steps + shift_audio - 1)
+
+    At the 8 steps this node defaults to, shift_audio 3.0 leaves 0.30. At the 4 a
+    distilled LoRA wants, the same 3.0 leaves 0.50 -- half of the audio denoising
+    crammed into one step, and an audio branch resolving half its noise in a single
+    jump is one that invents whatever is easiest. Reported as babble starting at
+    step 3 of 4, which is that step.
+    """
+    try:
+        n = max(1, int(steps))
+        a = float(shift_audio)
+    except (TypeError, ValueError):
+        return 0.0
+    return a / (n + a - 1.0) if (n + a - 1.0) > 0 else 0.0
 
 
 def apply_h3_model_sampling(model, shift_video, shift_audio):
@@ -6572,6 +6627,21 @@ class H3LongVideos:
         # Probed HERE, before the plan is returned, because finding out should not
         # cost a full render. The unit is cached, so a real render pays nothing for
         # this and the answer is the same one the render would get.
+        # The audio branch's own last step. Reported whenever it is steep, because
+        # shift_video is the dial people reach for and it does not touch this.
+        _last_a = last_audio_sigma(steps, shift_audio)
+        if _last_a > 0.4:
+            notes.append(
+                f"the audio branch still has sigma {_last_a:.2f} to clear on its FINAL "
+                f"step at {int(steps)} steps with shift_audio {float(shift_audio):g} -- "
+                f"about {_last_a * 100:.0f}% of its denoising in one jump, and a branch "
+                f"resolving that much at once invents whatever is easiest, which is a "
+                f"voice. It is the step where babble appears. shift_VIDEO does not "
+                f"change this: time_shift_sigma inverts the video shift and re-applies "
+                f"the audio one, so only the step count and shift_audio matter. "
+                f"shift_audio {3.0 * 8 / max(int(steps), 1):.1f} at {int(steps)} steps "
+                f"gives the same last step as the default 3.0 does at 8; "
+                f"sigma = shift_audio / (steps + shift_audio - 1)")
         if silence_nonspeech and n_silent:
             if audio_vae is None:
                 notes.append(

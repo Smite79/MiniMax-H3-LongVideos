@@ -767,6 +767,34 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_the_audio_branch_has_its_own_last_step():
+    """Babble starting at step 3 of 4 -- which is the FINAL step of a 4-step run.
+
+    The audio branch runs on its own shifted timeline. time_shift_sigma inverts the
+    video shift and re-applies the audio one, so what is left for the last step
+    depends on the STEP COUNT and shift_audio, and not at all on shift_video --
+    which is the dial everybody reaches for.
+
+    At 8 steps, shift_audio 3.0 leaves 0.30. At the 4 a distilled LoRA wants, the
+    same 3.0 leaves 0.50: half the audio denoising in one jump, and a branch
+    resolving that much at once invents whatever is easiest."""
+    # sigma = shift_audio / (steps + shift_audio - 1), checked against the values
+    # the scheduler actually produces.
+    for _n, _a, _want in ((4, 3.0, 0.50), (8, 3.0, 0.30), (4, 1.0, 0.25),
+                          (4, 1.5, 1.0 / 3.0), (8, 1.0, 0.125), (6, 3.0, 0.375)):
+        _got = S.last_audio_sigma(_n, _a)
+        check(f"{_n} steps at shift_audio {_a} -> {_want:.3f}",
+              abs(_got - _want) < 1e-9)
+    # Fewer steps is always steeper; more shift_audio is always steeper.
+    check("fewer steps leaves more for the last one",
+          S.last_audio_sigma(4, 3.0) > S.last_audio_sigma(8, 3.0))
+    check("...and so does a bigger audio shift",
+          S.last_audio_sigma(4, 3.0) > S.last_audio_sigma(4, 1.0))
+    # Garbage in does not raise: this feeds a report, never the sampler.
+    check("a bad step count is harmless", S.last_audio_sigma("x", 3.0) == 0.0)
+    check("a bad shift is harmless", S.last_audio_sigma(4, None) == 0.0)
+
+
 def test_silence_reports_what_happened():
     """The silence note reported the FLAG, not the result.
 
@@ -2931,6 +2959,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_dropped_garment_is_not_a_fall()
     test_silence_reports_what_happened()
+    test_the_audio_branch_has_its_own_last_step()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
