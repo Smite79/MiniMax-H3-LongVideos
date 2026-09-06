@@ -11,6 +11,8 @@ python test_readme.py`.
 import io
 import os
 import re
+import json
+import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,6 +67,46 @@ def main():
     check("...within the first few lines",
           any(NOTICE.split("!")[0] in _flat(l) for l in head),
           "; ".join(h[:40] for h in head))
+
+
+    # ------------------------------------------------------------------ Hub
+    # The Hugging Face Hub counts a download as an HTTP request for a QUERY FILE,
+    # picked so a multi-file repo is not counted many times over. With no library
+    # declared it looks for config.json, config.yaml, hyperparams.yaml,
+    # params.json or meta.yaml -- and a repo with none of them is never counted at
+    # all. This repo read 0 downloads against 93 likes for exactly that reason.
+    #
+    # Enforced here so it survives: a file whose only job is to be requested is
+    # the first thing somebody deletes as clutter.
+    # https://huggingface.co/docs/hub/models-download-stats
+    here = os.path.dirname(os.path.abspath(__file__))
+    cfg = os.path.join(here, "config.json")
+    check("config.json exists, so the Hub can count downloads", os.path.isfile(cfg),
+          "without it the download counter stays at zero for ever")
+    if os.path.isfile(cfg):
+        try:
+            with io.open(cfg, encoding="utf-8") as fh:
+                data = json.load(fh)
+            ok = isinstance(data, dict) and bool(data)
+        except Exception as exc:
+            ok, data = False, {}
+            check("...and is valid JSON", False, str(exc)[:60])
+        else:
+            check("...and is valid JSON", ok)
+        check("...and says why it is there, so it is not deleted as clutter",
+              "download" in json.dumps(data).lower())
+
+    # Repo-card metadata: without it the Hub cannot categorise the repo, and every
+    # push warns about it.
+    front = raw.lstrip()
+    check("the README carries YAML front matter", front.startswith("---"),
+          front[:40])
+    if front.startswith("---"):
+        end = front[3:].find("\n---")
+        meta = front[3:3 + end] if end != -1 else ""
+        check("...with tags", "tags:" in meta)
+        check("...naming comfyui", "comfyui" in meta)
+        check("...and a license", "license:" in meta)
 
     print("\nRESULT: " + ("ALL PASSED" if not _FAILED
                           else f"{len(_FAILED)} FAILURE(S): " + "; ".join(_FAILED)))
