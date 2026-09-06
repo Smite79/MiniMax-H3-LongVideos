@@ -3328,6 +3328,12 @@ def scene_name_for(head, scene):
         # Only the wardrobe side of "Name: she, 22, blue jeans shorts".
         line = line.split(":", 1)[-1]
         for item in re.split(r"[,;.]", line):
+            # A <Picture N> tag is not part of the garment's NAME. "chastity belt
+            # <Picture 2>" ends in "2", so the head-noun match failed and the belt
+            # fell back to the beat's bare word -- while an untagged garment in the
+            # same sheet expanded correctly. The tagged garment is exactly the one
+            # a reference is pinning, so it is the worst one to describe loosely.
+            item = re.sub(r"<\s*picture\s+\d+\s*>", " ", item, flags=re.I)
             item = re.sub(r"\s+", " ", item).strip()
             if not item or item.split()[-1].lower() != head:
                 continue
@@ -4963,8 +4969,13 @@ class H3LongVideos:
                     notes.append(f"shot {len(shots) + 1} takes off something an earlier "
                                  f"'add:' had put on, so that line retires with it: "
                                  + "; ".join(_retired))
+                # Reported with the SHEET's words, not the head-noun keys. The
+                # reader checks this line to see what the shot was told, and a
+                # bare "shorts" here for a sheet saying "blue jeans shorts" reads
+                # as the node having lost the description -- which is exactly the
+                # bug it had, so the report has to be able to show it is gone.
                 notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
-                             + ", ".join(toks))
+                             + ", ".join(scene_name_for(t, scene) or t for t in toks))
             maybe = missing_removals(body, scene, gone) if not auto_remove else []
             if maybe:
                 notes.append(f"shot {len(shots) + 1} reads as taking something off, but the "

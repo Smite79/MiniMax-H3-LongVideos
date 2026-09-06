@@ -791,6 +791,21 @@ def test_a_removal_names_it_the_way_the_sheet_does():
     check("...and singular stays singular",
           " is away" in S.off_by_last_frame(["belt"], "", sc))
     # Unknown to the sheet, it keeps the word the beat used rather than vanishing.
+    # A <Picture N> TAG is not part of the name. "chastity belt <Picture 2>" ends
+    # in "2", so the head-noun match failed and the belt fell back to the beat's
+    # bare word -- while untagged garments in the same sheet expanded correctly,
+    # which is what made it look fixed. The tagged garment is the one a reference
+    # is pinning, so it is the worst one to hand to the model loosely.
+    _tagged = ("McKenna: <Picture 1>, she, 22, Shiny white crop top, "
+               "chastity belt <Picture 2>, blue jeans shorts.")
+    check("a picture tag is not part of the garment name",
+          S.scene_name_for("belt", _tagged) == "chastity belt")
+    check("...and the untagged ones are unaffected",
+          S.scene_name_for("shorts", _tagged) == "blue jeans shorts"
+          and S.scene_name_for("top", _tagged) == "shiny white crop top")
+    check("...so the removal clause carries it",
+          "The chastity belt comes off"
+          in S.off_by_last_frame(["belt"], "", _tagged))
     check("a garment the sheet does not name still reads",
           "The cape comes off" in S.off_by_last_frame(["cape"], "", sc))
     check("no scene, no expansion", "The shorts come off"
