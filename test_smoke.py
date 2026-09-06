@@ -2535,14 +2535,18 @@ def test_one_line_is_one_voice():
     named = run_node('A room.\n\nKate and Sam stand together. Kate says: "Come here."',
                      plan_only=True, character_memory=mem)[3]
     check("the speaker is named", "Only Kate speaks" in named)
-    check("...and the shot is told there is one voice", "one voice in the shot" in named)
-    check("...and the other jaws are held", "every other mouth closed" in named)
+    check("...and the other jaws are held",
+          "every other mouth in the shot stays closed" in named)
+    # SHORT on purpose. Every word in this clause is speech vocabulary, and on a
+    # joint model the prose conditions the audio branch: a longer version ("one
+    # voice in the shot, the line said once, with room tone either side of it")
+    # was added to stop a listener babbling and was reported as causing it.
+    check("...and says no more than that",
+          "room tone either side" not in named and "said once" not in named)
     # A line is a second or two in a shot of five to ten, and the branch is open for
     # all of it: told only that there is ONE voice, the model still had seconds to
     # fill on either side and invented more talking to fill them. Reported as babble
     # before the dialogue starts.
-    check("...and the line is said once", "the line said once" in named)
-    check("...with something to fill the rest", "room tone either side" in named)
     # <d>...</d> is the same case.
     tag = run_node("A room.\n\nKate turns to Sam. <d>Come here.</d>",
                    plan_only=True, character_memory=mem)[3]
@@ -2552,7 +2556,7 @@ def test_one_line_is_one_voice():
         _out = run_node("A room.\n\n" + _b, plan_only=True, character_memory=mem)
         _info, _s = _out[2], _out[3]
         check(f"unattributed still gets one voice: {_b[:26]!r}",
-              "One voice in the shot" in _s)
+              "Only the person speaking" in _s)
         check("...and says so in info", "names no speaker" in _info)
     # One person alone needs no guard: there is nobody else to babble, and a
     # sentence about other mouths implies other people.

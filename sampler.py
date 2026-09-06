@@ -1272,17 +1272,21 @@ def speakers_in(beat, sheet=""):
 # The specific acoustic belongs to the sound clause, which already says it where
 # the scene names a space. Here it is the generic bed, so the sentence reads the
 # same whatever room this is.
-MOUTH_HOLD_OTHERS = (" Only {who} speaks -- one voice in the shot, the line said "
-                     "once, with room tone either side of it and every other mouth "
+# SHORT. Every word here is speech vocabulary -- speaks, voice, line, said -- and
+# on a joint model the prose conditions the AUDIO branch as much as the picture.
+# A longer version of this clause ("one voice in the shot, the line said once, with
+# room tone either side of it") was added to stop a listener babbling and was
+# reported as causing it: more speech words on a shot is more reason for the branch
+# to make speech. Say who has the line and hold the other mouths; nothing else.
+MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays "
                      "closed, jaws still.")
 
 # ...and when the line has no name on it. Two people, one line, nobody named: the
 # speaker cannot be identified, so neither mouth could be held and BOTH were free
 # to move -- which on a joint model is two voices in the stream and the second one
 # is the babble. Saying how many voices there are does not require knowing whose.
-ONE_VOICE = (" One voice in the shot, the line said once, with room tone either "
-             "side of it -- only the person speaking has their mouth moving, and "
-             "every other jaw stays still.")
+ONE_VOICE = (" Only the person speaking has their mouth moving; every other jaw "
+             "in the shot stays still.")
 
 
 def has_speech(beat):
