@@ -398,7 +398,6 @@ stay put; on a card without, only as much goes as must.
 
 ## Other nodes here
 
-- **H3 Shot Length** — seconds to a valid H3 frame count (17k+5 grid, 362 cap).
 - **H3 Overlay** — watermark and intro title composited onto finished frames.
 - **H3 Model Inspector** — checkpoint precision, and whether your card runs it natively.
 
