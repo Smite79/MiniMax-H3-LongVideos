@@ -2864,9 +2864,50 @@ _FALL_CUE = re.compile(
     r"hits?\s+the\s+(?:floor|ground|deck))\b", re.I)
 
 
+# What can go down WITHOUT being a body. A garment let go of falls, and so does
+# anything else the beat is holding -- and the fall guard exists to tell a shot what
+# takes the landing and how the legs fold, so aiming it at a belt puts the person
+# on the floor instead. Reported exactly that way: he took the belt off, it dropped
+# to the ground, and she fell with it.
+_OBJECT_FALLER = re.compile(
+    r"\b(?:it|its|belt|belts|top|tops|shirt|shorts|jeans|trousers|skirt|dress|"
+    r"coat|jacket|jumper|sweater|scarf|tie|boot|boots|shoe|shoes|sock|socks|"
+    r"glove|gloves|hat|bag|towel|sheet|blanket|cuffs?|handcuffs?|chain|chains|"
+    r"rope|ropes|tape|gag|collar|key|keys|phone|glass|bottle|cup|plate|book|"
+    r"clothes|clothing|garment|garments|thing|things)\b", re.I)
+# A person going down. A NAME, or a personal pronoun that is not "it".
+_PERSON_FALLER = re.compile(
+    r"\b(?:she|he|they|her|him|them|herself|himself|themselves|"
+    r"[A-Z][\w-]{1,24})\b")
+
+
 def falls_in(text):
-    """Does a body go down in this beat?"""
-    return bool(_FALL_CUE.search(text or ""))
+    """Does a BODY go down in this beat? A dropped garment is not a fall.
+
+    The fall guard tells the shot what takes the landing and what the legs do, so a
+    match on something that is not a person aims all of that at the wrong subject
+    and the shot puts a body on the floor to satisfy it.
+
+    The subject is whatever sits between the start of the clause and the verb. An
+    object there -- "it drops to the ground", "the belt falls to the floor" -- is
+    the thing being let go of, not somebody going down."""
+    t = text or ""
+    for m in _FALL_CUE.finditer(t):
+        # Back to the start of this clause: a subject does not reach across a full
+        # stop, nor across a comma or conjunction joining two predicates.
+        head = t[:m.start()]
+        cut = max((c.end() for c in
+                   re.finditer(r"[.;!?]\s+|,\s*|\s+(?:and|but|then|so)\s+", head)),
+                  default=0)
+        subject = head[cut:]
+        if _OBJECT_FALLER.search(subject):
+            continue                      # a thing came down, not a person
+        if not subject.strip() or _PERSON_FALLER.search(subject):
+            return True
+        # Nothing recognisable as a subject: the passive and destination-only forms
+        # ("pushed to the floor") are already narrow enough to mean a body.
+        return True
+    return False
 
 
 # Steel does not behave like rope. A model with no reason to think otherwise draws a

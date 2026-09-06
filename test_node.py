@@ -767,6 +767,41 @@ def test_bare_region():
           "and the feet" in S.bare_clause(["shorts", "boots"], {}, "shorts, boots"))
 
 
+def test_a_dropped_garment_is_not_a_fall():
+    """A garment let go of falls. So does a belt, a key, a coat. The fall guard
+    tells the shot what takes the landing and what the legs do, so aiming it at an
+    object puts the PERSON on the floor to satisfy it -- reported as her falling to
+    the ground when he took the belt off and it dropped.
+
+    The subject is whatever sits between the start of the clause and the verb. The
+    second half of _FALL_CUE already required a person; the first half -- falls,
+    drops to, collapses -- required nothing at all."""
+    for _b in ("Sam unlocks the belt. It drops to the ground.",
+               "Sam takes the belt off and it falls to the floor.",
+               "The belt falls to the floor.",
+               "Kate takes off her crop top. It drops to the ground.",
+               "The handcuffs drop to the floor.",
+               "Her coat falls to the ground.",
+               "Kate drops her coat on the ground.",
+               "Kate pulls down her shorts."):
+        check(f"not a fall: {_b[:40]!r}", not S.falls_in(_b))
+    # A body going down still is one: the opposite failure leaves a fall with no
+    # landing, and a fall is the frame where limbs are least determined.
+    for _b in ("Kate falls to the floor.",
+               "She falls to the floor.",
+               "Kate collapses.",
+               "Sam pushes her to the ground.",
+               "Kate stumbles and goes down.",
+               "She slumps against the wall.",
+               "Kate hits the floor.",
+               "Sam knocks Kate down."):
+        check(f"still a fall: {_b[:40]!r}", S.falls_in(_b))
+    # Both in one beat: the person is what the guard is for.
+    check("a garment dropping does not mask a real fall",
+          S.falls_in("Sam takes the belt off. It drops to the ground. "
+                     "Kate falls to the floor."))
+
+
 def test_a_posture_carries_to_the_next_shot():
     """A beat that sits somebody down ends its shot with them seated.
 
@@ -2858,6 +2893,7 @@ def main():
     test_generic_clothes_come_off_too()
     test_a_group_beat_keeps_the_group()
     test_a_posture_carries_to_the_next_shot()
+    test_a_dropped_garment_is_not_a_fall()
     test_removal_completes()
     test_restraints_hold()
     test_hardware_has_somewhere_to_go()
