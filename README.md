@@ -1,3 +1,15 @@
+---
+tags:
+  - comfyui
+  - comfyui-nodes
+  - minimax
+  - minimax-h3
+  - video
+  - text-to-video
+  - audio
+license: apache-2.0
+---
+
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/smite79)
 
 **This node is a constant work in progress! If you are noticing bugs or features that do

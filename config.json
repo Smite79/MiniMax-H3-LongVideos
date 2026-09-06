@@ -1,0 +1,17 @@
+{
+  "name": "H3-LongVideos",
+  "description": "ComfyUI custom node: one prompt into a chain of MiniMax-H3 video+audio shots, joined into one continuous video.",
+  "repository": "https://github.com/Smite79/MiniMax-H3-LongVideos",
+  "node_type": "comfyui-custom-node",
+  "requires": {
+    "comfyui": ">=0.31",
+    "model": "MiniMax-H3"
+  },
+  "nodes": [
+    "H3 Long Videos",
+    "H3 Shot Length",
+    "H3 Model Inspector",
+    "H3 Overlay"
+  ],
+  "_note": "Present so the Hugging Face Hub can count downloads. The Hub uses a set of query files to avoid double-counting, and with no library declared it looks for config.json; a repo without one is never counted, which is why this repo read 0 downloads. See https://huggingface.co/docs/hub/models-download-stats. Nothing in the node reads this file."
+}

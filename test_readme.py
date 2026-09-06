@@ -52,8 +52,16 @@ def main():
         check("...above the title", 0 <= flat.find(NOTICE) < title,
               "it sits below the heading")
 
-    # The Ko-fi button is allowed to precede it; nothing else should.
-    head = [l.strip() for l in raw.split("\n") if l.strip()][:3]
+    # YAML front matter is metadata for the Hugging Face Hub, not visible content,
+    # so it does not count against the notice's position. The Ko-fi button is
+    # allowed to precede it; nothing else should.
+    body = raw
+    if body.lstrip().startswith("---"):
+        _rest = body.lstrip()[3:]
+        _end = _rest.find("\n---")
+        if _end != -1:
+            body = _rest[_end + 4:]
+    head = [l.strip() for l in body.split("\n") if l.strip()][:3]
     check("...within the first few lines",
           any(NOTICE.split("!")[0] in _flat(l) for l in head),
           "; ".join(h[:40] for h in head))
