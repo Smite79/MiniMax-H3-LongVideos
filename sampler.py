@@ -1350,6 +1350,42 @@ def speakers_in(beat, sheet=""):
 # room tone either side of it") was added to stop a listener babbling and was
 # reported as causing it: more speech words on a shot is more reason for the branch
 # to make speech. Say who has the line and hold the other mouths; nothing else.
+# WHICH LANGUAGE the line is in. H3 is joint and multilingual: the prose conditions
+# the audio branch, and a branch told a line is spoken but never told in what will
+# pick one. Babble that is not babble at all -- a real language, fluently delivered,
+# and not the one the script is written in -- sounds exactly like gibberish to
+# somebody expecting English.
+#
+# Positively phrased, and stated once: at cfg 1 there is no negative prompt, so
+# "not in another language" would name the other language. Naming the wanted one is
+# the whole mechanism.
+SPOKEN_LANGUAGE = "English"
+LANGUAGE_HOLD = " The line is spoken in {lang}."
+
+# Characters that are not plain Latin text. A stray CJK, Cyrillic or Arabic glyph in
+# a prompt is a strong signal to a multilingual model about what language to speak,
+# and one pasted quotation mark is easy to miss by eye. Reported rather than
+# stripped: the node passes the author's words through, and silently editing them is
+# the thing it does not do.
+#
+# Latin-1 and Latin Extended cover the accented letters, and U+0300-U+036F the
+# COMBINING marks -- "cafe" plus a combining acute is the decomposed spelling of
+# the same word, and flagging it would report every accented character typed on a
+# Mac. Curly quotes and dashes are ordinary punctuation, not a language signal.
+_NON_LATIN = re.compile(
+    r"[^\x00-\x7F\u00C0-\u024F\u0300-\u036F"
+    r"\u2018\u2019\u201C\u201D\u2013\u2014\u2026]")
+
+
+def non_latin_in(text):
+    """The distinct non-Latin characters in this text, in order. [] when clean."""
+    out = []
+    for ch in str(text or ""):
+        if _NON_LATIN.match(ch) and ch not in out:
+            out.append(ch)
+    return out
+
+
 MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays "
                      "closed, jaws still.")
 
@@ -5533,6 +5569,7 @@ class H3LongVideos:
         revealed_shots = []       # shots that uncover a layer
         unattributed = []         # shots whose line names no speaker
         mouth_named = []          # shots with a line, holding the OTHER mouths
+        language_shots = []       # shots told which language the line is in
         poses = {}                # name -> the posture a beat put them in
         here = ""                 # the place the film is currently in
         posture_shots = []        # shots told to keep a standing posture
@@ -6356,6 +6393,13 @@ class H3LongVideos:
             if _mouth:
                 (mouth_shut if _mouth_from_silence
                  else mouth_named).append(len(shots) + 1)
+            # A shot with a line is told what language it is in. Every shot with a
+            # line, not only the ones with a listener to hold: a single speaker can
+            # deliver the line in whatever language the model picks.
+            _lang = (LANGUAGE_HOLD.format(lang=SPOKEN_LANGUAGE)
+                     if (_speaks and not _voiced) else "")
+            if _lang:
+                language_shots.append(len(shots) + 1)
             _device = device_voice_clause(body) if (_device_line and _has_people) else ""
             if _device:
                 device_shots.append(len(shots) + 1)
@@ -6396,6 +6440,7 @@ class H3LongVideos:
                 (9, "posture", _posture),   # where the last beat left the body
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),
+                (12, "language", _lang),   # ...and in which language
                 (13, "turn", turn),
             ]
             _kept, _dropped = fit_guards(_guards, len(body.split()))
@@ -6698,6 +6743,27 @@ class H3LongVideos:
                 f"the only thing that still knows where the limbs are fastened. It is "
                 f"being said. If the position still drifts, give the beat a wider frame "
                 f"so the anchor is in the picture the chain hands on")
+        if language_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in language_shots)} carry a line, "
+                f"so each is told it is spoken in {SPOKEN_LANGUAGE}. H3 is joint and "
+                f"multilingual: the prose conditions the audio branch, and a branch "
+                f"told a line is spoken but never told in WHAT will pick a language "
+                f"-- fluent delivery in one nobody asked for sounds like babble to "
+                f"anybody expecting {SPOKEN_LANGUAGE}. Said positively, because at "
+                f"cfg 1 there is no negative prompt and naming the unwanted language "
+                f"would ask for it")
+        _odd = non_latin_in(prompt) + non_latin_in(character_memory or "") \
+            + non_latin_in(anchor or "")
+        _odd = list(dict.fromkeys(_odd))
+        if _odd:
+            notes.append(
+                f"the prompt contains {len(_odd)} character(s) that are not Latin "
+                f"text: {' '.join(_odd[:12])}. A multilingual model reads those as a "
+                f"strong signal about which language to speak, and one pasted glyph "
+                f"is easy to miss by eye. They are NOT removed -- the node passes "
+                f"your words through -- so retype them if the delivery is coming out "
+                f"in a language you did not ask for")
         if mouth_named:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in mouth_named)} have a line, so "

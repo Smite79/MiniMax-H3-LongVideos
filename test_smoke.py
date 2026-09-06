@@ -263,9 +263,13 @@ def test_references_and_silence():
     # telling the model the line is not in it.
     clip4 = FakeCLIP()
     run_node("A room.\n\nShe walks in and says: \"Now.\"", clip=clip4)
+    # The GUARANTEE, not the exact sentence: the sound clause is the open form,
+    # and the beat and its line are there untouched. Asserting the whole string
+    # made this fail every time an unrelated clause was added beside it.
     check("a shot with a line is not told that is all there is",
-          clip4.seen[1][0] == 'A room. She walks in and says: "Now." '
-                              'It sounds like footsteps.', clip4.seen[1][0])
+          "It sounds like footsteps." in clip4.seen[1][0]
+          and "the only sound" not in clip4.seen[1][0]
+          and 'She walks in and says: "Now."' in clip4.seen[1][0], clip4.seen[1][0])
     clip3 = FakeCLIP()
     run_node("A room.\n\nHe walks in.", clip=clip3, auto_sound=False)
     check("...and with that off only the mouth clause remains",
@@ -2756,6 +2760,41 @@ def test_a_journey_reaches_the_shot():
     check("info names the travelling shots", "move between places" in info)
 
 
+def test_a_line_is_spoken_in_one_language():
+    """H3 is joint and multilingual. The prose conditions the audio branch, and a
+    branch told a line is spoken but never told in WHAT will pick a language --
+    fluent delivery in one nobody asked for sounds like babble to anybody expecting
+    English."""
+    print("\n=== a line is spoken in one language ===")
+    mem = "Kate: she, 30, coat.\nSam: he, 34, shirt."
+    P = ('A room.\n\nKate waits.\n\nKate says to Sam: "Come here."\n\n'
+         "They sit down.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    info, script = out[2], out[3]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("the speaking shot is told its language",
+          "spoken in English" in sh[1])
+    check("...and the silent ones are not",
+          "spoken in" not in sh[0] and "spoken in" not in sh[2])
+    check("info names the shots", "told it is spoken in English" in info)
+    # Positively phrased: naming the unwanted language would ask for it.
+    check("no language is named but the wanted one",
+          not any(w in sh[1] for w in ("not in", "Spanish", "French", "Chinese")))
+    # Non-Latin characters are a strong language signal and easy to miss by eye.
+    check("plain English is clean", S.non_latin_in('Kate says: "Hello."') == [])
+    check("...and accented Latin is not flagged",
+          S.non_latin_in("caf\u00e9 na\u00efve") == []
+          and S.non_latin_in("cafe\u0301") == [])
+    check("...nor curly quotes and dashes",
+          S.non_latin_in("\u201cHello\u201d \u2014 she said\u2026") == [])
+    check("a non-Latin script IS flagged",
+          S.non_latin_in("\u041f\u0440\u0438\u0432\u0435\u0442") != [])
+    odd = run_node('A room.\n\nKate says: "\u041f\u0440\u0438\u0432\u0435\u0442."',
+                   plan_only=True, character_memory="Kate: she, 30, coat.")[2]
+    check("...and reported", "not Latin text" in odd)
+    check("...without being removed from the prompt", "NOT removed" in odd)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -2871,6 +2910,7 @@ def main():
     test_the_silent_latent_looks_like_silence()
     test_a_softened_handoff_is_not_a_keyframe()
     test_a_journey_reaches_the_shot()
+    test_a_line_is_spoken_in_one_language()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
