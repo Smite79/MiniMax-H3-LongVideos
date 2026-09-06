@@ -6591,18 +6591,23 @@ class H3LongVideos:
             # exactly these shots, so the picture half is covered. It is still a
             # trade -- an open branch can put a voice in the gap -- and it is off
             # with auto_sound.
-            # ONLY where the branch is ALREADY open -- a shot with a line, or a
-            # sound the author wrote. Nothing this file INFERS may open a branch
-            # that silence has closed: that was tried, it babbled, and it was
-            # reported twice. The bed rides under audio that is happening anyway,
-            # so a scene is scored without a single new open branch.
-            _bed = ambient_bed if (auto_sound and ambient_bed
-                                   and (_speaks or _own or _voiced)) else ""
+            # EVERY shot, including ones silence would otherwise close. Chosen
+            # deliberately on 2026-09-06, with the trade stated: this is the
+            # mechanism that babbled before and was reported twice, and nothing
+            # this file infers was allowed to open a branch because of it.
+            #
+            # What has changed since is the picture half -- the mouths-shut guard
+            # now lands on exactly these shots, and the language clause keeps a
+            # spoken shot in one language. Neither can outvote an audio stream
+            # that has decided somebody is talking, so if babble comes back on
+            # wordless shots, THIS is the first thing to turn off: auto_sound.
+            _bed = ambient_bed if auto_sound and ambient_bed else ""
             if _bed:
                 ambient_shots.append(len(shots) + 1)
             _mute_written = bool(mouths_shut_when_no_line and _own and not _speaks
                                  and not _voiced)
             _will_silence = bool(silence_nonspeech and not _speaks and not _voiced
+                                 and not _bed
                                  and (not _own or _mute_written))
             if _mute_written and _will_silence:
                 muted_sound.append(len(shots) + 1)
@@ -6727,7 +6732,7 @@ class H3LongVideos:
             speech.append(_speaks)
             # What the AUTHOR wrote, and nothing this file worked out. See above --
             # effort counts, because the verb staging it is theirs.
-            sounded.append(_own or _voiced)
+            sounded.append(_own or _voiced or bool(_bed))
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
