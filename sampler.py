@@ -1529,6 +1529,59 @@ ONE_VOICE = (" Only the person speaking has their mouth moving; every other jaw 
              "in the shot stays still.")
 
 
+# H3'S OWN DIALOGUE MARKER. <d> and </d> are special tokens the model was trained
+# with -- comfy/text_encoders/minimax.py registers them as 151669 and 151670 -- and
+# they mark a span as SPEECH rather than as scene description.
+#
+# This file warned about them for a long time and never used them, which left the
+# real problem unfixed: a quoted line is just words in the prompt, and a video
+# model renders what the words describe. "Take off your shorts and lie down on the
+# change table" is an imperative sentence, and it was performed a beat before
+# anybody said it. Refusing to STAGE it -- which every reader here now does -- does
+# nothing about the model reading it.
+#
+# So the quotes become the marker the model actually understands. Every word the
+# author wrote is kept, in order; only the quotation marks are exchanged for the
+# tokens that say "this is spoken". That is less of an edit than the sentences this
+# node already appends, and it is the difference between a line being heard and a
+# line being acted out.
+_PLAIN_QUOTED = re.compile(r"[\"“]([^\"“”]{1,400}?)[\"”]")
+
+
+def mark_dialogue(beat):
+    """Wrap plainly-quoted speech in H3's <d>...</d>. Unchanged when there is none.
+
+    Left alone where the author has already marked it, and where a quote is not
+    speech at all. A LINE ends in terminal punctuation and a scare quote does not:
+    "Wait." is one word and is speech, a "vintage" coat is emphasis. Counting words
+    got both of those backwards."""
+    b = str(beat or "")
+    if not b or "<d>" in b:
+        return b
+
+    def _wrap(m):
+        said = m.group(1).strip()
+        if not said:
+            return m.group(0)
+        # A LINE ends in terminal punctuation; a scare quote does not. "Wait." is
+        # one word and is speech; a "vintage" coat is two characters of emphasis.
+        # Word count alone got that backwards both ways.
+        if said[-1] in ".!?":
+            return "<d>" + said + "</d>"
+        # No terminal punctuation: it needs BOTH a speech cue and more than one
+        # word. A cue alone is not enough -- _SAYS contains "called", so 'he
+        # called it a "problem"' read as an introduction to a line. A determiner
+        # and one word is a noun, whatever verb came before it.
+        if len(said.split()) < 2:
+            return m.group(0)
+        before = b[max(0, m.start() - 40):m.start()]
+        if re.search(r"(?:" + _SAYS + r")\b[^.]{0,12}$|[:,]\s*$", before, re.I):
+            return "<d>" + said + "</d>"
+        return m.group(0)
+
+    return _PLAIN_QUOTED.sub(_wrap, b)
+
+
 def has_speech(beat):
     """Does this beat contain a scripted line?
 
@@ -5880,6 +5933,7 @@ class H3LongVideos:
         mouth_named = []          # shots with a line, holding the OTHER mouths
         language_shots = []       # shots told which language the line is in
         told_shots = []           # shots whose line orders somebody about
+        dialogue_marked = []      # shots whose quotes became <d>...</d>
         poses = {}                # name -> the posture a beat put them in
         here = ""                 # the place the film is currently in
         # The film's ambient bed, read from the anchor and the scene rather
@@ -5973,6 +6027,16 @@ class H3LongVideos:
         guard_words = beat_words = total_words = sound_words = 0
         for b in beats:
             body, toks, adds = extract_directives(b)
+            # Quoted speech becomes H3'S OWN dialogue marker before anything else
+            # reads it. <d> and </d> are special tokens the model was trained with,
+            # and they say "this is spoken" where quotation marks say nothing at
+            # all -- a quoted imperative is just an imperative sentence in the
+            # prompt, and the model performed it. Every word is kept in order; only
+            # the quotation marks are exchanged. Reported below.
+            _marked = mark_dialogue(body)
+            if _marked != body:
+                dialogue_marked.append(len(shots) + 1)
+                body = _marked
             # Who this beat involves, decided BEFORE the removals: a beat that
             # undresses somebody names no garment, so the wardrobe to clear is read
             # off their sheet entries -- and only theirs. Undressing one person must
@@ -7156,6 +7220,16 @@ class H3LongVideos:
                 f"an open branch on a joint model can still put a voice in the gap. "
                 f"Write your own sound into a beat to override it, or turn auto_sound "
                 f"off to go back to silence")
+        if dialogue_marked:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in dialogue_marked)} had their "
+                f"quoted speech wrapped in H3's own dialogue marker, <d>...</d>. "
+                f"Those are special tokens the model was trained with, and they say "
+                f"a span is SPOKEN; quotation marks say nothing at all, so a quoted "
+                f"instruction reached the model as an imperative sentence and was "
+                f"performed -- often a beat before anybody said it. Every word you "
+                f"wrote is kept in order; only the quotation marks are exchanged. "
+                f"Mark them yourself and this leaves them alone")
         if told_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in told_shots)} carry a line that "
@@ -7291,13 +7365,21 @@ class H3LongVideos:
         # lyrics with explicit tokens; unmarked quoted text is not identified as any
         # of them, and a model with a caption channel may render it rather than say
         # it. Worth trying if subtitles are appearing under spoken lines.
+        # Only what the marker did NOT catch: a quote with no terminal punctuation
+        # and no speech cue in front of it, which is a scare quote far more often
+        # than a line. The note used to tell the reader to wrap their dialogue by
+        # hand; the node does that now, so this is what is left over.
         n_bare = sum(1 for b in beats
-                     if _QUOTED.search(b) and not _DIALOGUE_TAG.search(b))
+                     if _QUOTED.search(b) and not _DIALOGUE_TAG.search(b)
+                     and mark_dialogue(b) == b)
         if n_bare:
-            notes.append(f"{n_bare} beat(s) carry dialogue in plain quotes. H3 has its own "
-                         f"dialogue marker -- <d>like this</d> -- and a caption channel "
-                         f"besides. If spoken lines are coming out as on-screen subtitles, "
-                         f"wrap them in <d>...</d> and compare")
+            notes.append(f"{n_bare} beat(s) carry quotes that were NOT read as speech: "
+                         f"no full stop, question mark or exclamation inside them, and "
+                         f"no speech verb in front. A quote like that is usually "
+                         f"emphasis or a title, so it was left exactly as written. If "
+                         f"one of them IS a line, end it with punctuation or mark it "
+                         f"yourself with <d>...</d> and it will be spoken rather than "
+                         f"drawn")
         cued = sorted({m.group(0).lower() for s in shots for m in _TEXT_CUE.finditer(s)})
         if cued:
             notes.append(f"the prompt names on-screen text ({', '.join(cued)}) -- H3 draws "

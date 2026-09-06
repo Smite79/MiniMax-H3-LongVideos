@@ -274,7 +274,8 @@ def test_references_and_silence():
           "It sounds like" in clip4.seen[1][0]
           and "footsteps" in clip4.seen[1][0]
           and "the only sound" not in clip4.seen[1][0]
-          and 'She walks in and says: "Now."' in clip4.seen[1][0], clip4.seen[1][0])
+          and "She walks in and says:" in clip4.seen[1][0]
+          and "Now." in clip4.seen[1][0], clip4.seen[1][0])
     clip3 = FakeCLIP()
     run_node("A room.\n\nHe walks in.", clip=clip3, auto_sound=False)
     check("...and with that off only the mouth clause remains",
@@ -1013,8 +1014,12 @@ def test_a_television_keeps_its_own_voice():
                     'The TV says: "Storms tonight."',
                     plan_only=True, character_memory=mem)[2]
     check("the shot is not silenced", "conditioned on real silence" not in solo, "")
+    # The WORDS reach the model unchanged. The quotation marks do not: they are
+    # exchanged for H3's own <d>...</d>, which is the token pair that says a span
+    # is spoken. Quote marks say nothing to the model, and a quoted imperative was
+    # reaching it as an imperative sentence and being performed.
     check("...and the line reaches the model as written",
-          '"Storms tonight."' in sh[0], "")
+          "Storms tonight." in sh[0] and "<d>Storms tonight.</d>" in sh[0], "")
     # Her own line is untouched: she is speaking, and her mouth must move.
     check("her own line is left alone", "the TV's" not in sh[1], "")
     check("...and her mouth is not held shut", "Mouths in the shot" not in sh[1], "")

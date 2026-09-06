@@ -985,6 +985,45 @@ def test_one_person_undressing_is_one_person():
           "Everything McKenna is wearing" in S.own_body(S.BARE_HOLD, "McKenna", cast))
 
 
+def test_speech_is_marked_as_speech():
+    """Quotation marks say nothing to the model. <d> and </d> do.
+
+    They are special tokens H3 was trained with -- 151669 and 151670 in
+    comfy/text_encoders/minimax.py -- and they mark a span as SPOKEN. A quoted
+    instruction reached the model as an ordinary imperative sentence and was
+    performed, often a beat before anybody said it. Refusing to STAGE it, which
+    every reader here now does, did nothing about the model reading it."""
+    check("a quoted line becomes a marked one",
+          S.mark_dialogue('Dana says: "Take off your shorts and lie down."')
+          == "Dana says: <d>Take off your shorts and lie down.</d>")
+    check("every word survives, in order",
+          "Take off your shorts and lie down."
+          in S.mark_dialogue('Dana says: "Take off your shorts and lie down."'))
+    # A line ends in terminal punctuation; a scare quote does not. Counting words
+    # got both of these backwards -- "Wait." is one word and is speech.
+    check("a one-word line is still a line",
+          "<d>Wait.</d>" in S.mark_dialogue('Dana says: "Wait." and steps back.'))
+    check("a scare quote is left alone",
+          S.mark_dialogue('She wears a "vintage" coat.')
+          == 'She wears a "vintage" coat.')
+    check("...and so is a quoted noun mid-sentence",
+          S.mark_dialogue('He called it a "problem" and left.')
+          == 'He called it a "problem" and left.')
+    # Already marked, or nothing to mark.
+    check("an already-marked beat is untouched",
+          S.mark_dialogue("Dana turns. <d>Already marked.</d>")
+          == "Dana turns. <d>Already marked.</d>")
+    check("a beat with no speech is untouched",
+          S.mark_dialogue("McKenna walks in.") == "McKenna walks in.")
+    check("empty in, empty out", S.mark_dialogue("") == "")
+    # The readers still see it as speech afterwards, so nothing it says is staged.
+    _m = S.mark_dialogue('Dana says: "Take off your shorts and lie down."')
+    check("the marked line is still refused by the removal reader",
+          S.infer_removals(_m, "McKenna: she, 22, shorts.") == [])
+    check("...and by the posture reader",
+          S.posture_in(_m, ["McKenna", "Dana"]) == {})
+
+
 def test_a_posture_told_is_not_a_posture_taken():
     """Being told to lie down is not lying down.
 
@@ -3280,6 +3319,7 @@ def main():
     test_a_transitive_posture_puts_the_object_down()
     test_an_action_lets_go_of_a_posture()
     test_a_posture_told_is_not_a_posture_taken()
+    test_speech_is_marked_as_speech()
     test_one_person_undressing_is_one_person()
     test_a_comma_separated_list_is_a_list_of_actions()
     test_a_short_action_gets_the_whole_shot()
