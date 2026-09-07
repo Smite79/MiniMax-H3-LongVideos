@@ -1526,6 +1526,72 @@ def test_the_anchor_holds_the_part_the_hardware_is_on():
           in S.restraint_sentence("", [], [], anchor="at the wall"))
 
 
+def test_one_beat_can_put_on_two_things():
+    """Reported as her breaking out of the handcuffs, and it was the prompt.
+
+    hardware_named returns ONE item -- the most specific -- and the worn list was
+    built by appending that single string. So the ordinary way to write it,
+
+        The guard handcuffs Ana's wrists behind her back and locks a steel collar
+        around her neck, chained to the wall.
+
+    recorded the collar and dropped the handcuffs. From the next shot on the cuffs
+    were not in the prompt at all, and hardware nobody mentions is hardware the model
+    stops drawing: a woman with a collar and free hands, rendered exactly as told.
+
+    The across-shots version of this bug was fixed long ago -- worn_item used to be
+    overwritten by the next shot -- and the within-one-beat version was left."""
+    b = ("The guard handcuffs Ana's wrists behind her back and locks a steel "
+         "collar around her neck, chained to the wall.")
+    got = S.hardware_all_named(b)
+    check(f"both are recorded: {got}", len(got) >= 2)
+    check("...the cuffs", any("cuff" in x for x in got))
+    check("...and the collar", any("collar" in x for x in got))
+    check("the material is kept", any("steel collar" == x for x in got))
+    two = S.hardware_all_named("Dan cuffs her wrists and gags her with duct tape.")
+    check(f"cuffs and tape: {two}",
+          any("cuff" in x for x in two) and any("tape" in x for x in two))
+    # The same thing said twice is one thing, however it is worded.
+    one = S.hardware_all_named("He puts the collar on. The steel collar clicks shut.")
+    check(f"one collar, not two: {one}",
+          len([x for x in one if "collar" in x]) == 1)
+    check("...and the longer wording wins", "steel collar" in one)
+    check("nothing named is an empty list",
+          S.hardware_all_named("Ana walks to the window.") == [])
+
+
+def test_a_neck_is_not_behind_a_back():
+    """limb_anchor merges a limb POSITION with a fixed POINT into one string, and
+    with cuffs behind the back and a collar chained to a wall the sentence came out
+    as "holding the neck behind the back, at the wall" -- a neck behind a back, in
+    the clause whose whole job is to say plainly what holds what."""
+    both = S.restraint_sentence("handcuffs, steel collar", [], [],
+                                anchor="behind the back, at the wall", part="neck")
+    check("no neck behind a back", "neck behind the back" not in both)
+    check("the wrists take the position", "holding the wrists behind the back" in both)
+    check("...and the collar takes the point", "collar fast at the wall" in both)
+    # A position on its own, and a point on its own, both still read.
+    pos = S.restraint_sentence("handcuffs", [], [], anchor="behind the back")
+    check("position alone", "holding the wrists behind the back" in pos)
+    pt = S.restraint_sentence("steel collar", [], [], anchor="at the wall",
+                              part="neck")
+    check("point alone", "holding the neck at the wall" in pt)
+
+
+def test_a_door_is_not_a_room():
+    """"door" was in _PLACE, so "Ana looks at the door" -- the most ordinary beat
+    there is -- moved the whole shot: "This shot is in the door, not the room the
+    scene text names." A door is a thing inside a room."""
+    check("a door is not a place", not S.first_place("Ana looks at the door."))
+    check("...nor when opened", not S.first_place("Ana opens the door."))
+    check("...nor when walked to", not S.first_place("Ana walks to the door."))
+    # A doorway is somewhere you can stand, and stays.
+    check("a doorway still is", S.first_place("Ana waits in the doorway.") == "doorway")
+    for room in ("kitchen", "basement", "hallway", "bathroom"):
+        check(f"{room} still reads",
+              S.first_place(f"Ana walks into the {room}.") == room)
+
+
 def test_a_beat_names_the_sound_its_props_make():
     """The event sounds, which are a different system from the mixed ambient bed --
     that one builds TONE and cannot make a zipper. These go in the PROMPT, so the
@@ -4041,6 +4107,9 @@ def main():
     test_built_sound_sits_in_a_room()
     test_a_chain_can_be_fastened_to_a_wall()
     test_the_anchor_holds_the_part_the_hardware_is_on()
+    test_one_beat_can_put_on_two_things()
+    test_a_neck_is_not_behind_a_back()
+    test_a_door_is_not_a_room()
     test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()
     test_a_built_bed_always_goes_on()

@@ -3639,6 +3639,43 @@ def hardware_named(text):
     return "tape" if item == "tapes" else item
 
 
+def hardware_all_named(text):
+    """EVERY piece of hardware this text names, longest phrase per match, in order.
+
+    hardware_named returns one item -- the most specific -- and the caller appended
+    that single string to the worn list. So a beat that puts on two things at once,
+    which is the ordinary way to write it:
+
+        The guard handcuffs Ana's wrists behind her back and locks a steel collar
+        around her neck, chained to the wall.
+
+    recorded the collar and lost the handcuffs. From the next shot on, the cuffs
+    were not named in the prompt at all -- not "stays fastened", not mentioned --
+    and hardware nobody mentions is hardware the model stops drawing. Reported as
+    her breaking out of the handcuffs, which is the model rendering exactly what it
+    was told: a woman with a collar and free hands.
+
+    The across-shots case was already fixed -- worn_item used to be overwritten by
+    the next shot's item -- and the same bug within a single beat was left.
+    """
+    out = []
+    for m in _HARDWARE_NOUN.finditer(text or ""):
+        phrase = re.sub(r"\s+", " ", " ".join(g for g in m.groups() if g)).strip().lower()
+        if phrase == "tapes":
+            phrase = "tape"
+        if not phrase:
+            continue
+        # A longer phrase naming the same thing replaces the shorter one: "collar"
+        # then "steel collar" is one item, described better the second time.
+        dupe = next((i for i, p in enumerate(out)
+                     if p in phrase or phrase in p), None)
+        if dupe is None:
+            out.append(phrase)
+        elif len(phrase) > len(out[dupe]):
+            out[dupe] = phrase
+    return out
+
+
 _UNDO_NOW = re.compile(
     r"\b(?:unlocks?|unlocked|unlocking|uncuffs?|uncuffed|unbinds?|unbound|"
     r"unties?|untied|untying|unbuckles?|unbuckled|unstraps?|unstrapped|"
@@ -3907,7 +3944,22 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
         # to which part is held, so a collar the beat had just named came back
         # holding the wrists. The latch still knows what is on; ask it, not the
         # sentence being written.
-        out += f", holding the {part or held_part(items)} {anchor}"
+        #
+        # TWO RESTRAINTS, TWO ANCHORS. limb_anchor merges a limb POSITION with a
+        # fixed POINT into one string, and with cuffs behind the back and a collar
+        # chained to a wall that came out as "holding the neck behind the back, at
+        # the wall" -- a neck behind a back, which is not a thing, in the sentence
+        # whose whole job is to say plainly what is holding what. The position
+        # always belongs to the wrists; the point belongs to whatever is chained.
+        _m = re.match(r"^(.*?),?\s*(at the .+)$", anchor)
+        _pos, _point = (_m.group(1).strip(), _m.group(2)) if _m else (anchor, "")
+        _part = part or held_part(items)
+        if _pos and _point and _part != "wrists":
+            _fixed = next((i for i in items
+                           if re.search(_HELD_PART[0][0], i, re.I)), "collar")
+            out += f", holding the wrists {_pos}, the {_fixed} fast {_point}"
+        else:
+            out += f", holding the {_part} {anchor}"
     if posed:
         out += ("; the metal is already drawn to its full length, so the position it "
                 "fixes is the position that keeps, and the body strains against it "
@@ -4808,7 +4860,12 @@ def state_acts(text):
 _PLACE = (r"hallway|hall|corridor|passage|landing|stairs|staircase|steps|"
           r"bedroom|bathroom|kitchen|living\s+room|lounge|dining\s+room|study|"
           r"office|garage|basement|cellar|attic|loft|porch|garden|yard|driveway|"
-          r"street|car\s?park|lobby|foyer|doorway|door|room")
+          r"street|car\s?park|lobby|foyer|doorway|room")
+# "door" WAS IN THAT LIST and a door is not a room -- it is a thing inside one. So
+# "Ana looks at the door", the most ordinary beat there is, moved the whole shot:
+# "This shot is in the door, not the room the scene text names." The camera was
+# relocated into a door by a character glancing at it. "doorway" stays, because
+# standing in one is a real place to be.
 # _PLACE is an alternation with no edges of its own, so searching it RAW matches
 # inside words: "shallow depth of field" contains "hall", and every camera anchor
 # ever written for this node says shallow. That put the film in a hallway it never
@@ -7474,8 +7531,21 @@ class H3LongVideos:
             # cuffs -- and from that shot on the cuffs were never named again,
             # which is hardware that stops being drawn.
             _named_item = hardware_named(body) if restrained else ""
-            if _named_item and _named_item not in worn_items:
-                worn_items.append(_named_item)
+            # EVERY item this beat names, not just the most specific one. One beat
+            # that cuffs the wrists AND locks on a collar used to record whichever
+            # phrase was longer and drop the other for the rest of the film.
+            for _hw in (hardware_all_named(body) if restrained else []):
+                # Substring-aware, because the beats name the same thing differently
+                # from shot to shot: "handcuffs" in shot 1 and "the cuffs" in shot 4
+                # is ONE pair of handcuffs, and an exact-match check listed both --
+                # "The handcuffs, steel collar, chain and cuffs stay closed", which
+                # reads as four things and invites the model to draw a spare set.
+                _same = next((k for k, p in enumerate(worn_items)
+                              if p in _hw or _hw in p), None)
+                if _same is None:
+                    worn_items.append(_hw)
+                elif len(_hw) > len(worn_items[_same]):
+                    worn_items[_same] = _hw
             worn_item = ", ".join(worn_items)
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(shot_scene)

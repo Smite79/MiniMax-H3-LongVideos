@@ -3505,6 +3505,50 @@ def test_moving_towards_something_is_not_being_chained_to_it():
         check(f"no restraint: {t_!r}", not S.restraint_present(t_))
 
 
+def test_two_restraints_put_on_together_both_survive():
+    """END TO END, and the unit half would have passed while the film stayed wrong.
+
+    Cuffs and a collar applied in ONE beat recorded only the collar, because
+    hardware_named returns a single item and the worn list appended that string. So
+    from shot 2 the handcuffs were absent from the prompt entirely -- not held, not
+    even named -- and the model drew free hands. Reported as her breaking out of the
+    handcuffs, which is the model rendering exactly what it was given."""
+    print("\n=== two restraints, one beat ===")
+    P = ("A basement cell, bare concrete.\n\n"
+         "The guard handcuffs Ana's wrists behind her back and locks a steel "
+         "collar around her neck, chained to the wall.\n\n"
+         "Ana sits against the wall.\n\n"
+         "Ana pulls at the chain.\n\n"
+         # This beat calls them "the cuffs" where shot 1 said "handcuffs". Same
+         # pair, and the worn list has to know that.
+         "Ana twists her wrists in the cuffs.\n\n"
+         "Ana looks at the door.")
+    script = run_node(P, plan_only=True,
+                      character_memory="Ana: she, 28.\nGuard: he, 40.")[3]
+    shots = [b.split("]", 1)[1] for b in script.split("[Shot ")[1:]]
+    check("the cuffs are named in shot 2", "cuffs" in shots[1], shots[1][:220])
+    check("...and the collar with them", "collar" in shots[1])
+    check("both stay fastened in every later shot",
+          all("closed and fastened" in x for x in shots[1:]))
+    # The merged anchor used to read "holding the neck behind the back, at the
+    # wall" -- a neck behind a back.
+    check("no neck is behind a back",
+          not any("neck behind the back" in x for x in shots))
+    check("the wrists take the limb position",
+          all("holding the wrists behind the back" in x for x in shots[1:]))
+    check("the collar takes the fixed point",
+          all("fast at the wall" in x for x in shots[1:]))
+    # "Ana looks at the door" must not relocate the camera into a door.
+    check("a door does not move the shot",
+          not any("in the door," in x for x in shots))
+    # ONE pair of handcuffs, however the beats word it. An exact-match dedupe on the
+    # worn list produced "The handcuffs, steel collar, chain and cuffs stay closed",
+    # which reads as four things and invites the model to draw a spare set.
+    held = [x.split(" stay closed")[0].split(" stays closed")[0] for x in shots[1:]]
+    check("the cuffs are listed once", all(h.count("cuffs") <= 1 for h in held),
+          f"{[h[-90:] for h in held]}")
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3632,6 +3676,7 @@ def main():
     test_a_collar_chained_to_a_wall_stays_on()
     test_every_way_of_chaining_a_collar_to_a_wall()
     test_moving_towards_something_is_not_being_chained_to_it()
+    test_two_restraints_put_on_together_both_survive()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
