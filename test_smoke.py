@@ -2133,11 +2133,33 @@ def test_room_tone_under_every_shot():
           "hard walls giving the sound back" in sh[0])
     check("the acting shot still gets its events", "footsteps" in sh[0])
     check("info names the acoustic", "room tone read from the scene" in info)
-    # ...and with auto_sound on it now carries an ambient bed read from the scene,
-    # on every shot, which is what the wordless ones were missing.
-    check("the wordless shot is scored too",
-          "low hum off the strip light" in sh[1])
+    # The ambient bed goes under shots whose audio branch is ALREADY open -- ones
+    # with a line, or with a sound the author wrote. It is NOT put under a wordless
+    # shot, and that reversal is the point.
+    #
+    # "Ambience everywhere" was tried and does not work. The bed was allowed to open
+    # a branch, which is the one thing nothing inferred here may do: an open branch
+    # on a joint model fills itself, and at 4-8 steps the last audio step clears
+    # 50%-30% of the denoising in a single jump, so what it fills with is a voice.
+    # Ambience everywhere and silence are mutually exclusive by construction -- the
+    # silence latent IS the audio, and there is no room in it for a room tone.
+    check("the speaking shot carries the bed", "low hum off the strip light" in sh[0])
+    check("the wordless shot is left silent",
+          "low hum off the strip light" not in sh[1])
     check("...and info says so", "ambient bed read from the anchor" in info)
+    # THE CONDITIONING, not just the text. `sounded` decides whether the silence
+    # latent is applied at render time, and the bed used to be counted into it --
+    # so a wordless shot was reported as one that "describes a sound IN THE BEAT",
+    # which it does not, and its branch was left open. plan_only shows the text
+    # either way, so this reads the node's own account of which shots are pinned.
+    _pin = re.search(r"shot\(s\) ([\d, ]+) have no quoted line and no sound described",
+                     info)
+    _open = re.search(r"shot\(s\) ([\d, ]+) have no line but either", info)
+    check("the wordless shot is pinned to silence",
+          _pin is not None and "2" in _pin.group(1), _pin.group(1) if _pin else "none")
+    check("...and is not counted as describing its own sound",
+          _open is None or "2" not in _open.group(1),
+          _open.group(1) if _open else "none")
 
     # THE SILENCE PATH, which is still the path with auto_sound OFF.
     #
@@ -2989,9 +3011,15 @@ def test_a_described_room_still_holds():
     stayed behind in the room they left."""
     print("\n=== a described room still holds ===")
     mem = "Kate: she, 30, coat.\nSam: he, 34, shirt."
-    P = ("A carpeted living room, lamps low.\n\nKate and Sam sit on the sofa.\n\n"
+    # The shots that check the acoustic carry a LINE, because the bed and the room
+    # tone go under shots whose audio branch is already open. A wordless shot is
+    # pinned to silence and is given no acoustic at all -- see
+    # test_room_tone_under_every_shot for why ambience everywhere does not work.
+    P = ("A carpeted living room, lamps low.\n\n"
+         "Kate and Sam sit on the sofa and she says: \"Come with me.\"\n\n"
          "Kate walks him down the hallway to the tiled bathroom.\n\n"
-         "They stand by the sink.\n\nKate turns the tap on.")
+         "They stand by the sink and she says: \"Wait here.\"\n\n"
+         "Kate turns the tap on.")
     out = run_node(P, plan_only=True, character_memory=mem)
     info, script = out[2], out[3]
     sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
@@ -3024,10 +3052,14 @@ def test_the_sound_clause_is_inside_the_budget():
     checks the node's own report names what went."""
     print("\n=== the sound clause is inside the budget ===")
     mem = "Kate: she, 30, coat, scarf.\nSam: he, 34, shirt."
-    P = ("A living room.\n\nKate and Sam sit on the sofa.\n\n"
-         "Kate takes off her scarf.\n\n"
+    # Beats carry LINES, because a sound clause only exists on a shot whose audio
+    # branch is open -- a wordless shot is pinned to silence and gets none, so there
+    # would be nothing for the budget to drop.
+    P = ("A living room.\n\nKate and Sam sit on the sofa and she says: \"Sit down.\"\n\n"
+         "Kate takes off her scarf and says: \"It is warm in here.\"\n\n"
          "Kate walks him down the hallway to the tiled bathroom.\n\n"
-         "They stand by the sink.\n\nSam waits.")
+         "They stand by the sink and she says: \"Wait here.\"\n\n"
+         "Sam waits and says: \"All right.\"")
     floor, ratio = S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD
     try:
         S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD = 20, 1

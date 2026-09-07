@@ -5841,6 +5841,18 @@ class H3LongVideos:
                                "picture in one room and the audio in another, in the "
                                "same conditioning. They are re-read at a move, but "
                                "only where the new room has a sound of its own.\n\n"
+                               "NOTHING HERE CAN OPEN A SILENT SHOT. Ambience on "
+                               "every shot was tried and does not work: the bed was "
+                               "allowed to open the audio branch, and an open branch "
+                               "on a joint model fills itself. At 4-8 steps the last "
+                               "audio step clears 50%-30% of its denoising in one "
+                               "jump, and what it invents there is a voice -- so "
+                               "every wordless shot got ambience and a babbling mouth "
+                               "with it. Ambience everywhere and silence cannot both "
+                               "hold: the silence latent IS the audio, and there is "
+                               "no room in it for a room tone. Score a silent shot by "
+                               "writing the sound into that beat, or lay an ambient "
+                               "track under the finished video outside the model.\n\n"
                                "A beat that already describes its own sound is left "
                                "alone -- what you wrote wins. A shot given sound is also "
                                "not silenced, since it is now asking for audio. info "
@@ -7006,8 +7018,10 @@ class H3LongVideos:
                 ambient_shots.append(len(shots) + 1)
             _mute_written = bool(mouths_shut_when_no_line and _own and not _speaks
                                  and not _voiced)
+            # The bed no longer defeats this. It is the one thing this file infers
+            # that was allowed to open a branch, and opening a branch is what puts a
+            # voice in a wordless shot.
             _will_silence = bool(silence_nonspeech and not _speaks and not _voiced
-                                 and not _bed
                                  and (not _own or _mute_written))
             if _mute_written and _will_silence:
                 muted_sound.append(len(shots) + 1)
@@ -7169,7 +7183,16 @@ class H3LongVideos:
             speech.append(_speaks)
             # What the AUTHOR wrote, and nothing this file worked out. See above --
             # effort counts, because the verb staging it is theirs.
-            sounded.append(_own or _voiced or bool(_bed))
+            #
+            # `_bed` USED TO BE IN HERE, against the comment above it. The ambient
+            # bed is inferred, and putting it in this list left the audio branch
+            # open on every shot that got one -- which is every wordless shot, which
+            # is what the bed was for. An open branch on a joint model fills itself,
+            # and at 4-8 steps the final audio step clears 50%-30% of the denoising
+            # in one jump, so what it fills with is a voice. Ambience everywhere and
+            # silence are mutually exclusive by construction: the silence latent IS
+            # the audio, and there is no room in it for a room tone.
+            sounded.append(_own or _voiced)
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -7524,16 +7547,21 @@ class H3LongVideos:
         if ambient_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in ambient_shots)} were given an "
-                f"ambient bed read from the anchor and the scene -- \"{ambient_bed}\" "
-                f"-- because they have no line and describe no sound of their own, "
-                f"and would otherwise be pinned to real silence: not 'no speech' but "
-                f"no footsteps, no room tone, nothing, which is what makes a scene "
-                f"sound staged. This DOES open the audio branch, which is the one "
-                f"thing derived sound was never allowed to do -- the mouths-shut "
-                f"guard lands on these same shots, so the picture half is held, but "
-                f"an open branch on a joint model can still put a voice in the gap. "
-                f"Write your own sound into a beat to override it, or turn auto_sound "
-                f"off to go back to silence")
+                f"ambient bed read from the anchor and the scene -- \"{ambient_bed}\". "
+                f"It goes under shots whose audio branch is ALREADY open: ones with a "
+                f"line, or with a sound you wrote yourself. It can never open one. "
+                f"AMBIENCE ON EVERY SHOT WAS TRIED AND DOES NOT WORK: the bed was "
+                f"allowed to open a branch, which is the one thing nothing inferred "
+                f"here may do, and an open branch on a joint model fills itself. At "
+                f"4-8 steps the final audio step clears 50%-30% of its denoising in "
+                f"one jump, and what a branch resolving that much at once invents is "
+                f"a voice -- so every wordless shot got ambience and a babbling mouth "
+                f"with it. Ambience everywhere and silence are mutually exclusive by "
+                f"construction: the silence latent IS the audio, and there is no room "
+                f"in it for a room tone. To score a silent shot, write the sound into "
+                f"that beat -- that is you asking for audio on purpose -- or lay an "
+                f"ambient track under the finished video outside the model, where it "
+                f"costs nothing and cannot speak")
         if dialogue_marked:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in dialogue_marked)} had their "
