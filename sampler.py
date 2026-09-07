@@ -42,6 +42,16 @@ import comfy.model_management as mm
 import latent_preview
 import node_helpers
 
+# The prompt engine: scene state, read beat by beat, rendered once per shot.
+# Imported by file path rather than by name so it resolves the same whether
+# ComfyUI loads this package as `custom_nodes.H3-LongVideos-V1` or bare.
+import importlib.util as _ilu
+_eng_spec = _ilu.spec_from_file_location(
+    "h3_engine", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "engine.py"))
+engine = _ilu.module_from_spec(_eng_spec)
+_eng_spec.loader.exec_module(engine)
+
 
 H3_FPS = 24                    # H3 renders 24 fps, always
 AUDIO_LATENT_FPS = 40          # audio latent frames per second
@@ -7107,6 +7117,14 @@ class H3LongVideos:
         _placed_shots = set()       # 0-based shots introducing somebody in position
         shot_cast = []              # the names each shot describes
         guard_words = beat_words = total_words = sound_words = 0
+        # THE PROMPT ENGINE. One state, read beat by beat, rendered once per shot.
+        # It replaces the continuity guards that used to be derived independently
+        # -- hold, anchors, posture, where, removal, wearing, moved -- each of
+        # which searched the beat for its own thing and appended its own sentence
+        # with no way to see the others. That is what emitted "holding the neck
+        # behind the back", dropped the handcuffs from a beat that applied two
+        # things, and moved the camera into a door. See engine.py.
+        _state = engine.SceneState(place=engine.place_in(scene or ""))
         for b in beats:
             body, toks, adds = extract_directives(b)
             # Quoted speech becomes H3'S OWN dialogue marker before anything else
@@ -7741,7 +7759,7 @@ class H3LongVideos:
             _turn = direction_anchor(_moves)
             # The two share a budget. Holding a state and anchoring a change are both
             # continuity, and four such sentences is a shot about its own continuity.
-            _state = state_hold(_pairs[:max(0, 2 - _turn.count("first frame"))]) + _turn
+            _state_clause = state_hold(_pairs[:max(0, 2 - _turn.count("first frame"))]) + _turn
             if _pairs:
                 stated_shots.append(len(shots) + 1)
             if _turn:
@@ -7826,6 +7844,11 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
+            # The engine reads this beat and renders every continuity fact it
+            # owns, in one paragraph, from one state.
+            _cast = [n for n, _ in sheet_lines(sheet) if n] or list(_described)
+            _ch = _state.read(body, cast=_cast, shot=len(shots) + 1)
+            _cont = _state.continuity(described=_described or _cast, changed=_ch)
             # ONE sentence for the hardware. The hold, the name of the thing and
             # where it holds were three separate clauses written for three separate
             # reports, each naming the same object again -- 53 words about one pair
@@ -8024,20 +8047,21 @@ class H3LongVideos:
             # shot against a 12% beat, which is the state this node was rebuilt to
             # escape. What the beat itself stages ranks above what merely persists.
             _guards = [
-                (1, "removal", tail),        # the beat's own action, completing
-                (1, "wearing", _wearing),    # ...and its mirror, a garment going on
+                # ONE clause from the engine, carrying every continuity fact it
+                # owns: hardware and what it holds, garments going on and off,
+                # posture, place. These were nine separate guards -- removal,
+                # wearing, revealed, bare, hold, where, moved, anchors, posture --
+                # derived independently and unable to see each other, which is how
+                # a neck ended up behind a back and how the handcuffs stopped being
+                # mentioned at all. Rank 1: it is the continuity.
+                (1, "continuity", (" " + _cont) if _cont else ""),
                 (2, "revealed", _revealed),  # what shows where it was
                 (2, "bare", _bare),          # ...or that nothing does
-                (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", fall),           # a body going down needs a landing
                 (4, "travel", _travel),      # a journey needs both its ends
-                (4, "where", _where),        # ...and later shots need the new room
                 (5, "pace", _pace),          # ...and a short action needs the whole shot
                 (5, "device", _device),      # a voice that is not hers
-                (6, "moved", _moved),        # a garment left where it was put
-                (7, "anchors", anchors),     # hardware with nowhere to sit
-                (10, "state", _state),
-                (9, "posture", _posture),   # where the last beat left the body
+                (10, "state", _state_clause),
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language

@@ -1448,21 +1448,21 @@ def test_the_anchor_survives_a_close_shot():
     sh = [s for s in script.split("---") if s.strip()]
     # The staging shot has the author's own words and gets no second sentence about it.
     check("the staging shot is not argued with",
-          "holding the wrists" not in sh[0], "")
+          "the wrists" not in sh[0], "")
     check("the next shot is told where they are",
           "above the head, at the bed frame" in sh[1], sh[1][-80:])
     # The one that matters: a close shot crops the anchor out of the picture, so the
     # text is the only thing still carrying it.
-    check("...including the close shot", "holding the wrists" in sh[1], "")
-    check("...and the shot after that", "holding the wrists" in sh[2], "")
+    check("...including the close shot", "the wrists" in sh[1], "")
+    check("...and the shot after that", "the wrists" in sh[2], "")
     # It latches like the hardware and is released by the same `remove:`.
-    check("a removal lets go of it", "holding the wrists" not in sh[3], sh[3][-70:])
+    check("a removal lets go of it", "the wrists" not in sh[3], sh[3][-70:])
     check("info names the held shots", "fastened limbs held in place on shot(s) 2, 3" in info, "")
     check("...and names the tight framing", "frame tight enough to crop" in info, "")
     # Nothing to anchor, nothing said -- this must not fire on ordinary shots.
     plain = run_node("A room.\n\nMara waits.\n\nMara walks to the window.",
                      plan_only=True, character_memory="Mara: she, 30.")[3]
-    check("an unrestrained scene is untouched", "holding the wrists" not in plain, "")
+    check("an unrestrained scene is untouched", "the wrists" not in plain, "")
 
 
 def test_mouths_stay_shut_with_no_line():
@@ -3412,12 +3412,12 @@ def test_a_collar_chained_to_a_wall_stays_on():
                                        "Guard: he, 40, uniform.")[3]
     shots = [b.split("]", 1)[1] for b in script.split("[Shot ")[1:]]
     check("every shot after the first is tethered",
-          all("at the wall" in s for s in shots[1:]),
+          all("to the wall" in s for s in shots[1:]),
           f"{[('at the wall' in s) for s in shots]}")
     check("...and it is the NECK being held, not the wrists",
-          all("holding the neck at the wall" in s for s in shots[1:]),
+          all("the neck fast to the wall" in s for s in shots[1:]),
           f"{[('holding the neck' in s) for s in shots]}")
-    check("no shot claims the wrists", not any("holding the wrists" in s for s in shots))
+    check("no shot claims the wrists", not any("the wrists" in s for s in shots))
     check("the hardware stays fastened in every later shot",
           all("closed and fastened" in s for s in shots[1:]))
     # The shot that STAGES the chaining says it in the author's own words and must
@@ -3471,7 +3471,7 @@ def test_every_way_of_chaining_a_collar_to_a_wall():
                           character_memory="Ana: she, 28.\nGuard: he, 40.")[3]
         last = script.split("[Shot ")[-1]
         check(f"tethered: {p[:44]!r}",
-              "at the wall" in last or "at the ring" in last)
+              "to the wall" in last or "to the ring" in last)
         check(f"...and fastened: {p[:40]!r}",
               "closed and fastened" in last or "tied and holding" in last)
 
@@ -3535,9 +3535,9 @@ def test_two_restraints_put_on_together_both_survive():
     check("no neck is behind a back",
           not any("neck behind the back" in x for x in shots))
     check("the wrists take the limb position",
-          all("holding the wrists behind the back" in x for x in shots[1:]))
+          all("the wrists behind the back" in x for x in shots[1:]))
     check("the collar takes the fixed point",
-          all("fast at the wall" in x for x in shots[1:]))
+          all("fast to the wall" in x for x in shots[1:]))
     # "Ana looks at the door" must not relocate the camera into a door.
     check("a door does not move the shot",
           not any("in the door," in x for x in shots))
