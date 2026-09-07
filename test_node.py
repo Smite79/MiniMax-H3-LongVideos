@@ -1163,6 +1163,53 @@ def test_a_built_bed_always_goes_on():
     check("it is low, not a hiss", _centroid(y) < 400)
 
 
+def test_a_beat_names_the_sound_its_props_make():
+    """The event sounds, which are a different system from the mixed ambient bed --
+    that one builds TONE and cannot make a zipper. These go in the PROMPT, so the
+    model makes them in sync with the picture."""
+    def snd(b):
+        return S.sounds_for(b)
+    # Gaps found by listing the beats this is asked for and reading what came back.
+    check("a zipper by name", "a zip running" in snd("Dan pulls the zipper down."))
+    check("velcro", "velcro tearing open" in snd("Dan tears the velcro open."))
+    check("rope going tight",
+          "rope creaking as it goes tight" in snd("She pulls the rope tight."))
+    # The fabric entry listed coat, jacket, shirt, dress, skirt and stopped, so
+    # taking off a coat made a sound and taking off shorts did not.
+    check("lower-body garments rustle too",
+          "fabric rustling" in snd("She takes off her shorts."))
+    check("...and boots", "fabric rustling" in snd("She pulls off her boots."))
+    # A bolt is not something dragging on the floor.
+    check("a bolt is metal", snd("Dan slides the bolt across.")[0] == "a metal bolt sliding")
+    check("...and a real drag still is",
+          snd("Dan drags the crate across the floor.")[0] == "something dragging on the floor")
+    # Cuffs being APPLIED are a ratchet; knocking is what they do afterwards.
+    check("applying cuffs is a ratchet",
+          "cuffs ratcheting closed" in snd("Dan clicks the cuffs shut."))
+    check("...and it retires the general sound",
+          "cuffs knocking" not in snd("Dan clicks the cuffs shut."))
+    check("cuffs merely present still knock",
+          snd("Dan cuffs her wrists behind her back.") == ["cuffs knocking"])
+    # ORDER-INDEPENDENT. A lookahead placed mid-pattern only looks forward, so the
+    # hardware named BEFORE the verb silently lost the sound -- the same sentence
+    # written the other way round worked.
+    check("hardware after the verb", "restraints pulling taut" in
+          snd("She strains against the cuffs."))
+    check("hardware before the verb", "restraints pulling taut" in
+          snd("The cuffs hold her wrists as she strains."))
+    check("...and for a chain", "restraints pulling taut" in
+          snd("The chain is taut while she thrashes."))
+    check("a ratchet reads either way", "cuffs ratcheting closed" in
+          snd("The cuffs ratchet closed around her wrists."))
+    # No regressions on the things that must stay silent.
+    check("a look is not a padlock", snd("She locks eyes with him.") == [])
+    check("thrashing alone arms no restraint",
+          "restraints pulling taut" not in snd("McKenna thrashes on the bed."))
+    check("a shot still gets a cue, not an inventory",
+          len(snd("She walks in dragging the chain, cuffs knocking, "
+                  "unzips her coat and drops it.")) <= S.MAX_SOUNDS)
+
+
 def test_the_bed_is_built_from_the_scene():
     """No file and no second model pass: the node already reads what the room sounds
     like, and room tone is physically shaped noise, so it can be made rather than
@@ -3623,6 +3670,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()
     test_a_built_bed_always_goes_on()
     test_an_ambient_bed_is_mixed_not_conditioned()

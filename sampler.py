@@ -1055,8 +1055,25 @@ _SOUND_FROM = (
      r"approach(?:es|ed)?|creep(?:s|ing)?|crept|sneak(?:s|ing)?|shuffl(?:e|es|ing)|"
      r"stumbl(?:e|es|ing)|stagger(?:s|ing)?|feet)\b",  "footsteps"),
     (r"\bchains?\b",                                "chain links dragging"),
+    # BEFORE the generic cuffs entry, because both match and the first wins. Cuffs
+    # being APPLIED are a ratchet, which is the sound anyone picturing the moment
+    # expects; "cuffs knocking" is what they do afterwards, hanging on a wrist.
+    # BOTH conditions as lookaheads anchored at \A, so each scans the WHOLE beat.
+    # A lookahead placed mid-pattern only looks FORWARD from wherever the engine is
+    # standing, so "the cuffs ratchet closed" failed -- the hardware is named before
+    # the verb, and by the time the verb matched the cuffs were behind it. Written
+    # this way the order in the sentence stops mattering. See the restraint entry
+    # below, which had the same defect and lost its sound on exactly that wording.
+    (r"\A(?=[\s\S]*\b(?:handcuff|cuff|shackle|manacle)\w*\b)"
+     r"(?=[\s\S]*\b(?:ratchet(?:s|ed|ing)?|clos(?:e|es|ing|ed)|snap(?:s|ped|ping)?|"
+     r"lock(?:s|ed|ing)?|tighten(?:s|ed|ing)?|click(?:s|ed|ing)?)\b)",
+                                                    "cuffs ratcheting closed"),
     (r"\b(?:handcuff(?:s|ed)?|cuffs?|cuffed|shackle[sd]?|manacle[sd]?)\b",
                                                     "cuffs knocking"),
+    # A bolt is not something dragging on the floor, which is what the drag entry
+    # below was giving it. Ahead of that entry, because "slides the bolt" matches
+    # both and the first match is the one that is kept.
+    (r"\b(?:bolt|latch|catch)(?:es|ed|ing)?\b",     "a metal bolt sliding"),
     # NOT "locks eyes with her" -- that is a look, and it was giving the shot the
     # sound of a padlock closing.
     (r"\b(?:padlock(?:s|ed)?|locks?|locked|locking)\b(?!\s+(?:eyes|gaze|horns|onto))",
@@ -1076,10 +1093,14 @@ _SOUND_FROM = (
     (r"\b(?:smack(?:s|ed)?|slap(?:s|ped)?|hits?|strikes?|struck)\b", "a sharp impact"),
     # Only where there is something to pull against. "McKenna thrashes on the bed"
     # was getting restraints she is not wearing, because the verb alone armed it.
-    (r"(?=[\s\S]*\b(?:cuffs?|handcuffs?|shackles?|manacles?|chains?|ropes?|cords?|"
+    # Anchored at \A with BOTH conditions as lookaheads, so the hardware and the
+    # verb may appear in either order. Before this the lookahead sat mid-pattern and
+    # only looked forward: "she strains against the cuffs" worked and "the cuffs
+    # hold her wrists as she strains" silently did not, which is the same sentence.
+    (r"\A(?=[\s\S]*\b(?:cuffs?|handcuffs?|shackles?|manacles?|chains?|ropes?|cords?|"
      r"straps?|restraints?|bindings?|ties?|tape|harness|collar)\b)"
-     r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
-     r"strain(?:s|ing|ed)?|pull(?:s|ing|ed)?\s+against)\b",
+     r"(?=[\s\S]*\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
+     r"strain(?:s|ing|ed)?|pull(?:s|ing|ed)?\s+against)\b)",
                                                     "restraints pulling taut"),
     # A body under effort makes a VOICE, not only movement. H3 is joint, so this is
     # also what stops the face going flat: conditioning the audio on silence tells the
@@ -1093,12 +1114,24 @@ _SOUND_FROM = (
      r"clutch(?:es|ed|ing)?|grip(?:s|ped|ping)?|clench(?:es|ed|ing)?)\b",
                                                     "unsteady breathing, with gasps and "
                                                     "moans of effort"),
-    (r"\b(?:zip(?:s|ped|ping)?|unzip(?:s|ped|ping)?)\b", "a zip running"),
+    (r"\b(?:zip(?:s|ped|ping)?|unzip(?:s|ped|ping)?|zipper)\b", "a zip running"),
     (r"\btap(?:e|es|ed|ing)\b",                     "tape pulling off"),
+    # Gaps found by listing the beats this is actually asked for and reading what
+    # came back. Each of these returned NOTHING, on a shot whose whole point is the
+    # sound: velcro, a rope going tight, and the lower-body garments -- the fabric
+    # entry listed coat, jacket, shirt, dress, skirt and stopped there, so taking
+    # off a pair of shorts was silent while taking off a coat was not.
+    (r"\bvelcro\b",                                 "velcro tearing open"),
+    (r"\b(?:rope|cord|twine|zip\s?tie)s?\b",        "rope creaking as it goes tight"),
+    (r"\b(?:shorts|trousers|pants|jeans|leggings|tights|socks|boots|shoes|"
+     r"gloves|top|vest|jumper|sweater|hoodie|trousers)\b", "fabric rustling"),
+    (r"\bkeys?\b",                                  "keys on a ring"),
     (r"\b(?:wakes?\s+up|woke|gasp(?:s|ing)?|pant(?:s|ing)?|breath(?:es|ing)?)\b",
                                                     "breathing"),
 )
 MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
+# {specific: (generals it retires)} -- see sounds_for.
+_SOUND_SUPERSEDES = {"cuffs ratcheting closed": ("cuffs knocking",)}
 
 # The SPACE, as opposed to the things in it. Read from the scene, and this is the one
 # thing that safely can be: a chain standing in the scene must not rattle in a shot
@@ -1222,6 +1255,14 @@ def sounds_for(beat, held=()):
             continue
         if phrase not in out and re.search(pat, beat or "", re.I):
             out.append(phrase)
+    # A specific sound retires the general one for the same object. Cuffs being
+    # applied are a ratchet; "cuffs knocking" is what they do afterwards, hanging on
+    # a wrist. Both in one shot is one object described making two noises, and the
+    # budget is three sounds -- spending two of them on the same pair of cuffs
+    # crowds out whatever else the beat stages.
+    for specific, general in _SOUND_SUPERSEDES.items():
+        if specific in out:
+            out = [p for p in out if p == specific or p not in general]
     return out
 
 
