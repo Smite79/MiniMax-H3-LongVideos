@@ -1274,6 +1274,175 @@ def test_the_sound_of_an_action_can_be_built():
           <= 0.701)
 
 
+def _burst_spread_db(y, times, sr=44100):
+    """dB between the loudest and quietest burst in a train."""
+    import math
+    pk = [float(y[int(t * sr):int(t * sr) + int(0.09 * sr)].abs().max()) for t in times]
+    return 20 * math.log10(max(pk) / max(min(pk), 1e-9))
+
+
+def test_no_two_hits_are_the_same():
+    """Reported as sounding fake, and this is the first reason.
+
+    _hits used one amplitude and one decay for every burst in a train. Thirty-three
+    identical clicks is not a chain, it is a machine -- and the ear catches an exact
+    repeat far faster than it judges a timbre, so a rattle whose links are all the
+    same reads as synthetic even when one link on its own sounds right.
+
+    Measured against a control that keeps the old constant amp and decay: the noise
+    alone gives 3.0-4.9 dB of burst-to-burst spread, and per-hit variation gives
+    8.2-13.0 dB. 6.5 dB separates them with room on both sides."""
+    import math
+    sr, n = 44100, 44100 * 4
+    times = [0.05 + i * 0.12 for i in range(16)]
+
+    def flat(seed):                      # the old behaviour, kept as the control
+        g = torch.Generator().manual_seed(seed)
+        x, L = torch.zeros(n), max(4, int(0.05 * sr))
+        env = torch.exp(-torch.arange(L, dtype=torch.float32) / max(0.05 * sr / 4.0, 1.0))
+        for t in times:
+            i = int(t * sr)
+            m = min(L, n - i)
+            x[i:i + m] += torch.randn(m, generator=g) * env[:m]
+        return x
+
+    for seed in range(1, 6):
+        g = torch.Generator().manual_seed(seed)
+        got = _burst_spread_db(S._hits(n, sr, g, times, 0.05), times)
+        check(f"hits differ from each other (seed {seed}): {got:.1f} dB", got > 6.5)
+        ctl = _burst_spread_db(flat(seed), times)
+        check(f"...and the control stays flat (seed {seed}): {ctl:.1f} dB", ctl < 6.0)
+
+
+def test_a_struck_thing_rings_in_more_than_one_place():
+    """The second reason: one resonator is one tone colour.
+
+    A real bar or shell rings at several INHARMONIC modes at once, which is what
+    makes a cuff read as metal rather than as filtered noise. The ratios are not
+    integers on purpose -- an integer series is a musical note, which is a different
+    and worse kind of fake."""
+    import math
+    sr, n = 44100, 44100
+
+    def resp(f0, q, hz):
+        x = torch.zeros(n)
+        x[0] = 1.0
+        H = torch.fft.rfft(S._band(x, sr, f0, q)).abs()
+        f = torch.fft.rfftfreq(n, d=1.0 / sr)
+        return float(H[int(torch.argmin((f - hz).abs()))])
+
+    f0 = 2600.0
+    peak = resp(f0, 6.0, f0 * 1.48)
+    check("there is a second mode at 1.48x", peak > resp(f0, 6.0, f0 * 1.35))
+    check("...and it is a bump, not a shelf", peak > resp(f0, 6.0, f0 * 1.62))
+    check("the fundamental still dominates", resp(f0, 6.0, f0) > peak * 3.0)
+    check("no mode is placed past Nyquist",
+          torch.isfinite(S._band(torch.randn(n), sr, 9000.0, 6.0)).all())
+    # Integer ratios would be a chord. Nothing in the cluster may be one.
+    check("the ratios are inharmonic",
+          all(abs(r - round(r)) > 0.1 for r, _g, _q in S._MODES if r > 1.0))
+
+    # BANDWIDTH COMPENSATION. A resonator passes noise over a band of width fc/Q,
+    # so a mode an octave up collects twice the energy for the same gain -- and
+    # these are excited by noise, which is flat per Hz. Without compensating, the
+    # gains in _MODES do not mean the loudness they look like, and the cluster came
+    # out 2x brighter than every recipe was tuned for. Measured: the second mode's
+    # energy must match its stated gain, not exceed it.
+    gen = torch.Generator().manual_seed(7)
+    noise = S._band(torch.randn(n, generator=gen), sr, 1000.0, 6.0)
+    spec = torch.fft.rfft(noise).abs() ** 2
+    fr = torch.fft.rfftfreq(n, d=1.0 / sr)
+    e1 = float(spec[(fr >= 850) & (fr < 1180)].sum())
+    e2 = float(spec[(fr >= 1300) & (fr < 1700)].sum())
+    got = 10 * math.log10(e2 / max(e1, 1e-20))
+    # Guarded: with the cluster emptied there is no upper gain to read, and an
+    # IndexError here reports as a crashed suite rather than as the failure it is.
+    _up = [g for r, g, _q in S._MODES if r > 1.0]
+    check("there is an upper mode at all", bool(_up))
+    wantdb = 20 * math.log10(_up[0]) if _up else 0.0
+    check(f"the second mode is as loud as its gain says: {got:.1f} vs {wantdb:.1f} dB",
+          bool(_up) and abs(got - wantdb) < 2.0)
+
+    # Q TAPER. Q is how much the thing rings, so a low-Q recipe is a thud on a
+    # floor and must not sprout the mode cluster of a bell -- that is what put a
+    # footstep aimed at 130 Hz up at 428. A thud may not come out brighter,
+    # relative to its own centre, than a ringing object does.
+    def cen_at(q):
+        g2 = torch.Generator().manual_seed(4)
+        return _centroid(S._band(torch.randn(n, generator=g2), sr, 130.0, q
+                                 ).unsqueeze(0))
+
+    thud, bell = cen_at(1.6), cen_at(6.0)
+    check(f"a thud is not brighter than a bell: {thud / bell:.2f}x",
+          thud / bell < 1.2)
+
+
+def test_built_sound_sits_in_a_room():
+    """The third and loudest reason: every recipe was rendered anechoic.
+
+    Nothing in the physical world has zero energy after a transient, and the ear
+    reads a bone-dry impact as "not in a place" before it judges anything else. A
+    zip measured -120 dB of tail -- literally nothing -- against -4.8 dB now."""
+    import math
+    sr, n = 44100, 44100
+    x = torch.zeros(n)
+    x[100] = 1.0
+    wet = S._room(x, sr, seed=1)
+
+    def tail_db(sig):
+        a = float(sig[100:100 + int(0.004 * sr)].pow(2).mean())
+        b = float(sig[100 + int(0.020 * sr):100 + int(0.060 * sr)].pow(2).mean())
+        return 10 * math.log10(max(b / max(a, 1e-20), 1e-20))
+
+    check(f"dry has no tail at all: {tail_db(x):.0f} dB", tail_db(x) < -100)
+    check(f"the room gives it one: {tail_db(wet):.1f} dB", -30 < tail_db(wet) < -6)
+    check("wet=0 is an exact no-op", torch.equal(S._room(x, sr, wet=0.0), x))
+    # A room ABSORBS highs; it must never brighten what goes into it. An impulse is
+    # flat, so the wet return has to come back darker than it went in. Without the
+    # tail rolloff it comes back at essentially the input's own centroid.
+    flat_c = _centroid(x.unsqueeze(0))
+    wet_c = _centroid(S._room(x, sr, wet=1.0, seed=3).unsqueeze(0))
+    check(f"the room darkens rather than brightens: {wet_c / flat_c:.2f}x",
+          wet_c < flat_c * 0.85)
+    check("the same seed builds the same room",
+          torch.equal(S._room(x, sr, seed=5), S._room(x, sr, seed=5)))
+    # Linear, not circular: a tail must never wrap round in front of its own hit.
+    # LENGTH MATTERS HERE. At n=44100 the transform rounds up to 65536 regardless,
+    # so a circular version still had somewhere to put the tail and this passed
+    # either way. A power-of-two length leaves no slack, which is the only size
+    # that actually tests the padding.
+    p2 = 65536
+    late = torch.zeros(p2)
+    late[p2 - 200] = 1.0
+    check("no tail wraps to the start",
+          float(S._room(late, sr, seed=2)[:int(0.01 * sr)].abs().max()) < 1e-6)
+    # A real room absorbs highs faster than lows, so the tail is darker than the hit.
+    imp = S._room(x, sr, wet=1.0, seed=3)
+    early = imp[100:100 + int(0.006 * sr)]
+    later = imp[100 + int(0.030 * sr):100 + int(0.070 * sr)]
+    check("the tail is darker than the onset", _centroid(later.unsqueeze(0))
+          < _centroid(early.unsqueeze(0)))
+
+    # AND IT IS ACTUALLY WIRED INTO foley_for. Testing _room alone would pass with
+    # the call removed -- which is exactly how built sound came to be dropped from
+    # every effort shot: the piece worked and nothing asserted it was reached.
+    # Measured on the two recipes whose hits are far enough apart that "energy
+    # 20-60 ms after the peak" is a tail and not the next hit. Without the room
+    # they measure -31.9 and -35.6 dB; with it, -22.0 and -10.7.
+    def built_tail(phrase):
+        y = S.foley_for(phrase, 44100 * 3, sr, seed=3)
+        e = y.abs()
+        i = int(e.argmax())
+        a = float(e[i:i + int(0.004 * sr)].pow(2).mean())
+        b = float(e[i + int(0.020 * sr):i + int(0.060 * sr)].pow(2).mean())
+        return 10 * math.log10(max(b / max(a, 1e-20), 1e-20))
+
+    for phrase, floor in (("a lock snapping shut", -27.0),
+                          ("chain links dragging", -22.0)):
+        got = built_tail(phrase)
+        check(f"'{phrase}' is built in a room: {got:.1f} dB", got > floor)
+
+
 def test_a_beat_names_the_sound_its_props_make():
     """The event sounds, which are a different system from the mixed ambient bed --
     that one builds TONE and cannot make a zipper. These go in the PROMPT, so the
@@ -3784,6 +3953,9 @@ def main():
     test_effort_verbs_open_the_branch_they_are_given_sound_for()
     test_furniture_under_movement_is_built()
     test_the_sound_of_an_action_can_be_built()
+    test_no_two_hits_are_the_same()
+    test_a_struck_thing_rings_in_more_than_one_place()
+    test_built_sound_sits_in_a_room()
     test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()
     test_a_built_bed_always_goes_on()

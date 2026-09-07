@@ -2044,34 +2044,134 @@ def synth_ambient(phrase, n, sr, seed=0, channels=2):
 # NOTHING VOCAL IS EVER BUILT. Breathing and effort are in the sound table too, and
 # they are a VOICE: the one thing this file must not manufacture. They are absent
 # from the recipes below on purpose, and a phrase with no recipe is simply skipped.
+# A struck object rings at SEVERAL frequencies at once, and they are not a
+# harmonic series -- a bar or a shell has inharmonic modes, which is exactly why a
+# cuff reads as metal and not as a note. One resonator is one tone colour, and one
+# tone colour over a whole train of hits is the sound of a filter rather than the
+# sound of a thing.
+#
+# Ratios are deliberately irrational-ish. Integer multiples would make a pitched
+# tone, which is a different and worse kind of fake. Higher modes get less gain and
+# a lower Q, because in a real object they are both weaker and more damped.
+#
+# The upper-mode gains are a MEASURED TRADE, not a guess. Swept against modal
+# density (count of spectral peaks) and against how far the cluster drags the
+# centroid off what each recipe was tuned to as a single resonator:
+#
+#     gain scale   1.00   0.75   0.60   0.50   0.40   0.30
+#     modes        478    381    326    284    238    208     (was 200)
+#     centroid     1.61x  1.52x  1.45x  1.40x  1.35x  1.28x
+#
+# 0.60 keeps about 1.6x the spectral density of the single resonator while moving
+# the centre 1.45x rather than 1.61x. Density is the realism; the centroid shift is
+# a change to a character that was already tuned, so it is spent, not maximised.
+_MODES = ((1.00, 1.000, 1.00), (1.48, 0.270, 0.75),
+          (2.13, 0.132, 0.55), (3.31, 0.060, 0.40))
+
+
 def _band(x, sr, f0, q=4.0, order=3):
-    """Resonant band-pass by spectral envelope. One pass over the whole buffer.
+    """Resonant filter by spectral envelope: a mode cluster around f0, one pass.
 
     ORDER 3, which was measured. A single resonator's skirt falls off as 1/f, and
     against noise -- equal energy per Hz, spread over 20 kHz -- enough survives above
     the centre that the result is bright whatever f0 says: footsteps aimed at 130 Hz
     came back with a spectral centroid of 3.6 kHz, and every recipe sounded like the
-    same hiss. Cubing the response is what makes f0 mean something."""
+    same hiss. Cubing the response is what makes f0 mean something.
+
+    The f0/q interface is unchanged, so every recipe gets the mode cluster without
+    being rewritten -- this is the one place all 21 of them pass through."""
     n = int(x.shape[-1])
     X = torch.fft.rfft(x)
     f = torch.fft.rfftfreq(n, d=1.0 / sr).clamp(min=1.0)
-    resp = (1.0 / torch.sqrt(1.0 + (q * (f / f0 - f0 / f)) ** 2)) ** int(order)
+    resp = torch.zeros_like(f)
+    for ratio, gain, qs in _MODES:
+        fc = float(f0) * ratio
+        if fc >= sr * 0.45:            # past Nyquist is not a mode, it is aliasing
+            continue
+        qq = max(0.7, float(q) * qs)
+        # BANDWIDTH COMPENSATION, and it is not optional. A resonator's absolute
+        # bandwidth is fc/Q, so a mode an octave up passes twice the noise for the
+        # same gain -- and these are excited by noise, which has equal energy per
+        # Hz. Uncompensated, the cluster came out about 2x brighter across every
+        # recipe and put a footstep at 428 Hz against the 130 it is aimed at, which
+        # is the "a footstep is a hiss" failure the order-3 skirt was fixed for.
+        # Energy through a mode goes as gain^2 * fc / Q, so scaling the gain by
+        # sqrt(Q/fc) makes the numbers above mean the loudness they look like.
+        g_i = float(gain) * math.sqrt(float(qs) / float(ratio))
+        # ...and the cluster itself scales with Q, because Q IS how much the thing
+        # rings. Metal at q 5-8 has strong upper modes; a footstep at q 1.6 is a
+        # broadband thud on a floor and has almost none. Applied only above the
+        # fundamental, so a low-Q recipe collapses back to the single resonator it
+        # was tuned as -- which is what keeps a footstep at 130 Hz a footstep.
+        if ratio > 1.0:
+            g_i *= min(1.0, float(q) / 4.0)
+        resp = resp + g_i * (1.0 / torch.sqrt(
+            1.0 + (qq * (f / fc - fc / f)) ** 2)) ** int(order)
     return torch.fft.irfft(X * resp, n=n)
 
 
 def _hits(n, sr, g, times, decay, amp=1.0):
     """Decaying noise bursts at the given times (seconds). The excitation for a
-    click, a rattle, a footfall -- everything percussive here is this plus a band."""
+    click, a rattle, a footfall -- everything percussive here is this plus a band.
+
+    EVERY HIT DIFFERS. They used to be identical -- same level, same decay, same
+    everything -- and thirty-three identical clicks is not a chain, it is a machine.
+    Nothing gives a synthetic sound away faster: the ear is far better at spotting a
+    repeat than at judging a timbre, so a rattle whose links are all the same reads
+    as fake even when each single link sounds right.
+
+    Level varies about +/-5 dB and decay by about a third, which is the spread a
+    real repeated contact has from hitting at a different point and angle."""
     x = torch.zeros(n)
-    L = max(4, int(decay * sr))
-    env = torch.exp(-torch.arange(L, dtype=torch.float32) / max(decay * sr / 4.0, 1.0))
     for t in times:
         i = int(t * sr)
         if i < 0 or i >= n:
             continue
+        a = float(amp) * float(torch.exp((torch.rand(1, generator=g) - 0.5) * 1.1))
+        d = float(decay) * float(1.0 + (torch.rand(1, generator=g) - 0.5) * 0.7)
+        L = max(4, int(d * sr))
         m = min(L, n - i)
-        x[i:i + m] += torch.randn(m, generator=g) * env[:m] * float(amp)
+        env = torch.exp(-torch.arange(m, dtype=torch.float32)
+                        / max(d * sr / 4.0, 1.0))
+        x[i:i + m] += torch.randn(m, generator=g) * env * a
     return x
+
+
+def _room(x, sr, secs=0.11, wet=0.16, seed=0):
+    """A small room around the sound. Convolution with a decaying noise tail plus
+    three early reflections.
+
+    The dryness was the loudest tell. Every one of these was rendered anechoic --
+    no reflections, no tail -- and nothing in the physical world sounds like that;
+    the ear reads a bone-dry impact as "not in a place" before it judges anything
+    else about it. The tail is rolled off above 2.2 kHz because a real room absorbs
+    highs faster than lows, and a bright tail is its own kind of wrong.
+
+    Linear convolution, not circular: the transform is padded past n + L so a tail
+    cannot wrap round and appear before the hit that caused it."""
+    n = int(x.shape[-1])
+    L = max(8, int(float(secs) * sr))
+    if n < 8 or not (float(wet) > 0.0):
+        return x
+    g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
+    t = torch.arange(L, dtype=torch.float32)
+    ir = torch.randn(L, generator=g) * torch.exp(-t / max(L / 5.0, 1.0))
+    ir[0] = 0.0
+    for d, a in ((0.0071, 0.50), (0.0133, 0.34), (0.0211, 0.23)):
+        i = int(d * sr)
+        if i < L:
+            ir[i] += a
+    m = 1
+    while m < n + L:
+        m <<= 1
+    F = torch.fft.rfftfreq(m, d=1.0 / sr).clamp(min=1.0)
+    IR = torch.fft.rfft(ir, n=m) / (1.0 + F / 2200.0)
+    wet_sig = torch.fft.irfft(torch.fft.rfft(x, n=m) * IR, n=m)[:n]
+    p, q = float(wet_sig.abs().max()), float(x.abs().max())
+    if not (p > 0.0) or not torch.isfinite(wet_sig).all():
+        return x
+    wet_sig = wet_sig * (q / p)
+    return x * (1.0 - float(wet)) + wet_sig * float(wet)
 
 
 def _even(start, count, gap, jitter, g):
@@ -2161,6 +2261,10 @@ def foley_for(phrase, n, sr, seed=0):
             return None
         g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
         y = make(n, sr, g, n / float(sr))
+        # The room goes on LAST and on everything, which is what a room does: it is
+        # a property of the place, not of the prop. Applied here rather than in the
+        # recipes so all 21 get it and none can forget it.
+        y = _room(y, sr, seed=int(seed) + 977)
         peak = float(y.abs().max())
         if not (peak > 0.0) or not torch.isfinite(y).all():
             return None
