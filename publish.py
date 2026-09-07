@@ -31,11 +31,16 @@ FILES = [
     "README.md",            # carries the repo-card metadata in its front matter
     "__init__.py",
     "sampler.py",
+    # sampler.py IMPORTS this. Leaving it off the list published a mirror whose
+    # sampler could not load at all -- the verify step passed, because it only
+    # checks that the files it knows about match.
+    "engine.py",
     "shot_length.py",
     "inspector.py",
     "overlay.py",
     "test_node.py",
     "test_smoke.py",
+    "test_engine.py",
     "test_readme.py",
 ]
 
