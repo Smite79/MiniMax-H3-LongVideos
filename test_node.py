@@ -831,6 +831,36 @@ def test_the_audio_branch_has_its_own_last_step():
     check("a bad shift is harmless", S.last_audio_sigma(4, None) == 0.0)
 
 
+def test_the_babble_advice_points_the_right_way():
+    """The report that fires when the audio branch is babbling told you to make it
+    worse.
+
+    sigma = a / (steps + a - 1) rises monotonically with a, so a low step count
+    needs a SMALLER shift_audio. The note scaled it as 3.0 * 8 / steps, which at the
+    4 steps a distilled LoRA wants advised 6.0 -- taking the last step from 0.50 to
+    0.67, from half the audio denoising in one jump to two thirds. The suite covered
+    last_audio_sigma, which was right, and never read the advice built on it."""
+    for _n in (2, 3, 4, 6, 8, 12, 16):
+        _a = S.shift_audio_for(_n)
+        check(f"{_n} steps: advice is settable", 1.0 <= _a <= 20.0)
+        check(f"{_n} steps: advice never raises the last step",
+              S.last_audio_sigma(_n, _a) <= S.last_audio_sigma(_n, 3.0) + 1e-9
+              or _n > 8)
+    # It reproduces the default exactly where the default is what you are running.
+    check("8 steps rounds back to 3.0", abs(S.shift_audio_for(8) - 3.0) < 1e-6)
+    check("...and 4 steps asks for less, not more", S.shift_audio_for(4) < 3.0)
+    check("...landing on the default's own last step",
+          abs(S.last_audio_sigma(4, S.shift_audio_for(4))
+              - S.DEFAULT_LAST_AUDIO_SIGMA) < 1e-6)
+    # Fewer steps -> smaller shift. The direction is the whole point of the fix.
+    check("the advice falls as steps fall",
+          S.shift_audio_for(4) < S.shift_audio_for(6) < S.shift_audio_for(8))
+    # Where the widget floor binds it stays honest rather than printing 0.4.
+    check("clamped at the widget floor", S.shift_audio_for(2) == 1.0)
+    check("a bad step count is harmless", S.shift_audio_for(None) == 0.0)
+    check("an impossible target is harmless", S.shift_audio_for(8, 1.0) == 0.0)
+
+
 def test_silence_reports_what_happened():
     """The silence note reported the FLAG, not the result.
 
@@ -3772,6 +3802,7 @@ def main():
     test_a_comma_separated_list_is_a_list_of_actions()
     test_a_short_action_gets_the_whole_shot()
     test_a_dropped_garment_is_not_a_fall()
+    test_the_babble_advice_points_the_right_way()
     test_silence_reports_what_happened()
     test_the_audio_branch_has_its_own_last_step()
     test_the_addressee_is_not_the_speaker()

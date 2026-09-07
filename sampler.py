@@ -2851,6 +2851,42 @@ def last_audio_sigma(steps, shift_audio):
     return a / (n + a - 1.0) if (n + a - 1.0) > 0 else 0.0
 
 
+# What shift_audio 3.0 leaves on the last step at the 8 this node defaults to.
+DEFAULT_LAST_AUDIO_SIGMA = 0.30
+
+
+def shift_audio_for(steps, target=None):
+    """The shift_audio that reproduces a chosen last-step sigma at THIS step count.
+
+    Inverting sigma = a / (steps + a - 1):
+
+        a = sigma * (steps - 1) / (1 - sigma)
+
+    The DIRECTION matters more than the arithmetic. sigma rises monotonically with
+    shift_audio -- d/da = (steps - 1) / (steps + a - 1)**2, positive for every step
+    count above one -- so fewer steps need a SMALLER shift_audio, not a larger one.
+
+    The note this feeds scaled the other way: 3.0 * 8 / steps, which at the 4 steps
+    a distilled LoRA wants advised 6.0 and took the last step from 0.50 to 0.67.
+    That is the babble dial turned the wrong way, printed on the one report that
+    only fires when somebody is already hearing babble. Nothing caught it because
+    the tests covered last_audio_sigma, which was right, and not the advice.
+
+    Clamped to the widget's own range so the number printed is one that can be
+    typed in; where the floor binds, the caller reports the sigma it really gives
+    rather than the one that was asked for.
+    """
+    s = DEFAULT_LAST_AUDIO_SIGMA if target is None else float(target)
+    try:
+        n = max(1, int(steps))
+    except (TypeError, ValueError):
+        return 0.0
+    if not 0.0 < s < 1.0:
+        return 0.0
+    lo, hi = _WIDGET_RANGE["shift_audio"][1], _WIDGET_RANGE["shift_audio"][2]
+    return min(max(s * (n - 1) / (1.0 - s), lo), hi)
+
+
 def apply_h3_model_sampling(model, shift_video, shift_audio):
     """Apply H3's dual video/audio flow schedule from INSIDE the node so a missing
     upstream patch can't silently gibberish the audio.
@@ -8447,6 +8483,9 @@ class H3LongVideos:
         # The audio branch's own last step. Reported whenever it is steep, because
         # shift_video is the dial people reach for and it does not touch this.
         _last_a = last_audio_sigma(steps, shift_audio)
+        # Never advise RAISING it: the target is a ceiling on the last step, not a
+        # setting to move towards from below.
+        _fix_a = min(shift_audio_for(steps), float(shift_audio or 0.0) or 1.0)
         if _last_a > 0.4:
             notes.append(
                 f"the audio branch still has sigma {_last_a:.2f} to clear on its FINAL "
@@ -8456,9 +8495,11 @@ class H3LongVideos:
                 f"voice. It is the step where babble appears. shift_VIDEO does not "
                 f"change this: time_shift_sigma inverts the video shift and re-applies "
                 f"the audio one, so only the step count and shift_audio matter. "
-                f"shift_audio {3.0 * 8 / max(int(steps), 1):.1f} at {int(steps)} steps "
-                f"gives the same last step as the default 3.0 does at 8; "
-                f"sigma = shift_audio / (steps + shift_audio - 1)")
+                f"LOWER shift_audio or raise steps -- sigma rises with shift_audio, "
+                f"so raising it makes this worse. shift_audio {_fix_a:.2f} at "
+                f"{int(steps)} steps leaves {last_audio_sigma(steps, _fix_a):.2f}, "
+                f"against the {DEFAULT_LAST_AUDIO_SIGMA:.2f} the default 3.0 leaves "
+                f"at 8 steps; sigma = shift_audio / (steps + shift_audio - 1)")
         # Probed whenever silencing is ON, not only when a shot is silent today:
         # an ambient bed can cover every shot, and the answer still matters for
         # the moment one is not covered -- and for knowing the wiring is sound.
