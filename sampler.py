@@ -2001,6 +2001,144 @@ def synth_ambient(phrase, n, sr, seed=0, channels=2):
         return None                        # a bed is a nicety, a render is not
 
 
+# FOLEY: the sounds an action MAKES, built and mixed rather than asked of the model.
+#
+# auto_sound already reads these out of the beat, but only as TEXT in the prompt --
+# and text can never open a shot's audio branch, because an open branch on a joint
+# model invents a voice. So a wordless shot staging cuffs going on was pinned to
+# silence and the cue was dropped: the one shot whose whole point is a sound made
+# none, and the only way to get it was to write the sound into the beat by hand.
+#
+# Mixing solves that the same way the ambient bed does. A built sound asks nothing
+# of the model, so it cannot babble, and it goes into THAT SHOT'S span of the
+# soundtrack rather than under the whole film.
+#
+# HONEST LIMIT, and it is worth stating rather than discovering: this is synthesis,
+# not a recording. It reads as a click, a rattle, a rustle -- serviceable and in the
+# right place, not a foley stage. Wire a recording to ambient_audio, or write the
+# sound into the beat and let the model make it, where that is not enough.
+#
+# NOTHING VOCAL IS EVER BUILT. Breathing and effort are in the sound table too, and
+# they are a VOICE: the one thing this file must not manufacture. They are absent
+# from the recipes below on purpose, and a phrase with no recipe is simply skipped.
+def _band(x, sr, f0, q=4.0, order=3):
+    """Resonant band-pass by spectral envelope. One pass over the whole buffer.
+
+    ORDER 3, which was measured. A single resonator's skirt falls off as 1/f, and
+    against noise -- equal energy per Hz, spread over 20 kHz -- enough survives above
+    the centre that the result is bright whatever f0 says: footsteps aimed at 130 Hz
+    came back with a spectral centroid of 3.6 kHz, and every recipe sounded like the
+    same hiss. Cubing the response is what makes f0 mean something."""
+    n = int(x.shape[-1])
+    X = torch.fft.rfft(x)
+    f = torch.fft.rfftfreq(n, d=1.0 / sr).clamp(min=1.0)
+    resp = (1.0 / torch.sqrt(1.0 + (q * (f / f0 - f0 / f)) ** 2)) ** int(order)
+    return torch.fft.irfft(X * resp, n=n)
+
+
+def _hits(n, sr, g, times, decay, amp=1.0):
+    """Decaying noise bursts at the given times (seconds). The excitation for a
+    click, a rattle, a footfall -- everything percussive here is this plus a band."""
+    x = torch.zeros(n)
+    L = max(4, int(decay * sr))
+    env = torch.exp(-torch.arange(L, dtype=torch.float32) / max(decay * sr / 4.0, 1.0))
+    for t in times:
+        i = int(t * sr)
+        if i < 0 or i >= n:
+            continue
+        m = min(L, n - i)
+        x[i:i + m] += torch.randn(m, generator=g) * env[:m] * float(amp)
+    return x
+
+
+def _even(start, count, gap, jitter, g):
+    """Click times, with a little jitter so a rattle is not a drum machine."""
+    j = (torch.rand(int(count), generator=g) - 0.5) * 2.0 * float(jitter)
+    return [float(start + i * gap + j[i]) for i in range(int(count))]
+
+
+# phrase -> how to build it. `secs` is the shot length, so a rattle runs the shot
+# while a ratchet is one event placed a third of the way in.
+_FOLEY = {
+    "cuffs ratcheting closed":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.33, 9, 0.030, 0.004, g),
+                                           0.020), sr, 3200, 6.0),
+    "cuffs knocking":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.25, 4, 0.22, 0.06, g),
+                                           0.035), sr, 2600, 5.0),
+    "chain links dragging":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g,
+                                           _even(0.05, max(4, int(secs * 11)), 0.09, 0.035, g),
+                                           0.028), sr, 4200, 7.0),
+    "restraints pulling taut":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 3, 0.35, 0.10, g),
+                                           0.30), sr, 700, 2.5),
+    "rope creaking as it goes tight":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 4, 0.28, 0.09, g),
+                                           0.28), sr, 620, 2.5),
+    "a lock snapping shut":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.5], 0.045), sr, 2100, 5.0),
+    "a metal bolt sliding":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.4, 6, 0.035, 0.010, g),
+                                           0.030), sr, 1800, 4.0),
+    "keys on a ring":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 7, 0.055, 0.025, g),
+                                           0.030), sr, 5200, 8.0),
+    "a zip running":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.35, 70, 0.0065, 0.0012, g),
+                                           0.006), sr, 4800, 5.0),
+    "velcro tearing open":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.35, 120, 0.004, 0.0015, g),
+                                           0.005), sr, 3000, 1.6),
+    "tape pulling off":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 90, 0.007, 0.002, g),
+                                           0.008), sr, 2400, 2.0),
+    "fabric rustling":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.1, max(3, int(secs * 3)), 0.30,
+                                                           0.12, g), 0.10), sr, 2800, 1.8),
+    "blades through fabric":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 5, 0.18, 0.05, g),
+                                           0.09), sr, 3600, 2.2),
+    "a buckle and leather creaking":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 4, 0.20, 0.07, g),
+                                           0.12), sr, 1200, 3.0),
+    "footsteps":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.25, max(2, int(secs / 0.55)),
+                                                           0.55, 0.05, g), 0.10), sr, 130, 1.6),
+    "something dragging on the floor":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.2, max(6, int(secs * 8)),
+                                                           0.12, 0.05, g), 0.14), sr, 420, 1.4),
+    "something landing":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.5], 0.14), sr, 110, 1.5),
+    "a sharp impact":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.45], 0.07), sr, 900, 1.5),
+    "a door on its hinges":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 8, 0.09, 0.03, g),
+                                           0.13), sr, 780, 6.0),
+    "water":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.05, max(8, int(secs * 14)), 0.07,
+                                                           0.03, g), 0.06), sr, 1400, 1.5),
+}
+
+
+def foley_for(phrase, n, sr, seed=0):
+    """Build the sound `phrase` names, `n` samples long. None when there is no
+    recipe -- which includes every vocal phrase, deliberately."""
+    try:
+        n, sr = int(n), int(sr)
+        make = _FOLEY.get(str(phrase or ""))
+        if make is None or n < 64 or sr <= 0:
+            return None
+        g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
+        y = make(n, sr, g, n / float(sr))
+        peak = float(y.abs().max())
+        if not (peak > 0.0) or not torch.isfinite(y).all():
+            return None
+        return y * (0.7 / peak)
+    except Exception:
+        return None
+
+
 def plain_bed(n, sr, seed=0, channels=2):
     """The last-resort bed: noise and a moving average, and nothing else.
 
@@ -5784,6 +5922,7 @@ _WIDGET_RANGE = {
     "upscale_batch": (4, 1, 64, int),
     "pace": (1.0, 0.25, 2.0, float),
     "ambient_level": (0.25, 0.0, 1.0, float),
+    "foley_level": (0.35, 0.0, 1.0, float),
 }
 
 
@@ -6271,6 +6410,29 @@ class H3LongVideos:
                                "If the sum would clip, the whole mix is scaled down "
                                "rather than clipped, because clipping distorts the "
                                "line, which is the part worth keeping."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "foley_level": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Build the sound an action makes, on shots that have "
+                               "no line.\n\n"
+                               "auto_sound already reads those sounds out of the beat "
+                               "-- cuffs, a chain, a zip, footsteps -- but only as "
+                               "TEXT in the prompt, and text can never open a shot's "
+                               "audio branch, because an open branch on a joint model "
+                               "invents a voice. So a wordless shot staging cuffs "
+                               "going on was pinned to silence and the cue was "
+                               "dropped: the one shot whose point is a sound made "
+                               "none, and the only fix was writing the sound into the "
+                               "beat by hand.\n\n"
+                               "This builds it and mixes it into THAT SHOT'S span "
+                               "instead. It asks nothing of the model, so it cannot "
+                               "babble. Shots that already have a line are left "
+                               "alone -- their branch is open and making its own "
+                               "sound from the same prose, and building over it would "
+                               "double every footfall.\n\n"
+                               "It is synthesis, not a recording: a click, a rattle, "
+                               "a rustle, in the right place. Nothing vocal is ever "
+                               "built. 0 turns it off; needs auto_sound on."}),
             },
         }
 
@@ -6296,7 +6458,7 @@ class H3LongVideos:
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
-            ambient_audio=None, ambient_level=0.25, **_removed):
+            ambient_audio=None, ambient_level=0.25, foley_level=0.35, **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
@@ -6442,6 +6604,7 @@ class H3LongVideos:
         # the removing shot too: the keyframe already shows the garment on at the
         # start, and a description saying it is still worn is what puts it back.
         shots, speech, gone, shown = [], [], [], []
+        shot_events = []          # per shot: the sounds its action makes
         sounded = []                # beats that ask for a sound of their own
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
@@ -7535,6 +7698,13 @@ class H3LongVideos:
             shots.append(shot_text)
             shot_cast.append(list(active) if character_guard else [])
             speech.append(_speaks)
+            # The event sounds this beat implies, kept per shot so they can be
+            # BUILT and mixed into that shot's span later. `heard` is not it:
+            # that one has the bed and the room tone folded in and is emptied
+            # on a silenced shot, which is precisely the shot this is for.
+            shot_events.append(list(sounds_for(body, held=[_state_key(t)
+                                                           for t, _ in _pairs]))
+                               if auto_sound else [])
             # What the AUTHOR wrote, and nothing this file worked out. See above --
             # effort counts, because the verb staging it is theirs.
             #
@@ -8633,6 +8803,46 @@ class H3LongVideos:
                                "-- so what went under is the room those things are "
                                "in, not the things themselves. Wire a recording to "
                                "ambient_audio if you want the events. ")
+        # FOLEY, into each shot's own span. Only shots pinned to SILENCE: an open
+        # branch is already making its own sound from the same prose, and building
+        # over that would double every footfall. These are the shots that had
+        # nothing -- a wordless beat staging cuffs going on, silent because opening
+        # its branch is what babbles.
+        _foley_on = []
+        if auto_sound and float(foley_level or 0.0) > 0.0 and shot_events:
+            _at = 0
+            for _i, _w in enumerate(aud_out):
+                _len = int(_w.shape[-1])
+                _lo, _hi, _at = _at, _at + _len, _at + _len
+                if _i >= len(shot_events) or _i >= len(speech):
+                    continue
+                _pinned = bool(silence_nonspeech and not speech[_i]
+                               and not (sounded[_i] if _i < len(sounded) else False))
+                if not _pinned or _len < 64:
+                    continue
+                _made = []
+                for _ph in shot_events[_i]:
+                    _fx = foley_for(_ph, _len, int(sr), seed=int(seed) + _i)
+                    if _fx is None:
+                        continue
+                    audio[..., _lo:_hi] = (audio[..., _lo:_hi]
+                                           + _fx.to(audio.dtype).unsqueeze(0)
+                                           * float(foley_level))
+                    _made.append(_ph)
+                if _made:
+                    _foley_on.append((_i + 1, _made))
+        if _foley_on:
+            notes.append(
+                "sound built into the shot itself on "
+                + "; ".join(f"shot {n}: {', '.join(m)}" for n, m in _foley_on)
+                + ". Those shots have no line, so their audio branch is pinned to "
+                  "silence and the model cannot make these -- auto_sound puts them in "
+                  "the prompt, and prompt text can never open a branch, so the cue was "
+                  "being dropped on exactly the shots whose point is a sound. Built and "
+                  "mixed instead, which asks nothing of the model and so cannot babble. "
+                  "It is synthesis, not a recording: it reads as a click, a rattle, a "
+                  "rustle, in the right place. Nothing vocal is ever built. "
+                  "foley_level sets how loud, 0 turns it off")
         audio, _bed_note = mix_ambient(audio, sr, _bed_in, ambient_level)
         if _bed_note:
             notes.append(_built + _bed_note if _built else _bed_note)

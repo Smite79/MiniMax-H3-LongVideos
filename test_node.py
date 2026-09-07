@@ -1163,6 +1163,42 @@ def test_a_built_bed_always_goes_on():
     check("it is low, not a hiss", _centroid(y) < 400)
 
 
+def test_the_sound_of_an_action_can_be_built():
+    """auto_sound puts an action's sound in the PROMPT, and prompt text can never
+    open a shot's audio branch -- so a wordless beat staging cuffs going on was
+    pinned to silence and the cue was dropped. These are built and mixed instead,
+    which asks nothing of the model and so cannot babble."""
+    sr, n = 44100, 44100 * 3
+    y = S.foley_for("cuffs ratcheting closed", n, sr, seed=3)
+    check("a recipe builds", y is not None)
+    check("...at the asked-for length", int(y.numel()) == n)
+    check("...finite", bool(torch.isfinite(y).all()))
+    check("...and reproduces",
+          torch.allclose(y, S.foley_for("cuffs ratcheting closed", n, sr, seed=3)))
+    # NOTHING VOCAL IS EVER BUILT. Breathing and effort are in the sound table and
+    # they are a voice, which is the one thing this file must not manufacture.
+    check("effort is never built",
+          S.foley_for("unsteady breathing, with gasps and moans of effort", n, sr) is None)
+    check("breathing is never built", S.foley_for("breathing", n, sr) is None)
+    check("an unknown phrase builds nothing", S.foley_for("a wobble", n, sr) is None)
+    # Each recipe has to land near its own centre, or every prop sounds the same.
+    # A single resonator's skirt falls off as 1/f, and against noise enough survives
+    # above the centre that footsteps aimed at 130 Hz measured 3.6 kHz. Order 3 is
+    # what makes f0 mean anything.
+    want = {"footsteps": 130, "something landing": 110, "cuffs knocking": 2600,
+            "cuffs ratcheting closed": 3200, "chain links dragging": 4200,
+            "keys on a ring": 5200, "a zip running": 4800}
+    for phrase, f0 in want.items():
+        c = _centroid(S.foley_for(phrase, n, sr, seed=3).unsqueeze(0))
+        check(f"'{phrase}' sits near {f0} Hz", 0.45 * f0 <= c <= 2.4 * f0)
+    # ...and low things must actually be low, or a footstep is a hiss.
+    check("a footstep is far below a key",
+          _centroid(S.foley_for("footsteps", n, sr, 3).unsqueeze(0)) * 4
+          < _centroid(S.foley_for("keys on a ring", n, sr, 3).unsqueeze(0)))
+    check("nothing clips", float(S.foley_for("chain links dragging", n, sr, 3).abs().max())
+          <= 0.701)
+
+
 def test_a_beat_names_the_sound_its_props_make():
     """The event sounds, which are a different system from the mixed ambient bed --
     that one builds TONE and cannot make a zipper. These go in the PROMPT, so the
@@ -3604,7 +3640,7 @@ def test_schema():
     # hold_scene_state.
     # A ceiling, not a target: the old node had 38 and nobody could find anything.
     # Every one added since the rebuild answers a reported failure.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 36)
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 37)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -3612,10 +3648,10 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-10:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-11:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
-                              "ambient_audio", "ambient_level"])
+                              "ambient_audio", "ambient_level", "foley_level"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",
@@ -3670,6 +3706,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_the_sound_of_an_action_can_be_built()
     test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()
     test_a_built_bed_always_goes_on()

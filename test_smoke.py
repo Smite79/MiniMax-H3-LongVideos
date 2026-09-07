@@ -3237,6 +3237,46 @@ def test_the_ambient_bed_reaches_the_soundtrack():
           "have no quoted line and no sound described" in info)
 
 
+def test_built_sound_lands_in_the_right_shot():
+    """END TO END, and testing the PLACEMENT rather than the note. The note names the
+    shot from the same loop that does the mixing, so it would read correctly even if
+    the span arithmetic were wrong. foley_for is replaced with a flat marker, which
+    shows up as a DC offset in exactly the samples it was written to."""
+    print("\n=== built sound lands in the right shot ===")
+    mem = "Ana: she, 28, grey coat.\nGuard: he, 40, uniform."
+    P = ("A concrete room.\n\nAna stands by the table.\n\n"
+         "The guard closes the cuffs around her wrists.\n\n"
+         # The speaking shot STAGES A SOUND too, so leaving it alone is a real
+         # assertion: its branch is open and already making that sound from the
+         # same prose, and building over it would double every rattle.
+         "The guard drags the chain and says: \"Sit down.\"")
+    _real = S.foley_for
+    try:
+        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
+        out = run_node(P, character_memory=mem, ambient_level=0.0, foley_level=0.5)
+    finally:
+        S.foley_for = _real
+    wav, info, per_shot = out[1]["waveform"], out[2], out[4]
+    check("info names the shot", "sound built into the shot itself" in info)
+    # The fake model is random with mean ~0, so a span carrying the marker has a
+    # mean near +0.5 and every other span sits near 0.
+    n_shots = out[6]
+    span = int(wav.shape[-1]) // max(n_shots, 1)
+    means = [float(wav[..., i * span:(i + 1) * span].mean()) for i in range(n_shots)]
+    hot = [i + 1 for i, m in enumerate(means) if m > 0.25]
+    check("shot 2 carries the built sound", 2 in hot, f"means {[round(m,2) for m in means]}")
+    check("the speaking shot does not", 3 not in hot,
+          f"means {[round(m,2) for m in means]}")
+    check("the shot with nothing to sound does not", 1 not in hot,
+          f"means {[round(m,2) for m in means]}")
+    # The switches that turn it off.
+    off = run_node(P, character_memory=mem, ambient_level=0.0, foley_level=0.0)[2]
+    check("foley_level 0 builds nothing", "sound built into the shot" not in off)
+    na = run_node(P, character_memory=mem, ambient_level=0.0, foley_level=0.5,
+                  auto_sound=False)[2]
+    check("auto_sound off builds nothing", "sound built into the shot" not in na)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3358,6 +3398,7 @@ def main():
     test_the_anchor_is_not_read_as_a_room()
     test_a_garment_does_not_appear_at_the_first_frame()
     test_the_ambient_bed_reaches_the_soundtrack()
+    test_built_sound_lands_in_the_right_shot()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
