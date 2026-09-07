@@ -1,3 +1,7 @@
+# H3-LongVideos -- https://github.com/Smite79/MiniMax-H3-LongVideos
+# Copyright (c) 2026 Smite79. All rights reserved.
+# Redistribution, in whole or in part, requires written permission.
+# This notice may not be removed or altered. See LICENSE.
 """Publish this node to BOTH remotes, and verify what landed.
 
     python test_node.py && python test_smoke.py && python test_readme.py
@@ -29,6 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FILES = [
     "config.json",          # the Hub's download counter reads this. Do not drop it.
     "README.md",            # carries the repo-card metadata in its front matter
+    "LICENSE",              # the terms. Shipping the node without them is the bug.
     "__init__.py",
     "sampler.py",
     # sampler.py IMPORTS this. Leaving it off the list published a mirror whose

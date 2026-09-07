@@ -1,0 +1,53 @@
+H3-LongVideos — Licence
+Copyright (c) 2026 Smite79. All rights reserved.
+
+This licence applies to every version published on or after 2026-09-07.
+
+WHAT YOU MAY DO
+
+  1. Download and use this software, in unmodified or modified form, for your
+     own purposes, personal or commercial. Rendering with it, and whatever you
+     render with it, is yours and is not covered by this licence.
+
+  2. Modify your own copy.
+
+  3. Submit changes back to the original project.
+
+WHAT YOU MAY NOT DO WITHOUT WRITTEN PERMISSION
+
+  4. Redistribute this software, in whole or in part, modified or unmodified.
+     That includes publishing it to any repository, registry, model hub, node
+     manager, marketplace, or mirror; bundling it inside another package,
+     product, image, or installer; and hosting it as a service.
+
+  5. Remove, alter, or obscure the copyright notice above, this licence, or the
+     attribution in the source files — including where a permitted redistribution
+     has been agreed.
+
+  6. Represent this software, or a derivative of it, as your own work.
+
+ASKING
+
+  Permission for anything under 4 is granted case by case and is usually given
+  for things like inclusion in a node manager. Ask via the project's GitHub
+  issues at https://github.com/Smite79/MiniMax-H3-LongVideos.
+
+EARLIER VERSIONS
+
+  Versions published before 2026-09-07 were released under Apache License 2.0.
+  That grant is irrevocable for those versions: copies obtained under it stay
+  under it, and this licence does not and cannot withdraw it retroactively. It
+  governs this version and every version after it.
+
+  Apache 2.0 also required attribution, so a copy of an earlier version
+  republished with the copyright notice stripped was already in breach of the
+  licence it was taken under.
+
+NO WARRANTY
+
+  This software is provided "as is", without warranty of any kind, express or
+  implied, including but not limited to the warranties of merchantability,
+  fitness for a particular purpose, and non-infringement. In no event shall the
+  copyright holder be liable for any claim, damages, or other liability, whether
+  in an action of contract, tort, or otherwise, arising from, out of, or in
+  connection with the software or the use or other dealings in the software.

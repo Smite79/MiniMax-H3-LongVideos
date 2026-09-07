@@ -140,6 +140,28 @@ def main():
     check("every suite is on the not-shipped list: "
           + (", ".join(_loose) or "none loose"), not _loose)
 
+    # THE TERMS SHIP AND THE NOTICES STAY. Attribution is only worth anything if
+    # it is actually in what people download: a LICENSE nobody receives protects
+    # nothing, and a header that quietly stops being added to new modules leaves
+    # the newest code the least protected.
+    _lic = os.path.join(_HERE, "LICENSE")
+    check("there is a LICENSE file", os.path.isfile(_lic))
+    if os.path.isfile(_lic):
+        _terms = io.open(_lic, encoding="utf-8").read()
+        check("...naming the holder", "Smite79" in _terms)
+        check("...withholding redistribution", "Redistribute this software" in _terms)
+        # The Apache 2.0 grant on earlier versions cannot be withdrawn, and saying
+        # so in the licence is what keeps it honest rather than merely quiet.
+        check("...and being straight about the earlier grant",
+              "Apache License 2.0" in _terms and "irrevocable" in _terms)
+    check("the LICENSE is published", '"LICENSE"' in _pub)
+    _runtime_files = sorted(_runtime)
+    _bare = [f for f in _runtime_files
+             if "Copyright (c) 2026 Smite79"
+             not in io.open(os.path.join(_HERE, f), encoding="utf-8").read()]
+    check("every runtime module carries the notice: "
+          + (", ".join(_bare) or "all carry it"), not _bare)
+
     print("\nRESULT: " + ("ALL PASSED" if not _FAILED
                           else f"{len(_FAILED)} FAILURE(S): " + "; ".join(_FAILED)))
     return 1 if _FAILED else 0

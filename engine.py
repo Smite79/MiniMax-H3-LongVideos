@@ -1,3 +1,7 @@
+# H3-LongVideos -- https://github.com/Smite79/MiniMax-H3-LongVideos
+# Copyright (c) 2026 Smite79. All rights reserved.
+# Redistribution, in whole or in part, requires written permission.
+# This notice may not be removed or altered. See LICENSE.
 """The prompt engine: scene state, beat by beat.
 
 WHY THIS REPLACED WHAT WAS HERE BEFORE

@@ -7,7 +7,9 @@ tags:
   - video
   - text-to-video
   - audio
-license: apache-2.0
+license: other
+license_name: h3-longvideos-no-redistribution
+license_link: LICENSE
 ---
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/smite79)
