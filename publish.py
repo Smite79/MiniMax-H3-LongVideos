@@ -38,6 +38,14 @@ FILES = [
     "shot_length.py",
     "inspector.py",
     "overlay.py",
+]
+
+# NOT PUBLISHED. The suites are how this node is developed, not how it is used:
+# nobody installing it runs them, and they are the largest thing in the repo. They
+# stay in git, where the history and the bug reports they encode belong, and off
+# the mirror people download. Anything added here is deleted from the Hub on the
+# next publish rather than quietly left behind.
+NOT_SHIPPED = [
     "test_node.py",
     "test_smoke.py",
     "test_engine.py",
@@ -80,6 +88,22 @@ def main():
         print("  %-16s %s  %s" % (name, _sha(p)[:16], "MATCH" if ok else "MISMATCH"))
 
     listing = set(api.list_repo_files(HF_REPO, repo_type="model"))
+
+    # Take down anything that should not be there. Dropping a file from FILES
+    # only stops it being UPDATED -- the copy already on the Hub stays, and stale
+    # is worse than absent because it still looks current to whoever downloads it.
+    for name in NOT_SHIPPED:
+        if name in listing:
+            api.delete_file(path_in_repo=name, repo_id=HF_REPO,
+                            repo_type="model",
+                            commit_message="not shipped: " + name)
+            print("  %-16s %s" % (name, "DELETED from the mirror"))
+    listing = set(api.list_repo_files(HF_REPO, repo_type="model"))
+    left = [n for n in NOT_SHIPPED if n in listing]
+    if left:
+        print("  STILL PRESENT:", ", ".join(left))
+        bad += len(left)
+
     print()
     print("  config.json on the Hub:", "config.json" in listing)
     if "config.json" not in listing:
