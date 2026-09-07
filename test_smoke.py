@@ -3215,6 +3215,18 @@ def test_the_ambient_bed_reaches_the_soundtrack():
     # A wired file OVERRIDES the built one rather than stacking with it.
     check("a wired bed is used instead of a built one",
           "built from the scene" not in info)
+    # WHEN THE SHAPED BED WILL NOT BUILD, the plain one goes on instead -- never
+    # nothing, and never "go and wire a file". Forced, because it should not happen
+    # on its own.
+    _real = S.synth_ambient
+    try:
+        S.synth_ambient = lambda *a, **k: None
+        fb = run_node("A tiled bathroom.\n\nHe walks in.", ambient_level=0.25)[2]
+    finally:
+        S.synth_ambient = _real
+    check("a failed shape still gets a bed", "ambient bed was laid under" in fb)
+    check("...and says it fell back", "plain fallback" in fb)
+    check("...without telling anyone to wire a file", "Wire a recording there" not in fb)
     # A description of EVENTS gets the room, and says so rather than disappointing.
     ev = run_node("A garden in the morning.\n\nHe walks in.", ambient_level=0.25)[2]
     check("an eventful description is honest about tone",

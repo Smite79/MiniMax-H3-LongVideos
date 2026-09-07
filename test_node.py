@@ -1139,6 +1139,30 @@ def _centroid(y, sr=44100):
     return float((X * f).sum() / X.sum())
 
 
+def test_a_built_bed_always_goes_on():
+    """There is a floor under the shaped bed. synth_ambient is defensive and can
+    return None, and a built bed that comes back empty would leave the output with
+    no ambience -- for which wiring a file is NOT the remedy: the built bed is the
+    feature and a file is only ever an override for a real location."""
+    sr, n = 44100, 44100 * 2
+    y = S.plain_bed(n, sr, seed=1)
+    check("the fallback builds", y is not None)
+    check("...at the asked-for shape", tuple(y.shape) == (2, n))
+    check("...and is finite", bool(torch.isfinite(y).all()))
+    check("...and reproduces", torch.allclose(y, S.plain_bed(n, sr, seed=1)))
+    check("mono works too", S.plain_bed(n, sr, 1, 1) is not None)
+    check("an impossible length is None", S.plain_bed(2, sr, 1) is None)
+    # Same level as a shaped bed, so falling back does not also change the volume.
+    r_plain = float(y.pow(2).mean().sqrt())
+    r_shaped = float(S.synth_ambient("the quiet of a house", n, sr, 1).pow(2).mean().sqrt())
+    check("it lands on the same level as a shaped bed", abs(r_plain - r_shaped) < 0.01)
+    check("...and does not clip", float(y.abs().max()) <= 0.951)
+    # A RUMBLE, not a hiss, and that needed measuring: one box-filter pass has a
+    # -13 dB first sidelobe, and against white noise enough leaks through the top of
+    # the band to put the centroid at 3.3 kHz. Three passes is sinc^3.
+    check("it is low, not a hiss", _centroid(y) < 400)
+
+
 def test_the_bed_is_built_from_the_scene():
     """No file and no second model pass: the node already reads what the room sounds
     like, and room tone is physically shaped noise, so it can be made rather than
@@ -3600,6 +3624,7 @@ def main():
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
     test_the_bed_is_built_from_the_scene()
+    test_a_built_bed_always_goes_on()
     test_an_ambient_bed_is_mixed_not_conditioned()
     test_the_loop_join_does_not_click()
     test_a_garment_going_on_has_both_ends()

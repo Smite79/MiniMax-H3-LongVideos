@@ -1960,6 +1960,46 @@ def synth_ambient(phrase, n, sr, seed=0, channels=2):
         return None                        # a bed is a nicety, a render is not
 
 
+def plain_bed(n, sr, seed=0, channels=2):
+    """The last-resort bed: noise and a moving average, and nothing else.
+
+    synth_ambient is defensive, so it can return None -- and a built bed that comes
+    back empty leaves the output with no ambience at all. Wiring a file is NOT the
+    remedy for that: the built bed is the feature, and a file is only ever an
+    override for a real location. So there is a floor under it.
+
+    Deliberately primitive. No FFT, no envelope, no recipe -- a cumulative-sum box
+    filter over white noise, which is a rumble, and which cannot fail on any input
+    the caller can hand it. It is not as good as the shaped bed and does not try to
+    be; it is the difference between a quiet room and nothing at all."""
+    try:
+        n, sr, channels = int(n), int(sr), max(1, int(channels))
+        if n < 8 or sr <= 0:
+            return None
+        g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
+        y = torch.randn((channels, n), generator=g)
+        # Box filter by cumulative sum: out[i] = mean(w[i-k:i]). k sets the corner.
+        #
+        # CASCADED THREE TIMES, which was measured rather than assumed. One pass is
+        # a sinc, whose first sidelobe is only -13 dB -- against white noise, which
+        # has equal energy per Hz, enough leaks through the whole top of the band to
+        # put the spectral centroid at 3.3 kHz. That is a hiss, not the rumble this
+        # is meant to be. Three passes is sinc^3, and the centroid lands where the
+        # description says.
+        k = max(2, min(n // 4, int(sr / 200)))          # ~200 Hz
+        for _ in range(3):
+            c = torch.cumsum(torch.nn.functional.pad(y, (k, 0)), dim=-1)
+            y = (c[..., k:] - c[..., :-k])[..., :n] / float(k)
+        rms = float(y.pow(2).mean().sqrt())
+        if not (rms > 0.0) or not torch.isfinite(y).all():
+            return None
+        y = y * (_BED_RMS / rms)
+        peak = float(y.abs().max())
+        return y * (0.95 / peak) if peak > 0.95 else y
+    except Exception:
+        return None
+
+
 def _seamless_loop(x, n, sr):
     """[C, M] -> [C, n], looped with a crossfade so the join does not click.
 
@@ -8519,20 +8559,33 @@ class H3LongVideos:
             _phrase = " ".join(p for p in (_mix_bed, _mix_room) if p)
             _synth = synth_ambient(_phrase, int(audio.shape[-1]), int(sr),
                                    seed=seed, channels=int(audio.shape[1]))
+            _fell_back = False
             if _synth is None:
-                # SAID, not swallowed. synth_ambient is defensive on purpose so a
-                # render never dies for a bed, but that turns a failure into an
+                # A shaped bed that will not build falls back to a plain one rather
+                # than to nothing. Wiring a file is NOT the remedy: the built bed is
+                # the feature and a file is only ever an override, so the floor has
+                # to be here.
+                _synth, _fell_back = plain_bed(int(audio.shape[-1]), int(sr), seed,
+                                               int(audio.shape[1])), True
+            if _synth is None:
+                # SAID, not swallowed. Both builders are defensive so a render never
+                # dies for a bed, and that would otherwise turn a failure into an
                 # output with no ambience and nothing anywhere saying why -- the
                 # exact hole _SILENCE_STATUS exists to close on the other branch.
                 notes.append(
-                    f"AMBIENT LEVEL IS {float(ambient_level):.2f} BUT NO BED WENT ON: "
-                    f"the bed could not be built for this soundtrack. Nothing is "
-                    f"wired to ambient_audio, so there is no bed at all on the "
-                    f"output. Wire a recording there to get one regardless")
+                    f"AMBIENT LEVEL IS {float(ambient_level):.2f} BUT NO BED WENT ON. "
+                    f"Both the shaped bed and the plain fallback failed to build, "
+                    f"which should not be possible on a soundtrack this node just "
+                    f"produced -- please report it")
             else:
                 _bed_in = {"waveform": _synth.unsqueeze(0), "sample_rate": int(sr)}
                 _built = (f"built from the scene, not a file: \"{_phrase}\". "
                           if _phrase else "built as a neutral room tone. ")
+                if _fell_back:
+                    _built += ("The SHAPED bed would not build, so this is the plain "
+                               "fallback -- a rumble rather than the acoustic the "
+                               "scene describes. Worth reporting: it should not "
+                               "happen. ")
                 # Said plainly rather than left to disappoint: this shapes TONE.
                 if any(w in _phrase for w in _BED_EVENTFUL):
                     _built += ("That description names EVENTS, and this builds tone "
