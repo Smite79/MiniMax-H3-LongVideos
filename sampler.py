@@ -4032,6 +4032,35 @@ def travel_in(beat):
     return (frm, via, to)
 
 
+def where_hold(here, scene):
+    """Say which room the shot is in, once the film has left the one in the scene.
+
+    The scene paragraph is stamped into EVERY shot -- it has to be, or a removal
+    has nothing to scrub -- so a script that walks from the living room to the
+    bedroom goes on opening every later shot with "A living room." while the beat
+    has them on the bed. The shot then holds two places at once, and the picture
+    settles on whichever the model weighs more heavily, differently each time.
+    That is a scene that keeps changing and resetting.
+
+    The author's scene text is NOT edited. This states where the shot is now, and
+    only where that disagrees with what the scene says, so a script that never
+    moves is untouched and costs nothing."""
+    here = (here or "").strip().lower()
+    if not here:
+        return ""
+    txt = str(scene or "")
+    if not txt.strip():
+        return ""
+    # Nothing to correct if the scene already names this room.
+    if re.search(r"\b" + re.escape(here) + r"\b", txt, re.I):
+        return ""
+    # ...and nothing to correct unless the scene names a DIFFERENT place, since a
+    # scene that names no room is not disagreeing with anything.
+    if not re.search(_PLACE, txt, re.I):
+        return ""
+    return f" This shot is in the {here}, not the room the scene text names."
+
+
 def travel_anchor(frm, via, to, here=""):
     """Say where the shot starts, what it passes, and where it ends. "" if nowhere.
 
@@ -4056,6 +4085,15 @@ def travel_anchor(frm, via, to, here=""):
 
 _IS_IN = re.compile(r"\b(?:in|inside|within|at)\s+(?:the|her|his|their|a)\s+("
                     + _PLACE + r")\b", re.I)
+
+
+def first_place(text):
+    """The first place this text names at all. "" when it names none.
+
+    place_named wants "in the kitchen"; a scene paragraph is more often just "A
+    living room." with no preposition to hang on."""
+    m = re.search(_PLACE, str(text or ""), re.I)
+    return re.sub(r"\s+", " ", m.group(0)).strip().lower() if m else ""
 
 
 def place_named(text):
@@ -5935,13 +5973,18 @@ class H3LongVideos:
         told_shots = []           # shots whose line orders somebody about
         dialogue_marked = []      # shots whose quotes became <d>...</d>
         poses = {}                # name -> the posture a beat put them in
-        here = ""                 # the place the film is currently in
+        # Seeded from the SCENE, so the first journey has somewhere to start
+        # from. Without it "walks him down the hallway to the bedroom" had a
+        # destination and no origin, and a journey stated as a destination
+        # alone is the one that renders as a cut.
+        here = place_named(scene) or first_place(scene)
         # The film's ambient bed, read from the anchor and the scene rather
         # than typed into every beat. See scene_ambient.
         ambient_bed = scene_ambient(anchor, scene) if auto_sound else ""
         ambient_shots = []        # shots given the bed
         posture_shots = []        # shots told to keep a standing posture
         travel_shots = []         # shots that move between places
+        where_shots = []          # shots in a room the scene does not name
         paced_shots = []          # shots told to spread their action
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
@@ -6514,6 +6557,11 @@ class H3LongVideos:
             # The room the next beat starts from: where this one ended, or where it
             # simply says everyone is.
             here = _to or _frm or place_named(body) or here
+            # ...and say so on later shots, because the scene paragraph still
+            # names the room they started in and is stamped into every shot.
+            _where = where_hold(here, scene) if not _travel else ""
+            if _where:
+                where_shots.append(len(shots) + 1)
             _pose_now = posture_in(body, active if character_guard and active
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
             # ...and let go of any the beat contradicts. A pose that survives an
@@ -6885,6 +6933,7 @@ class H3LongVideos:
                 (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", fall),           # a body going down needs a landing
                 (4, "travel", _travel),      # a journey needs both its ends
+                (4, "where", _where),        # ...and later shots need the new room
                 (5, "pace", _pace),          # ...and a short action needs the whole shot
                 (5, "device", _device),      # a voice that is not hers
                 (6, "moved", _moved),        # a garment left where it was put
@@ -7041,6 +7090,18 @@ class H3LongVideos:
                 f"when, never how fast: 'slowly' is a style instruction and this is "
                 f"not one. Give the beat more to do, or shorten the shot, and it "
                 f"stops being needed")
+        if where_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in where_shots)} are in a room the "
+                f"scene text does not name, so each is told which one. The scene "
+                f"paragraph is stamped into EVERY shot -- it has to be, or a removal "
+                f"has nothing to scrub -- so a script that walks from one room to "
+                f"another goes on opening every later shot with the room it started "
+                f"in, while the beat has them somewhere else. The shot then holds two "
+                f"places at once and settles on whichever the model weighs more, "
+                f"differently each time. Your scene text is not edited: move the "
+                f"location into the beats, or keep the scene general, and this stops "
+                f"being needed")
         if travel_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in travel_shots)} move between "

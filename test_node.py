@@ -1124,6 +1124,32 @@ def test_a_transitive_posture_puts_the_object_down():
                                                        cast).values())
 
 
+def test_the_room_follows_the_characters():
+    """The scene paragraph is stamped into EVERY shot, so a script that walks from
+    the living room to the bedroom goes on opening every later shot with "A living
+    room." while the beat has them on the bed. The shot holds two places at once
+    and settles on whichever the model weighs more, differently each time -- a
+    scene that keeps changing and resetting."""
+    check("a later room is stated",
+          "bedroom" in S.where_hold("bedroom", "A living room."))
+    check("...and says the scene disagrees",
+          "not the room the scene text names" in S.where_hold("bedroom",
+                                                              "A living room."))
+    # Silent where there is nothing to correct.
+    check("the scene already naming it says nothing",
+          S.where_hold("bedroom", "A bedroom with a low lamp.") == "")
+    check("a scene naming no room says nothing",
+          S.where_hold("bedroom", "Two people, late evening.") == "")
+    check("no room known, nothing said", S.where_hold("", "A living room.") == "")
+    check("no scene, nothing said", S.where_hold("bedroom", "") == "")
+    # first_place seeds the film's starting room, so the first journey has an
+    # origin -- a journey stated as a destination alone renders as a cut.
+    check("a scene's room is found without a preposition",
+          S.first_place("A living room.") == "living room")
+    check("...and with one", S.first_place("Inside the kitchen, late.") == "kitchen")
+    check("...and none where there is none", S.first_place("Two people.") == "")
+
+
 def test_a_journey_has_two_ends():
     """A beat that walks somebody from one room to another is a staged change with
     two ends, exactly like a door opening. Told only where it FINISHES, the shot
@@ -3316,6 +3342,7 @@ def main():
     test_the_wearer_is_in_the_shot()
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
+    test_the_room_follows_the_characters()
     test_a_transitive_posture_puts_the_object_down()
     test_an_action_lets_go_of_a_posture()
     test_a_posture_told_is_not_a_posture_taken()

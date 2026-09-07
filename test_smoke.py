@@ -2958,6 +2958,31 @@ def test_an_instruction_is_not_the_action():
           "still lying down" not in idle_sh[1], idle_sh[1][-90:])
 
 
+def test_the_scene_does_not_reset():
+    """END TO END: after a move, later shots are in the new room, and the journey
+    itself has both its ends."""
+    print("\n=== the scene does not reset ===")
+    mem = "Kate: she, 30, coat.\nSam: he, 34, shirt."
+    P = ("A living room.\n\nKate and Sam sit on the sofa.\n\n"
+         "Kate walks him down the hallway to the bedroom.\n\n"
+         "They sit on the bed.\n\nKate looks at him.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    info, script = out[2], out[3]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    # The journey has an origin, which it only has because `here` is seeded from
+    # the scene: stated as a destination alone it renders as a cut.
+    check("the move begins where the scene says", "begins in the living room" in sh[1])
+    check("...and ends in the new room", "ends in the bedroom" in sh[1])
+    # ...and the shots after it stay there.
+    check("the next shot is in the new room", "is in the bedroom" in sh[2])
+    check("...and so is the one after", "is in the bedroom" in sh[3])
+    check("info names them", "room the scene text does not name" in info)
+    # A script that never moves is untouched.
+    still = run_node("A living room.\n\nKate waits.\n\nKate looks up.",
+                     plan_only=True, character_memory=mem)[3]
+    check("a script that stays put says nothing", "This shot is in the" not in still)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3073,6 +3098,7 @@ def main():
     test_the_silent_latent_looks_like_silence()
     test_a_softened_handoff_is_not_a_keyframe()
     test_a_journey_reaches_the_shot()
+    test_the_scene_does_not_reset()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
