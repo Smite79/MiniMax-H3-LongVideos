@@ -3011,6 +3011,40 @@ def test_a_described_room_still_holds():
     check("...and drops the acoustic", "tiled walls ringing" not in quiet)
 
 
+def test_the_sound_clause_is_inside_the_budget():
+    """END TO END, and testing the WIRING rather than the function.
+
+    The unit test for this passed with the fix reverted, because it called
+    fit_guards directly with clauses of its own -- which says nothing about whether
+    the sound clause is actually in the list the node passes. It was appended after
+    the call for a long time, so it was the one piece of node-written text no cap
+    could reach.
+
+    The shipped budget almost never binds, so this squeezes it deliberately and
+    checks the node's own report names what went."""
+    print("\n=== the sound clause is inside the budget ===")
+    mem = "Kate: she, 30, coat, scarf.\nSam: he, 34, shirt."
+    P = ("A living room.\n\nKate and Sam sit on the sofa.\n\n"
+         "Kate takes off her scarf.\n\n"
+         "Kate walks him down the hallway to the tiled bathroom.\n\n"
+         "They stand by the sink.\n\nSam waits.")
+    floor, ratio = S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD
+    try:
+        S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD = 20, 1
+        info = run_node(P, plan_only=True, character_memory=mem)[2]
+    finally:
+        S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD = floor, ratio
+    check("a squeezed budget drops something", "guard clauses dropped for room" in info)
+    # ...and the thing it drops is the sound clause, because it ranks last. If it
+    # were still appended after the cap it could not be dropped at all.
+    check("the sound clause is what gives way", re.search(r"dropped for room[^|]*sound",
+                                                          info) is not None)
+    # At the SHIPPED budget nothing is dropped: the cap catches runaways and does
+    # not trim routinely, so no current render changes because of this.
+    clean = run_node(P, plan_only=True, character_memory=mem)[2]
+    check("the shipped budget drops nothing", "guard clauses dropped for room" not in clean)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3128,6 +3162,7 @@ def main():
     test_a_journey_reaches_the_shot()
     test_the_scene_does_not_reset()
     test_a_described_room_still_holds()
+    test_the_sound_clause_is_inside_the_budget()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

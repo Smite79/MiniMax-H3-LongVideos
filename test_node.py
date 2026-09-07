@@ -1124,6 +1124,36 @@ def test_a_transitive_posture_puts_the_object_down():
                                                        cast).values())
 
 
+def test_the_sound_clause_spends_from_the_budget():
+    """The sound clause was appended AFTER fit_guards, so it was the one piece of
+    node-written text no cap could reach -- and the largest single contributor, 97
+    words of 420 across a six-shot script. It is now ranked in, LAST, so it is cut
+    before anything that traces to a report.
+
+    Ranking it high was tried and measured: at the same budget it wins its words
+    from the continuity holds, and the suites caught it costing the fall/landing
+    guard. This asserts the ordering that survived, not the one that read best."""
+    # Clauses sized to actually exceed the budget -- the floor means a beat of no
+    # words still gets GUARD_FLOOR_WORDS, so a short pair can never overrun it.
+    big = " " + " ".join(["word"] * (S.GUARD_FLOOR_WORDS - 5)) + "."
+    # It is cuttable at all, which before this it was not: it never reached here.
+    kept, dropped = S.fit_guards([(1, "keep", big), (14, "sound", big)], 0)
+    check("sound can be cut", "sound" in dropped)
+    # ...and it is cut BEFORE a guard that traces to a report, never instead of one.
+    kept, dropped = S.fit_guards([(4, "fall", big), (14, "sound", big)], 0)
+    check("the fall guard outranks it", "fall" not in dropped)
+    check("...and it is the one that goes", "sound" in dropped)
+    # Output order still follows the LIST, so the sentence is unchanged: being last
+    # to survive is not the same as being last to read.
+    kept, _ = S.fit_guards([(14, "sound", " S."), (1, "first", " F.")], 99)
+    check("the sentence order is the list order", kept.strip() == "S. F.")
+    # The shipped floor is a runaway catcher, not a routine trim: tightening it was
+    # measured against the suites and cost the fall guard, the restraint holds and
+    # the posture hold. Locked so it is not quietly lowered from the balance report.
+    check("the floor is the measured one", S.GUARD_FLOOR_WORDS == 90)
+    check("...and so is the ratio", S.GUARD_WORDS_PER_BEAT_WORD == 5)
+
+
 def test_a_described_room_is_still_a_room():
     """A room is usually described, not just named: "the tiled bathroom", "the long
     hallway", "the master bedroom". Every place reader wanted the article and the
@@ -3386,6 +3416,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_the_sound_clause_spends_from_the_budget()
     test_a_described_room_is_still_a_room()
     test_the_sound_follows_the_room()
     test_a_transitive_posture_puts_the_object_down()

@@ -3028,6 +3028,31 @@ def restraint_wearers(sheet):
 # holds, the revealed layer, the limb anchor -- and trading one set of bugs for
 # another. The ceiling is here so the next clause added without counting the others
 # cannot quietly rebuild the pile; it is not the thing doing the work.
+# TIGHTENING THIS WAS TRIED, MEASURED, AND REJECTED. Recorded here so it is not
+# proposed again from the balance report alone -- the report says the guards
+# outweigh the beat, which is true, and reads like slack, which it is not.
+#
+# Swept against the suites, which are the record of what was actually reported:
+#
+#   90/5 (this)  worst shot 116 words   beat 14%   0 suite failures
+#   80/5                                           2 -- the fall/landing guard, the
+#                                                       bound-fall wording
+#   75/4                                           3 -- ...and the forced position
+#   65/4                                           3
+#   60/4                                           6 -- ...and the rigid-metal hold
+#   55/3         worst shot  87 words   beat 16%   8 -- ...and both ends of applying
+#
+# Every clause the budget reaches is answering a report. There is no fat: two
+# points of beat share cost the fall guard, the restraint holds and the posture
+# hold, which is trading one set of bugs for another. With the sound clause ranked
+# last (see _guards) a tighter floor drops THAT first instead, and on a shot whose
+# audio branch is open the sound clause is the text half of the babble defence --
+# the failure reported more often than any other here, and one no test asserts,
+# so the suites would have gone green on it.
+#
+# So the floor stays a runaway catcher and is not the thing doing the work. What
+# changed is that the sound clause now SPENDS from it, so the next clause added
+# without counting the others cannot rebuild the pile the way sound quietly did.
 GUARD_FLOOR_WORDS = 90
 GUARD_WORDS_PER_BEAT_WORD = 5
 
@@ -6992,16 +7017,40 @@ class H3LongVideos:
                 (12, "language", _lang),   # ...and in which language
                 (6, "told", _told),          # a listener given an order to ignore
                 (13, "turn", turn),
+                # LAST in the list and LAST in the ranking, both on purpose.
+                #
+                # This was appended after fit_guards and so was the one piece of
+                # node-written text no budget could reach -- unranked, uncuttable,
+                # and measured as the largest single contributor: 97 words of 420
+                # across a six-shot script, double the budgeted guard on shot 1.
+                # Counting it APART for the balance report is right, because it asks
+                # for something to HAPPEN rather than to stay as it is. Exempting it
+                # from the CAP was a different thing, and not intended.
+                #
+                # Rank 14 was measured, not assumed. Ranked high it wins its words
+                # from the continuity holds, and the suites caught exactly that: at
+                # the SAME budget, ranking it 2 cost the fall/landing guard. So it
+                # goes last -- above nothing, cut before anything that traces to a
+                # report. At the shipped floor the budget never binds, so nothing
+                # about a current render changes; what changes is that sound can no
+                # longer grow the pile without the cap noticing.
+                #
+                # Last in the LIST keeps it at the end of the sentence where it
+                # already sat: fit_guards orders its output by list position, not by
+                # priority. Being last to survive is not the same as being last to
+                # read, and only the ranking was in question.
+                (14, "sound", _sound),
             ]
             _kept, _dropped = fit_guards(_guards, len(body.split()))
             if _dropped:
                 crowded.append((len(shots) + 1, _dropped))
-            shot_text = (line + _kept + _sound).strip()
+            shot_text = (line + _kept).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
-            sound_words += len(_sound.split())
-            guard_words += (len(shot_text.split()) - len(_sound.split())
+            _sound_kept = "" if "sound" in _dropped else _sound
+            sound_words += len(_sound_kept.split())
+            guard_words += (len(shot_text.split()) - len(_sound_kept.split())
                             - len(f"{shot_scene} {body}".split()))
             beat_words += len(body.split())
             total_words += len(shot_text.split())
@@ -7149,6 +7198,25 @@ class H3LongVideos:
                 f"differently each time. Your scene text is not edited: move the "
                 f"location into the beats, or keep the scene general, and this stops "
                 f"being needed")
+        if crowded:
+            # This was collected and never reported. The budget rarely binds, so the
+            # one time it did there was nothing in info saying a guard had been cut
+            # -- the shot simply stopped holding something, with no way to tell that
+            # from the guard having failed to fire. A dropped clause is exactly the
+            # case worth reading, being the one place the node knowingly stops
+            # answering a bug it knows about.
+            notes.append(
+                "guard clauses dropped for room -- "
+                + "; ".join(f"shot {n}: {', '.join(d)}" for n, d in crowded)
+                + f". Each shot's continuity text is capped at "
+                  f"{GUARD_WORDS_PER_BEAT_WORD} words per word of beat, floored at "
+                  f"{GUARD_FLOOR_WORDS}, and the lowest-ranked clauses give way "
+                  f"first. The cap is set to catch a runaway rather than to trim "
+                  f"routinely, so this firing at all means one shot is carrying far "
+                  f"more continuity than its beat -- usually a one-line beat in a "
+                  f"scene holding a lot of state. Giving that beat more to do buys "
+                  f"back the room, and is better than raising the cap: every clause "
+                  f"below the line is answering something")
         if acoustic_shots:
             notes.append(
                 "the sound followed them into the new room on "
