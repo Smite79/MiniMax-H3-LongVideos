@@ -6492,10 +6492,20 @@ class H3LongVideos:
                                "beat by hand.\n\n"
                                "This builds it and mixes it into THAT SHOT'S span "
                                "instead. It asks nothing of the model, so it cannot "
-                               "babble. Shots that already have a line are left "
-                               "alone -- their branch is open and making its own "
-                               "sound from the same prose, and building over it would "
-                               "double every footfall.\n\n"
+                               "babble. Shots that already have a line, or a sound "
+                               "you wrote yourself, are left alone -- their branch is "
+                               "open and making that sound from the same prose, and "
+                               "building over it would double every footfall.\n\n"
+                               "A shot staging EFFORT is the exception and does get "
+                               "built sound, even though its branch is open. It "
+                               "opened to make a VOICE, and a voice is not a bed "
+                               "frame or a chain -- so what is built there is the "
+                               "non-vocal half the model will not make. Lower this "
+                               "if anything doubles.\n\n"
+                               "0.35 puts it about 37 dB below full scale: well clear "
+                               "on a silenced shot, which sits near -65, and about 23 "
+                               "dB under a spoken one. Raise it towards 0.6-0.7 if "
+                               "you want it audible under a voice.\n\n"
                                "It is synthesis, not a recording: a click, a rattle, "
                                "a rustle, in the right place. Nothing vocal is ever "
                                "built. 0 turns it off; needs auto_sound on."}),
@@ -6672,6 +6682,10 @@ class H3LongVideos:
         shots, speech, gone, shown = [], [], [], []
         shot_events = []          # per shot: the sounds its action makes
         sounded = []                # beats that ask for a sound of their own
+        # Of those, the ones open ONLY because the beat stages effort. The branch
+        # is open on both, but for opposite reasons, and built sound has to tell
+        # them apart -- see the foley mix.
+        voiced_only = []
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
         restrained_who = set()    # who is actually in the hardware
@@ -7783,6 +7797,7 @@ class H3LongVideos:
             # silence are mutually exclusive by construction: the silence latent IS
             # the audio, and there is no room in it for a room tone.
             sounded.append(_own or _voiced)
+            voiced_only.append(bool(_voiced and not _own))
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -8928,7 +8943,23 @@ class H3LongVideos:
                     continue
                 _pinned = bool(silence_nonspeech and not speech[_i]
                                and not (sounded[_i] if _i < len(sounded) else False))
-                if not _pinned or _len < 64:
+                # ...OR open only because the beat stages EFFORT. The skip above
+                # exists so built sound does not double what an open branch is
+                # already making out of the same prose. That is true when the
+                # AUTHOR wrote the sound, and false for effort: THAT branch opened
+                # to make a voice, and a voice is not a bed frame, a chain or a
+                # cuff. Every recipe here is non-vocal by construction, so on such
+                # a shot the vocal phrase simply has no recipe and drops out on its
+                # own -- what is left is exactly the half the model will not make.
+                #
+                # Missing this undid the recipes in the same commit that added
+                # them: the nine effort verbs became _voiced, _voiced unpins the
+                # shot, and an unpinned shot skips the mix. So "a bed frame
+                # working" and "restraints pulling taut" were read from the beat,
+                # written into the prompt, and then never built -- on precisely the
+                # beats they exist for. Reported as hearing nothing.
+                _voice_open = bool(_i < len(voiced_only) and voiced_only[_i])
+                if not (_pinned or _voice_open) or _len < 64:
                     continue
                 _made = []
                 for _ph in shot_events[_i]:
@@ -8940,12 +8971,18 @@ class H3LongVideos:
                                            * float(foley_level))
                     _made.append(_ph)
                 if _made:
-                    _foley_on.append((_i + 1, _made))
+                    _foley_on.append((_i + 1, _made, _voice_open))
         if _foley_on:
+            _eff = [n for n, _, v in _foley_on if v]
             notes.append(
                 "sound built into the shot itself on "
-                + "; ".join(f"shot {n}: {', '.join(m)}" for n, m in _foley_on)
-                + ". Those shots have no line, so their audio branch is pinned to "
+                + "; ".join(f"shot {n}: {', '.join(m)}" for n, m, _v in _foley_on)
+                + (f". Shot(s) {', '.join(str(n) for n in _eff)} stage effort, so "
+                   f"their branch IS open and the model is making the voice -- what "
+                   f"is built there is only the non-vocal half it will not make, the "
+                   f"frame and the metal. Lower foley_level if it doubles anything. "
+                   if _eff else ". ")
+                + "The rest have no line, so their audio branch is pinned to "
                   "silence and the model cannot make these -- auto_sound puts them in "
                   "the prompt, and prompt text can never open a branch, so the cue was "
                   "being dropped on exactly the shots whose point is a sound. Built and "

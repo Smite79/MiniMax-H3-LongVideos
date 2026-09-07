@@ -3318,6 +3318,72 @@ def test_one_picture_two_people_is_reported():
     check("a solo scene says nothing", "carry a reference picture for one" not in solo)
 
 
+def test_built_sound_reaches_an_effort_shot():
+    """Reported as hearing nothing, and it was self-inflicted.
+
+    The foley mix ran only on shots PINNED TO SILENCE -- right, while the only way a
+    branch opened was the author writing a sound, because then the branch is already
+    making that sound out of the same prose and building over it doubles every
+    footfall. Then the nine effort verbs were made _voiced. _voiced unpins the shot.
+    So the same commit that added "a bed frame working" and "restraints pulling
+    taut" stopped either of them ever being mixed, on precisely the beats they were
+    written for: read from the text, put in the prompt, dropped from the audio.
+
+    An effort branch opened to make a VOICE, and a voice is not a frame or a chain.
+    Tested end to end on the SPAN, not the note -- the note is written by the loop
+    that does the mixing and would read correctly even if the arithmetic were wrong."""
+    print("\n=== built sound reaches an effort shot ===")
+    P = ("A cell.\n\nShe sits on the bunk.\n\n"
+         "She strains against the cuffs.\n\n"
+         "They rock together on the bed.")
+    _real = S.foley_for
+    try:
+        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
+        out = run_node(P, ambient_level=0.0, foley_level=0.5)
+    finally:
+        S.foley_for = _real
+    wav, info, n_shots = out[1]["waveform"], out[2], out[6]
+    span = int(wav.shape[-1]) // max(n_shots, 1)
+    means = [float(wav[..., i * span:(i + 1) * span].mean()) for i in range(n_shots)]
+    hot = [i + 1 for i, m in enumerate(means) if m > 0.25]
+    shown = f"means {[round(m, 2) for m in means]}"
+    check("the restrained effort shot sounds", 2 in hot, shown)
+    check("the furniture effort shot sounds", 3 in hot, shown)
+    check("a shot with nothing to sound stays quiet", 1 not in hot, shown)
+    check("the note says why those two are different",
+          "stage effort, so their branch IS open" in info)
+    # The VOCAL phrase on those shots must not be built -- it has no recipe, and
+    # that is the whole reason a noise shaper may run on an open branch at all.
+    # Checked on the REAL builder: the stub above answers every phrase, including
+    # the vocal one, so asserting this against the stubbed run tests the stub.
+    check("the vocal phrase has no recipe and cannot be built",
+          S.foley_for("unsteady breathing, with gasps and moans of effort",
+                      44100, 44100, seed=0) is None)
+    check("...and no recipe in the table is a voice",
+          not [k for k in S._FOLEY if re.search(
+              r"breath|gasp|moan|voice|speak|whimper|cry|sob|scream|pant", k, re.I)])
+    real = run_node(P, ambient_level=0.0, foley_level=0.5)[2]
+    # Guarded: with the fix reverted there is no note at all, and an IndexError
+    # here reports as a crashed suite rather than as the failure it is.
+    built = (real.split("sound built into the shot")[1].split(". Shot(s)")[0]
+             if "sound built into the shot" in real else "(no foley note)")
+    check("the real note builds the frame", "a bed frame working" in built)
+    check("...and not the breathing beside it", "unsteady breathing" not in built)
+    # An author-written sound still opens the branch and still suppresses the mix:
+    # that shot's audio is already making it.
+    W = ("A cell.\n\nThe chain drags on the concrete, and she says: \"Wait.\"")
+    try:
+        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
+        out2 = run_node(W, ambient_level=0.0, foley_level=0.5)
+    finally:
+        S.foley_for = _real
+    w2, n2 = out2[1]["waveform"], out2[6]
+    s2 = int(w2.shape[-1]) // max(n2, 1)
+    m2 = [float(w2[..., i * s2:(i + 1) * s2].mean()) for i in range(n2)]
+    check("a written sound still suppresses the mix", all(m < 0.25 for m in m2),
+          f"means {[round(m, 2) for m in m2]}")
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3440,6 +3506,7 @@ def main():
     test_a_garment_does_not_appear_at_the_first_frame()
     test_the_ambient_bed_reaches_the_soundtrack()
     test_built_sound_lands_in_the_right_shot()
+    test_built_sound_reaches_an_effort_shot()
     test_one_picture_two_people_is_reported()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
