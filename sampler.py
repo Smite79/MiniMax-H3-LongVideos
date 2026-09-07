@@ -3609,6 +3609,20 @@ FORM_HOLD = ", the same object in the same material."
 # shot the latch takes over and the hold is correct, because by then it IS on.
 RESTRAINT_GOING_ON = (" The hardware goes on during this shot: it is open and off the "
                       "body at the first frame, and closed on it by the last.")
+# WHERE THE LIMBS FINISH, on the shot that stages the fastening.
+#
+# The clause above says what the HARDWARE does across the shot and says nothing
+# about the body, and the anchor was deliberately withheld here on the grounds
+# that the author's own words are right beside it. They are -- but they describe
+# the ACT, and the next shot does not inherit the act. It inherits the last
+# frame. So a shot could close the cuffs with the arms wherever they happened to
+# be, and the shot after it opened on a picture of somebody with their arms at
+# their sides while the text insisted the wrists were behind the back. Text loses
+# to an inherited picture, every time.
+#
+# Reported as the handcuffs breaking in the next beat. Nothing broke: the frame
+# the next shot started from never had them behind her back.
+RESTRAINT_ENDS_AT = " By the last frame the {part} are {where}, and stay there."
 # The rigid half of CHAIN_HOLD, on its own. Steel is steel while it is being locked
 # on, so the applying shot keeps this even though it must not be told the thing is
 # already fastened -- dropping it there let the chain go soft for exactly the shot
@@ -7229,6 +7243,14 @@ class H3LongVideos:
         # behind the back", dropped the handcuffs from a beat that applied two
         # things, and moved the camera into a door. See engine.py.
         _state = engine.SceneState(place=engine.place_in(scene or ""))
+        # Which beat first puts each thing on, read before anything renders. The
+        # sheet cannot say when; the script can, and where it does it wins.
+        _staged_at = engine.staged_applications(
+            [extract_directives(b)[0] for b in beats])
+        # What the SHEET names, so the two can be told apart: hardware this node
+        # held back out of the sheet is a conflict it created, and hardware the
+        # sheet never mentioned is not.
+        _sheet_hw = {c for c, _p, _w, _a in engine.hardware_spans(sheet or "")}
         for b in beats:
             body, toks, adds = extract_directives(b)
             # Quoted speech becomes H3'S OWN dialogue marker before anything else
@@ -7246,9 +7268,15 @@ class H3LongVideos:
             # latch had already consulted it, so every shot was answered with the
             # PREVIOUS shot's state -- and shot 1 with an empty one.
             # The sheet first: what it already says is true before any beat runs.
+            # ...except anything the SCRIPT stages later. A sheet says what
+            # somebody has and never says when, so "McKenna: she, 27, green
+            # dress, handcuffs" beside a script that cuffs her in beat 3 put the
+            # cuffs on her from shot 1 -- reported as a handcuff on her arm
+            # before she is handcuffed.
+            _not_yet = {c for c, at in _staged_at.items() if at > len(shots) + 1}
             for _n, _line in sheet_lines(sheet):
                 if _n:
-                    _state.declare(_n, _line)
+                    _state.declare(_n, _line, staged_later=_not_yet)
             _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
                               shot=len(shots) + 1)
             # Who this beat involves, decided BEFORE the removals: a beat that
@@ -7537,9 +7565,21 @@ class H3LongVideos:
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
             # Maya lies still" -- and a name fused to the end of an attribute list is
             # read as one more item in it.
+            # HARDWARE THE SCRIPT HAS NOT PUT ON YET COMES OUT OF THE SHEET.
+            # The sheet is re-stamped into every shot by this node, so what it
+            # says in shot 1 is this node's doing -- and a sheet reading
+            # "McKenna: she, 27, green dress, handcuffs" beside a script that
+            # cuffs her in beat 3 listed handcuffs on her from the opening shot.
+            # A described item is a drawn item: reported as a handcuff on her arm
+            # before she is handcuffed.
+            #
+            # Same mechanism as a removed garment, and for the same reason: the
+            # sheet says WHAT somebody has and never WHEN, so where the script
+            # stages the moment, the sheet waits for it.
+            _early = [c for c, at in _staged_at.items() if at > len(shots) + 1]
             shot_scene = scrub_removed(
                 "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
-                visible + covered)
+                visible + covered + _early)
             # Retirement is handled at the moment of removal, above, so this is just
             # what is currently on. Filtering here against the whole history of `gone`
             # meant an add could never put anything BACK: the token stays in `gone`
@@ -7699,8 +7739,24 @@ class H3LongVideos:
                 elif len(_r.item) > len(worn_items[_same]):
                     worn_items[_same] = _r.item
             worn_item = ", ".join(worn_items)
+            # THE SCRIPT DECIDES THE MOMENT, and the sheet check must not veto it.
+            # Blocking on restraint_present(shot_scene) is right when the sheet
+            # says somebody is ALREADY restrained and the beat merely mentions
+            # it. It is wrong once the sheet's own hardware has been held back
+            # until this beat: the sheet then names the cuffs in exactly the shot
+            # that applies them, which suppressed the both-ends clause and left
+            # the applying shot with a standing hold -- a lie about its first
+            # frame, and the cuffing happening in whatever order was left over.
+            # ...and ONLY for hardware the sheet itself named and this held back
+            # until now. A sheet that says "wrists cuffed behind back" beside a
+            # beat that locks a CHAIN on is a different situation: the cuffs are
+            # genuinely already on, the sheet check is doing its job, and
+            # overriding it there cost the cuffs their standing hold. The veto is
+            # lifted only where this node created the conflict.
+            _stages_now = any(at == len(shots) + 1 and canon in _sheet_hw
+                              for canon, at in _staged_at.items())
             _applying = bool(restrained and not _was_restrained
-                             and not restraint_present(shot_scene)
+                             and (_stages_now or not restraint_present(shot_scene))
                              and restraint_going_on(body))
             # The sheet claiming hardware the beat is only now putting on. The sheet
             # goes into EVERY shot, so it is on her in the shots before it happens,
@@ -7922,7 +7978,17 @@ class H3LongVideos:
             # On the shot that PUTS the hardware on, both ends instead of the standing
             # hold: the chain clause is about a chain that is already taut, and the
             # restraint hold asserts a first frame that has not happened yet.
-            hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") if _applying
+            # ...and where the limbs finish, so the NEXT shot's keyframe has them
+            # in the right place. See RESTRAINT_ENDS_AT.
+            _ends_at = ""
+            if _applying and _anchor_now:
+                _pos = _anchor_now.split(", at the")[0].strip()
+                if _pos and not _pos.startswith("at the "):
+                    _ends_at = RESTRAINT_ENDS_AT.format(
+                        part=engine.held_part_of(worn_items) or "wrists",
+                        where=_pos)
+            hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
+                    if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
             if _applying:
                 applied_shots.append(len(shots) + 1)

@@ -414,7 +414,7 @@ class SceneState:
             self.people[name] = Person(name)
         return self.people[name]
 
-    def declare(self, name, description):
+    def declare(self, name, description, staged_later=()):
         """Take what a character sheet already says as read.
 
         A sheet entry is a STATE, not an event: "Kate: she, 30, coat, handcuffs"
@@ -424,10 +424,21 @@ class SceneState:
         mention some -- and a hold that never fires is hardware the model is free
         to leave off.
 
-        Declared, never applied: nothing here is a change, so no shot is told
-        anything goes on during it."""
+        `staged_later` is what stops that becoming its own bug. A sheet says WHAT
+        somebody has and never says WHEN, so a sheet reading "McKenna: she, 27,
+        green dress, handcuffs" beside a script that cuffs her in beat 3 declared
+        them on from shot 1 -- and shot 1 went out saying "The handcuffs stay
+        closed and fastened AS THEY WERE PUT ON", two shots before anybody put
+        them on. Reported as a handcuff on her arm before she is handcuffed.
+
+        Where the script stages the fastening, the script decides the moment. The
+        sheet still supplies the description; it just does not get to start the
+        clock. Declared, never applied: nothing here is a change, so no shot is
+        told anything goes on during it."""
         p = self.person(name)
         for canon, part, written, _at in hardware_spans(description or ""):
+            if canon in staged_later:
+                continue
             if canon not in p.hardware:
                 # applied_in = 0, so this never reads as "goes on during this
                 # shot" -- shots are numbered from 1.
@@ -700,6 +711,35 @@ def _wearer(beat, who, fallback):
     if agent is None:
         agent = who[0]          # active voice: the one doing it comes first
     return next((n for n in who if n != agent), fallback)
+
+
+def held_part_of(items):
+    """The body part these items hold, as a plural noun for a sentence.
+
+    A limb position describes the ARMS, so this answers "wrists" for anything
+    that holds them and defers to the item otherwise -- a collar's position is
+    never a limb position, and the constructor already refuses to give it one."""
+    text = " ".join(items or [])
+    for pat, _n, part in HARDWARE:
+        if re.search(r"\b(?:" + pat + r")\b", text, re.I) and part not in ("wrists",):
+            return part
+    return "wrists"
+
+
+def staged_applications(beats):
+    """{canonical hardware -> the 1-based beat that first puts it on}.
+
+    Read once, before anything renders, because a sheet cannot say WHEN. Where
+    the script stages a fastening, no earlier shot may be told that thing is
+    already fastened -- that is a cuff on a wrist two shots before the cuffing."""
+    out = {}
+    for i, b in enumerate(beats or [], 1):
+        b = b or ""
+        if not _APPLY.search(b) or _RELEASE.search(b):
+            continue
+        for canon, _part, _w, _at in hardware_spans(b):
+            out.setdefault(canon, i)
+    return out
 
 
 def _plural(item):

@@ -3745,6 +3745,94 @@ def test_no_guard_sentence_carries_a_negation():
           + ("; ".join(sorted(bad)[:2]) or "all clear"), not bad)
 
 
+def test_hardware_waits_for_the_beat_that_puts_it_on():
+    """Reported: a handcuff on McKenna's arm before she is handcuffed.
+
+    A sheet says WHAT somebody has and never WHEN. "McKenna: she, 27, green
+    dress, handcuffs" beside a script that cuffs her in beat 3 put them on from
+    shot 1 -- twice over. The engine declared them worn, so shot 1 went out
+    saying "The handcuffs stay closed and fastened AS THEY WERE PUT ON" two shots
+    before anybody put them on; and the sheet itself, which this node re-stamps
+    into every shot, listed handcuffs on her from the opening frame. A described
+    item is a drawn item.
+
+    Where the script stages the fastening, the script owns the moment. The sheet
+    still supplies the description -- it just does not start the clock."""
+    print("\n=== hardware waits for its beat ===")
+    P = ("A kitchen.\n\n"
+         "McKenna stands by the counter.\n\n"
+         "McKenna turns to face Dana.\n\n"
+         "Dana handcuffs McKenna's wrists behind her back.\n\n"
+         "McKenna pulls at the cuffs.")
+    mem = "Dana: she, 31, blue jacket.\nMcKenna: she, 27, green dress, handcuffs."
+    sh = [b.split("]", 1)[1] for b in
+          run_node(P, plan_only=True, character_memory=mem)[3].split("[Shot ")[1:]]
+    check("shot 1 has no cuffs in it at all", "cuff" not in sh[0].lower(), sh[0][:200])
+    check("...nor shot 2", "cuff" not in sh[1].lower(), sh[1][:200])
+    check("the applying shot has them", "cuff" in sh[2].lower())
+    check("...with both ends of the change",
+          "off the body at the first frame" in sh[2] or "open and off" in sh[2],
+          sh[2][:240])
+    check("and they stay after", "cuff" in sh[3].lower())
+    check("...held, not re-applied",
+          "closed and fastened" in sh[3] and "first frame" not in sh[3], sh[3][:240])
+
+    # A sheet with hardware the script NEVER stages is somebody who walks in
+    # already wearing it. That still has to hold from shot 1 -- hardware nobody
+    # mentions is hardware the model stops drawing.
+    worn = [b.split("]", 1)[1] for b in
+            run_node("A cell.\n\nKate sits on the bunk.\n\nKate waits.",
+                     plan_only=True,
+                     character_memory="Kate: she, 30, handcuffs."
+                     )[3].split("[Shot ")[1:]]
+    check("already-worn hardware holds from shot 1",
+          "handcuffs" in worn[0] and "closed and fastened" in worn[0], worn[0][:220])
+    check("...and keeps holding", "closed and fastened" in worn[1])
+
+
+def test_the_applying_shot_says_where_the_limbs_finish():
+    """Reported: "the handcuffs broke in the next beat -- her arms were at her
+    sides and not handcuffed behind her back".
+
+    Nothing broke. The going-on clause said what the HARDWARE does across the
+    shot -- open at the first frame, closed by the last -- and nothing about the
+    body, and the limb position was deliberately withheld there on the grounds
+    that the author's own words sit right beside it. They do, but they describe
+    the ACT, and the next shot does not inherit the act. It inherits the last
+    frame. So the cuffs could close with the arms wherever they happened to be,
+    and the following shot opened on a picture of somebody with their arms at
+    their sides while its text insisted the wrists were behind the back.
+
+    Text loses to an inherited picture, every time. The frame the next shot
+    started from never had them behind her back."""
+    print("\n=== the applying shot says where the limbs finish ===")
+    P = ("A kitchen.\n\nMcKenna stands by the counter.\n\n"
+         "Dana handcuffs McKenna's wrists behind her back.\n\n"
+         "McKenna pulls at the cuffs.\n\nMcKenna turns around.")
+    sh = [b.split("]", 1)[1] for b in
+          run_node(P, plan_only=True,
+                   character_memory="Dana: she, 31.\nMcKenna: she, 27, green dress."
+                   )[3].split("[Shot ")[1:]]
+    check("the applying shot names the end position",
+          "By the last frame the wrists are behind the back" in sh[1], sh[1][:300])
+    check("...as well as the hardware's two ends",
+          "open and off the body at the first frame" in sh[1])
+    check("the next shot still holds the position",
+          "wrists behind the back" in sh[2], sh[2][:240])
+    check("...and the one after that", "wrists behind the back" in sh[3])
+    # A shot that stages no fastening must not claim a last-frame position.
+    check("an ordinary shot says nothing about it",
+          "By the last frame" not in sh[0], sh[0][:200])
+    # A collar has no limb position, and must not be handed one.
+    neck = [b.split("]", 1)[1] for b in
+            run_node("A cell.\n\nDan locks a steel collar around Ana's neck.\n\n"
+                     "Ana sits down.", plan_only=True,
+                     character_memory="Dan: he, 40.\nAna: she, 28."
+                     )[3].split("[Shot ")[1:]]
+    check("a collar gets no limb position",
+          "By the last frame the wrists" not in neck[0], neck[0][:240])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3877,6 +3965,8 @@ def main():
     test_a_verb_is_not_a_room()
     test_entering_a_room_is_a_journey_not_a_cut()
     test_no_guard_sentence_carries_a_negation()
+    test_hardware_waits_for_the_beat_that_puts_it_on()
+    test_the_applying_shot_says_where_the_limbs_finish()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
