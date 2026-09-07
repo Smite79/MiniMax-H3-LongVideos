@@ -3833,6 +3833,43 @@ def test_the_applying_shot_says_where_the_limbs_finish():
           "By the last frame the wrists" not in neck[0], neck[0][:240])
 
 
+def test_a_collar_in_the_sheet_is_held_like_hardware():
+    """Reported: the collar was missing from her neck when she was seen in her
+    room. It was not the room -- the collar never latched at all.
+
+    restraint_present needs an ambiguous noun plus a binding verb or a body part
+    in the SAME line, and a sheet entry reading "green dress, steel collar" has
+    neither. So no hold ever fired for it in any shot, and hardware nobody holds
+    is hardware the model drops -- it just took a change of room for it to show.
+
+    Bare "collar" stays ambiguous, because a shirt has one. The MATERIAL settles
+    it: a shirt's collar is stiff or starched, never steel, and it does not
+    lock."""
+    print("\n=== a collar in the sheet is held like hardware ===")
+    for line in ("McKenna: she, 27, green dress, steel collar.",
+                 "McKenna: 27, a leather collar.",
+                 "McKenna: 27, a locked collar.",
+                 "McKenna: 27, a collar and a padlock.",
+                 "McKenna: she, 27, a collar at her throat."):
+        check(f"a restraint: {line[:44]!r}", S.restraint_present(line))
+    for line in ("McKenna: 27, white shirt with a stiff collar.",
+                 "Dan: 40, uniform with a starched collar.",
+                 "Dan: 40, a jacket with a fur collar.",
+                 "McKenna: she, 27, green dress."):
+        check(f"clothing, not hardware: {line[:40]!r}",
+              not S.restraint_present(line))
+    # END TO END, and across a change of room, which is where it was noticed.
+    sh = [b.split("]", 1)[1] for b in
+          run_node("A living room.\n\nMcKenna stands by the sofa.\n\n"
+                   "McKenna walks into her bedroom.\n\n"
+                   "McKenna sits on the bed.", plan_only=True,
+                   character_memory="McKenna: she, 27, green dress, steel collar."
+                   )[3].split("[Shot ")[1:]]
+    for i, s in enumerate(sh, 1):
+        check(f"shot {i} names the collar", "collar" in s.lower(), s[:180])
+        check(f"shot {i} holds it", "closed and fastened" in s, s[:180])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3967,6 +4004,7 @@ def main():
     test_no_guard_sentence_carries_a_negation()
     test_hardware_waits_for_the_beat_that_puts_it_on()
     test_the_applying_shot_says_where_the_limbs_finish()
+    test_a_collar_in_the_sheet_is_held_like_hardware()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

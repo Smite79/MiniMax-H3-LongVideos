@@ -4116,6 +4116,20 @@ _RESTRAINT_PLAIN = re.compile(
     # satisfy both halves of the MAYBE rule by themselves. "Ana is collared and
     # chained to the wall" matched nothing at all before this: "collared" is not
     # "collars?", so the noun half failed and the whole latch stayed down.
+    #
+    # A COLLAR MADE OF HARDWARE. Bare "collar" is genuinely ambiguous -- a shirt
+    # has one -- so it needs a body part beside it, and "a collar at her throat"
+    # supplies that. But a sheet entry reading "green dress, steel collar" has
+    # neither a body part nor a binding verb anywhere in the line, so it was not
+    # a restraint at all: no hold ever fired for it, and hardware nobody holds is
+    # hardware the model drops. Reported as the collar missing from her neck.
+    #
+    # The material settles it. A shirt's collar is stiff or starched; it is not
+    # steel and it does not lock, so "white shirt with a stiff collar" still
+    # reads as clothing -- which is the distinction worth keeping.
+    r"(?:steel|iron|metal|chrome|brass|leather|padded|locked|lockable|heavy|"
+    r"thick|studded|spiked|posture|shock|bondage|slave)\s+collars?|"
+    r"collars?\s+(?:and|with)\s+(?:a\s+)?(?:lock|padlock|leash|lead|chain|ring)|"
     r"spreader bar)\b", re.I)
 # Hardware that is only a restraint in context -- a chain-link fence, a rope on a
 # boat and a leather belt are none of the node's business.
