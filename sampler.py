@@ -8314,6 +8314,45 @@ class H3LongVideos:
                 _msg = f"<Picture {_n}> names a slot with no image connected"
                 if _msg not in notes:
                     notes.append(_msg)
+        # ONE FACE, TWO PEOPLE. A shot that carries a picture for somebody AND
+        # describes somebody else who has none gives the model a photographed face
+        # and two faces to draw. A reference is the strongest identity signal in the
+        # prompt -- far stronger than "38, dark hair" -- so the one that exists gets
+        # used twice, and the second character arrives as a copy of the first.
+        #
+        # Reported as two of the same woman in a scene written for two people. The
+        # node cannot stop it: it is the model resolving a shot that has more
+        # subjects than pictures, and there is no sentence that outranks a photo.
+        # What it can do is say which shots are in that state, and say it in terms
+        # of the fix -- a second reference, tagged onto the other person.
+        _twinned = []
+        if refs_all and _tagged_names:
+            for _i, _s in enumerate(shots):
+                if not picture_tags(_s):
+                    continue
+                _cast_here = shot_cast[_i] if _i < len(shot_cast) else []
+                _cast_here = [n for n in _cast_here if n] or [
+                    n for n, _ in sheet_lines(sheet) if n]
+                _bare = [n for n in _cast_here if n not in _tagged_names]
+                if _bare and any(n in _tagged_names for n in _cast_here):
+                    _twinned.append((_i + 1, _bare))
+        if _twinned:
+            _who = sorted({n for _, ns in _twinned for n in ns})
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n, _ in _twinned)} carry a reference "
+                f"picture for one person and also describe "
+                f"{', '.join(_who)}, who {'has' if len(_who) == 1 else 'have'} no "
+                f"<Picture N> of their own. That "
+                f"is one photographed face and two people to draw, and a reference is "
+                f"the strongest identity signal in the prompt -- much stronger than a "
+                f"line of description -- so the face that exists tends to be used "
+                f"twice and the second character arrives as a copy of the first. Wire "
+                f"a picture of {', '.join(_who)} to a free ref_image slot and tag it "
+                f"on their sheet "
+                f"{'entries' if len(_who) > 1 else 'entry'} -- "
+                f"'{_who[0]}: <Picture 2>, ...' -- so every shot with both of them "
+                f"carries both faces. No wording fixes this: nothing in the text "
+                f"outranks a photograph")
         if refs_all:
             _named = sum(1 for s in shots if picture_tags(s))
             notes.append(

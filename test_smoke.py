@@ -3277,6 +3277,47 @@ def test_built_sound_lands_in_the_right_shot():
     check("auto_sound off builds nothing", "sound built into the shot" not in na)
 
 
+def test_one_picture_two_people_is_reported():
+    """Reported: a scene written for two people rendered the same woman twice, and
+    the second character was not recognised as a separate person.
+
+    A shot carrying a reference for one person and describing another who has none
+    gives the model a photographed face and two faces to draw. A reference is the
+    strongest identity signal in the prompt -- far stronger than "38, dark hair" --
+    so the face that exists gets used twice.
+
+    The node cannot fix it: nothing in the text outranks a photograph, and it is the
+    model resolving a shot with more subjects than pictures. What it must do is SAY
+    so, in terms of the fix, instead of leaving it to be discovered in a render."""
+    print("\n=== one picture, two people ===")
+    img = torch.rand(1, H, W, 3)
+    P = ("A hotel room.\n\nKristy and Dan sit on the bed.\n\n"
+         "Dan takes her hand.")
+    one = run_node(P, plan_only=True, ref_image_1=img,
+                   character_memory="Kristy: <Picture 1>, she, 26, blonde.\n"
+                                    "Dan: he, 38, dark hair.")[2]
+    check("the mismatch is reported",
+          "carry a reference picture for one person" in one)
+    check("...naming who has no picture", "describe Dan" in one)
+    check("...and naming the shots", "shot(s) 1, 2" in one)
+    check("...and saying what to do about it", "<Picture 2>" in one)
+    # It must not cry wolf. Both tagged is the state it is asking for.
+    both = run_node(P, plan_only=True, ref_image_1=img, ref_image_2=img,
+                    character_memory="Kristy: <Picture 1>, she, 26, blonde.\n"
+                                     "Dan: <Picture 2>, he, 38, dark hair.")[2]
+    check("both tagged says nothing", "carry a reference picture for one" not in both)
+    # ...nor when there is no picture in play at all, which is a different note.
+    none = run_node(P, plan_only=True,
+                    character_memory="Kristy: <Picture 1>, she, 26, blonde.\n"
+                                     "Dan: he, 38, dark hair.")[2]
+    check("no reference wired says nothing", "carry a reference picture for one" not in none)
+    # ...nor on a scene with one person in it.
+    solo = run_node("A room.\n\nKristy sits down.\n\nKristy stands up.",
+                    plan_only=True, ref_image_1=img,
+                    character_memory="Kristy: <Picture 1>, she, 26, blonde.")[2]
+    check("a solo scene says nothing", "carry a reference picture for one" not in solo)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3399,6 +3440,7 @@ def main():
     test_a_garment_does_not_appear_at_the_first_frame()
     test_the_ambient_bed_reaches_the_soundtrack()
     test_built_sound_lands_in_the_right_shot()
+    test_one_picture_two_people_is_reported()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
