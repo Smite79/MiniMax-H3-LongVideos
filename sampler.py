@@ -7137,6 +7137,16 @@ class H3LongVideos:
             if _marked != body:
                 dialogue_marked.append(len(shots) + 1)
                 body = _marked
+            # THE ENGINE READS FIRST, before anything downstream asks it what is
+            # true. It was reading further down at one point, after the hardware
+            # latch had already consulted it, so every shot was answered with the
+            # PREVIOUS shot's state -- and shot 1 with an empty one.
+            # The sheet first: what it already says is true before any beat runs.
+            for _n, _line in sheet_lines(sheet):
+                if _n:
+                    _state.declare(_n, _line)
+            _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
+                              shot=len(shots) + 1)
             # Who this beat involves, decided BEFORE the removals: a beat that
             # undresses somebody names no garment, so the wardrobe to clear is read
             # off their sheet entries -- and only theirs. Undressing one person must
@@ -7564,6 +7574,26 @@ class H3LongVideos:
                     worn_items.append(_hw)
                 elif len(_hw) > len(worn_items[_same]):
                     worn_items[_same] = _hw
+            # THE ENGINE IS THE AUTHORITY ON WHAT IS ON WHOM, and this is the
+            # only place the answer comes from now. The old derivation ran here
+            # too, in parallel, and a disable-check showed the engine was not
+            # load-bearing at all: pull it out and nothing changed, because both
+            # paths were computing the same thing and the old one won by being
+            # first. A second implementation nothing depends on is not a port.
+            #
+            # So the old accumulation is gone. What is on somebody is what the
+            # state says is on them -- read once per beat, every item recorded
+            # rather than the longest, each modifier bound to its own item.
+            _eng_hw = [r for p in _state.people.values()
+                       for r in p.hardware.values()]
+            worn_items = []
+            for _r in _eng_hw:
+                _same = next((k for k, p_ in enumerate(worn_items)
+                              if p_ in _r.item or _r.item in p_), None)
+                if _same is None:
+                    worn_items.append(_r.item)
+                elif len(_r.item) > len(worn_items[_same]):
+                    worn_items[_same] = _r.item
             worn_item = ", ".join(worn_items)
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(shot_scene)
@@ -7844,11 +7874,6 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
-            # The engine reads this beat and renders every continuity fact it
-            # owns, in one paragraph, from one state.
-            _cast = [n for n, _ in sheet_lines(sheet) if n] or list(_described)
-            _ch = _state.read(body, cast=_cast, shot=len(shots) + 1)
-            _cont = _state.continuity(described=_described or _cast, changed=_ch)
             # ONE sentence for the hardware. The hold, the name of the thing and
             # where it holds were three separate clauses written for three separate
             # reports, each naming the same object again -- 53 words about one pair
@@ -8046,22 +8071,38 @@ class H3LongVideos:
             # none of them counted the others; together they had reached 65% of the
             # shot against a 12% beat, which is the state this node was rebuilt to
             # escape. What the beat itself stages ranks above what merely persists.
+            # THE ENGINE DECIDES THE FACTS; THESE SENTENCES SAY THEM.
+            #
+            # The rewrite kept the half that was wrong and kept the half that was
+            # right. What was wrong was the DERIVATION: sixty readers each
+            # searching the beat alone, so nothing could notice that "neck" and
+            # "behind the back" contradicted, or that a beat naming two items had
+            # recorded one. That is now engine.SceneState -- one state, read once
+            # per beat, and the source of truth for what is on whom, where it
+            # holds, what it is anchored to and which room this is.
+            #
+            # What was RIGHT was the prose. Every clause below is worded the way
+            # it is because a specific render came back wrong: "both ends" exists
+            # because a garment came off a beat early, "dropped out of frame"
+            # because it reappeared, "the same object in the same material"
+            # because tape drifted into the nearest commoner object. Throwing that
+            # away would have cost more than the derivations ever did, so the
+            # builders stay and the engine feeds them.
             _guards = [
-                # ONE clause from the engine, carrying every continuity fact it
-                # owns: hardware and what it holds, garments going on and off,
-                # posture, place. These were nine separate guards -- removal,
-                # wearing, revealed, bare, hold, where, moved, anchors, posture --
-                # derived independently and unable to see each other, which is how
-                # a neck ended up behind a back and how the handcuffs stopped being
-                # mentioned at all. Rank 1: it is the continuity.
-                (1, "continuity", (" " + _cont) if _cont else ""),
+                (1, "removal", tail),        # the beat's own action, completing
+                (1, "wearing", _wearing),    # ...and its mirror, a garment going on
                 (2, "revealed", _revealed),  # what shows where it was
                 (2, "bare", _bare),          # ...or that nothing does
+                (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", fall),           # a body going down needs a landing
                 (4, "travel", _travel),      # a journey needs both its ends
+                (4, "where", _where),        # ...and later shots need the new room
                 (5, "pace", _pace),          # ...and a short action needs the whole shot
                 (5, "device", _device),      # a voice that is not hers
+                (6, "moved", _moved),        # a garment left where it was put
+                (7, "anchors", anchors),     # hardware with nowhere to sit
                 (10, "state", _state_clause),
+                (9, "posture", _posture),   # where the last beat left the body
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language

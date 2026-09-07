@@ -380,6 +380,31 @@ class SceneState:
             self.people[name] = Person(name)
         return self.people[name]
 
+    def declare(self, name, description):
+        """Take what a character sheet already says as read.
+
+        A sheet entry is a STATE, not an event: "Kate: she, 30, coat, handcuffs"
+        says the handcuffs are already on before any beat puts them there. The
+        engine read only beats at first, so a scene that opened with somebody
+        already restrained had no hardware in it at all until a beat happened to
+        mention some -- and a hold that never fires is hardware the model is free
+        to leave off.
+
+        Declared, never applied: nothing here is a change, so no shot is told
+        anything goes on during it."""
+        p = self.person(name)
+        for canon, part, written, _at in hardware_spans(description or ""):
+            if canon not in p.hardware:
+                # applied_in = 0, so this never reads as "goes on during this
+                # shot" -- shots are numbered from 1.
+                p.hardware[canon] = Restraint(written or canon, part,
+                                              position_in(description or ""),
+                                              anchor_in(description or ""), 0)
+        for g in garments_in(description or ""):
+            if _garment_key(g) not in [_garment_key(x) for x in p.worn]:
+                p.worn.append(g)
+        return p
+
     # -- reading a beat ----------------------------------------------------
     def read(self, beat, cast=(), shot=0):
         """Update the state from one beat, and report what CHANGED.

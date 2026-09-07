@@ -167,8 +167,10 @@ def test_a_chain_is_a_tether_not_a_second_restraint():
         "Ana sits down."])
     hw = list(st.person("Ana").hardware)
     check(f"one item, not two: {hw}", hw == ["collar"], str(hw))
+    # Guarded: with the item reader broken there is no collar to index, and a
+    # KeyError reports as a crashed suite rather than as the failure it is.
     check("it carries the anchor",
-          st.person("Ana").hardware["collar"].anchor == "wall")
+          "collar" in hw and st.person("Ana").hardware["collar"].anchor == "wall")
     check("the shot says so", "fast to the wall" in shots[1], shots[1])
     check("no loose chain in the text", "chain" not in shots[1], shots[1])
 
@@ -183,10 +185,14 @@ def test_a_modifier_belongs_to_its_own_item():
         "collar around her neck, chained to the wall.",
         "Ana sits down."])
     hw = st.person("Ana").hardware
-    check("cuffs take the position", hw["handcuffs"].position == "behind the back")
-    check("...and not the wall", hw["handcuffs"].anchor == "", hw["handcuffs"].anchor)
-    check("the collar takes the wall", hw["collar"].anchor == "wall")
-    check("...and not the position", hw["collar"].position == "")
+    # Guarded: with the item reader broken one of these is missing entirely, and
+    # a KeyError reports as a crashed suite rather than as the failure it is.
+    check(f"both items recorded: {list(hw)}", "handcuffs" in hw and "collar" in hw)
+    c, k = hw.get("handcuffs"), hw.get("collar")
+    check("cuffs take the position", bool(c) and c.position == "behind the back")
+    check("...and not the wall", bool(c) and c.anchor == "")
+    check("the collar takes the wall", bool(k) and k.anchor == "wall")
+    check("...and not the position", bool(k) and k.position == "")
     s = shots[1]
     check("the shot reads correctly",
           "the wrists behind the back and the neck fast to the wall" in s, s)

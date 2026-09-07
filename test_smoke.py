@@ -582,7 +582,17 @@ def test_chain_hold_end_to_end():
     soft = run_node("A basement.\n\nMaya: 27, a rope around her wrists.\n\n"
                     "Maya lies still.", plan_only=True)[3]
     check("rope is not claimed to be rigid", chain not in soft)
-    check("...but it is still held whole", "closed and fastened as" in soft)
+    # ...and it is TIED, not closed and fastened. restraint_sentence has said so
+    # since it was written -- "rope is not closed and it is not fastened, and
+    # saying so of a cord describes a mechanism that is not there" -- but the
+    # rope was declared in the SHEET and nothing read the sheet, so no hardware
+    # was found and the shot fell through to the generic wording this assertion
+    # was pinned to. The engine reads the sheet, so the soft branch now fires.
+    # The check keeps its intent: whatever the mechanism is called, it is whole.
+    check("...but it is still held whole",
+          "tied and holding as" in soft or "closed and fastened as" in soft, soft[-120:])
+    check("...and a cord is tied rather than fastened shut",
+          "tied and holding as" in soft, soft[-120:])
     # Steel locked on in shot 1 is still steel in shot 5. Tested per shot rather than
     # latched, the shot naming the chain got the rigid clause and every shot after it
     # fell back to the soft one -- which is where the slack came back from.
@@ -3412,10 +3422,10 @@ def test_a_collar_chained_to_a_wall_stays_on():
                                        "Guard: he, 40, uniform.")[3]
     shots = [b.split("]", 1)[1] for b in script.split("[Shot ")[1:]]
     check("every shot after the first is tethered",
-          all("to the wall" in s for s in shots[1:]),
+          all("at the wall" in s for s in shots[1:]),
           f"{[('at the wall' in s) for s in shots]}")
     check("...and it is the NECK being held, not the wrists",
-          all("the neck fast to the wall" in s for s in shots[1:]),
+          all("holding the neck at the wall" in s for s in shots[1:]),
           f"{[('holding the neck' in s) for s in shots]}")
     check("no shot claims the wrists", not any("the wrists" in s for s in shots))
     check("the hardware stays fastened in every later shot",
@@ -3471,7 +3481,7 @@ def test_every_way_of_chaining_a_collar_to_a_wall():
                           character_memory="Ana: she, 28.\nGuard: he, 40.")[3]
         last = script.split("[Shot ")[-1]
         check(f"tethered: {p[:44]!r}",
-              "to the wall" in last or "to the ring" in last)
+              "at the wall" in last or "at the ring" in last)
         check(f"...and fastened: {p[:40]!r}",
               "closed and fastened" in last or "tied and holding" in last)
 
@@ -3537,7 +3547,7 @@ def test_two_restraints_put_on_together_both_survive():
     check("the wrists take the limb position",
           all("the wrists behind the back" in x for x in shots[1:]))
     check("the collar takes the fixed point",
-          all("fast to the wall" in x for x in shots[1:]))
+          all("fast at the wall" in x for x in shots[1:]))
     # "Ana looks at the door" must not relocate the camera into a door.
     check("a door does not move the shot",
           not any("in the door," in x for x in shots))
