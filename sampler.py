@@ -8519,7 +8519,17 @@ class H3LongVideos:
             _phrase = " ".join(p for p in (_mix_bed, _mix_room) if p)
             _synth = synth_ambient(_phrase, int(audio.shape[-1]), int(sr),
                                    seed=seed, channels=int(audio.shape[1]))
-            if _synth is not None:
+            if _synth is None:
+                # SAID, not swallowed. synth_ambient is defensive on purpose so a
+                # render never dies for a bed, but that turns a failure into an
+                # output with no ambience and nothing anywhere saying why -- the
+                # exact hole _SILENCE_STATUS exists to close on the other branch.
+                notes.append(
+                    f"AMBIENT LEVEL IS {float(ambient_level):.2f} BUT NO BED WENT ON: "
+                    f"the bed could not be built for this soundtrack. Nothing is "
+                    f"wired to ambient_audio, so there is no bed at all on the "
+                    f"output. Wire a recording there to get one regardless")
+            else:
                 _bed_in = {"waveform": _synth.unsqueeze(0), "sample_rate": int(sr)}
                 _built = (f"built from the scene, not a file: \"{_phrase}\". "
                           if _phrase else "built as a neutral room tone. ")
