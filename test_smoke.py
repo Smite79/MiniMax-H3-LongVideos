@@ -2821,10 +2821,11 @@ def test_a_journey_reaches_the_shot():
     info, script = out[2], out[3]
     sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     check("the travelling shot is told where it begins",
-          "begins in the living room" in sh[1])
-    check("...and where it ends", "ends in the bedroom" in sh[1])
+          "opens in the living room" in sh[1])
+    check("...and where it ends", "arrives in the bedroom" in sh[1])
     check("...and what it passes through", "along the hallway" in sh[1])
-    check("...and that it is not a cut", "not a cut" in sh[1])
+    check("...and that the walk happens on screen",
+          "played out on screen" in sh[1] and "every step in frame" in sh[1])
     # The origin came from the PREVIOUS beat: this one never names it.
     check("the origin is latched from the earlier beat",
           "living room" not in P.split("\n\n")[2])
@@ -3003,11 +3004,11 @@ def test_the_scene_does_not_reset():
     sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     # The journey has an origin, which it only has because `here` is seeded from
     # the scene: stated as a destination alone it renders as a cut.
-    check("the move begins where the scene says", "begins in the living room" in sh[1])
-    check("...and ends in the new room", "ends in the bedroom" in sh[1])
+    check("the move begins where the scene says", "opens in the living room" in sh[1])
+    check("...and ends in the new room", "arrives in the bedroom" in sh[1])
     # ...and the shots after it stay there.
-    check("the next shot is in the new room", "is in the bedroom" in sh[2])
-    check("...and so is the one after", "is in the bedroom" in sh[3])
+    check("the next shot is in the new room", "takes place in the bedroom" in sh[2])
+    check("...and so is the one after", "takes place in the bedroom" in sh[3])
     check("info names them", "room the scene text does not name" in info)
     # A script that never moves is untouched.
     still = run_node("A living room.\n\nKate waits.\n\nKate looks up.",
@@ -3033,10 +3034,10 @@ def test_a_described_room_still_holds():
     out = run_node(P, plan_only=True, character_memory=mem)
     info, script = out[2], out[3]
     sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
-    check("the journey has both ends", "begins in the living room" in sh[1]
-          and "ends in the bathroom" in sh[1])
-    check("the next shot is in the new room", "is in the bathroom" in sh[2])
-    check("...and so is the one after", "is in the bathroom" in sh[3])
+    check("the journey has both ends", "opens in the living room" in sh[1]
+          and "arrives in the bathroom" in sh[1])
+    check("the next shot is in the new room", "takes place in the bathroom" in sh[2])
+    check("...and so is the one after", "takes place in the bathroom" in sh[3])
     # The acoustic goes with them.
     check("the room tone follows", "tiled walls ringing" in sh[2])
     check("...and the ambient bed", "water moving in the pipes" in sh[2])
@@ -3045,7 +3046,7 @@ def test_a_described_room_still_holds():
     check("info names the shots", "sound followed them into the new room" in info)
     # auto_sound off leaves the picture fix alone and takes only the sound.
     quiet = run_node(P, plan_only=True, character_memory=mem, auto_sound=False)[3]
-    check("auto_sound off keeps the room hold", "is in the bathroom" in quiet)
+    check("auto_sound off keeps the room hold", "takes place in the bathroom" in quiet)
     check("...and drops the acoustic", "tiled walls ringing" not in quiet)
 
 
@@ -3106,19 +3107,19 @@ def test_the_anchor_is_not_read_as_a_room():
     script = out[3]
     sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     check("no shot is put in a phantom hall", "in the hall," not in script)
-    check("...and no journey starts in one", "begins in the hall" not in script)
+    check("...and no journey starts in one", "opens in the hall" not in script)
     check("...and the lens gets no cathedral", "a large room with a long tail" not in script)
     # The anchor itself is still carried on every shot -- that is what it is for.
     check("the anchor is on every shot",
           all("Shot on 35mm" in x for x in sh), f"{len(sh)} shots")
     check("...once per shot", all(x.count("Shot on 35mm") == 1 for x in sh))
     # The journey itself still works; it simply has no invented origin.
-    check("the move still reaches the bedroom", "ends in the bedroom" in sh[1])
+    check("the move still reaches the bedroom", "arrives in the bedroom" in sh[1])
     # ...and a scene paragraph that DOES name a room still seeds it.
     named = run_node("A living room.\n\nKate waits.\n\n"
                      "Kate walks him down the hallway to the bedroom.",
                      plan_only=True, character_memory=mem)[3]
-    check("a real scene room still seeds the origin", "begins in the living room" in named)
+    check("a real scene room still seeds the origin", "opens in the living room" in named)
     # THE HALF THAT CAUGHT A WRONG FIX. Excluding the anchor from the room reader
     # looks right -- a lens line is not a location -- but the anchor is DOCUMENTED
     # to carry the location, and with one set there is no scene paragraph for the
@@ -3129,7 +3130,7 @@ def test_the_anchor_is_not_read_as_a_room():
                        anchor="A carpeted living room. Shot on 35mm, "
                               "shallow depth of field, handheld.")[3]
     check("a location IN the anchor still seeds the origin",
-          "begins in the living room" in located)
+          "opens in the living room" in located)
     check("...and still no phantom hall", "in the hall" not in located)
 
 
@@ -3674,16 +3675,74 @@ def test_entering_a_room_is_a_journey_not_a_cut():
                       character_memory="Dana: she, 31, blue jacket.")[3]
     sh = [b.split("]", 1)[1] for b in script.split("[Shot ")[1:]]
     check("the walk is one continuous move",
-          "one continuous move, not a cut" in sh[1], sh[1][:220])
-    check("...starting where she was", "begins in the living room" in sh[1])
-    check("...and ending where she goes", "ends in the bedroom" in sh[1])
+          "played out on screen" in sh[1], sh[1][:220])
+    check("...starting where she was", "opens in the living room" in sh[1])
+    check("...and ending where she goes", "arrives in the bedroom" in sh[1])
     # The room the film is in follows her, or the scene paragraph keeps saying
     # living room over a shot standing in the bedroom.
     check("the next shot is in the bedroom",
-          "in the bedroom, not the room the scene text names" in sh[2], sh[2][:220])
+          "takes place in the bedroom" in sh[2], sh[2][:220])
     # The shot before the journey is untouched.
     check("the shot before it says nothing",
-          "continuous move" not in sh[0] and "not the room" not in sh[0])
+          "played out on screen" not in sh[0] and "takes place in the" not in sh[0])
+
+
+NEGATION = re.compile(
+    r"\b(?:not|never|no|none|nobody|nothing|without|cannot|can't|won't|"
+    r"doesn't|isn't|aren't)\b", re.I)
+
+
+def test_no_guard_sentence_carries_a_negation():
+    """At cfg 1 H3 evaluates NO negative prompt, so a negation in the positive
+    prompt is just the thing it names. This file says so in eleven places -- "no
+    leggings" would be read as leggings -- and then shipped, in the clause
+    written to prevent a cut:
+
+        one continuous move, not a cut
+
+    ...which puts the word CUT in the prompt of the only shot that must not cut.
+    Reported twice as an instant cut across a house, the second time after the
+    destination reader was fixed and the clause was demonstrably in the prompt.
+    The wording was the bug, and no amount of reading the shot text catches it,
+    because the clause looks exactly like what you meant.
+
+    Two more went with it: "in the {room}, NOT the room the scene text names"
+    pointed at the room being overridden, and "fully removed and NO LONGER on the
+    body" names the body it is clearing.
+
+    This sweeps what the node actually SENDS. A negation in a comment is fine and
+    there are hundreds; one in an emitted sentence is a bug by construction."""
+    print("\n=== no guard sentence carries a negation ===")
+    mem = ("Ana: she, 28, blue coat, wool scarf, grey shirt, handcuffs.\n"
+           "Dan: he, 40, uniform.")
+    scenes = [
+        "A living room.\n\nAna stands by the sofa.\n\n"
+        "Ana walks into the bedroom.\n\nAna looks around.",
+        "A cell.\n\nDan handcuffs Ana's wrists behind her back and chains her "
+        "to the wall.\n\nAna pulls at the chain.\n\nDan walks out.",
+        "A hallway.\n\nAna takes off her coat and hangs it up.\n\n"
+        'Ana sits down.\n\nAna says: "Where is he?"',
+        "A yard.\n\nRain on the corrugated roof.\n\nAna runs for the gate."
+        "\n\nAna falls.",
+        "A room.\n\nAna pulls her scarf aside.\n\nAna puts the scarf back on."
+        "\n\nAna stands up.",
+    ]
+    bad = {}
+    for sc in scenes:
+        script = run_node(sc, plan_only=True, character_memory=mem)[3]
+        beats = set(sc.split("\n\n"))
+        for block in script.split("[Shot ")[1:]:
+            body = block.split("]", 1)[1]
+            for sent in re.split(r"(?<=[.!?])\s+", body):
+                sent = sent.strip()
+                # The author's own beat and sheet go through verbatim and are
+                # theirs to phrase; only what the NODE writes is in scope.
+                if not sent or any(sent in b for b in beats):
+                    continue
+                if NEGATION.search(sent) and "<d>" not in sent:
+                    bad[sent[:90]] = True
+    check("every guard sentence is positively phrased: "
+          + ("; ".join(sorted(bad)[:2]) or "all clear"), not bad)
 
 
 def test_timing_report():
@@ -3817,6 +3876,7 @@ def main():
     test_a_name_that_is_only_spoken_is_not_in_the_shot()
     test_a_verb_is_not_a_room()
     test_entering_a_room_is_a_journey_not_a_cut()
+    test_no_guard_sentence_carries_a_negation()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

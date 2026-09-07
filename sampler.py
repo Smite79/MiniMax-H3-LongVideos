@@ -3445,10 +3445,10 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
     if agent:
         sentence = (f"{agent} takes {what} off during this shot, with {agent}'s own "
                     f"hands, and {what} {are} away by the last frame -- fully removed "
-                    f"and no longer on the body.")
+                    f"and clear of the body.")
     else:
         sentence = (f"{what} {verb} off during this shot and {are} away by the last "
-                    f"frame, fully removed and no longer on the body, dropped out of "
+                    f"frame, fully removed and clear of the body, dropped out of "
                     f"frame.")
     # BOUND the action. Saying what comes off does not say where to STOP, and an
     # action with time left over runs on to whatever is next: a hand that finishes
@@ -5037,7 +5037,14 @@ def where_hold(here, scene):
     # scene that names no room is not disagreeing with anything.
     if not _PLACE_WORD.search(txt):
         return ""
-    return f" This shot is in the {here}, not the room the scene text names."
+    # POSITIVELY PHRASED. This said "in the {here}, not the room the scene text
+    # names" -- and at cfg 1 there is no negative to carry the "not", so the
+    # clause pointed the model at the scene paragraph's room in the very shot
+    # that has to override it. The scene text is already in the prompt saying
+    # living room; this only has to assert the new one, harder, and let the
+    # stronger, later, more specific statement win on its own terms.
+    return (f" This shot takes place in the {here}: the walls, floor, light and "
+            f"furniture are the {here}'s throughout.")
 
 
 def travel_anchor(frm, via, to, here=""):
@@ -5051,15 +5058,25 @@ def travel_anchor(frm, via, to, here=""):
     start = frm or here
     if not to or start == to:
         return ""
+    # POSITIVELY PHRASED, and it was not. Every version of this clause ended
+    # "-- one continuous move, not a cut", which puts the word CUT in the prompt
+    # of the one shot that must not cut. At cfg 1 H3 evaluates no negative, so a
+    # negation in the positive prompt is just the thing it names: this file says
+    # so in eleven other places -- "no leggings" would be read as leggings -- and
+    # then asked for a cut in the clause written to prevent one.
+    #
+    # Reported twice as an instant cut across a house, once after the destination
+    # reader was fixed and the clause was demonstrably in the prompt. Say what the
+    # shot DOES: the walk happens, on screen, in frame, the whole way.
+    walk = "the walk between them played out on screen, every step in frame."
     if via:
-        return (f" The shot begins in the {start}, moves along the {via}, and ends "
-                f"in the {to} -- one continuous move, not a cut.") if start else (
-                f" The shot moves along the {via} and ends in the {to} -- one "
-                f"continuous move, not a cut.")
+        return (f" The shot opens in the {start}, carries along the {via}, and "
+                f"arrives in the {to}, {walk}") if start else (
+                f" The shot carries along the {via} and arrives in the {to}, "
+                f"{walk}")
     if not start:
         return ""
-    return (f" The shot begins in the {start} and ends in the {to} -- one "
-            f"continuous move, not a cut.")
+    return f" The shot opens in the {start} and arrives in the {to}, {walk}"
 
 
 _IS_IN = re.compile(r"\b(?:in|inside|within|at)\s+(?:the|her|his|their|a)\s+"

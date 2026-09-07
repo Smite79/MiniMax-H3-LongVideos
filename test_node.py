@@ -1888,7 +1888,7 @@ def test_the_room_follows_the_characters():
     check("a later room is stated",
           "bedroom" in S.where_hold("bedroom", "A living room."))
     check("...and says the scene disagrees",
-          "not the room the scene text names" in S.where_hold("bedroom",
+          "takes place in the bedroom" in S.where_hold("bedroom",
                                                               "A living room."))
     # Silent where there is nothing to correct.
     check("the scene already naming it says nothing",
@@ -1926,14 +1926,14 @@ def test_a_journey_has_two_ends():
         check(f"not travel: {_b[:34]!r}", S.travel_in(_b) == ("", "", ""))
     # Both ends, and the middle where the beat gives one.
     check("both ends are named",
-          "begins in the living room" in S.travel_anchor("living room", "", "bedroom")
-          and "ends in the bedroom" in S.travel_anchor("living room", "", "bedroom"))
+          "opens in the living room" in S.travel_anchor("living room", "", "bedroom")
+          and "arrives in the bedroom" in S.travel_anchor("living room", "", "bedroom"))
     check("...and the route between them",
           "along the hallway" in S.travel_anchor("living room", "hallway", "bedroom"))
     # The room an earlier beat established stands in for an unnamed origin: a
     # journey with only a destination is the one that renders as a cut.
     check("the established room is the origin",
-          "begins in the living room"
+          "opens in the living room"
           in S.travel_anchor("", "", "bedroom", here="living room"))
     check("no origin anywhere, nothing said",
           S.travel_anchor("", "", "bedroom") == "")
@@ -2303,7 +2303,7 @@ def test_removal_completes():
     # has moved on and never contradicts the picture, so it stays.
     one = S.off_by_last_frame(["coat"])
     check("the removing shot is told to finish it", "by the last frame" in one)
-    check("...and that nothing is left on the body", "no longer on the body" in one)
+    check("...and that the body is clear of it", "clear of the body" in one)
     check("...and where it ends up", "out of frame" in one)
     check("a plural garment agrees",
           "boots come off" in S.off_by_last_frame(["boots"])
@@ -2328,7 +2328,7 @@ def test_removal_completes():
     check("...naming no other garment", "jumper" not in _b and "coat" not in _b)
     # The BOUND sentence carries no negation: at cfg 1 the negative prompt is
     # never evaluated, so a negation in the positive only names what it forbids.
-    # ("no longer on the body" belongs to the removal half, and is the wording the
+    # ("clear of the body" belongs to the removal half, and is the wording the
     # previous node proved safe in the removing shot.)
     _bound = _b.split("dropped out of frame.")[1]
     check("...and the bound is stated positively",
