@@ -3174,6 +3174,43 @@ def test_a_garment_does_not_appear_at_the_first_frame():
     check("...and is described as worn in that shot", "Her blue shorts." in osh[3])
 
 
+def test_the_ambient_bed_reaches_the_soundtrack():
+    """END TO END, and testing the WIRING. The unit tests call mix_ambient directly,
+    which says nothing about whether the node ever calls it -- the same gap that let
+    the sound-clause budget test pass with its fix reverted.
+
+    It goes on ONCE, over the joined soundtrack, so the loop runs continuously
+    through the cuts instead of restarting at every one."""
+    print("\n=== the ambient bed reaches the soundtrack ===")
+    import math
+    P = ("A room.\n\nHe walks in.\n\nShe follows him and says: \"Wait.\"")
+    # THE FAKE MODEL IS RANDOM: two identical runs differ by 0.69 peak, so nothing
+    # here may compare one run's waveform against another's. An earlier version of
+    # this test did, and "the bed is not the dry one" passed on that alone. What is
+    # sound to assert is the node's own account -- the note comes from mix_ambient's
+    # return value and from nowhere else, so it is present exactly when the call is.
+    n = int(run_node(P)[1]["waveform"].shape[-1])
+    sr = 44100
+    tt = torch.arange(sr, dtype=torch.float32) / sr          # 1s, non-integer cycles
+    bed = {"waveform": (torch.sin(2 * math.pi * 97.3 * tt) * 0.4
+                        ).unsqueeze(0).repeat(2, 1).unsqueeze(0),
+           "sample_rate": sr}
+    wet_out = run_node(P, ambient_audio=bed, ambient_level=0.3)
+    wet, info = wet_out[1]["waveform"], wet_out[2]
+    check("the soundtrack keeps its length", int(wet.shape[-1]) == n)
+    check("the node actually mixes the bed", "ambient bed was laid under" in info)
+    check("...over the whole soundtrack", "under the whole soundtrack" in info)
+    check("...and loops the short one", "looped with a crossfade" in info)
+    # Level 0 is a wired bed that costs nothing until it is asked for.
+    off = run_node(P, ambient_audio=bed, ambient_level=0.0)
+    check("level 0 mixes nothing", "ambient bed was laid under" not in off[2])
+    check("...and still renders", int(off[1]["waveform"].shape[-1]) > 0)
+    # ...and the silent conditioning is untouched by any of it: the bed is a MIX and
+    # must not re-open an audio branch the way an inferred bed did.
+    check("wordless shots are still pinned",
+          "have no quoted line and no sound described" in info)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3294,6 +3331,7 @@ def main():
     test_the_sound_clause_is_inside_the_budget()
     test_the_anchor_is_not_read_as_a_room()
     test_a_garment_does_not_appear_at_the_first_frame()
+    test_the_ambient_bed_reaches_the_soundtrack()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

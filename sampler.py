@@ -1838,6 +1838,107 @@ def _decode_audio(audio_vae, out_latent):
     return {"waveform": audio, "sample_rate": sr}
 
 
+def _seamless_loop(x, n, sr):
+    """[C, M] -> [C, n], looped with a crossfade so the join does not click.
+
+    Plain tiling puts a discontinuity at every repeat, once per loop length. In a
+    bed that is meant to sit under everything unnoticed, a regular click is the one
+    thing that gets noticed -- the same objection that made the silence latent
+    ping-pong its interior rather than tile it. Here the material is real audio
+    being PLAYED rather than a latent being conditioned on, so it cannot be
+    reversed: a room tone read backwards is fine, but footsteps are not. Crossfade
+    instead, which works on both."""
+    m = int(x.shape[-1])
+    if m <= 0:
+        return None
+    if m >= n:
+        return x[..., :n]
+    fade = min(int(0.25 * sr), m // 4)
+    if fade < 1:
+        reps = -(-n // m)
+        return x.repeat(1, reps)[..., :n]
+    # OVERLAP-ADD the tail onto the head, and shorten the unit by the overlap. The
+    # unit then runs x[m-fade] .. x[m-fade-1], so tiling it steps between samples
+    # that were adjacent in the source and there is no discontinuity anywhere.
+    #
+    # Measured, because the obvious construction is wrong: appending the crossfade
+    # to the END of a full-length unit leaves it finishing on x[fade-1] while the
+    # next repeat starts on x[0], which are not adjacent -- a 2s tone that does not
+    # divide evenly gave a 64x jump at the join, worse than plain tiling's 41x.
+    t = torch.linspace(0.0, 1.0, fade, dtype=x.dtype, device=x.device)
+    head = x[..., :fade] * t + x[..., m - fade:] * (1.0 - t)
+    unit = torch.cat([head, x[..., fade:m - fade]], dim=-1)
+    if int(unit.shape[-1]) < 1:
+        reps = -(-n // m)
+        return x.repeat(1, reps)[..., :n]
+    reps = -(-n // int(unit.shape[-1]))
+    return unit.repeat(1, reps)[..., :n]
+
+
+def mix_ambient(audio, sr, bed, level):
+    """Lay an ambient bed UNDER a finished soundtrack. -> (waveform, note).
+
+    The bed is PLAYED, not conditioned on: it is the file, at the level asked for,
+    under whatever the model generated. That is the whole reason to do it here
+    rather than in the sampler -- ambience needs no cooperation from a joint model,
+    has nothing to lip-sync to, and so cannot put a voice in a wordless shot. The
+    conditioning path can only steer the branch toward something bed-LIKE, and on a
+    shot with a line it competes with the line.
+
+    Defensive throughout, like the silence latent: any failure returns the audio
+    untouched with a note saying so, because a bed is a nicety and a render is not.
+    """
+    try:
+        if audio is None or bed is None or float(level or 0.0) <= 0.0:
+            return audio, ""
+        w = bed.get("waveform") if isinstance(bed, dict) else None
+        if w is None or not int(getattr(w, "ndim", 0)):
+            return audio, ("ambient_audio is wired but carries no waveform, so nothing "
+                           "was laid under the soundtrack")
+        w = w[0] if w.dim() == 3 else w              # [B, C, M] -> [C, M]
+        if w.dim() != 2 or w.shape[-1] < 2:
+            return audio, ("ambient_audio is too short to loop, so nothing was laid "
+                           "under the soundtrack")
+        w = w.detach().to(dtype=audio.dtype, device=audio.device)
+        b_sr = int((bed.get("sample_rate") if isinstance(bed, dict) else 0) or 0)
+        # RESAMPLE, or the bed plays at the wrong speed and pitch. Linear is coarse
+        # for music and inaudible on a room tone, which is what this input is for.
+        resampled = ""
+        if b_sr > 0 and b_sr != int(sr):
+            want = max(2, int(round(w.shape[-1] * float(sr) / float(b_sr))))
+            w = torch.nn.functional.interpolate(
+                w.unsqueeze(0), size=want, mode="linear", align_corners=False)[0]
+            resampled = f", resampled from {b_sr} Hz"
+        ch = int(audio.shape[1])
+        if int(w.shape[0]) != ch:
+            w = (w.mean(dim=0, keepdim=True).repeat(ch, 1) if int(w.shape[0]) > ch
+                 else w[:1].repeat(ch, 1))
+        n = int(audio.shape[-1])
+        loop = _seamless_loop(w, n, int(sr))
+        if loop is None:
+            return audio, ""
+        out = audio + loop.unsqueeze(0) * float(level)
+        # NORMALISE rather than clip. Clipping a bed that pushed a loud line over
+        # the top distorts the LINE, which is the thing worth keeping.
+        peak = float(out.abs().max())
+        gain = ""
+        if peak > 1.0:
+            out = out / peak
+            gain = f", and the mix was scaled by {1.0 / peak:.2f} to stop it clipping"
+        secs = w.shape[-1] / float(sr)
+        return out, (f"an ambient bed was laid under the whole soundtrack at level "
+                     f"{float(level):.2f} -- {secs:.1f}s of audio{resampled}, looped "
+                     f"with a crossfade so the join does not click{gain}. It is your "
+                     f"file, played under what the model generated: it conditions "
+                     f"nothing, so it cannot put a voice in a wordless shot the way "
+                     f"an inferred bed did. Shots pinned to silence keep their silent "
+                     f"conditioning and get the bed on top, which is what makes a "
+                     f"wordless shot sound like a room instead of a mute")
+    except Exception as exc:
+        return audio, (f"the ambient bed could not be mixed ({type(exc).__name__}), so "
+                       f"the soundtrack is unchanged")
+
+
 def _is_oom(e):
     return isinstance(e, torch.cuda.OutOfMemoryError) or "out of memory" in str(e).lower()
 
@@ -5479,6 +5580,7 @@ _WIDGET_RANGE = {
     "upscale_target_short_edge": (0, 0, 4096, int),
     "upscale_batch": (4, 1, 64, int),
     "pace": (1.0, 0.25, 2.0, float),
+    "ambient_level": (0.25, 0.0, 1.0, float),
 }
 
 
@@ -5924,6 +6026,33 @@ class H3LongVideos:
                                "camera is, so a shot looking straight down the line of "
                                "sight is unaffected. Looking at a PERSON is left alone: "
                                "restating a pronoun says nothing the beat did not."}),
+                # APPENDED, like every widget before it. Saved workflows restore
+                # widget values by POSITION with no names stored.
+                "ambient_audio": ("AUDIO", {"tooltip":
+                    "An ambient bed laid UNDER the finished soundtrack -- room tone, "
+                    "rain, traffic, a hum. Wire any audio loader here.\n\n"
+                    "This is a MIX, not conditioning. Your file is played under what "
+                    "the model generated, at the level you set, unchanged. That is "
+                    "the difference that makes it work: ambience has nothing to "
+                    "lip-sync to and asks nothing of the model, so it cannot put a "
+                    "voice in a wordless shot.\n\n"
+                    "Ambience derived in the prompt CANNOT do this. To score a "
+                    "silent shot from text, the audio branch has to be left open, "
+                    "and an open branch on a joint model fills itself -- at 4-8 "
+                    "steps the last audio step resolves 50%-30% of its denoising in "
+                    "one jump, and what it invents there is a voice. Wordless shots "
+                    "keep their silent conditioning and get this bed on top instead, "
+                    "which is what makes them sound like a room rather than a mute.\n\n"
+                    "Looped with a crossfade to the length of the video, resampled if "
+                    "it does not match, and downmixed or spread to match the "
+                    "channels. Anything shorter than the film is fine."}),
+                "ambient_level": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "How loud the bed sits under everything. 0 turns it "
+                               "off. 0.15-0.3 is a bed you notice only when it "
+                               "stops; above that it starts competing with dialogue. "
+                               "If the sum would clip, the whole mix is scaled down "
+                               "rather than clipped, so a loud line distorts."}),
             },
         }
 
@@ -5948,7 +6077,8 @@ class H3LongVideos:
             upscale_batch=4, shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
-            mouths_shut_when_no_line=True, hold_gaze=True, **_removed):
+            mouths_shut_when_no_line=True, hold_gaze=True,
+            ambient_audio=None, ambient_level=0.25, **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
@@ -8233,6 +8363,12 @@ class H3LongVideos:
             if up_note:
                 notes.append(up_note)
         audio = torch.cat(aud_out, dim=-1)
+        # ...and the ambient bed goes on last, over the joined soundtrack rather than
+        # per shot, so the loop runs continuously through the cuts instead of
+        # restarting at each one. A bed that resets every shot is a bed you can hear.
+        audio, _bed_note = mix_ambient(audio, sr, ambient_audio, ambient_level)
+        if _bed_note:
+            notes.append(_bed_note)
         total = video.shape[0]
         # The finished chain is the largest thing this node holds, and it competes with
         # the MODELS for system RAM: ComfyUI offloads weights to RAM rather than

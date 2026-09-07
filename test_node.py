@@ -15,6 +15,8 @@ import os
 import sys
 import types
 
+import torch
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # Stub the ComfyUI modules the node imports; none of them is touched by the pure
@@ -1122,6 +1124,76 @@ def test_a_transitive_posture_puts_the_object_down():
     # "lays" and "laid" are the transitive spellings and were matched by nothing.
     check("lays is read", "lying down" in S.posture_in("Dana lays her down.",
                                                        cast).values())
+
+
+def _tone(secs, f, sr=44100, amp=0.4, ch=2):
+    import math
+    t = torch.arange(int(secs * sr), dtype=torch.float32) / sr
+    return (torch.sin(2 * math.pi * f * t) * amp).unsqueeze(0).repeat(ch, 1)
+
+
+def test_an_ambient_bed_is_mixed_not_conditioned():
+    """Ambience laid UNDER the finished soundtrack, rather than derived in the prompt.
+
+    Deriving it needs the audio branch left open, and an open branch on a joint model
+    fills itself with a voice -- that is why ambience everywhere was reverted. A mix
+    asks nothing of the model, has nothing to lip-sync to, and so cannot speak."""
+    sr = 44100
+    voice = _tone(4.0, 300.0, amp=0.6).unsqueeze(0)          # [1, 2, N]
+    bed = {"waveform": _tone(2.0, 90.0).unsqueeze(0), "sample_rate": sr}
+    out, note = S.mix_ambient(voice, sr, bed, 0.25)
+    check("the soundtrack keeps its length", tuple(out.shape) == tuple(voice.shape))
+    check("the bed is actually added", not torch.allclose(out, voice))
+    check("...and reported", "ambient bed was laid under" in note)
+    # A bed nobody asked for must cost nothing at all.
+    check("level 0 is a no-op", S.mix_ambient(voice, sr, bed, 0.0) == (voice, ""))
+    check("no bed is a no-op", S.mix_ambient(voice, sr, None, 0.5) == (voice, ""))
+    # Wrong rate would play the bed at the wrong speed and pitch.
+    b22 = {"waveform": _tone(2.0, 90.0, sr=22050).unsqueeze(0), "sample_rate": 22050}
+    o2, n2 = S.mix_ambient(voice, sr, b22, 0.25)
+    check("a different sample rate is resampled", "resampled from 22050 Hz" in n2)
+    check("...to the right length", tuple(o2.shape) == tuple(voice.shape))
+    mono = {"waveform": _tone(2.0, 90.0, ch=1).unsqueeze(0), "sample_rate": sr}
+    check("a mono bed is spread to the channels",
+          tuple(S.mix_ambient(voice, sr, mono, 0.25)[0].shape) == tuple(voice.shape))
+    # Clipping is NORMALISED, not clipped: clipping distorts the line, which is the
+    # thing worth keeping.
+    loud = {"waveform": _tone(2.0, 90.0, amp=1.0).unsqueeze(0), "sample_rate": sr}
+    o4, n4 = S.mix_ambient(_tone(4.0, 300.0, amp=1.0).unsqueeze(0), sr, loud, 1.0)
+    check("a mix that would clip is scaled", "stop it clipping" in n4)
+    check("...and peaks at 1.0", float(o4.abs().max()) <= 1.0 + 1e-6)
+    # Anything unusable leaves the render alone rather than failing it.
+    check("a bed with no waveform is survivable",
+          S.mix_ambient(voice, sr, {"sample_rate": sr}, 0.5)[0] is voice)
+
+
+def test_the_loop_join_does_not_click():
+    """A bed is looped to the length of the film, and a bed that clicks once per loop
+    is the one thing a background bed must not do.
+
+    The obvious construction is wrong and was caught by measuring: appending the
+    crossfade to the END of a full-length unit leaves it finishing on x[fade-1]
+    while the next repeat starts on x[0], which are not adjacent. Overlap the tail
+    onto the HEAD and shorten the unit instead, so tiling steps between samples that
+    were adjacent in the source."""
+    sr = 44100
+    n = int(9.5 * sr)
+    for f in (97.3, 123.7, 211.11):
+        src = _tone(2.0, f)
+        loop = S._seamless_loop(src, n, sr)
+        check(f"{f} Hz loops to the right length", int(loop.shape[-1]) == n)
+        step_src = float((src[:, 1:] - src[:, :-1]).abs().max())
+        step_loop = float((loop[:, 1:] - loop[:, :-1]).abs().max())
+        reps = -(-n // int(src.shape[-1]))
+        tiled = src.repeat(1, reps)[..., :n]
+        step_tiled = float((tiled[:, 1:] - tiled[:, :-1]).abs().max())
+        check(f"{f} Hz has no join bigger than the material itself",
+              step_loop <= step_src * 1.5)
+        # ...and this is not vacuous: plain tiling on the same material is far worse.
+        check(f"{f} Hz plain tiling would click", step_tiled > step_src * 5)
+    # A bed longer than the film is simply truncated.
+    check("a long bed is cut to length",
+          int(S._seamless_loop(_tone(20.0, 100.0), n, sr).shape[-1]) == n)
 
 
 def test_a_garment_going_on_has_both_ends():
@@ -3409,7 +3481,7 @@ def test_schema():
     # hold_scene_state.
     # A ceiling, not a target: the old node had 38 and nobody could find anything.
     # Every one added since the rebuild answers a reported failure.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 35)
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 36)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -3417,9 +3489,10 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-8:] == ["anchor", "character_memory", "character_guard",
-                             "pace", "auto_sound", "hold_scene_state",
-                             "mouths_shut_when_no_line", "hold_gaze"])
+          list(opt)[-10:] == ["anchor", "character_memory", "character_guard",
+                              "pace", "auto_sound", "hold_scene_state",
+                              "mouths_shut_when_no_line", "hold_gaze",
+                              "ambient_audio", "ambient_level"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",
@@ -3474,6 +3547,8 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_an_ambient_bed_is_mixed_not_conditioned()
+    test_the_loop_join_does_not_click()
     test_a_garment_going_on_has_both_ends()
     test_a_lens_setting_is_not_a_room()
     test_the_sound_clause_spends_from_the_budget()
