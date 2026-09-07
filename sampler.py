@@ -3992,22 +3992,45 @@ _PLACE = (r"hallway|hall|corridor|passage|landing|stairs|staircase|steps|"
           r"bedroom|bathroom|kitchen|living\s+room|lounge|dining\s+room|study|"
           r"office|garage|basement|cellar|attic|loft|porch|garden|yard|driveway|"
           r"street|car\s?park|lobby|foyer|doorway|door|room")
+# A room is usually DESCRIBED, not just named: "the tiled bathroom", "the long
+# hallway", "the second-floor landing". Every reader below wanted the article and
+# the room word to be adjacent, so one adjective made the whole journey invisible
+# -- no ends named, `here` never updated, and the room hold that depends on it
+# never fired. Silently: nothing warns, because nothing was found to warn about.
+# That is a scene resetting at a cut with no explanation anywhere.
+#
+# NON-GREEDY on purpose. "at the kitchen door" should still read as the kitchen,
+# so the FIRST place word wins and the modifiers are only tried when it does not
+# match. Prepositions and articles are excluded, so a match cannot cross into
+# "the door OF THE bedroom", and a comma ends it, so it cannot cross a clause.
+_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|his|"
+        r"their|its|my|our|your)\b)[A-Za-z][A-Za-z-]*\s+){0,3}?")
 # "to the bedroom", "into the kitchen" -- where it ENDS.
 _GOES_TO = re.compile(r"\b(?:to|into|toward|towards|through\s+to)\s+"
-                      r"(?:the|her|his|their|a)\s+(" + _PLACE + r")\b", re.I)
+                      r"(?:the|her|his|their|a)\s+" + _MOD
+                      + r"(" + _PLACE + r")\b", re.I)
 # "down the hallway", "along the corridor" -- what it passes THROUGH.
 _GOES_VIA = re.compile(r"\b(?:down|along|across|through|up|via|past)\s+"
-                       r"(?:the|her|his|their|a)\s+(" + _PLACE + r")\b", re.I)
+                       r"(?:the|her|his|their|a)\s+" + _MOD
+                       + r"(" + _PLACE + r")\b", re.I)
 # "from the living room", "out of the kitchen" -- where it STARTS.
 _GOES_FROM = re.compile(r"\b(?:from|out\s+of|leaves?|leaving)\s+"
-                        r"(?:the|her|his|their|a)?\s*(" + _PLACE + r")\b", re.I)
+                        r"(?:the|her|his|their|a)?\s*" + _MOD
+                        + r"(" + _PLACE + r")\b", re.I)
 # A verb that actually MOVES somebody. "looks to the bedroom" is not travel.
 _TRAVEL_VERB = re.compile(
     r"\b(?:walk|walks|walked|walking|lead|leads|led|leading|take|takes|took|taking|"
     r"go|goes|went|going|head|heads|headed|heading|move|moves|moved|moving|"
     r"carry|carries|carried|carrying|follow|follows|followed|following|"
     r"step|steps|stepped|stepping|climb|climbs|climbed|climbing|"
-    r"run|runs|ran|running|come|comes|came|coming)\b", re.I)
+    r"run|runs|ran|running|come|comes|came|coming|"
+    # _GOES_FROM already reads "leaves the bedroom" as the start of a journey, so
+    # the two lists disagreed with each other: one saw an origin, the other did not
+    # see a move, and the move was dropped. Entering and crossing are the same
+    # omission from the other end.
+    r"leave|leaves|left|leaving|enter|enters|entered|entering|"
+    r"cross|crosses|crossed|crossing|exit|exits|exited|exiting|"
+    r"return|returns|returned|returning)\b", re.I)
 
 
 def travel_in(beat):
@@ -4083,8 +4106,8 @@ def travel_anchor(frm, via, to, here=""):
             f"continuous move, not a cut.")
 
 
-_IS_IN = re.compile(r"\b(?:in|inside|within|at)\s+(?:the|her|his|their|a)\s+("
-                    + _PLACE + r")\b", re.I)
+_IS_IN = re.compile(r"\b(?:in|inside|within|at)\s+(?:the|her|his|their|a)\s+"
+                    + _MOD + r"(" + _PLACE + r")\b", re.I)
 
 
 def first_place(text):
@@ -5716,6 +5739,13 @@ class H3LongVideos:
                                "standing in the scene does not rattle in a shot where "
                                "nobody moves. Three sounds at most, so the shot gets a "
                                "cue rather than an inventory.\n\n"
+                               "The ambient bed and the room tone FOLLOW the "
+                               "characters. Both are read from the scene, and a film "
+                               "that walks into a tiled bathroom was going on being "
+                               "told it sounds like the carpeted room it left -- the "
+                               "picture in one room and the audio in another, in the "
+                               "same conditioning. They are re-read at a move, but "
+                               "only where the new room has a sound of its own.\n\n"
                                "A beat that already describes its own sound is left "
                                "alone -- what you wrote wins. A shot given sound is also "
                                "not silenced, since it is now asking for audio. info "
@@ -5985,6 +6015,7 @@ class H3LongVideos:
         posture_shots = []        # shots told to keep a standing posture
         travel_shots = []         # shots that move between places
         where_shots = []          # shots in a room the scene does not name
+        acoustic_shots = []       # ...and the ones whose sound followed them there
         paced_shots = []          # shots told to spread their action
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
@@ -6562,6 +6593,22 @@ class H3LongVideos:
             _where = where_hold(here, scene) if not _travel else ""
             if _where:
                 where_shots.append(len(shots) + 1)
+            # ...and the ACOUSTIC follows them. Both were read ONCE, before the
+            # loop, out of the scene -- so a film that walks into a tiled bathroom
+            # went on being told it sounds like the carpeted living room it left.
+            # H3 is joint, so that is the picture told one room and the audio told
+            # another, inside the same conditioning: the contradiction the room
+            # hold was written to end, arriving through the other branch.
+            #
+            # Only where the room has actually changed, and only when the new room
+            # has a sound of its own -- otherwise the film's own bed stands, since
+            # one bed across a chain is part of what makes it one film. A travel
+            # shot keeps the origin's acoustic, because that is where it begins.
+            _room_now = (room_tone(here) or _room) if (auto_sound and _where) else _room
+            _bed_now = ((scene_ambient(here) or ambient_bed)
+                        if (auto_sound and _where) else ambient_bed)
+            if _where and auto_sound and (_room_now != _room or _bed_now != ambient_bed):
+                acoustic_shots.append((len(shots) + 1, here))
             _pose_now = posture_in(body, active if character_guard and active
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
             # ...and let go of any the beat contradicts. A pose that survives an
@@ -6820,7 +6867,7 @@ class H3LongVideos:
             # spoken shot in one language. Neither can outvote an audio stream
             # that has decided somebody is talking, so if babble comes back on
             # wordless shots, THIS is the first thing to turn off: auto_sound.
-            _bed = ambient_bed if auto_sound and ambient_bed else ""
+            _bed = _bed_now if auto_sound and _bed_now else ""
             if _bed:
                 ambient_shots.append(len(shots) + 1)
             _mute_written = bool(mouths_shut_when_no_line and _own and not _speaks
@@ -6911,9 +6958,9 @@ class H3LongVideos:
                 # conditioning says is not there.
                 heard = []
             elif _bed:
-                heard = heard + [_bed] + ([_room] if _room else [])
-            elif auto_sound and _room:
-                heard = heard + [_room]
+                heard = heard + [_bed] + ([_room_now] if _room_now else [])
+            elif auto_sound and _room_now:
+                heard = heard + [_room_now]
             if heard:
                 inferred_sound.append(len(shots) + 1)
             # The branch is free on this shot, so SOMETHING fills it. Naming the sound
@@ -7102,6 +7149,20 @@ class H3LongVideos:
                 f"differently each time. Your scene text is not edited: move the "
                 f"location into the beats, or keep the scene general, and this stops "
                 f"being needed")
+        if acoustic_shots:
+            notes.append(
+                "the sound followed them into the new room on "
+                + "; ".join(f"shot {n}: {r}" for n, r in acoustic_shots)
+                + ". The ambient bed and the room tone were read once, before the "
+                  "first shot, out of the scene -- so a film that walked into a "
+                  "tiled bathroom went on being told it sounds like the carpeted "
+                  "room it left. H3 is joint, so that is the picture told one room "
+                  "and the audio told another inside the same conditioning, which is "
+                  "the contradiction the room hold exists to end, arriving through "
+                  "the other branch. Only where the room actually changed and only "
+                  "where the new room has a sound of its own: otherwise the film's "
+                  "own bed stands, because one bed across a chain is part of what "
+                  "makes it one film. Off with auto_sound")
         if travel_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in travel_shots)} move between "

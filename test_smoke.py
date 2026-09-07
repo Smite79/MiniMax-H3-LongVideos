@@ -2983,6 +2983,34 @@ def test_the_scene_does_not_reset():
     check("a script that stays put says nothing", "This shot is in the" not in still)
 
 
+def test_a_described_room_still_holds():
+    """END TO END: the same journey as above, into a room the author DESCRIBED. One
+    adjective used to switch the whole room tracker off, silently, and the acoustic
+    stayed behind in the room they left."""
+    print("\n=== a described room still holds ===")
+    mem = "Kate: she, 30, coat.\nSam: he, 34, shirt."
+    P = ("A carpeted living room, lamps low.\n\nKate and Sam sit on the sofa.\n\n"
+         "Kate walks him down the hallway to the tiled bathroom.\n\n"
+         "They stand by the sink.\n\nKate turns the tap on.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    info, script = out[2], out[3]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("the journey has both ends", "begins in the living room" in sh[1]
+          and "ends in the bathroom" in sh[1])
+    check("the next shot is in the new room", "is in the bathroom" in sh[2])
+    check("...and so is the one after", "is in the bathroom" in sh[3])
+    # The acoustic goes with them.
+    check("the room tone follows", "tiled walls ringing" in sh[2])
+    check("...and the ambient bed", "water moving in the pipes" in sh[2])
+    check("the room they left keeps its own", "a soft room with little echo" in sh[0])
+    check("...and is not given the new one", "tiled walls ringing" not in sh[0])
+    check("info names the shots", "sound followed them into the new room" in info)
+    # auto_sound off leaves the picture fix alone and takes only the sound.
+    quiet = run_node(P, plan_only=True, character_memory=mem, auto_sound=False)[3]
+    check("auto_sound off keeps the room hold", "is in the bathroom" in quiet)
+    check("...and drops the acoustic", "tiled walls ringing" not in quiet)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3099,6 +3127,7 @@ def main():
     test_a_softened_handoff_is_not_a_keyframe()
     test_a_journey_reaches_the_shot()
     test_the_scene_does_not_reset()
+    test_a_described_room_still_holds()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

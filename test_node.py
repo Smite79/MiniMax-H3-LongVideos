@@ -1124,6 +1124,49 @@ def test_a_transitive_posture_puts_the_object_down():
                                                        cast).values())
 
 
+def test_a_described_room_is_still_a_room():
+    """A room is usually described, not just named: "the tiled bathroom", "the long
+    hallway", "the master bedroom". Every place reader wanted the article and the
+    room word ADJACENT, so one adjective made the whole journey invisible -- no ends
+    named, `here` never updated, and the room hold that depends on it never fired.
+    Silently, because nothing was found to warn about."""
+    check("a described destination is read",
+          S.travel_in("She walks him down the hallway to the tiled bathroom.")[2]
+          == "bathroom")
+    check("...and a described waypoint",
+          S.travel_in("She walks him down the long hallway to the bedroom.")[1]
+          == "hallway")
+    check("...and a described origin",
+          S.travel_in("She leaves the upstairs bedroom for the kitchen.")[0] == "bedroom")
+    check("two modifiers still read",
+          S.travel_in("She walks him to the second-floor landing.")[2] == "landing")
+    check("a plain one is unaffected",
+          S.travel_in("She walks him down the hallway to the bedroom.")[1:] ==
+          ("hallway", "bedroom"))
+    check("place_named reads a described room",
+          S.place_named("Inside the small kitchen.") == "kitchen")
+    # NON-GREEDY: the FIRST place word still wins, so a modifier is only tried when
+    # the plain reading fails. "at the kitchen door" is the kitchen, not the door.
+    check("the nearest place still wins",
+          S.place_named("They stand at the kitchen door.") == "kitchen")
+    # ...and a match cannot cross a preposition or a comma into the next clause.
+    check("it does not cross a comma",
+          S.travel_in("She walks to the sink, the bedroom dark behind her.")[2] != "bedroom")
+
+
+def test_the_sound_follows_the_room():
+    """The ambient bed and the room tone were read ONCE, before the shot loop, out of
+    the scene. A film that walked into a tiled bathroom went on being told it sounds
+    like the carpeted room it left -- H3 is joint, so that is the picture told one
+    room and the audio told another inside the same conditioning."""
+    check("a bathroom has its own acoustic", S.room_tone("bathroom") == "tiled walls ringing")
+    check("...and its own bed", S.scene_ambient("bathroom") != "")
+    check("...different from a living room's",
+          S.room_tone("bathroom") != S.room_tone("A carpeted living room."))
+    # A room with no sound of its own leaves the film's own bed standing.
+    check("an unremarkable room changes nothing", S.room_tone("lobby") == "")
+
+
 def test_the_room_follows_the_characters():
     """The scene paragraph is stamped into EVERY shot, so a script that walks from
     the living room to the bedroom goes on opening every later shot with "A living
@@ -3343,6 +3386,8 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_a_described_room_is_still_a_room()
+    test_the_sound_follows_the_room()
     test_a_transitive_posture_puts_the_object_down()
     test_an_action_lets_go_of_a_posture()
     test_a_posture_told_is_not_a_posture_taken()
