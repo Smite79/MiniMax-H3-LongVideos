@@ -4950,16 +4950,28 @@ _NOT_A_ROOM_MODIFIER = {"the", "a", "an", "this", "that", "her", "his", "their",
 _MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|his|"
         r"their|its|my|our|your)\b)[A-Za-z][A-Za-z-]*\s+){0,3}?")
 # "to the bedroom", "into the kitchen" -- where it ENDS.
-_GOES_TO = re.compile(r"\b(?:to|into|toward|towards|through\s+to)\s+"
-                      r"(?:the|her|his|their|a)\s+" + _MOD
+# A room can belong to somebody. "McKenna's bedroom" is the ordinary way to write
+# whose room it is, and a determiner list of the/her/his/their/a did not match a
+# possessive name -- so the destination of the journey was invisible.
+_DET_POSS = r"(?:the|her|his|their|its|a|an|\w+['’]s)"
+# ENTERING is how arrival is written, and it is a verb, not a preposition. The
+# list here was prepositions only, so "Dana walks through the home and enters
+# McKenna's bedroom" named no destination at all, travel_in returned ('','',''),
+# the journey guard stayed silent and the walk rendered as a cut straight to the
+# far end. That is the failure the guard exists to prevent, arriving through the
+# one door it was not watching.
+_GOES_TO = re.compile(r"\b(?:to|into|toward|towards|through\s+to|"
+                      r"enters?|entered|entering|reaches|reached|arrives?\s+(?:at|in)|"
+                      r"steps?\s+into|stepped\s+into)\s+"
+                      + _DET_POSS + r"\s+" + _MOD
                       + r"(" + _PLACE + r")\b", re.I)
 # "down the hallway", "along the corridor" -- what it passes THROUGH.
 _GOES_VIA = re.compile(r"\b(?:down|along|across|through|up|via|past)\s+"
-                       r"(?:the|her|his|their|a)\s+" + _MOD
+                       + _DET_POSS + r"\s+" + _MOD
                        + r"(" + _PLACE + r")\b", re.I)
 # "from the living room", "out of the kitchen" -- where it STARTS.
 _GOES_FROM = re.compile(r"\b(?:from|out\s+of|leaves?|leaving)\s+"
-                        r"(?:the|her|his|their|a)?\s*" + _MOD
+                        + _DET_POSS + r"?\s*" + _MOD
                         + r"(" + _PLACE + r")\b", re.I)
 # A verb that actually MOVES somebody. "looks to the bedroom" is not travel.
 _TRAVEL_VERB = re.compile(

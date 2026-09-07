@@ -3634,6 +3634,58 @@ def test_a_verb_is_not_a_room():
         check(f"{want} still reads", S.first_place(room) == want)
 
 
+def test_entering_a_room_is_a_journey_not_a_cut():
+    """Reported: "Dana continues to walk through the home and enters McKenna's
+    bedroom" cut instantly from the living room to the bedroom.
+
+    travel_in returned ('', '', '') for it, so the journey guard said nothing and
+    the shot was free to cut. Two reasons, both in the destination pattern:
+
+      - ENTERING is a verb, and the pattern held prepositions only. "into the
+        bedroom" read; "enters the bedroom" did not, and entering is how arrival
+        is usually written.
+      - "McKenna's bedroom" is the ordinary way to say whose room it is, and the
+        determiner list was the/her/his/their/a, which no possessive name matches.
+
+    The origin was never the problem: travel_anchor already falls back to the room
+    the film is in. It just never learned there was a destination to go to."""
+    print("\n=== entering a room is a journey ===")
+    for beat, want_to in (
+            ("Dana continues to walk through the home and enters McKenna's "
+             "bedroom.", "bedroom"),
+            ("Dana walks through the house and enters the bedroom.", "bedroom"),
+            ("Dana enters McKenna's bedroom.", "bedroom"),
+            ("Dana walks down the hall and steps into the kitchen.", "kitchen"),
+            ("Dana walks from the living room into the bedroom.", "bedroom")):
+        _f, _v, to = S.travel_in(beat)
+        check(f"destination read: {beat[:44]!r} -> {to!r}", to == want_to)
+    # A named place with no movement is still not a journey.
+    check("looking somewhere is not travel",
+          S.travel_in("She looks to the bedroom.") == ("", "", ""))
+    check("...nor is standing in a room",
+          S.travel_in("Dana stands in the bedroom.") == ("", "", ""))
+
+    # END TO END: the walk is one move, and every shot after it is in the new room.
+    P = ("A living room in a suburban home.\n\n"
+         "Dana stands by the sofa.\n\n"
+         "Dana continues to walk through the home and enters McKenna's bedroom.\n\n"
+         "Dana looks around the bedroom.")
+    script = run_node(P, plan_only=True,
+                      character_memory="Dana: she, 31, blue jacket.")[3]
+    sh = [b.split("]", 1)[1] for b in script.split("[Shot ")[1:]]
+    check("the walk is one continuous move",
+          "one continuous move, not a cut" in sh[1], sh[1][:220])
+    check("...starting where she was", "begins in the living room" in sh[1])
+    check("...and ending where she goes", "ends in the bedroom" in sh[1])
+    # The room the film is in follows her, or the scene paragraph keeps saying
+    # living room over a shot standing in the bedroom.
+    check("the next shot is in the bedroom",
+          "in the bedroom, not the room the scene text names" in sh[2], sh[2][:220])
+    # The shot before the journey is untouched.
+    check("the shot before it says nothing",
+          "continuous move" not in sh[0] and "not the room" not in sh[0])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3764,6 +3816,7 @@ def main():
     test_two_restraints_put_on_together_both_survive()
     test_a_name_that_is_only_spoken_is_not_in_the_shot()
     test_a_verb_is_not_a_room()
+    test_entering_a_room_is_a_journey_not_a_cut()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
