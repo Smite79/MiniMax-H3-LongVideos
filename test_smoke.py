@@ -3391,6 +3391,46 @@ def test_built_sound_reaches_an_effort_shot():
           "sound built into the shot" not in off)
 
 
+def test_a_collar_chained_to_a_wall_stays_on():
+    """Reported: her collar was chained to a wall and she took it off.
+
+    END TO END, because the unit halves both passed while the film was still wrong.
+    limb_anchor could read a wall and held_part could say "neck", and neither was
+    reached: the wall was missing from _ANCHOR_POINT so nothing anchored, and the
+    part was computed from an item name that is dropped whenever the beat already
+    says it. Testing the pieces is what let this ship -- so this asserts the SHOTS."""
+    print("\n=== a collar chained to a wall stays on ===")
+    P = ("A basement.\n\n"
+         "The guard locks a steel collar around Ana's neck and chains it to the "
+         "wall.\n\n"
+         "Ana sits on the floor.\n\n"
+         "Ana pulls at the chain.\n\n"
+         "Ana stands and walks to the far side of the room.\n\n"
+         "Ana looks up at the door.")
+    script = run_node(P, plan_only=True,
+                      character_memory="Ana: she, 28, grey shirt.\n"
+                                       "Guard: he, 40, uniform.")[3]
+    shots = [b.split("]", 1)[1] for b in script.split("[Shot ")[1:]]
+    check("every shot after the first is tethered",
+          all("at the wall" in s for s in shots[1:]),
+          f"{[('at the wall' in s) for s in shots]}")
+    check("...and it is the NECK being held, not the wrists",
+          all("holding the neck at the wall" in s for s in shots[1:]),
+          f"{[('holding the neck' in s) for s in shots]}")
+    check("no shot claims the wrists", not any("holding the wrists" in s for s in shots))
+    check("the hardware stays fastened in every later shot",
+          all("closed and fastened" in s for s in shots[1:]))
+    # The shot that STAGES the chaining says it in the author's own words and must
+    # not get the clause back a second time.
+    check("the staging shot is not told twice", "at the wall" not in shots[0])
+    # A scene with no anchor in it must not sprout one.
+    plain = run_node("A room.\n\nThe guard cuffs Ana's wrists.\n\n"
+                     "Ana sits down.", plan_only=True,
+                     character_memory="Ana: she, 28.\nGuard: he, 40.")[3]
+    check("cuffs with no anchor named stay unanchored",
+          "at the wall" not in plain and "holding the neck" not in plain)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3515,6 +3555,7 @@ def main():
     test_built_sound_lands_in_the_right_shot()
     test_built_sound_reaches_an_effort_shot()
     test_one_picture_two_people_is_reported()
+    test_a_collar_chained_to_a_wall_stays_on()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

@@ -1467,6 +1467,65 @@ def test_built_sound_sits_in_a_room():
         check(f"'{phrase}' is built in a room: {got:.1f} dB", got > floor)
 
 
+def test_a_chain_can_be_fastened_to_a_wall():
+    """Reported: a collar chained to a wall, and she took it off.
+
+    _ANCHOR_POINT listed what hardware could be fastened to and the WALL was not on
+    it -- nor the floor, the ceiling or a pillar. So "chains it to the wall" produced
+    no anchor at all: the hold said the collar stays closed and nothing in any later
+    shot said she was tethered. A shot that then has her cross the room holds a
+    collar, no tether, and a beat saying she walks away, and the cheapest way for the
+    model to make that agree is to take the collar off.
+
+    The VERB is required with it. "to the <noun>" alone read movement as fastening --
+    "he walks to the table" came back anchored at the table -- and adding wall and
+    floor without fixing that would have made "she sinks to the floor" a chain."""
+    for t in ("chains it to the wall", "chained to the wall",
+              "chains her collar to the wall", "secures the chain to the floor",
+              "bolted to the ceiling", "chained to a pillar",
+              "tethered to a stake in the ground", "the leash is clipped to the ring",
+              "locks the chain to the ring", "cuffed to the bed frame"):
+        check(f"anchors: {t!r}", S.limb_anchor(t))
+    check("the wall is named", S.limb_anchor("chained to the wall") == "at the wall")
+    check("both halves still read",
+          S.limb_anchor("handcuffed above her head to the bed frame")
+          == "above the head, at the bed frame")
+    # Movement is not fastening.
+    for t in ("she sinks to the floor", "he walks to the table",
+              "she is dragged to the bed", "she falls to the floor",
+              "he crosses to the window", "she runs to the wall",
+              "they move to the bed", "she looks to the door"):
+        check(f"not an anchor: {t!r}", not S.limb_anchor(t))
+
+
+def test_the_anchor_holds_the_part_the_hardware_is_on():
+    """The clause said "holding the wrists" whatever the hardware was.
+
+    A steel collar chained to a wall came out as WRISTS held at the wall, which is a
+    different restraint -- and it leaves the neck free in the one shot whose whole
+    point is that it is not. Two restraints to draw and a reason to drop one."""
+    check("a collar holds the neck", S.held_part(["steel collar"]) == "neck")
+    check("a leash too", S.held_part(["leash"]) == "neck")
+    check("leg irons hold the ankles", S.held_part(["leg irons"]) == "ankles")
+    check("shackles too", S.held_part(["shackles"]) == "ankles")
+    check("a harness holds the body", S.held_part(["harness"]) == "body")
+    check("cuffs still hold the wrists", S.held_part(["handcuffs"]) == "wrists")
+    check("rope defaults to the wrists", S.held_part(["rope"]) == "wrists")
+    check("...and so does nothing named", S.held_part([]) == "wrists")
+    check("a collar among others still wins",
+          S.held_part(["steel collar", "chain"]) == "neck")
+    # The sentence has to use it, and it has to survive the item name being dropped:
+    # the name is omitted whenever the beat already says it, and the part went with
+    # it -- so a collar the beat had just named came back holding the wrists.
+    said = S.restraint_sentence("steel collar", [], [], anchor="at the wall")
+    check("the sentence says neck", "holding the neck at the wall" in said)
+    unnamed = S.restraint_sentence("", [], [], anchor="at the wall", part="neck")
+    check("...even with no item named", "holding the neck at the wall" in unnamed)
+    check("...and wrists remain the default",
+          "holding the wrists at the wall"
+          in S.restraint_sentence("", [], [], anchor="at the wall"))
+
+
 def test_a_beat_names_the_sound_its_props_make():
     """The event sounds, which are a different system from the mixed ambient bed --
     that one builds TONE and cannot make a zipper. These go in the PROMPT, so the
@@ -3980,6 +4039,8 @@ def main():
     test_no_two_hits_are_the_same()
     test_a_struck_thing_rings_in_more_than_one_place()
     test_built_sound_sits_in_a_room()
+    test_a_chain_can_be_fastened_to_a_wall()
+    test_the_anchor_holds_the_part_the_hardware_is_on()
     test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()
     test_a_built_bed_always_goes_on()

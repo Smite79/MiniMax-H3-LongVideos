@@ -3829,7 +3829,31 @@ def restrained_by_beat(beat, cast):
     return {n for n in people if n != agent} if agent else set(people)
 
 
-def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False):
+# WHICH PART THE ANCHOR HOLDS. The clause used to say "holding the wrists" whatever
+# the hardware was, so a steel collar chained to a wall came out as wrists held at
+# the wall -- which describes a different restraint entirely, and leaves the neck
+# free in the one shot whose point is that it is not. A model given wrists at the
+# wall and a collar on the neck has two restraints to draw and reason to drop one.
+_HELD_PART = (
+    (r"\b(?:collars?|leash(?:es)?|leads?|chokers?|neck\s*(?:chain|iron)s?)\b", "neck"),
+    (r"\b(?:leg\s*irons?|ankle\s*(?:cuffs?|chains?|straps?)|hobbles?|"
+     r"shackles?)\b", "ankles"),
+    (r"\b(?:harness(?:es)?|body\s*belts?)\b", "body"),
+    (r"\b(?:waist\s*(?:chain|belt)s?)\b", "waist"),
+)
+
+
+def held_part(items):
+    """The body part an anchored restraint holds, read from the hardware itself."""
+    text = " ".join(items or [])
+    for pat, part in _HELD_PART:
+        if re.search(pat, text, re.I):
+            return part
+    return "wrists"          # cuffs, rope and tape, which is the common case
+
+
+def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False,
+                       part=""):
     """ONE sentence for the hardware: what it is, that it is closed, and where it holds.
 
     These used to be three, written at three different times for three different bug
@@ -3878,7 +3902,12 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
     shut = "tied and holding as" if soft else "closed and fastened as"
     out = f" {subject} {verb} {shut} {it} {was} put on"
     if anchor:
-        out += f", holding the wrists {anchor}"
+        # `part` is passed in because the item NAME is dropped from this sentence
+        # whenever the beat already says it -- and with the name went the only clue
+        # to which part is held, so a collar the beat had just named came back
+        # holding the wrists. The latch still knows what is on; ask it, not the
+        # sentence being written.
+        out += f", holding the {part or held_part(items)} {anchor}"
     if posed:
         out += ("; the metal is already drawn to its full length, so the position it "
                 "fixes is the position that keeps, and the body strains against it "
@@ -4196,11 +4225,28 @@ _LIMB_ANCHOR = (
 )
 # What they are fastened TO. Named separately because a shot can state one, the other,
 # or both, and the clause reads correctly with whichever it has.
+#
+# THE VERB IS REQUIRED, and it was not. "to the <noun>" alone read any movement as a
+# fastening: "he walks to the table" came back anchored at the table and "she is
+# dragged to the bed" anchored at the bed. That was survivable only because the noun
+# list was short enough to miss most sentences -- and adding the missing nouns below
+# without this would have made "she sinks to the floor" a chain.
+_FASTEN_TO = (r"(?:chain|cuff|handcuff|shackle|manacle|lock|padlock|fasten|secure|"
+              r"tether|bind|bound|tie|strap|clip|hook|bolt|attach|anchor|leash|"
+              r"rope|fix|pin|hitch|moor)(?:s|es|ed|ing)?")
+# WHAT A CHAIN CAN BE FASTENED TO. The wall was not on this list, and that is the
+# whole of the reported bug: "chains it to the wall" produced NO anchor, so the
+# collar hold said the collar stays closed and nothing ever said she was tethered.
+# A shot that then has her cross the room is a shot with a collar, no tether, and a
+# beat saying she walks away -- and the cheapest way for the model to make that make
+# sense is to take the collar off. Floor, ceiling and pillar were missing with it.
 _ANCHOR_POINT = re.compile(
-    r"\bto\s+(?:the|a|an|her|his|their)\s+"
+    r"\b" + _FASTEN_TO + r"\b(?:\s+\S+){0,5}?\s+to\s+(?:the|a|an|her|his|their)\s+"
     r"((?:bed\s*frames?|bed\s*heads?|headboards?|bed\s*posts?|beds?|rails?|railings?|"
     r"bars?|posts?|rings?|hooks?|pipes?|radiators?|chairs?|tables?|beams?|frames?|"
-    r"grates?|grilles?|fences?))\b", re.I)
+    r"grates?|grilles?|fences?|walls?|floors?|grounds?|ceilings?|pillars?|columns?|"
+    r"stakes?|eye\s*bolts?|bolts?|brackets?|cages?|bunks?|benches?|ladders?|"
+    r"girders?|struts?|anchors?|loops?))\b", re.I)
 
 
 def limb_anchor(text):
@@ -7692,7 +7738,8 @@ class H3LongVideos:
                     # words are right there, and a second sentence saying it back
                     # is the redundancy this merge exists to remove.
                     _wearers, _described, anchor=("" if _anchor_now else anchored),
-                    rigid=bool(rigid), posed=bool(posed))
+                    rigid=bool(rigid), posed=bool(posed),
+                    part=held_part(worn_items or ([worn_item] if worn_item else [])))
                 if worn_item and not _named_item:
                     named_shots.append(len(shots) + 1)
             else:
