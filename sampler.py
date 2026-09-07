@@ -9062,7 +9062,15 @@ class H3LongVideos:
                 # working" and "restraints pulling taut" were read from the beat,
                 # written into the prompt, and then never built -- on precisely the
                 # beats they exist for. Reported as hearing nothing.
-                _voice_open = bool(_i < len(voiced_only) and voiced_only[_i])
+                #
+                # Gated on silence_nonspeech with everything else. Turning that off
+                # says "pin nothing, let the model sound every shot" -- and then
+                # there is no shot the model cannot make, which is the entire reason
+                # anything is built here. Without this the effort shots kept their
+                # built layer while the model was also sounding them from the same
+                # prose, which is the doubling this whole gate exists to avoid.
+                _voice_open = bool(silence_nonspeech and _i < len(voiced_only)
+                                   and voiced_only[_i])
                 if not (_pinned or _voice_open) or _len < 64:
                     continue
                 _made = []

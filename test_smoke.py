@@ -3382,6 +3382,13 @@ def test_built_sound_reaches_an_effort_shot():
     m2 = [float(w2[..., i * s2:(i + 1) * s2].mean()) for i in range(n2)]
     check("a written sound still suppresses the mix", all(m < 0.25 for m in m2),
           f"means {[round(m, 2) for m in m2]}")
+    # Silencing OFF says "pin nothing, let the model sound every shot" -- and then
+    # there is no shot the model cannot make, which is the only reason anything is
+    # built here. The effort shots kept their built layer while the model was also
+    # sounding them from the same prose: the exact doubling the gate exists to stop.
+    off = run_node(P, ambient_level=0.0, foley_level=0.5, silence_nonspeech=False)[2]
+    check("nothing is built when the model sounds everything",
+          "sound built into the shot" not in off)
 
 
 def test_timing_report():
