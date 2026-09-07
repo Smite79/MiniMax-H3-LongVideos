@@ -3045,6 +3045,52 @@ def test_the_sound_clause_is_inside_the_budget():
     check("the shipped budget drops nothing", "guard clauses dropped for room" not in clean)
 
 
+def test_the_anchor_is_not_read_as_a_room():
+    """END TO END: an anchor is the CAMERA. room_tone has always said so and reads the
+    opening beat instead, but the room reader was handed the whole assembled string --
+    anchor, scene and sheet -- so a lens line was being asked where everybody is.
+
+    With "shallow depth of field" in the anchor, every shot was told it was in a hall,
+    the first journey took the hall as its origin, and the acoustic became a large
+    room with a long tail. None of it was in the script."""
+    print("\n=== the anchor is not read as a room ===")
+    anchor = ("Shot on 35mm, shallow depth of field, warm practical lighting, "
+              "handheld, muted colour grade, film grain.")
+    mem = "Kate: she, 30, coat.\nSam: he, 34, shirt."
+    P = ("Kate and Sam sit on the sofa.\n\n"
+         "Kate walks him down the hallway to the bedroom.\n\n"
+         "They sit on the bed.\n\nSam waits.")
+    out = run_node(P, plan_only=True, character_memory=mem, anchor=anchor)
+    script = out[3]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    check("no shot is put in a phantom hall", "in the hall," not in script)
+    check("...and no journey starts in one", "begins in the hall" not in script)
+    check("...and the lens gets no cathedral", "a large room with a long tail" not in script)
+    # The anchor itself is still carried on every shot -- that is what it is for.
+    check("the anchor is on every shot",
+          all("Shot on 35mm" in x for x in sh), f"{len(sh)} shots")
+    check("...once per shot", all(x.count("Shot on 35mm") == 1 for x in sh))
+    # The journey itself still works; it simply has no invented origin.
+    check("the move still reaches the bedroom", "ends in the bedroom" in sh[1])
+    # ...and a scene paragraph that DOES name a room still seeds it.
+    named = run_node("A living room.\n\nKate waits.\n\n"
+                     "Kate walks him down the hallway to the bedroom.",
+                     plan_only=True, character_memory=mem)[3]
+    check("a real scene room still seeds the origin", "begins in the living room" in named)
+    # THE HALF THAT CAUGHT A WRONG FIX. Excluding the anchor from the room reader
+    # looks right -- a lens line is not a location -- but the anchor is DOCUMENTED
+    # to carry the location, and with one set there is no scene paragraph for the
+    # room to live in instead. Excluded, this loses the origin of its first journey,
+    # which is the destination-with-no-origin case that renders as a cut. The word
+    # boundary was the whole fix; the anchor was never at fault.
+    located = run_node(P, plan_only=True, character_memory=mem,
+                       anchor="A carpeted living room. Shot on 35mm, "
+                              "shallow depth of field, handheld.")[3]
+    check("a location IN the anchor still seeds the origin",
+          "begins in the living room" in located)
+    check("...and still no phantom hall", "in the hall" not in located)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3163,6 +3209,7 @@ def main():
     test_the_scene_does_not_reset()
     test_a_described_room_still_holds()
     test_the_sound_clause_is_inside_the_budget()
+    test_the_anchor_is_not_read_as_a_room()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

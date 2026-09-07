@@ -4017,6 +4017,14 @@ _PLACE = (r"hallway|hall|corridor|passage|landing|stairs|staircase|steps|"
           r"bedroom|bathroom|kitchen|living\s+room|lounge|dining\s+room|study|"
           r"office|garage|basement|cellar|attic|loft|porch|garden|yard|driveway|"
           r"street|car\s?park|lobby|foyer|doorway|door|room")
+# _PLACE is an alternation with no edges of its own, so searching it RAW matches
+# inside words: "shallow depth of field" contains "hall", and every camera anchor
+# ever written for this node says shallow. That put the film in a hallway it never
+# had -- stated on each shot, used as the origin of the first journey, and handed
+# to room_tone, which gave a lens setting the acoustic of a cathedral. The readers
+# that sit behind a preposition were always safe, because the \s+ before them is
+# already a boundary; the two that search free text were not.
+_PLACE_WORD = re.compile(r"\b(?:" + _PLACE + r")\b", re.I)
 # A room is usually DESCRIBED, not just named: "the tiled bathroom", "the long
 # hallway", "the second-floor landing". Every reader below wanted the article and
 # the room word to be adjacent, so one adjective made the whole journey invisible
@@ -4104,7 +4112,7 @@ def where_hold(here, scene):
         return ""
     # ...and nothing to correct unless the scene names a DIFFERENT place, since a
     # scene that names no room is not disagreeing with anything.
-    if not re.search(_PLACE, txt, re.I):
+    if not _PLACE_WORD.search(txt):
         return ""
     return f" This shot is in the {here}, not the room the scene text names."
 
@@ -4140,7 +4148,7 @@ def first_place(text):
 
     place_named wants "in the kitchen"; a scene paragraph is more often just "A
     living room." with no preposition to hang on."""
-    m = re.search(_PLACE, str(text or ""), re.I)
+    m = _PLACE_WORD.search(str(text or ""))
     return re.sub(r"\s+", " ", m.group(0)).strip().lower() if m else ""
 
 
@@ -6032,6 +6040,18 @@ class H3LongVideos:
         # from. Without it "walks him down the hallway to the bedroom" had a
         # destination and no origin, and a journey stated as a destination
         # alone is the one that renders as a cut.
+        #
+        # READ FROM THE WHOLE SCENE, ANCHOR INCLUDED, and that was checked rather
+        # than assumed. Excluding the anchor looks right -- an anchor is the camera,
+        # and a lens line was being read for a location -- but the anchor is also
+        # DOCUMENTED to carry the location, and with one set there is no scene
+        # paragraph for the room to live in instead. Excluded, "A carpeted living
+        # room. Shot on 35mm" lost the origin of its first journey, which is the
+        # destination-with-no-origin case that renders as a cut: the bug this seed
+        # exists to fix, reintroduced through the widget meant to prevent it.
+        #
+        # The lens was never the anchor's fault. _PLACE matched INSIDE "shallow",
+        # and the word boundary in _PLACE_WORD is the whole of the fix.
         here = place_named(scene) or first_place(scene)
         # The film's ambient bed, read from the anchor and the scene rather
         # than typed into every beat. See scene_ambient.

@@ -1124,6 +1124,26 @@ def test_a_transitive_posture_puts_the_object_down():
                                                        cast).values())
 
 
+def test_a_lens_setting_is_not_a_room():
+    """_PLACE is an alternation with no edges of its own, so searching it RAW matches
+    inside words. "shallow depth of field" contains "hall" -- and every camera anchor
+    ever written for this node says shallow. The film was put in a hallway it never
+    had: stated on each shot, used as the origin of the first journey, and handed to
+    room_tone, which gave a lens setting the acoustic of a cathedral."""
+    check("shallow is not a hall", S.first_place("shallow depth of field") == "")
+    check("...nor is it a room to correct to",
+          S.where_hold("bedroom", "Shot on 35mm, shallow depth of field.") == "")
+    # Other words that carry a place inside them.
+    check("a doorstep is not a door", S.first_place("She waits on the doorstep.") == "")
+    check("a hallmark is not a hall", S.first_place("A hallmark of the style.") == "")
+    check("a bedroom is still a bedroom", S.first_place("A dimly lit bedroom.") == "bedroom")
+    check("...and a hall is still a hall", S.first_place("The hall was empty.") == "hall")
+    # The readers behind a preposition were always safe: the \s+ before them is
+    # already a boundary. Confirmed rather than assumed.
+    check("the travel reader was never fooled",
+          S.travel_in("She walks to the shallow end.")[2] == "")
+
+
 def test_the_sound_clause_spends_from_the_budget():
     """The sound clause was appended AFTER fit_guards, so it was the one piece of
     node-written text no cap could reach -- and the largest single contributor, 97
@@ -3416,6 +3436,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_a_lens_setting_is_not_a_room()
     test_the_sound_clause_spends_from_the_budget()
     test_a_described_room_is_still_a_room()
     test_the_sound_follows_the_room()
