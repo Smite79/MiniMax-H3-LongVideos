@@ -1003,23 +1003,58 @@ _EXERTION = re.compile(
     r"scream(?:s|ing|ed)?|shout(?:s|ing|ed)?|yell(?:s|ing|ed)?|moan(?:s|ing|ed)?|"
     r"whimper(?:s|ing|ed)?|laugh(?:s|ing|ed)?|flinch(?:es|ing|ed)?|"
     r"trembl(?:e|es|ing|ed)|shak(?:e|es|ing)|shiver(?:s|ing|ed)?|"
-    r"freak(?:s|ing)?\s+out|wakes?\s+up|woke\s+up|panic(?:s|king|ked)?|"
-    # THESE WERE IN THE SOUND TABLE AND NOT HERE, and the two lists have to agree.
-    # _SOUND_FROM's effort entry gives all of them "unsteady breathing, with gasps
-    # and moans of effort" -- but that is TEXT, and only this list opens the audio
-    # branch and exempts the shot from mouths_shut_when_no_line. So a beat staging
-    # sustained physical effort got the sound written into its prompt and was then
-    # pinned to silence with the mouth held closed, which is a body working in total
-    # silence behind a still face. Nine verbs, every one of them the ordinary way to
-    # write the action.
-    r"arch(?:es|ed|ing)?|shudder(?:s|ed|ing)?|buck(?:s|ed|ing)?|"
-    r"grind(?:s|ing)?|ground|rock(?:s|ed|ing)?|thrust(?:s|ing)?|"
-    r"clutch(?:es|ed|ing)?|grip(?:s|ped|ping)?|clench(?:es|ed|ing)?)\b", re.I)
+    r"freak(?:s|ing)?\s+out|wakes?\s+up|woke\s+up|panic(?:s|king|ked)?)\b", re.I)
+
+# What a hand closes on under effort. A railing, a wheel, a bag or a door handle is
+# somebody steadying themselves and is deliberately not here.
+_EFFORT_OBJ = (r"(?:her|his|their|the)\s+(?:backs?|hips?|thighs?|shoulders?|arms?|"
+               r"wrists?|waist|hair|neck|sheets?|bedding|blankets?|pillows?|"
+               r"mattress|headboard|bars?|restraints?)")
+
+# The generic MOTION verbs, which mean effort only in context.
+#
+# These were added bare, and bare they are wrong: arch, buck, clench, clutch, grind,
+# grip, rock and thrust are ordinary English. "He grinds the coffee", "she grips the
+# railing", "the truck rocks over the kerb" and "she arches an eyebrow" all read as
+# vocal effort, which put "unsteady breathing, with gasps and moans of effort" into
+# the prompt of a scenery beat, opened its audio branch and took the mouth guard off
+# it. On a joint model that is a close-up of a panting face where a wide shot of a
+# hallway was asked for, and an invented speaker to go with the invented voice.
+#
+# THE TRADE RUNS THE OTHER WAY FROM WHAT I ASSUMED. A wrong OPEN branch costs
+# moaning text, a free mouth and a babbling stream that drags the framing with it; a
+# wrong CLOSED one costs a silent shot, and built foley now covers part of even
+# that. So these must corroborate, never fire alone.
+#
+# `clench` is gone except standing alone: a clenched jaw or fist is silent tension,
+# which is the opposite of a sound cue.
+_EXERTION_NARROW_SRC = (
+    # arching a back, not an eyebrow
+    r"arch(?:es|ed|ing)?\s+(?:her|his|their)\s+backs?\b|"
+    r"arch(?:es|ed|ing)?\s+(?:up|upwards?|off)\b|"
+    # sustained movement, always against or with something
+    r"(?:rock|grind|thrust|buck|push|move)(?:s|ed|ing)?\s+"
+    r"(?:against|into|together|beneath|underneath|under|onto)\b|"
+    # ...or the same verbs with no object at all, which is the intransitive sense
+    r"(?:rocks?|rocked|rocking|grinds?|ground|grinding|thrusts?|thrusting|"
+    r"bucks?|bucked|bucking|clench(?:es|ed|ing)?)\s*(?=[.,;!?]|$)|"
+    # a hand closing on a body or the bedding, not on a railing
+    r"(?:clutch(?:es|ed|ing)?|grip(?:s|ped|ping)?|claw(?:s|ed|ing)?)\s+"
+    r"(?:at\s+)?" + _EFFORT_OBJ + r"|"
+    r"(?:clutch(?:es|ed|ing)?|grip(?:s|ped|ping)?|claw(?:s|ed|ing)?)\s+at\b|"
+    # involuntary, and rarely said of a prop
+    r"shudder(?:s|ed|ing)?\b")
+_EXERTION_NARROW = re.compile(r"\b(?:" + _EXERTION_NARROW_SRC + r")", re.I)
 
 
 def exertion_in(beat):
-    """Does this beat stage effort or reaction -- something a face performs?"""
-    return bool(_EXERTION.search(beat or ""))
+    """Does this beat stage effort or reaction -- something a face performs?
+
+    Two lists: verbs that are inherently about distress or exertion and mean it
+    wherever they appear, and generic motion verbs that mean it only with the right
+    complement. See _EXERTION_NARROW for why the second group may not fire alone."""
+    b = beat or ""
+    return bool(_EXERTION.search(b) or _EXERTION_NARROW.search(b))
 
 
 # Sound the text asks for. H3 is joint, so the same prose conditions the audio
@@ -1118,11 +1153,14 @@ _SOUND_FROM = (
     # model the person makes no sound, and a person making no sound is rendered still.
     # A beat that already names the sound is left alone -- "she moans" is in
     # _SOUND_CUE, so what you wrote wins and none of this is added.
+    # THE TWO LISTS HAVE TO AGREE, and they are now built from the same source so
+    # they cannot drift again. The generic motion verbs were bare here too, so "he
+    # grinds the coffee" was given moans of effort as prompt text -- and prompt text
+    # on a joint model steers the picture, which is how a wide shot became a
+    # close-up of a panting face. See _EXERTION_NARROW.
     (r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
-     r"strain(?:s|ing|ed)?|arch(?:es|ed|ing)?|shudder(?:s|ed|ing)?|"
-     r"trembl(?:e|es|ing|ed)|shiver(?:s|ed|ing)?|buck(?:s|ed|ing)?|"
-     r"grind(?:s|ing)?|rock(?:s|ed|ing)?|thrust(?:s|ing)?|"
-     r"clutch(?:es|ed|ing)?|grip(?:s|ped|ping)?|clench(?:es|ed|ing)?)\b",
+     r"strain(?:s|ing|ed)?|trembl(?:e|es|ing|ed)|shiver(?:s|ed|ing)?)\b"
+     r"|\b(?:" + _EXERTION_NARROW_SRC + r")",
                                                     "unsteady breathing, with gasps and "
                                                     "moans of effort"),
     (r"\b(?:zip(?:s|ped|ping)?|unzip(?:s|ped|ping)?|zipper)\b", "a zip running"),

@@ -1208,16 +1208,40 @@ def test_effort_verbs_open_the_branch_they_are_given_sound_for():
     # ...and the two lists still agree in the other direction.
     for v in ("She writhes.", "She strains.", "She thrashes.", "She moans."):
         check(f"still effort: {v}", S.exertion_in(v))
-    # No false positives on the ordinary senses of the same words.
-    for v in ("She rocks the cradle.", "He grinds the coffee.",
-              "She arches an eyebrow.", "He grips the railing and looks down."):
-        # These DO read as effort, which is accepted: the cost of a wrong open branch
-        # is a shot that may make a sound, and the cost of a wrong closed one is a
-        # body working in silence. Recorded so the trade is deliberate, not a
-        # surprise.
-        pass
     check("a still scene is not effort", not S.exertion_in("She sits on the bed."))
     check("...nor is describing furniture", not S.exertion_in("The bed is made."))
+    # THE ORDINARY SENSES OF THE SAME WORDS, and this list used to be a `pass` with
+    # a comment calling the false positives an accepted trade. That was wrong, and
+    # it was reported as wrecked camera framing with strangers in the shot.
+    #
+    # Arch, buck, clench, clutch, grind, grip, rock and thrust are ordinary English.
+    # Bare, they gave a scenery beat "unsteady breathing, with gasps and moans of
+    # effort" in its prompt, opened its audio branch and lifted the mouth guard off
+    # it -- and prompt text steers the picture on a joint model, so a wide shot of a
+    # hallway became a close-up of a panting face with an invented speaker in it.
+    #
+    # The trade runs the OTHER way from what that comment claimed. A wrong open
+    # branch costs moaning text, a free mouth and a stream that drags the framing
+    # with it. A wrong closed one costs a silent shot, and built foley covers part
+    # of even that.
+    for v in ("She rocks the cradle.", "He grinds the coffee.",
+              "She arches an eyebrow.", "He grips the railing and looks down.",
+              "He rocks back on his heels.", "She clutches her bag and walks out.",
+              "The truck rocks over the kerb.", "He thrusts the letter at her.",
+              "She clenches her jaw and says nothing.",
+              "She grips the wheel and drives off.", "He grips the door handle.",
+              "She clutches the folder."):
+        check(f"not effort: {v}", not S.exertion_in(v))
+        check(f"...and no moans in its prompt: {v}",
+              not [x for x in S.sounds_for(v) if "moans" in x])
+    # The complement is what makes the difference, so the pairs have to split.
+    for yes, no in (("She arches her back.", "She arches an eyebrow."),
+                    ("They rock together.", "She rocks the cradle."),
+                    ("She grinds against him.", "He grinds the coffee."),
+                    ("She grips his shoulder.", "She grips the railing."),
+                    ("She claws at his back.", "She claws the paint off.")):
+        check(f"split: {yes!r} vs {no!r}",
+              S.exertion_in(yes) and not S.exertion_in(no))
 
 
 def test_furniture_under_movement_is_built():
