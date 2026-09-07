@@ -1163,6 +1163,51 @@ def test_a_built_bed_always_goes_on():
     check("it is low, not a hiss", _centroid(y) < 400)
 
 
+def test_effort_verbs_open_the_branch_they_are_given_sound_for():
+    """_EXERTION and the effort entry in _SOUND_FROM have to agree, and did not.
+
+    The table gave nine verbs "unsteady breathing, with gasps and moans of effort".
+    That is TEXT. Only _EXERTION opens the audio branch and exempts a shot from
+    mouths_shut_when_no_line -- so those beats had the sound written into the prompt
+    and were then pinned to silence with the mouth held closed: a body working in
+    total silence behind a still face."""
+    for v in ("She arches her back.", "She shudders.", "She bucks.",
+              "She grinds against him.", "He thrusts.", "They rock together.",
+              "She clutches the sheet.", "She grips his shoulder.", "She clenches."):
+        check(f"effort opens the branch: {v}", S.exertion_in(v))
+    # ...and the two lists still agree in the other direction.
+    for v in ("She writhes.", "She strains.", "She thrashes.", "She moans."):
+        check(f"still effort: {v}", S.exertion_in(v))
+    # No false positives on the ordinary senses of the same words.
+    for v in ("She rocks the cradle.", "He grinds the coffee.",
+              "She arches an eyebrow.", "He grips the railing and looks down."):
+        # These DO read as effort, which is accepted: the cost of a wrong open branch
+        # is a shot that may make a sound, and the cost of a wrong closed one is a
+        # body working in silence. Recorded so the trade is deliberate, not a
+        # surprise.
+        pass
+    check("a still scene is not effort", not S.exertion_in("She sits on the bed."))
+    check("...nor is describing furniture", not S.exertion_in("The bed is made."))
+
+
+def test_furniture_under_movement_is_built():
+    """The NON-VOCAL half, which the synthesiser can honestly make: a frame and a
+    mattress working. Both conditions required and in either order, because a bed
+    standing in the scene must not creak in a shot where nobody moves."""
+    check("movement on a bed sounds",
+          "a bed frame working" in S.sounds_for("They rock together on the bed."))
+    check("...either order", "a bed frame working" in
+          S.sounds_for("The bed shifts under them as they move together."))
+    check("a bed nobody moves on is silent",
+          "a bed frame working" not in S.sounds_for("She sits on the bed."))
+    check("...and so is movement with no furniture",
+          "a bed frame working" not in S.sounds_for("They rock together."))
+    y = S.foley_for("a bed frame working", 44100 * 2, 44100, seed=3)
+    check("it builds", y is not None)
+    check("...low and wooden", 100 < _centroid(y.unsqueeze(0)) < 600)
+    check("...and does not clip", float(y.abs().max()) <= 0.701)
+
+
 def test_the_sound_of_an_action_can_be_built():
     """auto_sound puts an action's sound in the PROMPT, and prompt text can never
     open a shot's audio branch -- so a wordless beat staging cuffs going on was
@@ -3706,6 +3751,8 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_effort_verbs_open_the_branch_they_are_given_sound_for()
+    test_furniture_under_movement_is_built()
     test_the_sound_of_an_action_can_be_built()
     test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()

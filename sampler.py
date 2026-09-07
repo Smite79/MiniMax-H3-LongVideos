@@ -1003,7 +1003,18 @@ _EXERTION = re.compile(
     r"scream(?:s|ing|ed)?|shout(?:s|ing|ed)?|yell(?:s|ing|ed)?|moan(?:s|ing|ed)?|"
     r"whimper(?:s|ing|ed)?|laugh(?:s|ing|ed)?|flinch(?:es|ing|ed)?|"
     r"trembl(?:e|es|ing|ed)|shak(?:e|es|ing)|shiver(?:s|ing|ed)?|"
-    r"freak(?:s|ing)?\s+out|wakes?\s+up|woke\s+up|panic(?:s|king|ked)?)\b", re.I)
+    r"freak(?:s|ing)?\s+out|wakes?\s+up|woke\s+up|panic(?:s|king|ked)?|"
+    # THESE WERE IN THE SOUND TABLE AND NOT HERE, and the two lists have to agree.
+    # _SOUND_FROM's effort entry gives all of them "unsteady breathing, with gasps
+    # and moans of effort" -- but that is TEXT, and only this list opens the audio
+    # branch and exempts the shot from mouths_shut_when_no_line. So a beat staging
+    # sustained physical effort got the sound written into its prompt and was then
+    # pinned to silence with the mouth held closed, which is a body working in total
+    # silence behind a still face. Nine verbs, every one of them the ordinary way to
+    # write the action.
+    r"arch(?:es|ed|ing)?|shudder(?:s|ed|ing)?|buck(?:s|ed|ing)?|"
+    r"grind(?:s|ing)?|ground|rock(?:s|ed|ing)?|thrust(?:s|ing)?|"
+    r"clutch(?:es|ed|ing)?|grip(?:s|ped|ping)?|clench(?:es|ed|ing)?)\b", re.I)
 
 
 def exertion_in(beat):
@@ -1121,6 +1132,18 @@ _SOUND_FROM = (
     # sound: velcro, a rope going tight, and the lower-body garments -- the fabric
     # entry listed coat, jacket, shirt, dress, skirt and stopped there, so taking
     # off a pair of shorts was silent while taking off a coat was not.
+    # FURNITURE UNDER SUSTAINED MOVEMENT. Both conditions, either order, because a
+    # bed standing in the scene must not creak in a shot where nobody moves -- the
+    # same rule the room tone follows. This is the NON-VOCAL half: a frame and a
+    # mattress working. The vocal half is not built anywhere and cannot be, since
+    # this synthesiser shapes noise and a voice is not noise; it comes from the
+    # model, on a branch the effort verbs open. See _EXERTION.
+    (r"\A(?=[\s\S]*\b(?:bed|mattress|springs?|bunk|couch|sofa|headboard|"
+     r"frame|table|desk|floorboards?)\b)"
+     r"(?=[\s\S]*\b(?:rock(?:s|ed|ing)?|thrust(?:s|ing)?|grind(?:s|ing)?|"
+     r"buck(?:s|ed|ing)?|writh(?:e|es|ing|ed)|arch(?:es|ed|ing)?|"
+     r"thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|move(?:s|d)?\s+together|"
+     r"shift(?:s|ed|ing)?\s+under)\b)",              "a bed frame working"),
     (r"\bvelcro\b",                                 "velcro tearing open"),
     (r"\b(?:rope|cord|twine|zip\s?tie)s?\b",        "rope creaking as it goes tight"),
     (r"\b(?:shorts|trousers|pants|jeans|leggings|tights|socks|boots|shoes|"
@@ -2099,6 +2122,13 @@ _FOLEY = {
     "blades through fabric":
         lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 5, 0.18, 0.05, g),
                                            0.09), sr, 3600, 2.2),
+    # A slow rhythm of frame creaks. Low and wooden, and the rate is deliberately
+    # unhurried: the point is that the room is not silent, not that the shot has a
+    # metronome in it.
+    "a bed frame working":
+        lambda n, sr, g, secs: _band(_hits(n, sr, g,
+                                           _even(0.15, max(3, int(secs * 1.6)), 0.62,
+                                                 0.05, g), 0.16), sr, 240, 3.0),
     "a buckle and leather creaking":
         lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 4, 0.20, 0.07, g),
                                            0.12), sr, 1200, 3.0),
