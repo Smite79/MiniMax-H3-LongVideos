@@ -3091,6 +3091,57 @@ def test_the_anchor_is_not_read_as_a_room():
     check("...and still no phantom hall", "in the hall" not in located)
 
 
+def test_a_garment_does_not_appear_at_the_first_frame():
+    """END TO END: an outer garment comes off, several beats pass, and it goes back
+    on. The shot that puts it on must describe the CHANGE, not the end state, and
+    must not also list it as already worn -- one shot holding the garment in two
+    states is the disagreement that made it appear at frame one."""
+    print("\n=== a garment does not appear at the first frame ===")
+    mem = "Kate: she, 30, brown hair, grey leggings, blue shorts."
+    P = ("A changing room.\n\nKate stands by the bench.\n\n"
+         "Kate takes off her shorts.\n\nKate sits down on the bench.\n\n"
+         "Kate reaches for the bench.\n\n"
+         "Kate puts her shorts back on.\nadd: her blue shorts\n\n"
+         "Kate stands up and walks out.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    info, script = out[2], out[3]
+    sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
+    # Off in the shots between.
+    check("the shorts are gone after the removal", "shorts" not in sh[2])
+    check("...and stay gone", "shorts" not in sh[3])
+    # The staging shot describes the CHANGE...
+    check("the staging shot gives both ends",
+          "off the body as the shot opens" in sh[4] and "by the last frame" in sh[4])
+    # ...and does NOT also list them as already worn. The add phrase is held back.
+    check("...and does not also list them as worn", "Her blue shorts." not in sh[4])
+    # From the next shot they are simply worn, the way a removal scrubs from its own.
+    check("the next shot wears them", "Her blue shorts." in sh[5])
+    check("info names the shot", "put a garment back ON" in info)
+    # The OTHER use of add: -- revealing a layer already underneath -- is untouched.
+    rev = run_node("A yard.\n\nNora stands by the gate.\n\n"
+                   "Dan cuts off her jacket and throws it away.\n"
+                   "remove: jacket\nadd: her white shirt underneath\n\n"
+                   "Nora turns to the gate.",
+                   plan_only=True,
+                   character_memory="Nora: she, 34, red hair, green jacket, white shirt.")[3]
+    check("a reveal stages no dressing", "off the body as the shot opens" not in rev)
+    check("...and is described in its own shot", "Her white shirt underneath." in
+          [x for x in re.split(r"(?=\[Shot )", rev) if x.strip()][1])
+    # ...and the case the beat_stages_wearing guard actually protects: the SAME
+    # garment coming back, on a beat that does not stage anybody putting it on. It
+    # went back on between shots, so there is no dressing to give both ends to, and
+    # the shot should simply describe it as worn.
+    off = run_node("A changing room.\n\nKate stands by the bench.\n\n"
+                   "Kate takes off her shorts.\n\nKate walks to the door.\n\n"
+                   "Kate is at the door.\nadd: her blue shorts\n\n"
+                   "Kate opens the door.",
+                   plan_only=True, character_memory=mem)[3]
+    osh = [x for x in re.split(r"(?=\[Shot )", off) if x.strip()]
+    check("a garment back with no dressing staged gets no clause",
+          "off the body as the shot opens" not in off)
+    check("...and is described as worn in that shot", "Her blue shorts." in osh[3])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3210,6 +3261,7 @@ def main():
     test_a_described_room_still_holds()
     test_the_sound_clause_is_inside_the_budget()
     test_the_anchor_is_not_read_as_a_room()
+    test_a_garment_does_not_appear_at_the_first_frame()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

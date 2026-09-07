@@ -2769,6 +2769,68 @@ _PLURAL_ITEM = re.compile(r"\b(?:s|shorts|trousers|pants|jeans|boots|shoes|glove
                           r"tights|leggings|briefs|knickers|cuffs)$", re.I)
 
 
+# PUTTING SOMETHING BACK ON. The mirror of a removal, and it had none of the same
+# machinery. A removal is scrubbed from the staging shot AND given a clause saying
+# it FINISHES there -- both ends, because the shot's keyframe shows the garment on
+# and the text has to carry it off. An `add:` had only the scrub's opposite: the
+# phrase went into the same shot's scene block as a plain worn item.
+#
+# So the shot inherited a last frame with the garment OFF and was told, statically,
+# that it is ON. There is no change described, only a disagreement, and the model
+# resolves it in the opening frames: whatever is on the body turns into the garment.
+# Reported as one thing instantly becoming another, a beat before the beat that
+# puts it on -- which is exactly what the opening frames of that shot are.
+_PUTS_ON = re.compile(
+    r"\b(?:put(?:s|ting)?|pull(?:s|ing)?|slip(?:s|ping)?|tug(?:s|ging)?|"
+    r"draw(?:s|ing)?|get(?:s|ting)?|climb(?:s|ing)?|step(?:s|ping)?)\b"
+    r"[^.;!?]{0,40}?\b(?:back\s+on|back\s+into|on|into)\b", re.I)
+# ...and the ones that need no preposition.
+_DRESSES = re.compile(r"\b(?:dress(?:es|ing)?|redress(?:es|ing)?|"
+                      r"button(?:s|ing)?\s+up|zip(?:s|ping)?\s+up|"
+                      r"fasten(?:s|ing)?|laces?\s+up|puts?\s+back\s+on)\b", re.I)
+
+
+def beat_stages_wearing(beat, item):
+    """Does the BEAT say this garment goes ON during this shot?
+
+    Only then is the both-ends clause right. `add:` has a second, older job -- it
+    reveals a layer that was under something all along ("add: her white shirt
+    underneath", after the jacket is cut off) -- and that garment was already worn.
+    Telling the shot it goes on during these frames would stage a dressing that
+    never happens, which is the same defect pointing the other way."""
+    b = str(beat or "")
+    if not b.strip():
+        return False
+    head = str(item or "").strip().lower()
+    if not head:
+        return False
+    # The item has to be NAMED near the wearing verb, or a beat that puts a coat on
+    # would also claim the boots an `add:` mentioned in the same breath.
+    for pat in (_PUTS_ON, _DRESSES):
+        for m in pat.finditer(b):
+            window = b[max(0, m.start() - 60):min(len(b), m.end() + 60)]
+            if re.search(r"\b" + re.escape(head.split()[-1]) + r"\b", window, re.I):
+                return True
+    return False
+
+
+def wearing_clause(phrases):
+    """Give putting something on BOTH ENDS: off as the shot opens, on by the last.
+
+    The same shape direction_anchor uses for a door and removal_clause uses for a
+    garment coming off. Phrased as where the garment IS at each end rather than as
+    what it is not, because at cfg 1 there is no negative prompt and naming an
+    unwanted state in the positive asks for it."""
+    items = [str(p or "").strip().rstrip(".") for p in (phrases or []) if str(p or "").strip()]
+    if not items:
+        return ""
+    what = " and ".join(items)
+    plural = len(items) > 1 or bool(_PLURAL_ITEM.search(items[-1]))
+    are = "are" if plural else "is"
+    return (f" {what[0].upper()}{what[1:]} {are} off the body as the shot opens and "
+            f"fully on by the last frame, put on during this shot.")
+
+
 # --- restraints ---------------------------------------------------------------
 # The one continuity fact the node asserts on its own, because it is the one that
 # cannot be recovered: a cuff that renders open is not a detail that drifts, it is
@@ -6088,6 +6150,7 @@ class H3LongVideos:
         stripped_shots = set()      # 0-based shots that took something off
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
+        wearing_shots = []          # shots that put one back on, given both ends
         # Names, so "lifts Kate onto the table" reads as moving a person rather than
         # an object. A sheet LABELS them, which beats scanning prose for capitals --
         # that way "Medium shadows" is not a member of the cast, and a name with an
@@ -6303,6 +6366,9 @@ class H3LongVideos:
                              f"scene still describes {', '.join(maybe)} and there is no "
                              f"'remove:' line for it -- so every shot keeps saying it is worn. "
                              f"Add 'remove: {maybe[0]}' to that beat")
+            _wearing = ""             # the both-ends clause for a garment going on
+            _staged_add = []          # ...and the phrases it covers, held out of
+                                      #    this shot's static wardrobe
             if adds:
                 shown.extend(a for a in adds if a not in shown)
                 # An `add:` that names something previously removed is putting it
@@ -6327,6 +6393,23 @@ class H3LongVideos:
                           "here. A garment coming back has to un-cover as well as "
                           "re-cover, or the layer under it stays described for the "
                           "rest of the run")
+                    # ...and it goes on DURING this shot, which nothing said. The
+                    # phrase went straight into the scene block as a worn item, so a
+                    # shot inheriting a last frame without the garment was told flatly
+                    # that it has it. That is a disagreement rather than a change, and
+                    # the model settles it in the opening frames by turning whatever
+                    # is on the body into the garment.
+                    #
+                    # Only where the BEAT stages the dressing. An `add:` revealing a
+                    # layer that was underneath all along describes something already
+                    # worn, and staging it would invent a dressing that never happens.
+                    _worn_now = [a for a in adds
+                                 if any(beat_stages_wearing(body, g) for g in _back)
+                                 and any(names_any(a, [g]) for g in _back)]
+                    if _worn_now:
+                        _wearing = wearing_clause(_worn_now)
+                        _staged_add = list(_worn_now)
+                        wearing_shots.append(len(shots) + 1)
                 notes.append(f"added to the scene from shot {len(shots) + 1} on: "
                              + "; ".join(adds))
             # The scrub applies to the removing shot too -- but only because that
@@ -6430,7 +6513,13 @@ class H3LongVideos:
             # meant an add could never put anything BACK: the token stays in `gone`
             # for the rest of the film, so "add: her locket is back on" was suppressed
             # by the removal that took it off in the first place.
-            live = list(shown)
+            # A garment going ON in THIS shot is described by the wearing clause,
+            # which gives it both ends. Listing it here as well would say it is
+            # already worn while the clause says it is being put on -- the same
+            # shot holding the garment in two states, which is the disagreement
+            # that made it appear at the first frame. It joins the static wardrobe
+            # from the NEXT shot on, exactly as a removal scrubs from its own.
+            live = [a for a in shown if a not in _staged_add]
             if live:
                 tail = ". ".join(a.rstrip(".") for a in live) + "."
                 tail = tail[0].upper() + tail[1:]
@@ -7020,6 +7109,7 @@ class H3LongVideos:
             # escape. What the beat itself stages ranks above what merely persists.
             _guards = [
                 (1, "removal", tail),        # the beat's own action, completing
+                (1, "wearing", _wearing),    # ...and its mirror, a garment going on
                 (2, "revealed", _revealed),  # what shows where it was
                 (2, "bare", _bare),          # ...or that nothing does
                 (3, "hold", hold),           # hardware coming open is not a drift
@@ -7218,6 +7308,20 @@ class H3LongVideos:
                 f"differently each time. Your scene text is not edited: move the "
                 f"location into the beats, or keep the scene general, and this stops "
                 f"being needed")
+        if wearing_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in wearing_shots)} put a garment back "
+                f"ON, so each is told both ends: off the body as the shot opens, fully "
+                f"on by the last frame. An 'add:' used to go straight into the scene "
+                f"block as a worn item, which told a shot inheriting a last frame "
+                f"WITHOUT the garment that it flatly has it -- a disagreement rather "
+                f"than a change, and the model settles those in the opening frames by "
+                f"turning whatever is on the body into the garment. That reads as one "
+                f"thing instantly becoming another, a beat before the beat that puts it "
+                f"on, which is what those opening frames are. The garment joins the "
+                f"static wardrobe from the NEXT shot, the way a removal scrubs from its "
+                f"own. An 'add:' that merely reveals a layer already underneath is left "
+                f"alone: nothing is being put on there")
         if crowded:
             # This was collected and never reported. The budget rarely binds, so the
             # one time it did there was nothing in info saying a guard had been cut

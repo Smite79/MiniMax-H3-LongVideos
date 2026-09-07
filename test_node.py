@@ -1124,6 +1124,44 @@ def test_a_transitive_posture_puts_the_object_down():
                                                        cast).values())
 
 
+def test_a_garment_going_on_has_both_ends():
+    """A removal is scrubbed from its staging shot AND told it FINISHES there --
+    both ends, because the keyframe shows the garment on and the text has to carry
+    it off. An `add:` had only the scrub's opposite: the phrase went into the same
+    shot's scene block as a plain worn item.
+
+    So a shot inheriting a last frame WITHOUT the garment was told flatly that it
+    has it. That is a disagreement rather than a change, and the model settles it in
+    the opening frames by turning whatever is on the body into the garment -- read
+    as one thing instantly becoming another, a beat before the beat that puts it on,
+    which is what those opening frames are."""
+    check("a dressing is read", S.beat_stages_wearing("Kate puts her shorts back on.",
+                                                      "shorts"))
+    check("...with a preposition", S.beat_stages_wearing(
+        "Kate pulls her shorts on over the leggings.", "shorts"))
+    check("...and stepping into", S.beat_stages_wearing("Kate steps into her shorts.",
+                                                        "shorts"))
+    check("...and fastening", S.beat_stages_wearing("Kate zips up her jacket.", "jacket"))
+    # An `add:` has a second, older job: revealing a layer that was underneath all
+    # along. That garment was already worn, and staging it would invent a dressing.
+    check("a reveal is not a dressing",
+          not S.beat_stages_wearing("Dan cuts off her jacket and throws it away.",
+                                    "shirt"))
+    check("a garment merely mentioned is not put on",
+          not S.beat_stages_wearing("Kate looks at her shorts on the bench.", "shorts"))
+    check("...nor is something else going on a bench",
+          not S.beat_stages_wearing("Kate puts her bag on the bench.", "shorts"))
+    check("a removal is not a dressing",
+          not S.beat_stages_wearing("Kate takes off her shorts.", "shorts"))
+    # Both ends, and phrased as where the garment IS -- at cfg 1 there is no negative
+    # prompt, so naming an unwanted state in the positive asks for it.
+    c = S.wearing_clause(["her blue shorts"])
+    check("the clause gives the opening frame", "as the shot opens" in c)
+    check("...and the last", "by the last frame" in c)
+    check("...and says it happens during the shot", "put on during this shot" in c)
+    check("nothing to put on says nothing", S.wearing_clause([]) == "")
+
+
 def test_a_lens_setting_is_not_a_room():
     """_PLACE is an alternation with no edges of its own, so searching it RAW matches
     inside words. "shallow depth of field" contains "hall" -- and every camera anchor
@@ -3436,6 +3474,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_a_garment_going_on_has_both_ends()
     test_a_lens_setting_is_not_a_room()
     test_the_sound_clause_spends_from_the_budget()
     test_a_described_room_is_still_a_room()
