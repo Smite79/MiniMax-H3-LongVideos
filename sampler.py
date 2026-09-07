@@ -7287,10 +7287,11 @@ class H3LongVideos:
             # dress, handcuffs" beside a script that cuffs her in beat 3 put the
             # cuffs on her from shot 1 -- reported as a handcuff on her arm
             # before she is handcuffed.
-            _not_yet = {c for c, at in _staged_at.items() if at > len(shots) + 1}
+            _later_for_state = {c for c, at in _staged_at.items()
+                                if at > len(shots) + 1}
             for _n, _line in sheet_lines(sheet):
                 if _n:
-                    _state.declare(_n, _line, staged_later=_not_yet)
+                    _state.declare(_n, _line, staged_later=_later_for_state)
             _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
                               shot=len(shots) + 1)
             # Who this beat involves, decided BEFORE the removals: a beat that
@@ -7579,21 +7580,46 @@ class H3LongVideos:
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
             # Maya lies still" -- and a name fused to the end of an attribute list is
             # read as one more item in it.
-            # HARDWARE THE SCRIPT HAS NOT PUT ON YET COMES OUT OF THE SHEET.
-            # The sheet is re-stamped into every shot by this node, so what it
-            # says in shot 1 is this node's doing -- and a sheet reading
-            # "McKenna: she, 27, green dress, handcuffs" beside a script that
-            # cuffs her in beat 3 listed handcuffs on her from the opening shot.
-            # A described item is a drawn item: reported as a handcuff on her arm
-            # before she is handcuffed.
+            # THE CHARACTER MEMORY IS NOT EDITED. This briefly scrubbed hardware
+            # out of the sheet before the beat that stages it, to stop a cuff
+            # appearing on a wrist before the cuffing. It was the wrong lever and
+            # it was told so: "Stop removing items from the character memory!"
             #
-            # Same mechanism as a removed garment, and for the same reason: the
-            # sheet says WHAT somebody has and never WHEN, so where the script
-            # stages the moment, the sheet waits for it.
-            _early = [c for c, at in _staged_at.items() if at > len(shots) + 1]
+            # It was also worse than it looked. scrub_removed drops the whole
+            # comma-separated entry, so "green dress, steel collar" lost the line
+            # -- and with the line gone the person went with it, leaving shots
+            # with nobody described in them at all.
+            #
+            # The sheet is the author's. Where it disagrees with the script the
+            # node says so in the report and holds ITS OWN clause back, which is
+            # the half that was actually asserting a lie. Only removals the
+            # author staged still scrub, which is what that mechanism is for.
             shot_scene = scrub_removed(
                 "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
-                visible + covered + _early)
+                visible + covered)
+            # A READING COPY, never emitted. The sheet is sent to the model exactly
+            # as written; this is only what the node consults when deciding whether
+            # to assert hardware is FASTENED, and it leaves out anything the script
+            # stages later. Without it the sheet's own mention latched the standing
+            # hold from shot 1 -- "the handcuffs stay closed and fastened as they
+            # were put on", two shots before anybody put them on -- which is the
+            # assertion that had to stop, as against the author's description,
+            # which did not.
+            _sheet_says_early = [c for c, at in _staged_at.items()
+                                 if c in _sheet_hw and at > len(shots) + 1]
+            _scene_for_state = (scrub_removed(shot_scene, _sheet_says_early)
+                                if _sheet_says_early else shot_scene)
+            # "ALREADY ON" MEANS BEFORE THIS SHOT. The applying test asks whether
+            # the hardware was on before the beat that puts it on, so the item
+            # being staged HERE has to be out of the answer as well -- otherwise
+            # the sheet's own mention vetoes the both-ends clause on exactly the
+            # shot that stages the fastening, and it gets the standing hold: a lie
+            # about its first frame.
+            _sheet_says_now_or_later = [c for c, at in _staged_at.items()
+                                        if c in _sheet_hw and at >= len(shots) + 1]
+            _scene_before_now = (
+                scrub_removed(shot_scene, _sheet_says_now_or_later)
+                if _sheet_says_now_or_later else shot_scene)
             # Retirement is handled at the moment of removal, above, so this is just
             # what is currently on. Filtering here against the whole history of `gone`
             # meant an add could never put anything BACK: the token stays in `gone`
@@ -7688,7 +7714,7 @@ class H3LongVideos:
                     worn_item = ""
                     worn_items = []
                     restrained_who = set()
-                elif restraint_present(body) or restraint_present(shot_scene):
+                elif restraint_present(body) or restraint_present(_scene_for_state):
                     restrained = True
                     # At the moment hardware GOES ON -- every time, not only the
                     # first. Latching once meant a second person cuffed in a later
@@ -7770,7 +7796,7 @@ class H3LongVideos:
             _stages_now = any(at == len(shots) + 1 and canon in _sheet_hw
                               for canon, at in _staged_at.items())
             _applying = bool(restrained and not _was_restrained
-                             and (_stages_now or not restraint_present(shot_scene))
+                             and not restraint_present(_scene_before_now)
                              and restraint_going_on(body))
             # The sheet claiming hardware the beat is only now putting on. The sheet
             # goes into EVERY shot, so it is on her in the shots before it happens,
@@ -7782,7 +7808,7 @@ class H3LongVideos:
             # from shot 1, which is the whole problem being reported. Recorded
             # once -- it is one authoring decision, not one per shot.
             if (not early_hardware and restraint_going_on(body)
-                    and restraint_present(shot_scene)):
+                    and restraint_present(_scene_for_state)):
                 early_hardware.append(len(shots) + 1)
             # Rigidity latches like the hardware itself. Steel locked on in shot 1 is
             # still steel in shot 5, and a beat that does not happen to say "chain"
@@ -8640,11 +8666,12 @@ class H3LongVideos:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in early_hardware)} stage hardware "
                 f"going ON, but the character sheet already lists it as worn. The sheet "
-                f"goes into every shot, so it is on them in the shots BEFORE this "
-                f"happens, and this shot is told the restraint is already fastened "
-                f"instead of being told both ends -- which renders as restrained first "
-                f"and caught afterwards. Take the hardware off the sheet entry and let "
-                f"the beat put it on; from the next shot it is held automatically. Your "
+                f"goes into every shot, so it DESCRIBES the hardware in the shots "
+                f"BEFORE this happens, and a described item is a drawn item. What the "
+                f"node will not do is assert it: no shot before this one is told the "
+                f"restraint is fastened, and this one is told both ends rather than "
+                f"the standing hold. Take the hardware off the sheet entry and let the "
+                f"beat put it on, or drop the beat if she wears it throughout. Your "
                 f"wording is never edited, so this one is yours")
         if applied_shots:
             notes.append(

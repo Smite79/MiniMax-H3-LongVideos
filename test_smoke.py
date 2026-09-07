@@ -3767,8 +3767,22 @@ def test_hardware_waits_for_the_beat_that_puts_it_on():
     mem = "Dana: she, 31, blue jacket.\nMcKenna: she, 27, green dress, handcuffs."
     sh = [b.split("]", 1)[1] for b in
           run_node(P, plan_only=True, character_memory=mem)[3].split("[Shot ")[1:]]
-    check("shot 1 has no cuffs in it at all", "cuff" not in sh[0].lower(), sh[0][:200])
-    check("...nor shot 2", "cuff" not in sh[1].lower(), sh[1][:200])
+    # THE SHEET IS NOT EDITED. This asserted the cuffs were absent from shots 1
+    # and 2 entirely, which was achieved by scrubbing them out of the character
+    # memory -- the wrong lever, and the user said so plainly: "Stop removing
+    # items from the character memory!" It was also destructive beyond the item,
+    # because scrub_removed drops the whole comma-separated entry and took the
+    # person's line with it.
+    #
+    # What the node owes is narrower and is what this checks now: it must not
+    # ASSERT the hardware is fastened before the beat that fastens it. The
+    # author's own words stay exactly as written, and the clash is reported.
+    check("shot 1 keeps the author's sheet line",
+          "handcuffs" in sh[0], sh[0][:200])
+    check("...but claims nothing is fastened yet",
+          "closed and fastened" not in sh[0], sh[0][:200])
+    check("...and shot 2 likewise",
+          "handcuffs" in sh[1] and "closed and fastened" not in sh[1], sh[1][:200])
     check("the applying shot has them", "cuff" in sh[2].lower())
     check("...with both ends of the change",
           "off the body at the first frame" in sh[2] or "open and off" in sh[2],
@@ -3785,6 +3799,15 @@ def test_hardware_waits_for_the_beat_that_puts_it_on():
                      plan_only=True,
                      character_memory="Kate: she, 30, handcuffs."
                      )[3].split("[Shot ")[1:]]
+    # ...and the disagreement is REPORTED, not silently resolved.
+    info = run_node(P, plan_only=True,
+                    character_memory="Dana: she, 31, blue jacket.\n"
+                                     "McKenna: she, 27, green dress, handcuffs.")[2]
+    check("the sheet/script clash is reported",
+          "already lists it as worn" in info, info[-400:])
+    check("...and says the wording is untouched",
+          "Your wording is never edited" in info)
+
     check("already-worn hardware holds from shot 1",
           "handcuffs" in worn[0] and "closed and fastened" in worn[0], worn[0][:220])
     check("...and keeps holding", "closed and fastened" in worn[1])

@@ -737,7 +737,14 @@ def staged_applications(beats):
         b = b or ""
         if not _APPLY.search(b) or _RELEASE.search(b):
             continue
-        for canon, _part, _w, _at in hardware_spans(b):
+        for canon, _part, _w, at in hardware_spans(b):
+            # WHAT IS BEING FASTENED TO WHAT. "Dana clips a lead to the steel
+            # collar" puts a LEAD on; the collar is where it clips, and it has
+            # been round her neck all along. Counting it as the collar's own
+            # application dated the collar to that beat, and everything before
+            # it was then treated as before she had one.
+            if re.search(r"\bto\s+(?:the|a|an|her|his|their)\s*$", b[:at], re.I):
+                continue
             out.setdefault(canon, i)
     return out
 

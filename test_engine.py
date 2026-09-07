@@ -233,6 +233,39 @@ def SceneState_for(beat):
     return st
 
 
+def test_fastening_something_to_a_collar_does_not_date_the_collar():
+    """REPORTED: "the collar is still being removed".
+
+    "Dana clips a lead to the steel collar" puts a LEAD on. The collar is where
+    it clips and has been round her neck all along -- but staged_applications
+    counted every piece of hardware in the beat, so it dated the COLLAR to that
+    beat too, and everything before it was treated as before she had one."""
+    print("\n=== fastening to a thing does not date that thing ===")
+    beats = ["McKenna sits on the sofa.",
+             "Dana clips a lead to the steel collar."]
+    got = E.staged_applications(beats)
+    check(f"the collar is not dated: {got}", "collar" not in got, str(got))
+    check("...and so nothing is staged at all here", got == {}, str(got))
+    # A leash clipped ON is dated, because it is the thing going on.
+    leashed = E.staged_applications(["McKenna waits.",
+                                     "Dana clips a leash to the steel collar."])
+    check("the leash is dated", leashed.get("leash") == 2, str(leashed))
+    check("...and still not the collar", "collar" not in leashed, str(leashed))
+    # ...while actually putting a collar on does date it.
+    on = E.staged_applications(["McKenna waits.",
+                                "Dana locks a steel collar around her neck."])
+    check("locking one on dates it", on.get("collar") == 2, str(on))
+    # A beat that only MENTIONS hardware dates nothing.
+    check("a mention dates nothing",
+          E.staged_applications(["McKenna looks at the collar."]) == {})
+    # KNOWN GAP, recorded rather than guessed at: "lead" as a noun is not in the
+    # hardware table. It is the British word for a leash and it is also a very
+    # common verb ("Dana leads her down the hall"), and no cheap pattern told
+    # them apart without false-firing on the verb. Write "leash" for now.
+    check("a bare 'lead' is not read as hardware (known gap)",
+          not E.hardware_in("Dana clips a lead to it"))
+
+
 def test_nothing_is_said_twice():
     """The old engine restated the same fact from several readers at once and
     the guards reached 65% of a shot against a 12% beat."""
@@ -299,6 +332,7 @@ def main():
     test_a_chain_is_a_tether_not_a_second_restraint()
     test_a_modifier_belongs_to_its_own_item()
     test_a_spoken_name_is_not_a_staged_one()
+    test_fastening_something_to_a_collar_does_not_date_the_collar()
     test_nothing_is_said_twice()
     test_a_garment_change_says_both_ends()
     test_pulled_aside_is_not_taken_off()
