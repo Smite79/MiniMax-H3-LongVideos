@@ -1132,6 +1132,58 @@ def _tone(secs, f, sr=44100, amp=0.4, ch=2):
     return (torch.sin(2 * math.pi * f * t) * amp).unsqueeze(0).repeat(ch, 1)
 
 
+def _centroid(y, sr=44100):
+    m = y.mean(0)
+    X = torch.fft.rfft(m).abs()
+    f = torch.fft.rfftfreq(int(m.numel()), d=1.0 / sr)
+    return float((X * f).sum() / X.sum())
+
+
+def test_the_bed_is_built_from_the_scene():
+    """No file and no second model pass: the node already reads what the room sounds
+    like, and room tone is physically shaped noise, so it can be made rather than
+    fetched. Built noise is also the one source of ambience that cannot produce a
+    voice, which is the whole difficulty with getting it out of a joint model."""
+    sr, n = 44100, 44100 * 3
+    y = S.synth_ambient("the quiet of a house", n, sr, seed=1)
+    check("a bed is produced", y is not None)
+    check("...at the asked-for shape", tuple(y.shape) == (2, n))
+    check("...and is finite", bool(torch.isfinite(y).all()))
+    check("the same seed reproduces it",
+          torch.allclose(y, S.synth_ambient("the quiet of a house", n, sr, seed=1)))
+    check("a different seed does not",
+          not torch.allclose(y, S.synth_ambient("the quiet of a house", n, sr, seed=2)))
+    # Different rooms have to SOUND different, or reading the scene bought nothing.
+    # Spectral centroid, because a low/mid/high split cannot separate interiors --
+    # they are all mostly under 300 Hz, which is what room tone is.
+    cents = {p: _centroid(S.synth_ambient(p, n, sr, seed=1))
+             for p in ("the quiet of a house", "the hollow quiet of a hallway",
+                       "water moving in the pipes", "tiled walls ringing",
+                       "open air with no walls close by")}
+    check("a house is darker than a hallway",
+          cents["the quiet of a house"] < cents["the hollow quiet of a hallway"])
+    check("...a hallway darker than pipes",
+          cents["the hollow quiet of a hallway"] < cents["water moving in the pipes"])
+    check("...and tiles are the brightest of them",
+          cents["tiled walls ringing"] > cents["open air with no walls close by"] * 0.9)
+    check("every room is distinct", len(set(round(c) for c in cents.values())) == 5)
+    # NORMALISED BY RMS, so ambient_level means the same thing in every room.
+    # Peak-normalising gave a 26 dB spread from one setting, measured.
+    rms = [float(S.synth_ambient(p, n, sr, seed=1).pow(2).mean().sqrt())
+           for p in ("the quiet of a house", "tiled walls ringing",
+                     "a low hum off the strip light", "an engine idling",
+                     "rain against the glass")]
+    check("every bed lands on the same level", max(rms) / min(rms) < 1.2)
+    # ...and nothing clips before the mix even sees it.
+    for p in ("a clock ticking", "a low hum off the strip light", "rain against the glass"):
+        check(f"'{p}' stays under full scale",
+              float(S.synth_ambient(p, n, sr, seed=1).abs().max()) <= 0.951)
+    # An unrecognised description still gets a room rather than nothing.
+    check("an unknown room falls back", S.synth_ambient("", n, sr, seed=1) is not None)
+    # Defensive: too short to shape is None, not an exception.
+    check("an impossible length is survivable", S.synth_ambient("a house", 8, sr) is None)
+
+
 def test_an_ambient_bed_is_mixed_not_conditioned():
     """Ambience laid UNDER the finished soundtrack, rather than derived in the prompt.
 
@@ -3547,6 +3599,7 @@ def main():
     test_a_posture_carries_to_the_next_shot()
     test_a_journey_has_two_ends()
     test_the_room_follows_the_characters()
+    test_the_bed_is_built_from_the_scene()
     test_an_ambient_bed_is_mixed_not_conditioned()
     test_the_loop_join_does_not_click()
     test_a_garment_going_on_has_both_ends()

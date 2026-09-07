@@ -1838,6 +1838,128 @@ def _decode_audio(audio_vae, out_latent):
     return {"waveform": audio, "sample_rate": sr}
 
 
+# SYNTHESISING THE BED, from the description the node already read off the scene.
+#
+# No file to wire and no second model pass. Room tone is physically shaped noise --
+# air, rumble, plant, a mains hum -- so it can be built rather than fetched, and
+# built noise cannot speak, which is the whole problem with getting ambience out of
+# a joint model.
+#
+# Each recipe is: spectral tilt (0 white, 1 pink, 2 brown), a low-pass corner, an
+# optional high-pass, an optional tonal hum with its harmonic, and an optional slow
+# amplitude movement. Ordered, first match wins, most specific first.
+#
+# HONEST LIMIT: this makes TONE, not events. "birdsong", "cutlery and moving chairs"
+# and "a monitor somewhere down the corridor" get the ROOM those things are in, not
+# the things -- synthesising a convincing bird is not something a noise shaper does,
+# and a bad one is worse than the room alone. `info` says when that has happened.
+_BED_EVENTFUL = ("birdsong", "cutlery", "monitor somewhere", "corridor beyond")
+# Target level for a built bed, before ambient_level scales it. -22 dBFS RMS, so
+# the default 0.25 lands near -34 dBFS: present, and well under a spoken line.
+_BED_RMS = 0.08
+_BED_RECIPE = (
+    (r"\brain\b",            dict(tilt=0.8, cut=9000, hp=250, mod=(0.30, 0.18))),
+    (r"\bstorm\b|\bthunder", dict(tilt=1.7, cut=700,          mod=(0.13, 0.40))),
+    (r"\bwind\b|\btrees\b",  dict(tilt=1.2, cut=2600,         mod=(0.18, 0.42))),
+    (r"\bsea\b|\bocean\b",   dict(tilt=1.3, cut=1700,         mod=(0.11, 0.50))),
+    (r"\btraffic\b",         dict(tilt=1.7, cut=900,          mod=(0.07, 0.22))),
+    (r"\bengine\b",          dict(tilt=1.5, cut=520, hum=(60.0, 0.30),
+                                  mod=(0.09, 0.12))),
+    (r"\bpipes\b|\bwater\b", dict(tilt=1.3, cut=1250,         mod=(0.55, 0.45))),
+    (r"\bclock\b|\bticking", dict(tilt=1.6, cut=800, tick=(1.0, 0.22))),
+    # The hum family: a fridge, a fan, a strip light, a monitor. Tonal, not noise.
+    (r"\bhum(?:ming|s)?\b|\bfan\b|\bfridge\b|\bstrip light\b|\bmonitor\b",
+                             dict(tilt=1.4, cut=1500, hum=(100.0, 0.22))),
+    (r"\btiled\b|\bringing\b", dict(tilt=0.9, cut=6000, hp=180)),
+    (r"\bhard walls\b|\bgiving the sound back\b", dict(tilt=1.6, cut=950)),
+    (r"\bopen air\b|\bno walls close\b|\bbirdsong\b", dict(tilt=1.0, cut=7000)),
+    (r"\bhollow quiet\b|\bhallway\b|\bcorridor\b|\blarge empty room\b|\blong tail\b",
+                             dict(tilt=1.6, cut=700)),
+    (r"\bcutlery\b|\bchairs\b", dict(tilt=1.1, cut=4500)),
+    (r"\bsoft room\b|\blittle echo\b", dict(tilt=1.8, cut=520)),
+    (r"\bnight\b|\bbedroom\b|\bhouse\b|\bquiet\b", dict(tilt=1.9, cut=380)),
+)
+
+
+def bed_recipe(phrase):
+    """How to build the bed this phrase describes. The neutral room if none match."""
+    p = str(phrase or "").lower()
+    for pat, rec in _BED_RECIPE:
+        if re.search(pat, p):
+            return dict(rec)
+    return dict(tilt=1.8, cut=420)
+
+
+def synth_ambient(phrase, n, sr, seed=0, channels=2):
+    """Build `n` samples of the ambience `phrase` describes. [C, n], or None.
+
+    Shaped in the FREQUENCY domain -- white noise, an envelope, back again -- which
+    gives exact spectral control in one pass and, unlike a per-sample filter, does
+    not walk a million-sample loop in Python.
+
+    Generated at the FULL length of the film, so unlike a wired file there is no
+    loop and therefore no join to hide.
+
+    Defensive like everything else on this path: any failure returns None and the
+    soundtrack goes out as the model made it."""
+    try:
+        n, sr = int(n), int(sr)
+        if n < 64 or sr <= 0:
+            return None
+        rec = bed_recipe(phrase)
+        g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
+        w = torch.randn((int(channels), n), generator=g)
+        f = torch.fft.rfftfreq(n, d=1.0 / sr).clamp(min=1.0)
+        # Amplitude goes as f^(-tilt/2), so POWER goes as f^-tilt: tilt 1 is pink,
+        # 2 is brown. Then a gentle low-pass, and a high-pass where the recipe wants
+        # the bottom out of it.
+        env = f.pow(-float(rec.get("tilt", 1.8)) / 2.0)
+        env = env / (1.0 + (f / float(rec.get("cut", 420))) ** 2)
+        if rec.get("hp"):
+            env = env * (f / (f + float(rec["hp"])))
+        y = torch.fft.irfft(torch.fft.rfft(w, dim=-1) * env, n=n, dim=-1)
+        t = torch.arange(n, dtype=torch.float32) / sr
+        # Slow movement, so a bed does not sit perfectly still and read as a hiss.
+        if rec.get("mod"):
+            rate, depth = rec["mod"]
+            y = y * (1.0 + float(depth) * torch.sin(2 * math.pi * float(rate) * t))
+        # A tonal hum is a TONE, not noise: a fridge and a strip light are pitched.
+        if rec.get("hum"):
+            hz, amp = rec["hum"]
+            hum = (torch.sin(2 * math.pi * float(hz) * t)
+                   + 0.35 * torch.sin(2 * math.pi * float(hz) * 2 * t))
+            y = y + float(amp) * hum.unsqueeze(0)
+        if rec.get("tick"):
+            rate, amp = rec["tick"]
+            step = max(1, int(sr / max(float(rate), 0.01)))
+            click = torch.zeros(n)
+            idx = torch.arange(0, n, step)
+            click[idx] = 1.0
+            decay = torch.exp(-torch.arange(min(step, int(sr * 0.05)),
+                                            dtype=torch.float32) / (sr * 0.004))
+            click = torch.nn.functional.conv1d(
+                click.view(1, 1, -1), decay.flip(0).view(1, 1, -1),
+                padding=decay.numel() - 1)[0, 0, :n]
+            y = y + float(amp) * (click * torch.randn(n, generator=g)).unsqueeze(0)
+        # NORMALISE BY RMS, NOT PEAK. Peak-normalising made the loudness depend on
+        # the recipe's crest factor rather than on the setting: measured across the
+        # beds, a strip-light hum came out at -8.2 dBFS and a ticking clock at
+        # -34.1, a 26 dB spread from one ambient_level. RMS puts them all at the
+        # same subjective level, so the widget means the same thing in every room.
+        rms = float(y.pow(2).mean().sqrt())
+        if not (rms > 0.0) or not torch.isfinite(y).all():
+            return None
+        y = y * (_BED_RMS / rms)
+        # ...then hold the peak down, because a peaky recipe (the clock) would
+        # otherwise reach 2.8 at that RMS and clip before the mix even sees it.
+        peak = float(y.abs().max())
+        if peak > 0.95:
+            y = y * (0.95 / peak)
+        return y
+    except Exception:
+        return None                        # a bed is a nicety, a render is not
+
+
 def _seamless_loop(x, n, sr):
     """[C, M] -> [C, n], looped with a crossfade so the join does not click.
 
@@ -6029,11 +6151,19 @@ class H3LongVideos:
                 # APPENDED, like every widget before it. Saved workflows restore
                 # widget values by POSITION with no names stored.
                 "ambient_audio": ("AUDIO", {"tooltip":
-                    "An ambient bed laid UNDER the finished soundtrack -- room tone, "
-                    "rain, traffic, a hum. Wire any audio loader here.\n\n"
-                    "This is a MIX, not conditioning. Your file is played under what "
-                    "the model generated, at the level you set, unchanged. That is "
-                    "the difference that makes it work: ambience has nothing to "
+                    "OPTIONAL OVERRIDE. Leave it empty and the bed is BUILT from the "
+                    "scene -- the node has already read what the room sounds like, "
+                    "and room tone is physically shaped noise, so it can be made "
+                    "rather than fetched. No file needed and no second model pass.\n\n"
+                    "Wire a recording here only when you want that recording: a real "
+                    "location, or the events a synthesiser cannot make. Building "
+                    "produces TONE -- air, rumble, plant, a mains hum, water, a "
+                    "clock -- so a scene whose ambience is birdsong or a room full "
+                    "of cutlery gets the room those things are in, not the things. "
+                    "info says when that has happened.\n\n"
+                    "Either way this is a MIX, not conditioning: it plays under what "
+                    "the model generated, at the level you set. That is the "
+                    "difference that makes it work -- ambience has nothing to "
                     "lip-sync to and asks nothing of the model, so it cannot put a "
                     "voice in a wordless shot.\n\n"
                     "Ambience derived in the prompt CANNOT do this. To score a "
@@ -6048,11 +6178,18 @@ class H3LongVideos:
                     "channels. Anything shorter than the film is fine."}),
                 "ambient_level": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0,
                     "step": 0.01,
-                    "tooltip": "How loud the bed sits under everything. 0 turns it "
-                               "off. 0.15-0.3 is a bed you notice only when it "
-                               "stops; above that it starts competing with dialogue. "
+                    "tooltip": "How loud the bed sits under everything, and the "
+                               "switch that turns it on: above 0 a bed is built "
+                               "from the scene even with nothing wired to "
+                               "ambient_audio. 0 turns it off entirely.\n\n"
+                               "A built bed is normalised to a fixed RMS first, so "
+                               "this means the same thing in every room -- the "
+                               "default 0.25 lands near -34 dBFS, present and well "
+                               "under a spoken line. 0.15-0.3 is a bed you notice "
+                               "only when it stops.\n\n"
                                "If the sum would clip, the whole mix is scaled down "
-                               "rather than clipped, so a loud line distorts."}),
+                               "rather than clipped, because clipping distorts the "
+                               "line, which is the part worth keeping."}),
             },
         }
 
@@ -6330,6 +6467,12 @@ class H3LongVideos:
         _opening = extract_directives(beats[0])[0] if beats else ""
         _room = room_tone(scene, _opening) if auto_sound else ""
         _room_src = "the scene" if room_tone(scene) else "the opening beat"
+        # The same two readings, kept for the MIX and not gated on auto_sound.
+        # auto_sound governs what goes in the PROMPT, which is a conditioning-side
+        # question -- the mixed bed conditions nothing, so turning the prompt-side
+        # inference off should not also silence the room.
+        _mix_bed = scene_ambient(anchor, scene)
+        _mix_room = room_tone(scene, _opening)
         if _room:
             notes.append(f"room tone read from {_room_src}: {_room}. It goes under the "
                          f"shots whose audio branch is already open -- ones with a line, "
@@ -8366,9 +8509,29 @@ class H3LongVideos:
         # ...and the ambient bed goes on last, over the joined soundtrack rather than
         # per shot, so the loop runs continuously through the cuts instead of
         # restarting at each one. A bed that resets every shot is a bed you can hear.
-        audio, _bed_note = mix_ambient(audio, sr, ambient_audio, ambient_level)
+        # THE BED IS BUILT, not fetched, unless something is wired to ambient_audio.
+        # The node has already read what the room sounds like off the scene -- that
+        # is what auto_sound puts in the prompt -- so the same phrase can be turned
+        # into the sound itself. No file, no second model pass, and shaped noise is
+        # the one source of ambience that physically cannot produce a voice.
+        _bed_in, _built = ambient_audio, ""
+        if _bed_in is None and float(ambient_level or 0.0) > 0.0:
+            _phrase = " ".join(p for p in (_mix_bed, _mix_room) if p)
+            _synth = synth_ambient(_phrase, int(audio.shape[-1]), int(sr),
+                                   seed=seed, channels=int(audio.shape[1]))
+            if _synth is not None:
+                _bed_in = {"waveform": _synth.unsqueeze(0), "sample_rate": int(sr)}
+                _built = (f"built from the scene, not a file: \"{_phrase}\". "
+                          if _phrase else "built as a neutral room tone. ")
+                # Said plainly rather than left to disappoint: this shapes TONE.
+                if any(w in _phrase for w in _BED_EVENTFUL):
+                    _built += ("That description names EVENTS, and this builds tone "
+                               "-- so what went under is the room those things are "
+                               "in, not the things themselves. Wire a recording to "
+                               "ambient_audio if you want the events. ")
+        audio, _bed_note = mix_ambient(audio, sr, _bed_in, ambient_level)
         if _bed_note:
-            notes.append(_bed_note)
+            notes.append(_built + _bed_note if _built else _bed_note)
         total = video.shape[0]
         # The finished chain is the largest thing this node holds, and it competes with
         # the MODELS for system RAM: ComfyUI offloads weights to RAM rather than

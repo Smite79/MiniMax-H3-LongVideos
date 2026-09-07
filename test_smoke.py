@@ -3205,6 +3205,20 @@ def test_the_ambient_bed_reaches_the_soundtrack():
     off = run_node(P, ambient_audio=bed, ambient_level=0.0)
     check("level 0 mixes nothing", "ambient bed was laid under" not in off[2])
     check("...and still renders", int(off[1]["waveform"].shape[-1]) > 0)
+    # WITH NOTHING WIRED, the bed is BUILT from the scene -- no file, no second
+    # model pass. That is the default, so it is the path that has to work.
+    built = run_node("A tiled bathroom.\n\nHe walks in.\n\n"
+                     "She follows him and says: \"Wait.\"", ambient_level=0.25)
+    check("a bed is built with nothing wired", "built from the scene" in built[2])
+    check("...naming what it read", "tiled walls ringing" in built[2])
+    check("...and it is mixed", "ambient bed was laid under" in built[2])
+    # A wired file OVERRIDES the built one rather than stacking with it.
+    check("a wired bed is used instead of a built one",
+          "built from the scene" not in info)
+    # A description of EVENTS gets the room, and says so rather than disappointing.
+    ev = run_node("A garden in the morning.\n\nHe walks in.", ambient_level=0.25)[2]
+    check("an eventful description is honest about tone",
+          "names EVENTS" in ev, ev[-200:] if "built from" in ev else "no bed built")
     # ...and the silent conditioning is untouched by any of it: the bed is a MIX and
     # must not re-open an audio branch the way an inferred bed did.
     check("wordless shots are still pinned",

@@ -98,12 +98,14 @@ depicts and it follows them; untagged, a reference goes on every shot.
 | `megapixels` | 1.0 is H3's native budget; lower is faster and leaner |
 | `shot_seconds` | the cap on each shot |
 | `shot_length` | `from the beat` sizes each shot from its own line; `fixed` gives every shot `shot_seconds` |
-| `ambient_audio` / `ambient_level` | wire a room-tone loop to lay under the whole soundtrack; 0.15–0.3 is a bed you notice only when it stops |
+| `ambient_level` | ambience under the whole soundtrack, built from your scene. 0 is off; 0.15–0.3 is a bed you notice only when it stops |
+| `ambient_audio` | optional — wire a recording to use instead of the built one |
 
-Ambience belongs on `ambient_audio`, not in the prose. Scoring a silent shot from
-text needs the audio branch left open, and an open branch on a joint model invents a
-voice for the face to lip-sync to. A mix asks nothing of the model, so it cannot
-speak.
+Ambience is mixed, never prompted. Scoring a silent shot from text needs the audio
+branch left open, and an open branch on a joint model invents a voice for the face to
+lip-sync to. The bed is built from the room your scene names, so it needs no file,
+and shaped noise cannot speak. It makes tone — air, rumble, hum, water, a clock — so
+a scene whose ambience is birdsong gets the room, not the birds; `info` says when.
 
 Everything else is a switch, on by default, and each has a tooltip explaining what it
 does and what it costs. Hover before you change one.
