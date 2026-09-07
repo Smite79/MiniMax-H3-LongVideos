@@ -3559,6 +3559,81 @@ def test_two_restraints_put_on_together_both_survive():
           f"{[h[-90:] for h in held]}")
 
 
+def test_a_name_that_is_only_spoken_is_not_in_the_shot():
+    """Reported: a character turned up in a scene they were not supposed to be in.
+
+        Dana opens the door and calls out: "McKenna where are you?"
+
+    put McKenna's whole sheet line into that shot -- "McKenna: she, 27, green
+    dress" -- so the model was handed a full description of her and drew her
+    standing there. She is the one person the beat says is NOT in the room.
+
+    Calling for somebody is the commonest way to write their absence, and it was
+    reading as their presence. Presence is decided on the beat with its spoken
+    spans removed; a name staged OUTSIDE the quote still counts."""
+    print("\n=== a spoken name is not a staged one ===")
+    mem = "Dana: she, 31, blue jacket.\nMcKenna: she, 27, green dress."
+
+    def described(beat):
+        s = run_node("A hallway.\n\n" + beat + "\n\nDana walks on.",
+                     plan_only=True, character_memory=mem)[3]
+        first = s.split("[Shot ")[1].split("]", 1)[1]
+        return {n for n in ("Dana", "McKenna") if n + ":" in first}
+
+    check("called for, and absent",
+          described('Dana opens the door and calls out: "McKenna where are you? '
+                    'I am looking for you."') == {"Dana"})
+    check("spoken about, and absent",
+          described('Dana says: "McKenna took the keys."') == {"Dana"})
+    check("...even named twice in the line",
+          described('Dana shouts: "McKenna! McKenna, answer me."') == {"Dana"})
+    # Staged AND spoken still counts: the staging half is what puts her there.
+    check("staged as well as spoken",
+          described('Dana turns to McKenna and says: "McKenna, wait."')
+          == {"Dana", "McKenna"})
+    check("staged with no speech at all",
+          described("Dana and McKenna walk together.") == {"Dana", "McKenna"})
+    # And the same rule where hardware is concerned. Asserted on the SHOT, not on
+    # restrained_by_beat: that one deliberately returns everybody when it cannot
+    # tell who is applying what -- a hold that fires needlessly is a wasted
+    # sentence, one that fails to fire is hardware that stops being described --
+    # so the guarantee lives in who gets DESCRIBED, not in that set.
+    hw = run_node('A cell.\n\nDan says: "McKenna, put the cuffs on."'
+                  '\n\nDan waits.', plan_only=True,
+                  character_memory="Dan: he, 40, uniform.\n"
+                                   "McKenna: she, 27, green dress.")[3]
+    first = hw.split("[Shot ")[1].split("]", 1)[1]
+    check("a spoken instruction describes nobody new",
+          "McKenna:" not in first, first[:200])
+    check("...and puts no hardware on her",
+          "cuffs stay" not in first and "cuffs are" not in first, first[:200])
+
+
+def test_a_verb_is_not_a_room():
+    """Found in the same shot as the bug above: "McKenna steps out of the far
+    room" read as the flight of STEPS, and "Ana walks into the room" produced
+    "This shot is in the room, not the room the scene text names" -- a sentence
+    that contradicts itself in eight words.
+
+    first_place searches free text with no preposition in front of it, so it
+    cannot tell a noun from a verb. The words that collide do not get to win."""
+    print("\n=== a verb is not a room ===")
+    for t_ in ("McKenna steps out of the far room.", "She steps forward.",
+               "He lounges on the sofa.", "They study the map."):
+        check(f"not a place: {t_!r}", S.first_place(t_) not in
+              ("steps", "lounge", "study"), repr(S.first_place(t_)))
+    check("a bare room names nowhere", not S.first_place("Ana walks into the room."))
+    # ...but a qualified one is somewhere.
+    check("the back room does", S.first_place("Ana walks into the back room.")
+          == "back room")
+    check("the far room does", S.first_place("She steps out of the far room.")
+          == "far room")
+    for room, want in (("A kitchen.", "kitchen"), ("A long hallway.", "hallway"),
+                       ("A basement.", "basement"), ("The corridor is dark.",
+                                                     "corridor")):
+        check(f"{want} still reads", S.first_place(room) == want)
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3687,6 +3762,8 @@ def main():
     test_every_way_of_chaining_a_collar_to_a_wall()
     test_moving_towards_something_is_not_being_chained_to_it()
     test_two_restraints_put_on_together_both_survive()
+    test_a_name_that_is_only_spoken_is_not_in_the_shot()
+    test_a_verb_is_not_a_room()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

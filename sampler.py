@@ -351,6 +351,23 @@ def entry_heads(line):
     return out
 
 
+_SPOKEN_SPAN = re.compile(r"<d>.*?</d>|[\"“][^\"“”]{1,400}?[\"”]", re.S)
+
+
+def _outside_speech(text):
+    """The beat with everything anybody SAYS taken out.
+
+    What a character says is not stage direction. A name, a garment or a place
+    inside a line of dialogue is being talked about, and the commonest thing to
+    talk about is something that is not in the room -- "McKenna where are you?"
+    is how you write somebody's absence.
+
+    Both markers, because both exist in the pipeline: <d> after mark_dialogue has
+    run, plain quotes before it and wherever the author wrote a quote the marker
+    declined to wrap."""
+    return _SPOKEN_SPAN.sub(" ", text or "")
+
+
 def sheet_for_beat(sheet, beat, previous=None):
     """(the sheet lines for the people this beat involves, the names kept).
 
@@ -369,8 +386,25 @@ def sheet_for_beat(sheet, beat, previous=None):
     rows = sheet_lines(sheet)
     # CASE-SENSITIVE. Prose capitalises a name, and matching without case made the
     # word "will" find a character called Will, and "grace" find Grace.
+    #
+    # A NAME INSIDE SPEECH IS BEING SAID, NOT STAGED. Reported: a beat where one
+    # character calls for another --
+    #
+    #     Dana opens the door and calls out: "McKenna where are you?"
+    #
+    # -- put McKenna's whole sheet line into the shot, so the model was handed
+    # "McKenna: she, 27, green dress" and drew her standing there. She is the one
+    # person the beat says is NOT in the room. Calling for somebody is the
+    # commonest way to write their absence and it was reading as their presence.
+    #
+    # So presence is decided on the beat with its spoken spans removed. A name
+    # said aloud AND staged outside the quote still counts -- "Dana turns to
+    # McKenna and says: 'McKenna, wait'" keeps her, because the staging half
+    # names her. Only a name that appears nowhere but inside the speech is
+    # dropped.
+    _staged = _outside_speech(beat or "")
     named = [n for n, _ in rows
-             if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "")]
+             if n and re.search(r"\b" + re.escape(n) + r"\b", _staged)]
     # THE WEARER of anything the beat handles. "Dan unlocks the chastity belt"
     # names only Dan, so the shot described only Dan -- and her sheet line went,
     # taking BOTH her <Picture N> tags with it. The shot then unlocked her belt
@@ -3856,7 +3890,12 @@ def restrained_by_beat(beat, cast):
     people = [n for n in (cast or []) if n]
     if len(people) <= 1:
         return set(people)
-    b = beat or ""
+    # SPOKEN NAMES ARE NOT STAGED ONES, here for the same reason as in
+    # sheet_for_beat: "Dan says: 'McKenna, put the cuffs on'" names McKenna in
+    # dialogue only, and taking that as her being in the shot describes hardware
+    # on somebody the text never put in the room -- which is exactly how a second
+    # figure gets invented to own it.
+    b = _outside_speech(beat or "")
     # The agent is whoever is named nearest BEFORE the applying verb, not whoever is
     # named first. "Mara runs for the door. Dan catches her and cuffs her wrists"
     # opens on the person being cuffed, and reading the first name as the agent put
@@ -4888,6 +4927,15 @@ _PLACE = (r"hallway|hall|corridor|passage|landing|stairs|staircase|steps|"
 # that sit behind a preposition were always safe, because the \s+ before them is
 # already a boundary; the two that search free text were not.
 _PLACE_WORD = re.compile(r"\b(?:" + _PLACE + r")\b", re.I)
+# Place words that are also ordinary verbs. free-text readers cannot tell which
+# sense is meant, and "she steps out", "he lands badly", "they study the map" are
+# all commoner than the rooms they collide with.
+_PLACE_ALSO_A_VERB = {"steps", "landing", "study", "lounge", "garage", "porch"}
+# Words in front of "room" that do NOT make it a particular room -- an article or
+# a preposition leaves it as "wherever we already are".
+_NOT_A_ROOM_MODIFIER = {"the", "a", "an", "this", "that", "her", "his", "their",
+                        "its", "my", "our", "your", "in", "into", "inside", "of",
+                        "from", "to", "at", "on", "and", "or", "same", "other"}
 # A room is usually DESCRIBED, not just named: "the tiled bathroom", "the long
 # hallway", "the second-floor landing". Every reader below wanted the article and
 # the room word to be adjacent, so one adjective made the whole journey invisible
@@ -5011,8 +5059,31 @@ def first_place(text):
 
     place_named wants "in the kitchen"; a scene paragraph is more often just "A
     living room." with no preposition to hang on."""
-    m = _PLACE_WORD.search(str(text or ""))
-    return re.sub(r"\s+", " ", m.group(0)).strip().lower() if m else ""
+    for m in _PLACE_WORD.finditer(str(text or "")):
+        got = re.sub(r"\s+", " ", m.group(0)).strip().lower()
+        # WORDS THAT ARE ALSO VERBS ARE NOT PLACES HERE. "McKenna steps out of
+        # the far room" read as the flight of STEPS -- the same collision as
+        # "door", found the same way, in the same sentence. This reader searches
+        # free text with no preposition in front of it, so it cannot tell a noun
+        # from a verb; the ones that collide are simply not allowed to win here.
+        # place_named still reads them, because "at the top of the steps" has a
+        # preposition and is unambiguous.
+        if got in _PLACE_ALSO_A_VERB:
+            continue
+        # ...and a bare "room" names nowhere. "Ana walks into the room" says she
+        # goes inside, not which room, and taking it as a place produced "This
+        # shot is in the room, not the room the scene text names" -- a sentence
+        # that contradicts itself. QUALIFIED it is a real place, and the word in
+        # front is what qualifies it: the back room, the far room, the next room
+        # are each somewhere distinct from where we just were.
+        if got == "room":
+            before = re.search(r"(\w+)\s+$", str(text or "")[:m.start()])
+            word = before.group(1).lower() if before else ""
+            if word in _NOT_A_ROOM_MODIFIER or not word:
+                continue
+            return (word + " room")
+        return got
+    return ""
 
 
 def place_named(text):

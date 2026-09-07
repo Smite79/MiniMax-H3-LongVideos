@@ -104,7 +104,12 @@ APPLY_VERB = (
     r"handcuffing|cuffing|chaining|locking|fastening|securing|tethering|tying|"
     r"strapping|clipping|bolting|attaching|gagging|blindfolding|collaring|"
     r"taping|buckling|binding|shackling|"
-    r"puts?\s+on|putting\s+on|slips?\s+on|closes?\s+around|clicks?\s+shut)"
+    # The particle can sit four words from its verb, exactly as it can for
+    # garments: "puts the cuffs on her" is the ordinary way to write it, and
+    # requiring "puts on" adjacent read that as no application at all.
+    r"(?:puts?|putting|slips?|slipped|snaps?|snapped|clicks?|clicked|clamps?|"
+    r"clamped)(?:\s+\S+){0,4}?\s+(?:on|onto|around|shut|closed)|"
+    r"closes?\s+around|clicks?\s+shut)"
     r"|" + _DET + r"(?:handcuffs|cuffs|chains|shackles|locks|padlocks|fastens|"
     r"secures|tethers|ties|straps|clips|hooks|bolts|attaches|anchors|leashes|"
     r"ropes|gags|blindfolds|collars|tapes|buckles|binds)")
@@ -173,6 +178,23 @@ POSTURES = (
 
 def _rx(pattern):
     return re.compile(pattern, re.I)
+
+
+_SPOKEN_SPAN = re.compile(r"<d>.*?</d>|[\"“][^\"“”]{1,400}?[\"”]",
+                          re.S)
+
+
+def _outside_speech(text):
+    """The beat with everything anybody SAYS taken out.
+
+    What a character says is not stage direction. The commonest thing to talk
+    about is something that is NOT in the room -- "McKenna where are you?" is how
+    absence gets written -- and reading a spoken name as a staged one put a full
+    description of the missing person into the shot, so the model drew her.
+
+    Both markers, because both exist in the pipeline: <d> once mark_dialogue has
+    run, plain quotes before it."""
+    return _SPOKEN_SPAN.sub(" ", text or "")
 
 
 _HW_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r")?\s+)?("
@@ -279,7 +301,15 @@ def place_in(text):
     Behind a preposition, so a room has to be somewhere somebody IS. "Ana looks
     at the door" names no room -- and a door is not on the list in any case."""
     m = _PLACE_IN.search(text or "")
-    return re.sub(r"\s+", " ", m.group(1).lower()).strip() if m else ""
+    if not m:
+        return ""
+    got = re.sub(r"\s+", " ", m.group(1).lower()).strip()
+    # A BARE "room" NAMES NOWHERE. "Ana walks into the room" says she goes
+    # inside, not which room -- and taking it as a place produced "The shot is
+    # in the room, not the room the scene text names", which contradicts itself
+    # in one sentence. Modified, it is a real place: "the far room", "the back
+    # room" and "the next room" all distinguish themselves from where we were.
+    return "" if got == "room" else got
 
 
 def garments_in(text):
@@ -430,10 +460,15 @@ class SceneState:
         # before "Guard" in "The guard handcuffs Ana", so the cuffs went on the
         # guard -- the agent wearing what he is applying, which is the invented
         # second figure all over again.
+        #
+        # ...and read from the STAGED half only. A name inside a line of dialogue
+        # is being said, not staged: "Dan says: 'McKenna, put the cuffs on'"
+        # would otherwise hand McKenna hardware in a shot she is not in.
+        staged = _outside_speech(beat)
         who = sorted(
             (n for n in cast
-             if re.search(r"\b" + re.escape(n) + r"\b", beat, re.I)),
-            key=lambda n: re.search(r"\b" + re.escape(n) + r"\b", beat,
+             if re.search(r"\b" + re.escape(n) + r"\b", staged, re.I)),
+            key=lambda n: re.search(r"\b" + re.escape(n) + r"\b", staged,
                                     re.I).start())
         subject = who[0] if who else next(iter(list(self.people) or list(cast)
                                                or [""]))

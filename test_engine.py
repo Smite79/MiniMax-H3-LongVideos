@@ -198,6 +198,41 @@ def test_a_modifier_belongs_to_its_own_item():
           "the wrists behind the back and the neck fast to the wall" in s, s)
 
 
+def test_a_spoken_name_is_not_a_staged_one():
+    """REPORTED: a character turned up in a scene they were not in, because a
+    beat called out to them --
+
+        Dana opens the door and calls out: "McKenna where are you?"
+
+    Calling for somebody is how absence gets written, and it was reading as
+    presence. The state has to see the staged half only, or an instruction said
+    aloud puts hardware on somebody who is not in the room."""
+    print("\n=== a spoken name is not a staged one ===")
+    check("speech is stripped",
+          "McKenna" not in E._outside_speech(
+              'Dana calls out: <d>McKenna where are you?</d>'))
+    check("...and plain quotes too",
+          "McKenna" not in E._outside_speech('Dana calls out: "McKenna?"'))
+    check("staging survives it",
+          "McKenna" in E._outside_speech(
+              'Dana turns to McKenna and says: <d>Wait.</d>'))
+    # An order given aloud names the person it is given to. That is not the
+    # person the hardware goes on -- nobody in this beat is touched at all.
+    st = SceneState_for('Dan says: <d>McKenna, put the cuffs on.</d>')
+    check("nobody spoken to is restrained",
+          not st.person("McKenna").restrained(),
+          str(st.person("McKenna").hardware))
+    # ...while the same sentence staged puts them on for real.
+    st2 = SceneState_for("Dan puts the cuffs on McKenna.")
+    check("staged, they go on", st2.person("McKenna").restrained())
+
+
+def SceneState_for(beat):
+    st = E.SceneState()
+    st.read(beat, cast=("Dan", "McKenna"), shot=1)
+    return st
+
+
 def test_nothing_is_said_twice():
     """The old engine restated the same fact from several readers at once and
     the guards reached 65% of a shot against a 12% beat."""
@@ -263,6 +298,7 @@ def main():
     test_the_shot_that_applies_says_both_ends()
     test_a_chain_is_a_tether_not_a_second_restraint()
     test_a_modifier_belongs_to_its_own_item()
+    test_a_spoken_name_is_not_a_staged_one()
     test_nothing_is_said_twice()
     test_a_garment_change_says_both_ends()
     test_pulled_aside_is_not_taken_off()
