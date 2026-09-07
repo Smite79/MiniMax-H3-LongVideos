@@ -3992,6 +3992,11 @@ _RESTRAINT_PLAIN = re.compile(
     r"\b(?:handcuff(?:s|ed)?|cuffed|shackle[sd]?|manacle[sd]?|hogtied|hog-?tied|"
     r"hogcuffed|hog-?cuffed|gag(?:ged|s)?|blindfold(?:ed|s)?|zip[- ]ties?|"
     r"cable[- ]ties?|restrain(?:t|ts|ed)|bound|bindings?|straitjacket|"
+    r"collared|leashed|tethered|manacled|fettered|chained\s+up|"
+    # PARTICIPLES are unambiguous and are not in the noun list, so they cannot
+    # satisfy both halves of the MAYBE rule by themselves. "Ana is collared and
+    # chained to the wall" matched nothing at all before this: "collared" is not
+    # "collars?", so the noun half failed and the whole latch stayed down.
     r"spreader bar)\b", re.I)
 # Hardware that is only a restraint in context -- a chain-link fence, a rope on a
 # boat and a leather belt are none of the node's business.
@@ -4231,9 +4236,37 @@ _LIMB_ANCHOR = (
 # dragged to the bed" anchored at the bed. That was survivable only because the noun
 # list was short enough to miss most sentences -- and adding the missing nouns below
 # without this would have made "she sinks to the floor" a chain.
-_FASTEN_TO = (r"(?:chain|cuff|handcuff|shackle|manacle|lock|padlock|fasten|secure|"
-              r"tether|bind|bound|tie|strap|clip|hook|bolt|attach|anchor|leash|"
-              r"rope|fix|pin|hitch|moor)(?:s|es|ed|ing)?")
+#
+# VERB FORMS ONLY -- the same rule _BINDING_VERB already documents, and the first
+# version of this broke it. Written as bare stems with an optional suffix, "chain",
+# "rope", "clip", "lock" and "bolt" are all NOUNS as well, so the pattern found its
+# own hardware and called it a fastening: "she drops the rope to the floor" anchored
+# at the floor, "the clip fell to the floor" anchored at the floor, and with the
+# restraint gate now leaning on this, each of them latched a restraint hold over
+# hardware lying on the ground for the rest of the film.
+_FASTEN_PART = (r"(?:chained|cuffed|handcuffed|shackled|manacled|locked|padlocked|"
+                r"fastened|secured|tethered|bound|tied|strapped|clipped|hooked|"
+                r"bolted|attached|anchored|leashed|roped|affixed|fixed|pinned|"
+                r"hitched|moored|lashed|chaining|cuffing|locking|fastening|"
+                r"securing|tethering|tying|strapping|clipping|hooking|bolting|"
+                r"attaching|anchoring|padlocking)")
+# The -s forms are verbs or plural nouns depending on what sits in front of them.
+# A determiner makes them nouns -- "the chains", "a clip", "those cuffs" -- and
+# anything else makes them verbs: "the guard chains her collar", "...and clips the
+# chain to a ring".
+_FASTEN_S = (r"(?<!\bthe\s)(?<!\ba\s)(?<!\ban\s)(?<!\bthese\s)(?<!\bthose\s)"
+             r"(?<!\btwo\s)(?<!\bsome\s)(?<!\bmore\s)"
+             r"(?:chains|cuffs|handcuffs|shackles|manacles|locks|padlocks|fastens|"
+             r"secures|tethers|ties|straps|clips|hooks|bolts|attaches|anchors|"
+             r"leashes|ropes|pins)")
+# WEAK verbs describe a chain's PATH rather than an act of fastening, and on their
+# own they are ordinary motion -- "she runs to the wall" must not be an anchor. They
+# count only with the hardware itself as the subject: "a chain runs from her collar
+# to the wall" and "a short chain holds her collar to the wall" are both anchors and
+# neither has a fastening verb anywhere in it.
+_FASTEN_WEAK = (r"(?:chains?|ropes?|cords?|cables?|leash(?:es)?|leads?|straps?|"
+                r"tethers?|links?|lines?)\s+(?:\S+\s+){0,4}?"
+                r"(?:run|hold|lead|stretch|extend|go|reach|drop|hang)(?:s|es|ing)?")
 # WHAT A CHAIN CAN BE FASTENED TO. The wall was not on this list, and that is the
 # whole of the reported bug: "chains it to the wall" produced NO anchor, so the
 # collar hold said the collar stays closed and nothing ever said she was tethered.
@@ -4241,7 +4274,8 @@ _FASTEN_TO = (r"(?:chain|cuff|handcuff|shackle|manacle|lock|padlock|fasten|secur
 # beat saying she walks away -- and the cheapest way for the model to make that make
 # sense is to take the collar off. Floor, ceiling and pillar were missing with it.
 _ANCHOR_POINT = re.compile(
-    r"\b" + _FASTEN_TO + r"\b(?:\s+\S+){0,5}?\s+to\s+(?:the|a|an|her|his|their)\s+"
+    r"\b(?:" + _FASTEN_PART + r"|" + _FASTEN_S + r"|" + _FASTEN_WEAK + r")"
+    r"\b(?:\s+\S+){0,5}?\s+to\s+(?:the|a|an|her|his|their)\s+"
     r"((?:bed\s*frames?|bed\s*heads?|headboards?|bed\s*posts?|beds?|rails?|railings?|"
     r"bars?|posts?|rings?|hooks?|pipes?|radiators?|chairs?|tables?|beams?|frames?|"
     r"grates?|grilles?|fences?|walls?|floors?|grounds?|ceilings?|pillars?|columns?|"
@@ -5076,6 +5110,18 @@ def restraint_present(text):
     for part in re.split(r"(?<=[.;!?])\s+", t):
         if _RESTRAINT_MAYBE.search(part) and (_BINDING_VERB.search(part)
                                               or _BODY_PART.search(part)):
+            return True
+        # ...OR the hardware is fastened to something that does not move. That is
+        # what a restraint IS, and the verb list could not see it: _BINDING_VERB
+        # holds participles only -- "chained", "clipped", "bolted" is not even in
+        # it -- so "the guard chains her collar to the wall", "clips the chain to a
+        # ring in the wall" and "a short chain holds her collar to the wall" all
+        # came back with no restraint at all, and the anchor reader is only ever
+        # consulted once one is latched. Six of fourteen ordinary phrasings.
+        #
+        # _ANCHOR_POINT is safe to lean on here because it now demands a fastening
+        # verb of its own, so this cannot fire on somebody merely walking to a wall.
+        if _RESTRAINT_MAYBE.search(part) and _ANCHOR_POINT.search(part):
             return True
     return False
 

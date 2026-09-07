@@ -3431,6 +3431,80 @@ def test_a_collar_chained_to_a_wall_stays_on():
           "at the wall" not in plain and "holding the neck" not in plain)
 
 
+COLLAR_PHRASINGS = [
+    "The guard locks a steel collar around Ana's neck and chains it to the wall.",
+    "The guard chains her collar to the wall.",
+    "Her collar is chained to the wall.",
+    "She is chained to the wall by her collar.",
+    "A chain runs from her collar to the wall.",
+    "The collar at her throat is padlocked to a ring in the wall.",
+    "The guard puts a collar on her and clips the chain to a ring in the wall.",
+    "Ana is collared and chained to the wall.",
+    "The chain from her collar is bolted to the wall.",
+    "Her collar is attached to a chain fixed to the wall.",
+    "The guard fastens the collar and secures the chain to the wall.",
+    "She wears a steel collar chained to the wall.",
+    "The collar around her neck is locked to a wall ring.",
+    "A short chain holds her collar to the wall.",
+]
+
+
+def test_every_way_of_chaining_a_collar_to_a_wall():
+    """Reported twice. The first fix -- adding the wall to _ANCHOR_POINT -- was
+    shipped without a render and did not fix it, because the anchor reader is only
+    consulted once a restraint is LATCHED, and six of these fourteen latched nothing.
+
+    restraint_present needs an ambiguous noun (chain, collar) plus a binding verb or
+    a body part in the same sentence. _BINDING_VERB holds participles almost
+    exclusively -- "chains", "clips" and "holds" are absent and "bolted" is not in it
+    at all -- and "collared" matches no noun pattern, so the whole latch stayed down
+    and every later shot was free of hardware entirely.
+
+    Hardware fastened to something that does not move IS a restraint, whatever verb
+    form said so. Tested on the SHOTS, across every phrasing, because the unit halves
+    passed while the film was wrong the first time."""
+    print("\n=== every way of chaining a collar to a wall ===")
+    for p in COLLAR_PHRASINGS:
+        script = run_node("A basement.\n\n" + p + "\n\nAna sits on the floor.\n\n"
+                          "Ana stands and walks across the room.",
+                          plan_only=True,
+                          character_memory="Ana: she, 28.\nGuard: he, 40.")[3]
+        last = script.split("[Shot ")[-1]
+        check(f"tethered: {p[:44]!r}",
+              "at the wall" in last or "at the ring" in last)
+        check(f"...and fastened: {p[:40]!r}",
+              "closed and fastened" in last or "tied and holding" in last)
+
+
+def test_moving_towards_something_is_not_being_chained_to_it():
+    """The other half of the same rule, and the reason it cannot simply be loosened.
+
+    restraint_present now accepts hardware plus an anchor point, and limb_anchor
+    accepts a chain that "runs" or "holds" to a fixed thing. Both would read ordinary
+    movement as a fastening if the verb were not constrained -- "she runs to the
+    wall" is the exact shape of "a chain runs to the wall"."""
+    print("\n=== movement is not fastening ===")
+    for t_ in ("she sinks to the floor", "he walks to the table",
+               "she is dragged to the bed", "she falls to the floor",
+               "he crosses to the window", "she runs to the wall",
+               "they move to the bed", "she looks to the door",
+               "he runs to the fence", "a chain-link fence runs along the wall",
+               "the rope runs to the mast", "she leans back against the wall",
+               "the dog runs to the gate",
+               # HARDWARE BEING MOVED, not fastened. These are the ones the first
+               # attempt let through: _FASTEN_TO was written as bare stems with an
+               # optional suffix, and "chain", "rope", "clip" and "lock" are nouns
+               # as well as verbs, so the pattern matched its own hardware and called
+               # it a fastening. With the restraint gate leaning on the anchor, each
+               # of these then latched a hold over hardware lying on the ground.
+               "She drops the rope to the floor.", "He throws the chain to the floor.",
+               "She kicks the cuffs to the wall.", "The rope lies next to the bed.",
+               "He carries the chain to the table.", "The clip fell to the floor.",
+               "The chains hang next to the door."):
+        check(f"no anchor: {t_!r}", not S.limb_anchor(t_))
+        check(f"no restraint: {t_!r}", not S.restraint_present(t_))
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -3556,6 +3630,8 @@ def main():
     test_built_sound_reaches_an_effort_shot()
     test_one_picture_two_people_is_reported()
     test_a_collar_chained_to_a_wall_stays_on()
+    test_every_way_of_chaining_a_collar_to_a_wall()
+    test_moving_towards_something_is_not_being_chained_to_it()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
