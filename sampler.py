@@ -351,21 +351,11 @@ def entry_heads(line):
     return out
 
 
-_SPOKEN_SPAN = re.compile(r"<d>.*?</d>|[\"“][^\"“”]{1,400}?[\"”]", re.S)
-
-
-def _outside_speech(text):
-    """The beat with everything anybody SAYS taken out.
-
-    What a character says is not stage direction. A name, a garment or a place
-    inside a line of dialogue is being talked about, and the commonest thing to
-    talk about is something that is not in the room -- "McKenna where are you?"
-    is how you write somebody's absence.
-
-    Both markers, because both exist in the pipeline: <d> after mark_dialogue has
-    run, plain quotes before it and wherever the author wrote a quote the marker
-    declined to wrap."""
-    return _SPOKEN_SPAN.sub(" ", text or "")
+# Speech-stripping lives in the engine: this file and that one had identical
+# copies, written the same day, which is the duplication this port exists to
+# end. A name inside a line of dialogue is being SAID, not staged.
+_SPOKEN_SPAN = engine._SPOKEN_SPAN
+_outside_speech = engine._outside_speech
 
 
 def sheet_for_beat(sheet, beat, previous=None):
@@ -4741,23 +4731,13 @@ _STATE_PRED = re.compile(r"\b(" + _STATE_THING + r")\s+" +
 #
 # Deliberately coarse: four postures, no orientation, no limb detail. Naming more
 # than the pose is how a continuity clause turns into an instruction to hold still.
-_POSTURE_OF = (
-    ("sitting", re.compile(r"\b(?:sits?|sat|sitting|seats?\s+(?:her|him|them)self|"
-                           r"is\s+seated|takes?\s+a\s+seat|perch(?:es|ed)?)\b", re.I)),
-    ("kneeling", re.compile(r"\b(?:kneels?|knelt|kneeling|"
-                            r"(?:goes?|got|gets?)\s+down\s+on\s+(?:her|his|their)\s+knees)\b",
-                            re.I)),
-    ("lying down", re.compile(r"\b(?:lies?|lay|lays?|laid|lying|laying|"
-                              r"stretches?\s+out|sprawls?|sprawled)\b", re.I)),
-    ("standing", re.compile(r"\b(?:stands?|stood|standing|"
-                            r"(?:gets?|got)\s+(?:up|to\s+(?:her|his|their)\s+feet)|"
-                            r"rises?|rose|risen)\b", re.I)),
-)
-# A posture verb that is really about somewhere else: "the chair stands in the
-# corner", "the case lies on the table". Those set nobody's pose.
-_NOT_A_BODY = re.compile(r"\b(?:it|chair|table|box|case|bag|door|house|room|"
-                         r"building|tree|bottle|glass|book|light|lamp)\s+\w{0,8}?\s*"
-                         r"(?:stands?|lies?|sits?)\b", re.I)
+# The posture vocabulary lives in the engine: there were two tables and they
+# had diverged, with a crouch setting no posture at all here. This file keeps
+# its own READER, because it answers a different question -- whose posture,
+# clause by clause -- but off the same words.
+_POSTURE_OF = engine._POSTURE_OF
+_NOT_A_BODY = engine._NOT_A_BODY
+
 
 
 # Words that follow a posture verb but are never its object: they are the

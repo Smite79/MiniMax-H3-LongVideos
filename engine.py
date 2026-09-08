@@ -396,11 +396,15 @@ def garment_words(text):
     return out
 
 def posture_in(text):
-    """The posture this beat puts a body in. '' when it does not."""
-    for rx, name in _POSTURE:
-        if rx.search(text or ""):
-            return name
-    return ""
+    """The posture this beat puts a body in. '' when it does not.
+
+    Reads the one table. sampler.posture_in answers a different question -- which
+    PERSON each posture belongs to, clause by clause -- and keeps its own reader
+    for that, but off the same vocabulary."""
+    t = text or ""
+    hits = sorted((m.start(), name) for name, rx in _POSTURE_OF
+                  for m in [rx.search(t)] if m)
+    return hits[0][1] if hits else ""
 
 
 
@@ -738,6 +742,41 @@ def hidden_layers(covers, gone, moved=()):
             and str(o).lower().split()[-1] not in aside]
 
 
+
+
+# ---------------------------------------------------------------------------
+# POSTURE. Moved from sampler.py, which had the richer table -- "takes a
+# seat", "gets to her feet", "goes down on her knees" -- and the engine had
+# three the sampler lacked. Two tables, diverged, and the sampler's is the
+# one that drives the guard, so a crouch set no posture at all.
+# ---------------------------------------------------------------------------
+
+_POSTURE_OF = (
+    ("sitting", re.compile(r"\b(?:sits?|sat|sitting|seats?\s+(?:her|him|them)self|"
+                           r"is\s+seated|takes?\s+a\s+seat|perch(?:es|ed)?)\b", re.I)),
+    ("kneeling", re.compile(r"\b(?:kneels?|knelt|kneeling|"
+                            r"(?:goes?|got|gets?)\s+down\s+on\s+(?:her|his|their)\s+knees)\b",
+                            re.I)),
+    ("lying down", re.compile(r"\b(?:lies?|lay|lays?|laid|lying|laying|"
+                              r"stretches?\s+out|sprawls?|sprawled)\b", re.I)),
+    ("standing", re.compile(r"\b(?:stands?|stood|standing|"
+                            r"(?:gets?|got)\s+(?:up|to\s+(?:her|his|their)\s+feet)|"
+                            r"rises?|rose|risen)\b", re.I)),
+)
+# A posture verb that is really about somewhere else: "the chair stands in the
+# corner", "the case lies on the table". Those set nobody's pose.
+_NOT_A_BODY = re.compile(r"\b(?:it|chair|table|box|case|bag|door|house|room|"
+                         r"building|tree|bottle|glass|book|light|lamp)\s+\w{0,8}?\s*"
+                         r"(?:stands?|lies?|sits?)\b", re.I)
+# THE THREE THE ENGINE KNEW AND THIS DID NOT. Two tables, diverged, and this is
+# the one that drives the posture guard -- so "Ana crouches" set no posture at
+# all and the next shot was told nothing about how she was left.
+_POSTURE_OF = _POSTURE_OF + (
+    ("crouching", _rx(r"\b(?:crouch(?:es|ing|ed)?|squats?|squatting|squatted)\b")),
+    ("bent over", _rx(r"\b(?:bends?\s+over|bent\s+over|leans?\s+over|"
+                      r"leaned\s+over|doubles?\s+over)\b")),
+    ("curled up", _rx(r"\b(?:curled\s+up|curls?\s+up|foetal|fetal)\b")),
+)
 
 # ---------------------------------------------------------------------------
 # STATE. One object knows what is true, and everything a shot says is rendered
