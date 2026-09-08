@@ -1592,6 +1592,43 @@ def test_a_door_is_not_a_room():
               S.first_place(f"Ana walks into the {room}.") == room)
 
 
+def test_a_chastity_belt_is_underwear():
+    """Asked for directly: "treat the chastity belt as underwear".
+
+    It was already layered as one -- always under the outer garment, whatever
+    order the sheet lists them in -- but garments_in never saw it, because that
+    reader works word by word and the item is two words. "chastity belt" is
+    neither "chastity" nor "belt", and bare "belt" cannot go in the single-word
+    list because a belt through trouser loops is not underwear.
+
+    So it was the one thing in a sheet that nothing tracked as clothing: it could
+    not be taken off by the prose, and auto_remove could never clear it."""
+    for line, want in (
+            ("Ana: she, 28, blue jeans, a steel chastity belt.", "chastity belt"),
+            ("Ana: she, 28, a chastity device.", "chastity device"),
+            ("Ana: she, 28, a chastity cage.", "chastity cage"),
+            ("Ana: she, 28, a g-string.", "g string"),
+            ("Ana: she, 28, boxer shorts.", "boxer shorts")):
+        got = S.garments_in(line)
+        check(f"{want} is a garment: {got}", want in got)
+    # ...and it does not swallow the ordinary kind of belt.
+    check("a leather belt is not underwear",
+          "belt" not in " ".join(S.garments_in("Dan: he, 40, trousers and a "
+                                               "leather belt.")))
+    # The outer garment is still read alongside it, not eaten by the multi-word
+    # pass -- "blue jeans, a steel chastity belt" is two garments, not one.
+    both = S.garments_in("Ana: she, 28, blue jeans, a steel chastity belt.")
+    check(f"both garments are read: {both}",
+          "jeans" in both and "chastity belt" in both)
+    # It layers as underwear, which it already did, in either order.
+    for line in ("Ana: she, 28, jeans, a chastity belt.",
+                 "Ana: she, 28, a chastity belt, jeans."):
+        check(f"under the jeans: {line[-28:]!r}",
+              S.implied_layers(line).get("chastity belt") == "jeans")
+    check("...and is recognised as an undergarment",
+          S.is_undergarment("chastity belt") and S.is_undergarment("panties"))
+
+
 def test_a_beat_names_the_sound_its_props_make():
     """The event sounds, which are a different system from the mixed ambient bed --
     that one builds TONE and cannot make a zipper. These go in the PROMPT, so the
@@ -4110,6 +4147,7 @@ def main():
     test_one_beat_can_put_on_two_things()
     test_a_neck_is_not_behind_a_back()
     test_a_door_is_not_a_room()
+    test_a_chastity_belt_is_underwear()
     test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()
     test_a_built_bed_always_goes_on()

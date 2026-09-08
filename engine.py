@@ -135,7 +135,13 @@ PLACES = (r"hallway|hall|corridor|passage|landing|stairwell|staircase|stairs|"
 _ROOM_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|"
              r"his|their|its|my|our|your)\b)[A-Za-z][A-Za-z-]*\s+){0,3}?")
 
-_GARMENT = (r"shirt|blouse|top|t-?shirt|vest|jumper|sweater|hoodie|cardigan|"
+# Multi-word undergarments come FIRST, so the alternation prefers "chastity belt"
+# over the bare "belt" further down -- otherwise the item was recorded as a belt
+# and lost the half that says which kind.
+_GARMENT = (r"chastity[\s-]*(?:belts?|devices?|cages?)|g[\s-]?strings?|"
+            r"boxer[\s-]+shorts?|suspender[\s-]+belts?|garter[\s-]+belts?|"
+            r"thongs?|knickers|briefs|boxers|camisole|corset|slip|lingerie|"
+            r"shirt|blouse|top|t-?shirt|vest|jumper|sweater|hoodie|cardigan|"
             r"jacket|coat|dress|skirt|trousers|pants|jeans|shorts|leggings|"
             r"tights|socks|stockings|shoes|boots|heels|gloves|scarf|hat|cap|"
             r"bra|knickers|panties|underwear|briefs|nappy|diaper|robe|gown|"

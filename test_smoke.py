@@ -3764,9 +3764,21 @@ def test_no_guard_sentence_carries_a_negation():
         "A room.\n\nAna pulls her scarf aside.\n\nAna puts the scarf back on."
         "\n\nAna stands up.",
     ]
+    # A scene may bring its own sheet, because the shared one cannot cover
+    # every shape. This one is an UNDERGARMENT under an outer layer with both
+    # coming off, and it went unswept for two commits: the shared memory has
+    # no jeans and no belt, so the beats matched nothing and the agentless
+    # branch of the removal clause was never reached. It held a live negation
+    # -- "fully removed and no longer on the body", naming the body it is
+    # clearing. Three copies of that sentence exist and the fix caught two.
+    scenes = [(sc, mem) for sc in scenes] + [
+        ("A room.\n\nAna stands.\n\nAna takes off her jeans.\n\n"
+         "Ana takes off the chastity belt.\n\nAna sits.",
+         "Ana: she, 28, blue jeans, a steel chastity belt."),
+    ]
     bad = {}
-    for sc in scenes:
-        script = run_node(sc, plan_only=True, character_memory=mem)[3]
+    for sc, sheet in scenes:
+        script = run_node(sc, plan_only=True, character_memory=sheet)[3]
         beats = set(sc.split("\n\n"))
         for block in script.split("[Shot ")[1:]:
             body = block.split("]", 1)[1]

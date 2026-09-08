@@ -3529,7 +3529,7 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
         # off. Say it agentlessly: the beat supplies the hands, this supplies the
         # completion.
         return (f" {what[0].upper()}{what[1:]} {verb} off during this shot and "
-                f"{are} away by the last frame -- fully removed and no longer on "
+                f"{are} away by the last frame -- fully removed and clear of "
                 f"the body.")
     if agent:
         sentence = (f"{agent} takes {what} off during this shot, with {agent}'s own "
@@ -5839,13 +5839,36 @@ _GARMENT_WORD = re.compile(
     r"poncho|kilt|sari|kimono|cloak|clothes|clothing|outfit)s?$", re.I)
 
 
+# Undergarments whose name is more than one word. garments_in reads word by word,
+# so these were invisible to it: "chastity belt" is neither "chastity" nor "belt",
+# and bare "belt" cannot go in the single-word list because a belt through trouser
+# loops is not underwear. Read as a unit, before the words are split up.
+_MULTIWORD_GARMENT = re.compile(
+    r"\bchastity[\s-]*(?:belts?|devices?|cages?)|\bg[\s-]?strings?|"
+    r"\bboxer[\s-]+shorts?|\bsports?[\s-]+bras?|\bbody[\s-]?suits?|"
+    r"\bsuspender[\s-]+belts?|\bgarter[\s-]+belts?", re.I)
+
+
 def garments_in(text):
-    """Every garment word the given wardrobe text names, in order.
+    """Every garment the given wardrobe text names, in order.
 
     Restraints are excluded on purpose: taking clothes off does not unlock anything,
     and the standing rule is that hardware is cleared by an explicit `remove:` and by
-    nothing else."""
+    nothing else.
+
+    A chastity belt is UNDERWEAR here, not hardware. It is worn under the clothes,
+    it comes off with them rather than with a key, and every other garment reader
+    already treats it that way -- this one did not, so it was the one thing in the
+    sheet that nothing tracked as clothing."""
+    text = text or ""
     out = []
+    # Multi-word first, and the words they used are taken out of the text so the
+    # single-word pass cannot also read "belt" out of "chastity belt".
+    for m in _MULTIWORD_GARMENT.finditer(text):
+        phrase = re.sub(r"[\s-]+", " ", m.group(0)).strip().lower()
+        if phrase not in out:
+            out.append(phrase)
+    text = _MULTIWORD_GARMENT.sub(" ", text)
     for word in re.findall(r"\b[\w-]{3,}\b", text or ""):
         low = word.lower().strip("-")
         if low in out or _RESTRAINT_WORD.match(low):
