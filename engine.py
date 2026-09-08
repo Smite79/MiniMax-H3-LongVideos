@@ -125,11 +125,20 @@ RELEASE_VERB = (
 # Rooms. A place is somewhere a scene can BE. "door" is not on this list and must
 # not go back on it: a door is a thing inside a room, and putting it here moved
 # the camera into a door whenever anybody looked at one.
+# THE PLACE VOCABULARY. One list, because there were two and they disagreed --
+# the engine knew a cell and a warehouse, the sampler did not, so a scene set in
+# either was a room to one reader and nowhere to the other. Same fault the
+# garment lists had, waiting to be reported.
 PLACES = (r"hallway|hall|corridor|passage|landing|stairwell|staircase|stairs|"
-          r"bedroom|bathroom|washroom|kitchen|living\s+room|lounge|dining\s+room|"
-          r"study|office|garage|basement|cellar|attic|loft|porch|veranda|"
-          r"garden|yard|driveway|street|alley|car\s?park|lobby|foyer|doorway|"
-          r"cell|corridor|warehouse|barn|shed|van|car|truck|room")
+          r"steps|bedroom|bathroom|washroom|kitchen|living\s+room|lounge|"
+          r"dining\s+room|study|office|garage|basement|cellar|attic|loft|porch|"
+          r"veranda|garden|yard|driveway|street|alley|car\s?park|lobby|foyer|"
+          r"doorway|cell|warehouse|barn|shed|van|truck|room")
+# Place words that are also ordinary verbs or everyday nouns. A reader with a
+# preposition in front of it ("in the study") can tell which sense is meant; the
+# free-text one cannot, and "she steps out", "they study the map" and "he lands
+# badly" are all commoner than the rooms they collide with.
+PLACE_ALSO_A_VERB = {"steps", "landing", "study", "lounge", "garage", "porch"}
 # A room is usually described, not just named -- "the tiled bathroom", "the long
 # hallway". Up to three adjectives, non-greedy so the NEAREST room still wins.
 _ROOM_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|"

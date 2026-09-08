@@ -5077,10 +5077,12 @@ def state_acts(text):
 #
 # The same fix direction_anchor uses for doors: name BOTH ends, and the middle if
 # the beat gives one.
-_PLACE = (r"hallway|hall|corridor|passage|landing|stairs|staircase|steps|"
-          r"bedroom|bathroom|kitchen|living\s+room|lounge|dining\s+room|study|"
-          r"office|garage|basement|cellar|attic|loft|porch|garden|yard|driveway|"
-          r"street|car\s?park|lobby|foyer|doorway|room")
+# The vocabulary lives in the engine, because there were two of these and they
+# disagreed -- a cell and a warehouse were rooms to one reader and nowhere to the
+# other. The READERS stay separate: this file's search free text with no
+# preposition, which is what a scene paragraph gives them, and that is why they
+# carry the also-a-verb guard the engine's does not need.
+_PLACE = engine.PLACES
 # "door" WAS IN THAT LIST and a door is not a room -- it is a thing inside one. So
 # "Ana looks at the door", the most ordinary beat there is, moved the whole shot:
 # "This shot is in the door, not the room the scene text names." The camera was
@@ -5097,7 +5099,7 @@ _PLACE_WORD = re.compile(r"\b(?:" + _PLACE + r")\b", re.I)
 # Place words that are also ordinary verbs. free-text readers cannot tell which
 # sense is meant, and "she steps out", "he lands badly", "they study the map" are
 # all commoner than the rooms they collide with.
-_PLACE_ALSO_A_VERB = {"steps", "landing", "study", "lounge", "garage", "porch"}
+_PLACE_ALSO_A_VERB = engine.PLACE_ALSO_A_VERB
 # Words in front of "room" that do NOT make it a particular room -- an article or
 # a preposition leaves it as "wherever we already are".
 _NOT_A_ROOM_MODIFIER = {"the", "a", "an", "this", "that", "her", "his", "their",
