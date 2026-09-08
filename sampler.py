@@ -3251,16 +3251,8 @@ _ADD_LINE = re.compile(r"^[ \t]*(?:add|wear|wearing)[ \t]*:[ \t]*(.+?)[ \t]*$", 
 # is a removal ("pulls down her shorts"); trailing after the object, only "off"
 # and "away" are -- "takes her coat off" removes it, "pulls her crop top down"
 # only adjusts it, and adjusting a garment must not cost it its description.
-_STRIP_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
-               r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|"
-               r"slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
-               r"toss(?:es|ed)?|throw[s]?|threw|"
-               # How clothes actually come off, in the words people write it in.
-               # Without these a beat took the garment off on screen while the scene
-               # kept saying it was worn -- and the scene is re-stamped into every
-               # later shot, so it came back on and stayed on.
-               r"kick(?:s|ed|ing)?|step(?:s|ped|ping)?|lift(?:s|ed|ing)?|"
-               r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?|work(?:s|ed)?")
+# One definition, in the engine. See engine._STRIP_VERB.
+_STRIP_VERB = engine._STRIP_VERB
 # The verbs above that stay a removal when the particle TRAILS the object -- "kicks
 # her boots off". The rest are removals only with the particle straight after them:
 # "steps out of her leggings" is one, "steps back" while a light goes off later in
@@ -3271,14 +3263,8 @@ _TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
                   r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
                   r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
 # ...and verbs that are a removal on their own, needing no particle.
-_UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
-              r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?|"
-              # Hardware comes off by being UNDONE, and these were missing: a beat
-              # saying "unlocks the belt" left it described as worn for the rest of
-              # the film, because nothing here read as a removal at all.
-              r"unlock(?:s|ed)?|unbuckle[sd]?|unclip(?:s|ped)?|unstrap(?:s|ped)?|"
-              r"unlace[sd]?|untie[sd]?|unties|unwrap(?:s|ped)?|"
-              r"undo(?:es)?|undid")
+# One definition, in the engine. See engine._UNDO_VERB.
+_UNDO_VERB = engine._UNDO_VERB
 
 _REMOVAL_PROSE = re.compile(
     r"\b(?:" + _UNDO_VERB + r")\b"
@@ -3524,7 +3510,7 @@ _PUTS_ON = re.compile(
     r"[^.;!?]{0,40}?\b(?:back\s+on|back\s+into|on|into)\b", re.I)
 # ...and the ones that need no preposition.
 _DRESSES = re.compile(r"\b(?:dress(?:es|ing)?|redress(?:es|ing)?|"
-                      r"button(?:s|ing)?\s+up|zip(?:s|ping)?\s+up|"
+                      r"button(?:s|ing)?(?:\s+up)?|zip(?:s|ping)?\s+up|"
                       r"fasten(?:s|ing)?|laces?\s+up|puts?\s+back\s+on)\b", re.I)
 
 
@@ -4986,7 +4972,7 @@ _PLACE = engine.PLACES
 # to room_tone, which gave a lens setting the acoustic of a cathedral. The readers
 # that sit behind a preposition were always safe, because the \s+ before them is
 # already a boundary; the two that search free text were not.
-_PLACE_WORD = re.compile(r"\b(?:" + _PLACE + r")\b", re.I)
+_PLACE_WORD = engine._PLACE_WORD
 # Place words that are also ordinary verbs. free-text readers cannot tell which
 # sense is meant, and "she steps out", "he lands badly", "they study the map" are
 # all commoner than the rooms they collide with.
