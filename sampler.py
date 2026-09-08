@@ -5714,16 +5714,68 @@ def displaced_garments(beat, scene):
 # Putting it right without naming it: "pulls them back up". A pronoun cannot be
 # matched against the wardrobe, but if exactly one garment is displaced there is only
 # one thing it can mean -- and leaving it displaced is the error that shows.
+# PUTTING IT BACK. A displaced garment is still worn and the node keeps saying
+# where the beat left it -- so the beat that puts it right has to be read, or the
+# skirt stays lifted for the rest of the film and whatever was under it stays on
+# show. Reported: "McKenna lets it fall" did nothing, because the only restores
+# recognised were pull/tug/hitch/hike/yank/push with a pronoun and a direction.
+#
+# What actually gets written is mostly the opposite: a lifted skirt is LET FALL,
+# DROPPED, LOWERED, SMOOTHED DOWN, STRAIGHTENED, FIXED or simply LET GO of, and
+# none of those has a direction word in it at all.
+_RESTORE_VERB = (r"(?:let(?:s|ting)?(?:\s+go\s+of)?|drop(?:s|ped|ping)?|"
+                 r"lower(?:s|ed|ing)?|smooth(?:s|ed|ing)?|straighten(?:s|ed|ing)?|"
+                 r"fix(?:es|ed|ing)?|rearrang(?:e|es|ed|ing)|"
+                 r"replac(?:e|es|ed|ing)|put(?:s|ting)?|tidy|tidies|tidied|"
+                 r"cover(?:s|ed|ing)?\s+(?:herself|himself|themselves|up)|"
+                 r"pull|tug|hitch|hike|yank|push)")
+# The old pronoun form, plus the new verbs, still with no garment named.
 _PUT_BACK = re.compile(
     r"\b(?:pull|tug|hitch|hike|yank|push)(?:s|ed|ing)?\s+"
     r"(?:it|them|these|those)\s+(?:back\s+)?(?:up|down|closed|shut|together)\b"
     r"|\b(?:pull|tug|hitch|hike|yank|push)(?:s|ed|ing)?\s+"
-    r"(?:it|them)\s+back\b", re.I)
+    r"(?:it|them)\s+back\b"
+    r"|\b" + _RESTORE_VERB + r"(?:s|ed|ing)?\s+"
+    r"(?:it|them|these|those)\s+(?:fall|drop|go|back|down|straight)\b"
+    r"|\blet(?:s|ting)?\s+(?:it|them)\s+fall\b"
+    r"|\b(?:cover(?:s|ed|ing)?\s+(?:herself|himself|themselves)\s+(?:back\s+)?up)\b",
+    re.I)
+# ...and the same act with the garment NAMED: "lets the skirt fall", "smooths her
+# skirt down". The garment has to be one the sheet already dresses them in, which
+# is the same condition displaced_garments uses.
+_PUT_BACK_NAMED = re.compile(
+    r"\b" + _RESTORE_VERB + r"\s+"
+    r"(?:the|her|his|their|a|an)\s+([\w][\w\- ]{0,28}?)"
+    r"(?:\s+(?:fall|drop|down|back|straight|up|closed|shut|together))?"
+    r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then|over|again)\b|$)", re.I)
 
 
 def puts_it_back(beat):
     """Does this beat put a displaced garment right without naming it?"""
     return bool(_PUT_BACK.search(beat or ""))
+
+
+def restored_garments(beat, scene):
+    """[garment] this beat puts back, by name. [] when it names none.
+
+    Same two conditions as displaced_garments: the beat has to stage it, and the
+    sheet has to already dress them in the thing. The sheet's own name is what
+    comes back, so a restore keyed on "her skirt" clears a displacement stored as
+    "long grey skirt"."""
+    if not beat or not scene:
+        return []
+    out, low = [], scene.lower()
+    for m in _PUT_BACK_NAMED.finditer(beat):
+        thing = re.sub(r"\s+", " ", (m.group(1) or "")).strip().lower()
+        if not thing:
+            continue
+        head = thing.split()[-1]
+        if len(head) < 3 or head not in low:
+            continue
+        name = scene_name_for(head, scene) or thing
+        if name not in out:
+            out.append(name)
+    return out
 
 
 def displaced_hold(items):
@@ -7740,9 +7792,22 @@ class H3LongVideos:
             # skirt still saw it covering, and the belt came out from under it one
             # shot late. The latch below is unchanged; this only looks ahead.
             _moved_now = {g for g, _h in displaced_garments(body, shot_sheet or sheet)}
+            # ...minus anything this beat puts BACK. Without it the shot that
+            # lets the skirt fall still counted the skirt as moved, so what
+            # was under it stayed uncovered for one shot too many -- the
+            # mirror of the off-by-one that made it uncover one shot late.
+            _back_now = set(restored_garments(body, shot_sheet or sheet))
+            if puts_it_back(body) and len(displaced) == 1:
+                _back_now |= set(displaced)
+            _heads_back = {str(g).lower().split()[-1] for g in _back_now}
+            _moved_now = {g for g in _moved_now
+                          if str(g).lower().split()[-1] not in _heads_back}
             covered = hidden_layers(covers,
                                     [g for g in visible if g not in restored],
-                                    set(displaced) | _moved_now)
+                                    (set(displaced) | _moved_now)
+                                    - {g for g in (set(displaced) | _moved_now)
+                                       if str(g).lower().split()[-1]
+                                       in _heads_back})
             # A BEAT that names a covered garment. Beats are passed through word for
             # word and never scrubbed -- that is the node's oldest promise -- so the
             # layering can take the belt out of the sheet and the beat can put it
@@ -8315,6 +8380,14 @@ class H3LongVideos:
             # "pulls them back up" names nothing, and a pronoun cannot be matched
             # against the wardrobe -- but with one garment displaced there is only
             # one thing it can mean, and leaving it displaced is the error that shows.
+            # ...and a restore that NAMES the garment clears that one, however
+            # many are displaced. "Lets the skirt fall" is not a pronoun and
+            # does not need the one-garment guess.
+            for _g in restored_garments(body, shot_scene):
+                _head = str(_g).lower().split()[-1]
+                for _k in [k for k in displaced
+                           if str(k).lower().split()[-1] == _head]:
+                    displaced.pop(_k, None)
             if len(displaced) == 1 and puts_it_back(body):
                 displaced.clear()
             # The shot that STAGES the displacement already says so in the beat, and

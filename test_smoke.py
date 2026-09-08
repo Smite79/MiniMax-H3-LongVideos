@@ -4095,6 +4095,65 @@ def test_the_picture_arrives_when_the_cover_moves():
                                    "McKenna: she, 27, a skirt, a chastity belt."))
 
 
+def test_letting_the_cover_fall_puts_it_back():
+    """A lifted skirt has to come back down, or it stays lifted for the rest of the
+    film and whatever was under it stays on show.
+
+    The only restores recognised were pull/tug/hitch/hike/yank/push with a PRONOUN
+    and a direction -- "pulls them back up". What actually gets written is the
+    opposite: a lifted skirt is LET FALL, DROPPED, LOWERED, SMOOTHED DOWN,
+    STRAIGHTENED or LET GO of, and none of those carries a direction word. Nor
+    could any of them name the garment; "lets the skirt fall" matched nothing."""
+    print("\n=== letting the cover fall puts it back ===")
+    sheet = "McKenna: she, 27, a long grey skirt, a chastity belt."
+    for beat in ("McKenna lets the skirt fall.", "McKenna lets her skirt drop.",
+                 "McKenna lets go of the skirt.", "McKenna smooths her skirt down.",
+                 "McKenna lowers her skirt.", "McKenna straightens her skirt.",
+                 "McKenna drops her skirt.", "McKenna puts her skirt back."):
+        got = S.restored_garments(beat, sheet)
+        # The SHEET's name comes back, not the beat's -- a displacement is stored
+        # under "long grey skirt" and a restore keyed on "skirt" has to clear it.
+        check(f"restores: {beat[:38]!r}", got == ["long grey skirt"], str(got))
+    for beat in ("McKenna lifts her skirt.", "McKenna lets the door close.",
+                 "McKenna waits."):
+        check(f"not a restore: {beat[:34]!r}",
+              not S.restored_garments(beat, sheet), str(S.restored_garments(beat, sheet)))
+    # Pronoun forms, which name nothing.
+    for beat in ("McKenna lets it fall.", "McKenna lets them fall.",
+                 "McKenna pulls them back up.", "McKenna covers herself up."):
+        check(f"pronoun restore: {beat[:34]!r}", S.puts_it_back(beat))
+    check("...and an ordinary beat is not one", not S.puts_it_back("McKenna waits."))
+
+    # END TO END: the picture follows the cover, both ways, on the shot that moves it.
+    mem = "McKenna: <Picture 1>, she, 27, a long grey skirt, a chastity belt <Picture 2>."
+    FACE, BELT = torch.rand(1, H, W, 3), torch.rand(1, H, W, 3)
+
+    def refs(prompt):
+        rows, ob = [], S.build_conditioning
+
+        def spy(clip, vae, av, p, *a, **k):
+            rows.append(len(k.get("refs") or []))
+            return ob(clip, vae, av, p, *a, **k)
+        S.build_conditioning = spy
+        try:
+            run_node(prompt, character_memory=mem, ref_image_1=FACE, ref_image_2=BELT)
+        finally:
+            S.build_conditioning = ob
+        return rows
+
+    got = refs("A home.\n\nMcKenna waits.\n\nMcKenna lifts her skirt.\n\n"
+               "McKenna lets it fall.\n\nMcKenna waits.")
+    check(f"lifted, then covered again: {got}", got == [1, 2, 1, 1], str(got))
+    stays = refs("A home.\n\nMcKenna waits.\n\nMcKenna lifts her skirt.\n\n"
+                 "McKenna waits.\n\nMcKenna waits.")
+    check(f"...and stays shown if nothing puts it back: {stays}",
+          stays == [1, 2, 2, 2], str(stays))
+    named = refs("A home.\n\nMcKenna waits.\n\nMcKenna lifts her skirt.\n\n"
+                 "McKenna smooths her skirt down.\n\nMcKenna waits.")
+    check(f"...and a named restore works too: {named}", named == [1, 2, 1, 1],
+          str(named))
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -4233,6 +4292,7 @@ def main():
     test_an_undergarment_keeps_its_words_and_waits_for_its_picture()
     test_an_under_layer_belongs_to_somebody()
     test_the_picture_arrives_when_the_cover_moves()
+    test_letting_the_cover_fall_puts_it_back()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
