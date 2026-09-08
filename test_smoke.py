@@ -3992,6 +3992,53 @@ def test_an_undergarment_keeps_its_words_and_waits_for_its_picture():
           "whole, opaque and unbroken" not in bare.lower(), bare[:220])
 
 
+def test_an_under_layer_belongs_to_somebody():
+    """Reported from a real shot: a scene with Dana in jeans and McKenna in a
+    skirt and a chastity belt put
+
+        The chastity belt is worn under the skirt...
+
+    into a shot describing only DANA, who has neither. The belt does not go on
+    Dana. A described garment is a drawn garment and it is drawn on whoever is in
+    the frame.
+
+    implied_layers was read off the WHOLE sheet at once, so it paired a garment
+    with a cover and lost whose they were. A sheet line is one person, so the
+    layers are read line by line and the owner kept. Per line the same sheet
+    answers correctly -- Dana {}, McKenna {chastity belt: skirt} -- which is what
+    made this findable."""
+    print("\n=== an under-layer belongs to somebody ===")
+    mem = ("Dana: she, 35, black t-shirt, blue jeans.\n"
+           "McKenna: she, 27, a skirt, a chastity belt.")
+    P = ("A home.\n\nA camera tracks Dana moving around the home.\n\n"
+         "McKenna steps out of the back room.\n\nDana looks at her.")
+    sh = [b.split("]", 1)[1] for b in
+          run_node(P, plan_only=True, character_memory=mem)[3].split("[Shot ")[1:]]
+    check("Dana's shot says nothing about a belt",
+          "chastity belt" not in sh[0].lower(), sh[0][:220])
+    check("...nor about a skirt she does not own",
+          "skirt" not in sh[0].lower(), sh[0][:220])
+    check("McKenna's shot places it under her skirt",
+          "worn under" in sh[1].lower() and "chastity belt" in sh[1].lower(),
+          sh[1][:240])
+    check("...and Dana's later shot is clean again",
+          "chastity belt" not in sh[2].lower(), sh[2][:220])
+    # Both in one shot: the belt has to say WHOSE, or it lands on either woman.
+    two = run_node("A home.\n\nDana and McKenna stand in the hall.",
+                   plan_only=True, character_memory=mem)[3]
+    body = two.split("]", 1)[1]
+    check("with both described, the belt is attributed",
+          "McKenna's chastity belt" in body, body[:300])
+    check("...and the name is not mangled", "Mckenna" not in body, body[:300])
+    # One person, and no attribution needed.
+    solo = run_node("A home.\n\nMcKenna waits.", plan_only=True,
+                    character_memory="McKenna: she, 27, a skirt, a chastity belt.")[3]
+    solo_body = solo.split("]", 1)[1]
+    check("alone, it is just the belt",
+          "The chastity belt is worn under the skirt" in solo_body,
+          solo_body[:240])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -4128,6 +4175,7 @@ def main():
     test_the_applying_shot_says_where_the_limbs_finish()
     test_a_collar_in_the_sheet_is_held_like_hardware()
     test_an_undergarment_keeps_its_words_and_waits_for_its_picture()
+    test_an_under_layer_belongs_to_somebody()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

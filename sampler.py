@@ -830,14 +830,22 @@ def under_clause(pairs):
     Panties, knickers, thongs, briefs, boxers, underwear, bras, corsets and
     chastity belts, devices and cages are all in _UNDER_BY_REGION, so they are
     always the under-layer whatever order the sheet lists them in."""
-    pairs = [(u, o) for u, o in (pairs or []) if u and o]
+    pairs = [(p[0], p[1], p[2] if len(p) > 2 else "")
+             for p in (pairs or []) if p[0] and p[1]]
     if not pairs:
         return ""
 
     def _plural(w):
         return w.endswith("s") and not w.endswith("ss")
 
-    def _one(u, o):
+    def _one(u, o, who=""):
+        # WHOSE, when more than one person is in the shot. "The chastity belt is
+        # worn under the skirt" beside two women says nothing about which of them
+        # wears it, and an unattributed garment lands on whoever the model finds
+        # convenient -- the same failure as hardware on nobody's wrists. Named
+        # once, at the front, and never run through .capitalize(), which lowers
+        # the rest of a name and turned McKenna into Mckenna.
+        #
         # Each garment takes its own number: panties ARE worn, a bra IS; jeans
         # cover THEM, a skirt covers IT.
         #
@@ -849,13 +857,16 @@ def under_clause(pairs):
         # phrased, as everything here has to be at cfg 1 -- this describes the
         # cloth that IS there, never the thing that must not show.
         them = "them" if _plural(o) else "it"
-        cover = ("cover" if _plural(o) else "covers")
-        return (f"The {u} {'are' if _plural(u) else 'is'} worn under the {o}, "
-                f"against the skin and beneath {them}. The {o} {cover} that part "
-                f"of the body completely: whole, opaque and unbroken over it, "
-                f"the outermost thing there and the only one in view.")
+        cover = "cover" if _plural(o) else "covers"
+        are = "are" if _plural(u) else "is"
+        mine = f"{who}'s " if who else "The "
+        hers = f"{who}'s " if who else "the "
+        return (f"{mine}{u} {are} worn under {hers}{o}, against the skin and "
+                f"beneath {them}. The {o} {cover} that part of the body "
+                f"completely: whole, opaque and unbroken over it, the outermost "
+                f"thing there and the only one in view.")
 
-    return " " + " ".join(_one(u, o) for u, o in pairs[:2])
+    return " " + " ".join(_one(*p) for p in pairs[:2])
 
 
 def reveal_clause(items):
@@ -7318,7 +7329,24 @@ class H3LongVideos:
         # drawn thing and it would be drawn over its cover. Off, nothing is ever
         # held back from the character memory -- which is what somebody wants who
         # has attached a <Picture N> to the item and expects to see it.
-        covers = dict(implied_layers(scene))
+        # PER PERSON. Read off the whole sheet at once, layering has no idea whose
+        # garments it is pairing: a sheet with Dana in jeans and McKenna in a skirt
+        # and a chastity belt produced {chastity belt: skirt} with no owner on it,
+        # and the under-clause was then written into a shot describing only Dana.
+        # The belt does not go on Dana. A described garment is a drawn garment, and
+        # it is drawn on whoever is in the frame.
+        #
+        # Each sheet line is one person, so the layers are read line by line and
+        # the owner is kept. Anything the SCENE paragraph implies has no owner and
+        # is left unattributed, which is right: it belongs to the set, not a body.
+        covers, cover_owner = {}, {}
+        for _who, _line in sheet_lines(sheet):
+            for _u, _o in implied_layers(_line).items():
+                covers[_u] = _o
+                if _who:
+                    cover_owner[_u] = _who
+        for _u, _o in implied_layers(static or "").items():
+            covers.setdefault(_u, _o)
         covers.update(infer_layers([extract_directives(b)[0] for b in beats], scene))
         if covers:
             notes.append("read as layers -- underwear goes under whatever the sheet "
@@ -7722,7 +7750,17 @@ class H3LongVideos:
             # still waits: a locket under a coat cannot be seen, nothing is lost
             # by holding it until the coat comes off, and its picture would ask
             # the model to draw a thing that is not visible.
-            _worn_under = [u for u in covered if is_undergarment(u)]
+            # ...and only for people this shot actually describes. A garment
+            # whose owner is not in the frame is a garment drawn on whoever is.
+            # NOT `_described` -- that is assigned further down the loop, so
+            # reading it here would answer with the PREVIOUS shot's cast. Same
+            # expression, evaluated where it is needed.
+            _here = set(active if character_guard
+                        else [n for n, _ in sheet_lines(shot_sheet) if n])
+            _worn_under = [u for u in covered
+                           if is_undergarment(u)
+                           and (cover_owner.get(u) in _here
+                                or u not in cover_owner)]
             _hidden = [u for u in covered if u not in _worn_under]
             shot_scene = scrub_removed(
                 "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
@@ -7740,7 +7778,10 @@ class H3LongVideos:
             # entirely -- there is no weaker setting for one image, only
             # ref_noise_aug for all of them. So it stays, and the cover carries
             # the weight. See under_clause.
-            _under = under_clause([(u, covers.get(u, "")) for u in _worn_under])
+            _under = under_clause(
+                [(u, covers.get(u, ""),
+                  cover_owner.get(u, "") if len(_here) > 1 else "")
+                 for u in _worn_under])
             # A READING COPY, never emitted. The sheet is sent to the model exactly
             # as written; this is only what the node consults when deciding whether
             # to assert hardware is FASTENED, and it leaves out anything the script
