@@ -5334,6 +5334,34 @@ def handoff_claim(n):
             f"anybody new.")
 
 
+def room_claim(n, present, joining):
+    """Claim a handoff carried as a reference because somebody NEW is in the shot.
+
+    The keyframe used to be thrown away here, and throwing it away is what the
+    node's own note in build_conditioning warns about: with no handoff the VLM is
+    never shown where the shot left off and re-imagines the scenery -- same place,
+    new room. Reported as the scene not staying the same between shots.
+
+    A keyframe and a reference are different instruments. A keyframe IS frame one,
+    so a newcomer absent from it has to walk in from nowhere, which is the bug the
+    fresh start was for. A reference only supplies appearance, so the same picture
+    carries the room and the people already in it while the newcomer is simply
+    there at the first frame.
+
+    Claimed, and specifically. An unclaimed picture of somebody is another person
+    who looks like them, and the standing claim is worse than nothing here: it says
+    the shot is joined by nobody new, in the one case where it is."""
+    said = (f" <Picture {n}> is this room a moment earlier: the same walls, floor, "
+            f"furniture and light, from the same camera.")
+    if present:
+        said += (f" {' and '.join(present)} "
+                 f"{'are the people' if len(present) > 1 else 'is the person'} there.")
+    if joining:
+        said += (f" {' and '.join(joining)} {'are' if len(joining) > 1 else 'is'} in "
+                 f"this room too, already in place at the first frame.")
+    return said
+
+
 def state_hold(pairs):
     """One sentence putting those states at the first frame instead of in the action.
 
@@ -6301,7 +6329,8 @@ def latent_upscaler_node():
 
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                        handoff=None, refs=None,
-                       ref_noise_aug=0.999, silent=False, ref_image_size="match"):
+                       ref_noise_aug=0.999, silent=False, ref_image_size="match",
+                       handoff_as_ref=False):
     """Text + references + keyframe for a single shot.
 
     THE ONE RULE from H3's layout: a shot's conditioning rows are packed in the
@@ -6349,7 +6378,11 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     # KEYFRAME_SAFE_AUG the keyframe latent would be noised and labelled at the wrong
     # timestep, so the handoff stops being an anchor and rides as an extra reference
     # instead: weaker continuity, but nothing pretending to anchor while carrying noise.
-    carry_as_ref = bool(hand_img is not None and refs and not keyframe_ok)
+    # ...or because the caller asked for it. A shot that introduces somebody already
+    # in position wants the room this picture carries and NOT the first frame it
+    # would force, and that is a demotion the aug knows nothing about.
+    carry_as_ref = bool(hand_img is not None
+                        and (handoff_as_ref or (refs and not keyframe_ok)))
 
     enc_refs = refs + ([hand_img] if carry_as_ref else [])
     items, blocks = ([], [])
@@ -7281,7 +7314,7 @@ class H3LongVideos:
         active = []                 # the people the previous beat involved
         _seen_before = set()        # everyone a shot has described so far
         _returns = []               # (shot, names back after a shot away)
-        _placed_shots = set()       # 0-based shots introducing somebody in position
+        _placed_shots = {}          # 0-based shot -> who it introduces in position
         shot_cast = []              # the names each shot describes
         guard_words = beat_words = total_words = sound_words = 0
         # THE PROMPT ENGINE. One state, read beat by beat, rendered once per shot.
@@ -7359,16 +7392,17 @@ class H3LongVideos:
                 # staging them arriving. See the handoff decision in the render loop.
                 _new = [n for n in active if n not in _seen_before]
                 if _new and not arrives_in(body) and shots:
-                    _placed_shots.add(len(shots))
+                    _placed_shots[len(shots)] = list(_new)
                     notes.append(
                         f"shot {len(shots) + 1} introduces {', '.join(_new)} in "
-                        f"position rather than arriving, so it starts FRESH instead of "
-                        f"continuing from the previous shot's last frame -- that frame "
-                        f"does not have them in it, and a keyframe is a picture, so "
-                        f"they would have to appear out of nothing and travel to the "
-                        f"spot the beat describes. Costs a cut where a new character "
-                        f"appears. Write the entrance -- 'walks in', 'steps through' -- "
-                        f"if you would rather they arrive on screen and keep the join")
+                        f"position rather than arriving, so the previous shot's last "
+                        f"frame stops being this shot's FIRST frame -- that frame does "
+                        f"not have them in it, and a keyframe is a picture, so they "
+                        f"would have to appear out of nothing and travel to the spot "
+                        f"the beat describes. The frame is still carried, as a "
+                        f"reference, so the room comes with it. Write the entrance -- "
+                        f"'walks in', 'steps through' -- if you would rather they "
+                        f"arrive on screen and keep the frame as the anchor")
                 _back = [n for n in active if n not in _was and n in _seen_before]
                 if _back:
                     _returns.append((len(shots) + 1, list(_back)))
@@ -9303,6 +9337,7 @@ class H3LongVideos:
         _captured_from = {}         # name -> which shot that frame came from
         _recovered = []             # (shot, name, source shot) actually pinned
         _handoff_claimed = []       # shots whose demoted handoff was named in the text
+        _carried = []               # (shot, who was there, who joins) room carried on
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         _SILENCE_STATUS.update(asked=0, applied=0, why="")
         _deep_cleanup()
@@ -9318,6 +9353,7 @@ class H3LongVideos:
             # Breaking the chain at the one boundary where the state changes costs a
             # cut exactly where a cut belongs.
             shot_handoff = handoff
+            _handoff_ref = False
             if restart_after_removal and (i - 1) in stripped_shots:
                 shot_handoff = None
                 fresh.append(i + 1)
@@ -9335,9 +9371,29 @@ class H3LongVideos:
             # before is exactly right there. "Dan is already sitting on the crate" is
             # a person who should be there at the first frame, and there is no frame to
             # inherit that has him in it.
+            # The frame is still the right picture of the ROOM, though, and throwing
+            # it away is what build_conditioning's own note warns about: with no
+            # handoff the VLM is never shown where the shot left off and re-imagines
+            # the scenery -- same place, new room. So it is DEMOTED rather than
+            # dropped. As a reference it carries the walls, the light and the people
+            # already there without being frame one, so the newcomer is simply in
+            # place instead of walking in from nowhere.
+            #
+            # Only when everybody in that frame is named in this shot. The picture
+            # contains whoever was on screen when it was taken, and one the prompt
+            # cannot account for is the node's oldest bug: a picture nobody claims is
+            # another person. When it cannot be claimed, the old fresh start stands.
             elif i in _placed_shots:
-                shot_handoff = None
-                fresh.append(i + 1)
+                _was_here = [n for n in (shot_cast[i - 1] if i - 1 < len(shot_cast)
+                                         else []) if n]
+                _here_now = shot_cast[i] if i < len(shot_cast) else []
+                if _was_here and all(n in _here_now for n in _was_here):
+                    _handoff_ref = True
+                    _carried.append((i + 1, list(_was_here),
+                                     list(_placed_shots[i])))
+                else:
+                    shot_handoff = None
+                    fresh.append(i + 1)
 
             # SOMEBODY BACK AFTER A SHOT AWAY, with no picture of them anywhere.
             #
@@ -9383,7 +9439,15 @@ class H3LongVideos:
             # here rather than inside build_conditioning because the claim is text,
             # and the text is assembled up here.
             _shot_refs = list(shot_refs_all[i]) + _extra
-            if handoff_rides_as_ref(shot_handoff, _shot_refs, ref_noise_aug):
+            if _handoff_ref:
+                # Carried for the ROOM, with somebody new in the shot -- so the
+                # standing claim is exactly wrong here ("joined by anybody new") and
+                # this one names the room, who was in it, and who is also here.
+                _was, _join = next(((w, j) for s, w, j in _carried if s == i + 1),
+                                   ([], []))
+                shot_prompt = shot_prompt + room_claim(len(_shot_refs) + 1, _was, _join)
+                _handoff_claimed.append(i + 1)
+            elif handoff_rides_as_ref(shot_handoff, _shot_refs, ref_noise_aug):
                 shot_prompt = shot_prompt + handoff_claim(len(_shot_refs) + 1)
                 _handoff_claimed.append(i + 1)
             # Whatever this shot ends up being, that is what `script` reports.
@@ -9391,7 +9455,8 @@ class H3LongVideos:
             cond, latent, fc, demoted = build_conditioning(
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
                 handoff=shot_handoff, refs=list(shot_refs_all[i]) + _extra,
-                ref_noise_aug=ref_noise_aug, silent=silent)
+                ref_noise_aug=ref_noise_aug, silent=silent,
+                handoff_as_ref=_handoff_ref)
             if demoted and not _aug_warned:
                 _aug_warned = True
                 notes.append(
@@ -9756,6 +9821,17 @@ class H3LongVideos:
                 f"show the garment is how it comes back, and a picture outvotes the text. "
                 f"That costs a cut there. Turn restart_after_removal off to keep the "
                 f"continuity instead")
+        if _carried:
+            notes.append(
+                "; ".join(
+                    f"shot {s} carries the previous frame as a REFERENCE rather than "
+                    f"as its first frame, so the room, the light and "
+                    f"{' and '.join(w)} come with it while "
+                    f"{' and '.join(j)} {'are' if len(j) > 1 else 'is'} already in "
+                    f"place instead of walking in"
+                    for s, w, j in _carried)
+                + " -- a keyframe is frame one and a reference is not, which is what "
+                  "lets a shot introduce somebody without re-imagining the room")
         wall = time.perf_counter() - t_start
         n = max(1, len(shots))
         other = max(0.0, wall - t_sample - t_decode)

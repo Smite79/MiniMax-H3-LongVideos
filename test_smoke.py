@@ -1877,11 +1877,38 @@ def test_introducing_somebody_already_in_position():
 
     # In position: the shot cannot inherit a frame that has him in it, so it starts
     # fresh. Three shots, and only shot 3 encodes a keyframe.
+    # The frame stops being frame ONE -- and is still carried, as a reference, so the
+    # room comes with it. Dropping it outright is what re-imagined the scenery
+    # between shots, which build_conditioning's own note calls "same place, new room".
     n_placed, info = encodes("Dan is already sitting on the crate, watching her.")
-    check("an in-position introduction drops its keyframe", n_placed == 1, str(n_placed))
+    check("an in-position introduction still carries the frame",
+          "carries the previous frame as a REFERENCE" in info)
     check("...and the run says so", "introduces Dan in position" in info)
-    check("...naming what it costs", "Costs a cut" in info)
-    check("...and how to keep the join", "Write the entrance" in info)
+    check("...naming what the room brings", "the room, the light and Nora come" in info)
+    check("...and how to keep it as the anchor", "Write the entrance" in info)
+    # CLAIMED, and claimed differently. The standing handoff claim says the shot is
+    # "carried forward rather than joined by anybody new" -- exactly wrong in the one
+    # case where somebody new is the reason the frame was demoted. Unclaimed, a
+    # picture of Nora is a second Nora.
+    # The full path on purpose: the carry is decided in the render loop, because it
+    # needs a frame to carry. plan_only has none and reports none.
+    _s2 = re.split(r"\[Shot ", run_node(
+        "Nora sets a toolbox on the bench.\n\nDan is already sitting on the crate, "
+        "watching her." + tail, anchor="A workshop.", character_memory=mem)[3])[2]
+    check("the carried frame is claimed as the room",
+          "is this room a moment earlier" in _s2, _s2[-260:])
+    check("...naming who was in it", "Nora is the person there" in _s2)
+    check("...and who is already in place", "Dan is in this room too" in _s2)
+    check("...without the claim that nobody new joins",
+          "joined by anybody new" not in _s2)
+    # NOT claimable: somebody in that frame is absent from this shot, so the picture
+    # would carry a person the prompt cannot account for. The old fresh start stands.
+    _info3 = run_node(
+        "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
+        "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
+        character_memory=mem + "\nAda: 29, she, short hair")[2]
+    check("an unaccountable person in the frame keeps the fresh start",
+          "carries the previous frame as a REFERENCE" not in _info3)
     # Arriving is what the chain is FOR: he walks in from the frame before.
     n_arrive, info2 = encodes("Dan walks in through the side door and looks at her.")
     check("an arriving introduction keeps the chain", n_arrive == 2, str(n_arrive))
