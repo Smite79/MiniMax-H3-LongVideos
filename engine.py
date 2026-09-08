@@ -394,6 +394,227 @@ def posture_in(text):
     return ""
 
 
+
+# A determiner, INCLUDING A POSSESSIVE NAME. "Dana lifts up McKenna's skirt" and
+# "enters McKenna's bedroom" both failed on a list of the/her/his/their/a/an, in
+# two different readers, fixed weeks apart. One constant, so the next reader that
+# needs it cannot get a narrower copy.
+DET_POSS = r"(?:the|her|his|their|its|a|an|\w+['’]s)"
+_DET_POSS = DET_POSS
+
+# ---------------------------------------------------------------------------
+# WARDROBE: what moved, and what was put back.
+#
+# Moved here from sampler.py, whole, because the pair went wrong three separate
+# ways while it was split across two files: a possessive name ("Dana lifts up
+# McKenna's skirt") matched neither reader, the restore verbs covered only the
+# direction nobody writes, and the layering read displacements a beat before the
+# latch recorded them. They name the same garments, they have to agree with the
+# same sheet, and they now sit beside the vocabulary they both read.
+# ---------------------------------------------------------------------------
+
+# Shared with the removal readers still in sampler.py, which is why it is here
+# rather than moved: this is the copy, and the sampler imports it.
+_STRIP_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
+               r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|"
+               r"slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
+               r"toss(?:es|ed)?|throw[s]?|threw|"
+               # How clothes actually come off, in the words people write it in.
+               # Without these a beat took the garment off on screen while the scene
+               # kept saying it was worn -- and the scene is re-stamped into every
+               # later shot, so it came back on and stayed on.
+               r"kick(?:s|ed|ing)?|step(?:s|ped|ping)?|lift(?:s|ed|ing)?|"
+               r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?|work(?:s|ed)?")
+# The verbs above that stay a removal when the particle TRAILS the object -- "kicks
+# her boots off". The rest are removals only with the particle straight after them:
+# "steps out of her leggings" is one, "steps back" while a light goes off later in
+# the sentence is not, and the trailing form would read that as a removal.
+_TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
+                  r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|"
+                  r"tore|slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
+                  r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
+                  r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
+# ...and verbs that are a removal on their own, needing no particle.
+_UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
+              r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?|"
+              # Hardware comes off by being UNDONE, and these were missing: a beat
+              # saying "unlocks the belt" left it described as worn for the rest of
+              # the film, because nothing here read as a removal at all.
+              r"unlock(?:s|ed)?|unbuckle[sd]?|unclip(?:s|ped)?|unstrap(?:s|ped)?|"
+              r"unlace[sd]?|untie[sd]?|unties|unwrap(?:s|ped)?|"
+              r"undo(?:es)?|undid")
+
+
+_DISPLACE_WAY = (r"back\s+up|back\s+down|down|up|aside|open|back|"
+                 r"off\s+(?:one|her|his|their)\s+shoulders?")
+_DISPLACE = re.compile(
+    r"\b(?:" + _STRIP_VERB + r"|push(?:es|ed|ing)?|shove[sd]?|roll(?:s|ed|ing)?|"
+    r"hitch(?:es|ed)?|hike[sd]?|open(?:s|ed)?|undo(?:es)?|unzip(?:s|ped)?|"
+    # LIFTING A SKIRT IS DISPLACING IT, and none of these were here. Asked
+    # for directly: "when the skirt has been lifted up to show the chastity
+    # belt, that's when it should be shown". Lifting was not read as moving
+    # anything, so the belt stayed covered through the shot that uncovers it.
+    r"lift(?:s|ed|ing)?|raise[sd]?|rais(?:es|ed|ing)|hoist(?:s|ed|ing)?|"
+    r"hold(?:s|ing)?|held|gather(?:s|ed|ing)?|bunch(?:es|ed|ing)?)\s+"
+    r"(?:(" + _DISPLACE_WAY + r")\s+)?"
+    r"(" + _DET_POSS + r"\s+)?([\w][\w\- ]{0,28}?)"
+    r"(?:\s+(" + _DISPLACE_WAY + r"))?"
+    r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then)\b|$)", re.I)
+
+
+def scene_name_for(head, scene):
+    """The sheet's OWN full name for a garment, found by its head noun. "" if absent.
+
+    A beat calls a thing whatever is convenient -- "the shorts" for what the sheet
+    dressed her in as "blue jeans shorts". Anything the node then says about it has
+    to use the SHEET's words: a shot carrying both names is a shot describing two
+    garments, and the model draws the bare one however it likes. That is a garment
+    invented out of the node's own text, which is the worst kind.
+
+    The entry is read back from the sheet: its modifiers are the words before the
+    head noun in the same comma-separated item, and no further -- a name from the
+    entry before it would attach one garment's colour to another."""
+    head = (head or "").strip().lower()
+    if not head or not scene:
+        return ""
+    best = ""
+    for line in str(scene).split("\n"):
+        # Only the wardrobe side of "Name: she, 22, blue jeans shorts".
+        line = line.split(":", 1)[-1]
+        for item in re.split(r"[,;.]", line):
+            # A <Picture N> tag is not part of the garment's NAME. "chastity belt
+            # <Picture 2>" ends in "2", so the head-noun match failed and the belt
+            # fell back to the beat's bare word -- while an untagged garment in the
+            # same sheet expanded correctly. The tagged garment is exactly the one
+            # a reference is pinning, so it is the worst one to describe loosely.
+            item = re.sub(r"<\s*picture\s+\d+\s*>", " ", item, flags=re.I)
+            item = re.sub(r"\s+", " ", item).strip()
+            if not item or item.split()[-1].lower() != head:
+                continue
+            # Drop a leading article or possessive; they are not description.
+            item = re.sub(r"^(?:a|an|the|her|his|their|its)\s+", "", item, flags=re.I)
+            # The longest entry wins: a sheet that names it twice described it most
+            # fully once, and the fuller name is the one worth carrying.
+            if len(item) > len(best):
+                best = item
+    # The author's OWN capitalisation. Lowercasing turned "PVC" into "pvc" and
+    # "Shiny white crop top" into all-lowercase -- a different token sequence than
+    # was written, for a brand or material name that is capitalised for a reason.
+    # Only the matching above is case-insensitive; what comes back is what they typed.
+    return best
+
+
+def displaced_garments(beat, scene):
+    """[(garment, how)] this beat MOVES without taking off. [] when none.
+
+    Same two conditions infer_removals uses, and for the same reason: the beat has
+    to stage it, and the scene has to already say the thing is worn. A displacement
+    invented for something nobody is wearing describes a garment into existence."""
+    if not beat or not scene:
+        return []
+    out, seen = [], set()
+    low = scene.lower()
+    for m in _DISPLACE.finditer(beat):
+        way = (m.group(1) or m.group(4) or "").lower().strip()
+        thing = re.sub(r"\s+", " ", (m.group(3) or "")).strip().lower()
+        # SOME VERBS CARRY THEIR OWN DIRECTION. "lifts her skirt" says which way
+        # by saying lift, and the direction word this pattern wants is simply not
+        # written -- so the match was thrown away for having no `way`, and the one
+        # beat that uncovers the layer beneath did nothing. Read on the matched
+        # text rather than a new capture group, which would renumber the rest.
+        if not way and re.match(r"\s*(?:lift|rais|hoist|gather|bunch)", m.group(0),
+                                re.I):
+            way = "up"
+        if not way or not thing or thing in seen:
+            continue
+        # The garment has to be one the scene already dresses them in, and the head
+        # noun is what matches: "her denim shorts" is the scene's "blue denim shorts".
+        head = thing.split()[-1]
+        if len(head) < 3 or head not in low:
+            continue
+        seen.add(thing)
+        # ...and it is the SCENE'S name that gets carried forward, not the beat's.
+        # A beat says "pulls the shorts back up" for what the sheet calls "blue
+        # jeans shorts", and the guard echoed the beat: the shot then carried a
+        # bare "the shorts" beside the sheet's full name, and a model handed two
+        # differently-named garments draws two different garments. The shorts came
+        # back in a different colour and cut -- invented, from the node's own text.
+        thing = scene_name_for(head, scene) or thing
+        # "back up" and "back down" say the direction in their second word.
+        way = re.sub(r"^back\s+", "", re.sub(r"\s+", " ", way))
+        out.append((thing, "pulled " + way if way in ("down", "up", "aside", "back")
+                    else way))
+    return out
+
+
+# Putting it right without naming it: "pulls them back up". A pronoun cannot be
+# matched against the wardrobe, but if exactly one garment is displaced there is only
+# one thing it can mean -- and leaving it displaced is the error that shows.
+# PUTTING IT BACK. A displaced garment is still worn and the node keeps saying
+# where the beat left it -- so the beat that puts it right has to be read, or the
+# skirt stays lifted for the rest of the film and whatever was under it stays on
+# show. Reported: "McKenna lets it fall" did nothing, because the only restores
+# recognised were pull/tug/hitch/hike/yank/push with a pronoun and a direction.
+#
+# What actually gets written is mostly the opposite: a lifted skirt is LET FALL,
+# DROPPED, LOWERED, SMOOTHED DOWN, STRAIGHTENED, FIXED or simply LET GO of, and
+# none of those has a direction word in it at all.
+_RESTORE_VERB = (r"(?:let(?:s|ting)?(?:\s+go\s+of)?|drop(?:s|ped|ping)?|"
+                 r"lower(?:s|ed|ing)?|smooth(?:s|ed|ing)?|straighten(?:s|ed|ing)?|"
+                 r"fix(?:es|ed|ing)?|rearrang(?:e|es|ed|ing)|"
+                 r"replac(?:e|es|ed|ing)|put(?:s|ting)?|tidy|tidies|tidied|"
+                 r"cover(?:s|ed|ing)?\s+(?:herself|himself|themselves|up)|"
+                 r"pull|tug|hitch|hike|yank|push)")
+# The old pronoun form, plus the new verbs, still with no garment named.
+_PUT_BACK = re.compile(
+    r"\b(?:pull|tug|hitch|hike|yank|push)(?:s|ed|ing)?\s+"
+    r"(?:it|them|these|those)\s+(?:back\s+)?(?:up|down|closed|shut|together)\b"
+    r"|\b(?:pull|tug|hitch|hike|yank|push)(?:s|ed|ing)?\s+"
+    r"(?:it|them)\s+back\b"
+    r"|\b" + _RESTORE_VERB + r"(?:s|ed|ing)?\s+"
+    r"(?:it|them|these|those)\s+(?:fall|drop|go|back|down|straight)\b"
+    r"|\blet(?:s|ting)?\s+(?:it|them)\s+fall\b"
+    r"|\b(?:cover(?:s|ed|ing)?\s+(?:herself|himself|themselves)\s+(?:back\s+)?up)\b",
+    re.I)
+# ...and the same act with the garment NAMED: "lets the skirt fall", "smooths her
+# skirt down". The garment has to be one the sheet already dresses them in, which
+# is the same condition displaced_garments uses.
+_PUT_BACK_NAMED = re.compile(
+    r"\b" + _RESTORE_VERB + r"\s+"
+    + _DET_POSS + r"\s+([\w][\w\- ]{0,28}?)"
+    r"(?:\s+(?:fall|drop|down|back|straight|up|closed|shut|together))?"
+    r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then|over|again)\b|$)", re.I)
+
+
+def puts_it_back(beat):
+    """Does this beat put a displaced garment right without naming it?"""
+    return bool(_PUT_BACK.search(beat or ""))
+
+
+def restored_garments(beat, scene):
+    """[garment] this beat puts back, by name. [] when it names none.
+
+    Same two conditions as displaced_garments: the beat has to stage it, and the
+    sheet has to already dress them in the thing. The sheet's own name is what
+    comes back, so a restore keyed on "her skirt" clears a displacement stored as
+    "long grey skirt"."""
+    if not beat or not scene:
+        return []
+    out, low = [], scene.lower()
+    for m in _PUT_BACK_NAMED.finditer(beat):
+        thing = re.sub(r"\s+", " ", (m.group(1) or "")).strip().lower()
+        if not thing:
+            continue
+        head = thing.split()[-1]
+        if len(head) < 3 or head not in low:
+            continue
+        name = scene_name_for(head, scene) or thing
+        if name not in out:
+            out.append(name)
+    return out
+
+
+
 # ---------------------------------------------------------------------------
 # STATE. One object knows what is true, and everything a shot says is rendered
 # from it -- so two clauses cannot contradict each other, because there is only
