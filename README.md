@@ -7,6 +7,7 @@ tags:
   - video
   - text-to-video
   - audio
+  - not-for-all-audiences
 license: other
 license_name: h3-longvideos-no-redistribution
 license_link: LICENSE

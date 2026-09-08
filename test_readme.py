@@ -109,6 +109,11 @@ def main():
         meta = front[3:3 + end] if end != -1 else ""
         check("...with tags", "tags:" in meta)
         check("...naming comfyui", "comfyui" in meta)
+        # The Hub reads this tag and puts a content warning on the repo. Asserted
+        # because it lives in front matter nobody looks at, and a tag that
+        # silently goes missing takes the warning with it.
+        check("...and flagged not-for-all-audiences",
+              "not-for-all-audiences" in meta)
         check("...and a license", "license:" in meta)
 
     # EVERY MODULE THE PACKAGE IMPORTS HAS TO BE PUBLISHED. publish.py did not
