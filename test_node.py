@@ -1518,11 +1518,12 @@ def test_the_anchor_holds_the_part_the_hardware_is_on():
     # the name is omitted whenever the beat already says it, and the part went with
     # it -- so a collar the beat had just named came back holding the wrists.
     said = S.restraint_sentence("steel collar", [], [], anchor="at the wall")
-    check("the sentence says neck", "holding the neck at the wall" in said)
+    check("the sentence says neck", "holding the neck fast at the wall" in said)
     unnamed = S.restraint_sentence("", [], [], anchor="at the wall", part="neck")
-    check("...even with no item named", "holding the neck at the wall" in unnamed)
+    check("...even with no item named",
+          "holding the neck fast at the wall" in unnamed)
     check("...and wrists remain the default",
-          "holding the wrists at the wall"
+          "holding the wrists fast at the wall"
           in S.restraint_sentence("", [], [], anchor="at the wall"))
 
 
@@ -1568,14 +1569,21 @@ def test_a_neck_is_not_behind_a_back():
     both = S.restraint_sentence("handcuffs, steel collar", [], [],
                                 anchor="behind the back, at the wall", part="neck")
     check("no neck behind a back", "neck behind the back" not in both)
-    check("the wrists take the position", "holding the wrists behind the back" in both)
-    check("...and the collar takes the point", "collar fast at the wall" in both)
+    # The limb position is a POSE sentence of its own now, and the hardware
+    # sentence keeps only the anchor point, with the part it holds.
+    check("the position is not buried in the hold",
+          "holding the wrists behind the back" not in both)
+    check("...and the point keeps its part", "holding the neck fast at the wall"
+          in both)
+    check("the pose is its own sentence",
+          "Both arms are behind the body" in S.pose_clause("behind the back"))
     # A position on its own, and a point on its own, both still read.
     pos = S.restraint_sentence("handcuffs", [], [], anchor="behind the back")
-    check("position alone", "holding the wrists behind the back" in pos)
+    check("position alone leaves the hold clean",
+          "behind the back" not in pos)
     pt = S.restraint_sentence("steel collar", [], [], anchor="at the wall",
                               part="neck")
-    check("point alone", "holding the neck at the wall" in pt)
+    check("point alone", "holding the neck fast at the wall" in pt)
 
 
 def test_a_door_is_not_a_room():
@@ -3358,7 +3366,13 @@ def test_fastened_limbs_keep_their_anchor():
     # Where it holds rides inside the restraint sentence now. anchor_hold was a second
     # sentence repeating the same subject, and the merge removed it.
     cl = S.restraint_sentence("cuffs", [], ["Mara"], anchor="above the head")
-    check("the anchor is carried", "holding the wrists above the head" in cl)
+    # The limb POSITION is a pose sentence now; the hold keeps only the anchor
+    # point. Buried here it was the least prominent thing in thirty words about
+    # metal, and the wrists rendered in front on the next beat.
+    check("the position is not buried in the hold",
+          "above the head" not in cl)
+    check("...and the pose says it as a body",
+          "wrists together above the head" in S.pose_clause("above the head"))
     check("the clause is one sentence", cl.count(".") == 1)
     check("...and is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))

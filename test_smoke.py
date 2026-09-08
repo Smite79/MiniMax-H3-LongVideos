@@ -1504,8 +1504,14 @@ def test_the_anchor_survives_a_close_shot():
     # The staging shot has the author's own words and gets no second sentence about it.
     check("the staging shot is not argued with",
           "the wrists" not in sh[0], "")
-    check("the next shot is told where they are",
-          "above the head, at the bed frame" in sh[1], sh[1][-80:])
+    # Both facts still reach the shot; they are two sentences now. The POSITION is
+    # a pose about the body, because buried in the hardware sentence it was the
+    # least prominent thing in it and the wrists rendered in front. The POINT
+    # stays with the hardware, which is what is fastened to the frame.
+    check("the next shot is told where the arms are",
+          "wrists together above the head" in sh[1], sh[1][-120:])
+    check("...and what they are fastened to",
+          "fast at the bed frame" in sh[1], sh[1][-120:])
     # The one that matters: a close shot crops the anchor out of the picture, so the
     # text is the only thing still carrying it.
     check("...including the close shot", "the wrists" in sh[1], "")
@@ -3471,7 +3477,7 @@ def test_a_collar_chained_to_a_wall_stays_on():
           all("at the wall" in s for s in shots[1:]),
           f"{[('at the wall' in s) for s in shots]}")
     check("...and it is the NECK being held, not the wrists",
-          all("holding the neck at the wall" in s for s in shots[1:]),
+          all("holding the neck fast at the wall" in s for s in shots[1:]),
           f"{[('holding the neck' in s) for s in shots]}")
     check("no shot claims the wrists", not any("the wrists" in s for s in shots))
     check("the hardware stays fastened in every later shot",
@@ -3590,8 +3596,10 @@ def test_two_restraints_put_on_together_both_survive():
     # wall" -- a neck behind a back.
     check("no neck is behind a back",
           not any("neck behind the back" in x for x in shots))
+    # A limb position is a POSE sentence of its own now.
     check("the wrists take the limb position",
-          all("the wrists behind the back" in x for x in shots[1:]))
+          all("wrists together at the small of the back" in x
+              for x in shots[1:]))
     check("the collar takes the fixed point",
           all("fast at the wall" in x for x in shots[1:]))
     # "Ana looks at the door" must not relocate the camera into a door.
@@ -3898,8 +3906,9 @@ def test_the_applying_shot_says_where_the_limbs_finish():
     check("...as well as the hardware's two ends",
           "open and off the body at the first frame" in sh[1])
     check("the next shot still holds the position",
-          "wrists behind the back" in sh[2], sh[2][:240])
-    check("...and the one after that", "wrists behind the back" in sh[3])
+          "wrists together at the small of the back" in sh[2], sh[2][:240])
+    check("...and the one after that",
+          "wrists together at the small of the back" in sh[3])
     # A shot that stages no fastening must not claim a last-frame position.
     check("an ordinary shot says nothing about it",
           "By the last frame" not in sh[0], sh[0][:200])

@@ -3990,6 +3990,34 @@ def held_part(items):
     return "wrists"          # cuffs, rope and tape, which is the common case
 
 
+# THE POSE A LIMB POSITION MAKES, as a body rather than as a relation. Buried in
+# the hardware sentence as "holding the wrists behind the back" it was reported as
+# the wrists rendering in front on the next beat: the fact was there, in every
+# shot, and it was a subordinate clause in the middle of thirty words about the
+# metal. A pose is drawn from arms and shoulders.
+# SHORT. At 28 words this outbid FALL_HOLD and the budget dropped the fall guard
+# -- which exists because a fall grew a third leg to brace a landing nothing in
+# the text was taking. Trading one reported bug for another is not a fix. Arms and
+# wrists make the pose renderable; elbows, shoulders and chest were decoration.
+_POSE_OF_POSITION = {
+    "behind the back": ("Both arms are behind the body, wrists together at the "
+                        "small of the back"),
+    "above the head": ("Both arms are raised, wrists together above the head, "
+                       "the body stretched long"),
+    "in front of the body": ("Both arms are in front of the body, wrists "
+                             "together at the waist"),
+    "out to the sides": ("Both arms are held out level with the shoulders, one "
+                         "hand to each side"),
+    "at the waist": "Both arms are at the sides, wrists together at the waist",
+}
+
+
+def pose_clause(position):
+    """One sentence describing the BODY a limb position makes. "" when unknown."""
+    said = _POSE_OF_POSITION.get(str(position or "").strip().lower(), "")
+    return f" {said}." if said else ""
+
+
 def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False,
                        part=""):
     """ONE sentence for the hardware: what it is, that it is closed, and where it holds.
@@ -4055,12 +4083,20 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
         _m = re.match(r"^(.*?),?\s*(at the .+)$", anchor)
         _pos, _point = (_m.group(1).strip(), _m.group(2)) if _m else (anchor, "")
         _part = part or held_part(items)
-        if _pos and _point and _part != "wrists":
-            _fixed = next((i for i in items
-                           if re.search(_HELD_PART[0][0], i, re.I)), "collar")
-            out += f", holding the wrists {_pos}, the {_fixed} fast {_point}"
-        else:
-            out += f", holding the {_part} {anchor}"
+        # The limb POSITION leaves this sentence and gets one of its own, in
+        # pose_clause -- buried here it was the least prominent thing in thirty
+        # words about the metal, and it was reported as the wrists rendering in
+        # front. What stays is the anchor POINT, which is about the hardware and
+        # belongs with it.
+        # The PART and the POINT both stay: a collar holds the neck and the chain
+        # holds it to the wall, and dropping either leaves a shot that does not
+        # say what is attached to what. Naming the ITEM again here was worse than
+        # both -- "The steel collar stays closed and fastened, the steel collar
+        # fast at the wall" -- so the part carries it.
+        if _point:
+            out += f", holding the {_part} fast {_point}"
+        elif not _pos:
+            out += f", holding the {_part}"
     if posed:
         out += ("; the metal is already drawn to its full length, so the position it "
                 "fixes is the position that keeps, and the body strains against it "
@@ -8106,6 +8142,11 @@ class H3LongVideos:
                     _ends_at = RESTRAINT_ENDS_AT.format(
                         part=engine.held_part_of(worn_items) or "wrists",
                         where=_pos)
+            # The limb pose, said as a body, on every shot the position holds --
+            # the applying shot included, where it says where they FINISH.
+            _pose = pose_clause(_anchor_now.split(", at the")[0].strip()
+                                if _anchor_now else
+                                (anchored or "").split(", at the")[0].strip())
             hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
@@ -8401,6 +8442,10 @@ class H3LongVideos:
                 (7, "anchors", anchors),     # hardware with nowhere to sit
                 (10, "state", _state_clause),
                 (9, "posture", _posture),   # where the last beat left the body
+                # ...and the pose the hardware holds them in, as a BODY. Ranked
+                # beside posture because that is what it is: an arm position, not
+                # a fact about metal. See pose_clause.
+                (3, "pose", _pose),
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language
