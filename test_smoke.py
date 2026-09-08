@@ -1120,13 +1120,17 @@ def test_a_beat_can_name_what_the_layering_hid():
     sh = [s for s in script.split("---") if s.strip()]
     # The sheet KEEPS it and the node says where it is. Deleting it was what
     # put the author's own words out of the prompt, three reports running.
-    check("the sheet keeps it", "chastity belt" in sh[0].lower(), sh[0][:160])
+    # The WORDS wait too. One mention at cfg 1 is enough to draw it, and the
+    # sheet's was the last one left after the picture and the clause stopped
+    # naming it. It returns on the shot the cover moves.
+    check("the covered shot does not name it",
+          "chastity belt" not in sh[0].lower(), sh[0][:200])
     # The clause names the COVER. The belt is named once, by the sheet.
     check("...and the jeans are described as covering it",
           "jeans cover the hips and waist completely" in sh[0].lower(),
           sh[0][:240])
-    check("...and the node does not name the belt a second time",
-          sh[0].lower().count("chastity belt") == 1, sh[0][:240])
+    check("...and nothing else in her entry is touched",
+          "blue jeans" in sh[0].lower(), sh[0][:240])
     check("...and the jeans are described as covering it",
           "whole, opaque and unbroken" in sh[0].lower(), sh[0][:260])
     # The PICTURE waits even though the words do not: a reference reproduces
@@ -1219,8 +1223,9 @@ def test_the_only_tag_being_on_a_covered_thing():
     # the text never claims is read as an extra subject.
     check("the picture waits while it is covered",
           rows[0][1] == 0 and rows[1][1] == 0, str([n for _, n in rows]))
-    check("...but the words are there the whole time",
-          all("chastity" in p.lower() for p, _ in rows[:2]), rows[0][0][-160:])
+    check("...and the words wait with it",
+          not any("chastity" in p.lower() for p, _ in rows[:2]),
+          rows[0][0][-160:])
     # The occlusion is carried by the COVER, since a reference cannot be
     # weakened for one image. If the belt still shows through, ref_noise_aug
     # is the only lever left and it moves every reference at once.
@@ -1320,13 +1325,13 @@ def test_underwear_is_hidden_until_it_is_not():
     # the fact protected is the same one, that it is not rendered on top of
     # what covers it. A locket or a scarf under a coat still waits.
     check("while the shorts are on, the shorts are the outermost layer",
-          "panties" in sh[0] and "whole, opaque and unbroken" in sh[0],
-          sh[0][-150:])
+          "whole, opaque and unbroken" in sh[0], sh[0][-150:])
+    check("...and the panties are not named",
+          "panties" not in sh[0], sh[0][-150:])
     # The belt goes under as well: worn beneath jeans it is COVERED, not forgotten,
     # and it comes back by the same route as any other layer -- the cover comes off,
     # the reveal clause names it, and it stays in the scene from then on.
-    check("...and the belt is named once, by the sheet",
-          sh[0].count("chastity belt") == 1, sh[0][-150:])
+    check("...nor the belt", "chastity belt" not in sh[0], sh[0][-150:])
     check("...while the shorts themselves are", "shorts" in sh[0], "")
     # The shot that takes them off is where both become visible, and it has to say so
     # or the reveal happens against a body the text says is bare.
@@ -3978,8 +3983,11 @@ def test_an_undergarment_keeps_its_words_and_waits_for_its_picture():
     # -- green for the wrong reason, and the wrong reason was the actual report.
     sheet_line = [l for l in covered.split(chr(10)) if l.strip().startswith("Ana:")]
     check("the character memory line survives", bool(sheet_line), covered[:200])
-    check("...still carrying the belt",
-          bool(sheet_line) and "chastity belt" in sheet_line[0].lower(),
+    check("...with the rest of it intact",
+          bool(sheet_line) and "blue jeans" in sheet_line[0].lower()
+          and "28" in sheet_line[0], (sheet_line[0] if sheet_line else covered)[:200])
+    check("...and only the belt held back",
+          bool(sheet_line) and "chastity belt" not in sheet_line[0].lower(),
           (sheet_line[0] if sheet_line else covered)[:200])
     check("...and the jeans are described as covering it",
           "cover the hips and waist completely" in covered.lower(),
@@ -4023,8 +4031,7 @@ def test_an_under_layer_belongs_to_somebody():
     check("...nor about a skirt she does not own",
           "skirt" not in sh[0].lower(), sh[0][:220])
     check("McKenna's shot describes the skirt covering it",
-          "skirt covers the hips and waist" in sh[1].lower()
-          and "chastity belt" in sh[1].lower(), sh[1][:240])
+          "skirt covers the hips and waist" in sh[1].lower(), sh[1][:240])
     check("...and Dana's later shot is clean again",
           "chastity belt" not in sh[2].lower(), sh[2][:220])
     # Both in one shot: the belt has to say WHOSE, or it lands on either woman.
@@ -4091,8 +4098,8 @@ def test_the_picture_arrives_when_the_cover_moves():
     check("untouched: the picture never arrives", quiet == [1, 1, 1], str(quiet))
     words = run_node("A home.\n\nMcKenna waits.\n\nMcKenna sits.", plan_only=True,
                      character_memory=mem)[3]
-    check("...but the belt is in the memory the whole time",
-          words.lower().count("chastity belt") >= 2, words[:200])
+    check("...and the belt waits, in every covered shot",
+          words.lower().count("chastity belt") == 0, words[:200])
     # A lift is not everything that moves: a chin is not a garment.
     check("lifting a chin displaces nothing",
           not S.displaced_garments("McKenna lifts her chin.",

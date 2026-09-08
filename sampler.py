@@ -5828,6 +5828,63 @@ def extract_removals(beat):
     return body, removed
 
 
+def hide_item(text, items):
+    """Take the named items out of a sheet line, keeping everything else.
+
+    SURGICAL, unlike scrub_removed, which drops the whole comma-separated
+    fragment -- that is right for a garment that has come off and wrong here: it
+    took "green dress, steel collar" down to nothing and the person's line with
+    it, leaving shots with nobody described in them.
+
+    This removes the item and the adjectives attached to it, and stops. A
+    fragment that held only that item disappears; a fragment holding anything
+    else keeps the rest. A fragment carrying the person's LABEL ("McKenna: she,
+    22") never disappears, whatever else is in it."""
+    if not text or not items:
+        return text
+    out_lines = []
+    for line in str(text).split("\n"):
+        frags, kept = line.split(","), []
+        for n, frag in enumerate(frags):
+            new = frag
+            for item in items:
+                if not str(item).strip():
+                    continue
+                # The item, plus any adjectives sitting directly in front of it.
+                new = re.sub(r"(?:\b\w+[\w-]*\s+){0,3}?\b"
+                             + re.escape(str(item).strip()) + r"\b",
+                             "", new, flags=re.I)
+            # An article left standing alone ("a", "the") is not a garment,
+            # so the fragment goes. A fragment carrying the person's LABEL
+            # never reaches this test empty -- the removal takes the item and
+            # leaves the name -- which is why there is no separate guard for
+            # it. One was written; a disable-check showed it never fired, and
+            # a guard that looks protective and is not is worse than none.
+            if not re.sub(r"\b(?:a|an|the|and|with|in)\b|[\s,.;]", "", new):
+                continue
+            kept.append(new)
+        joined = ",".join(kept)
+        # Tidy the seams the removal leaves: doubled commas and spaces.
+        joined = re.sub(r"\s*,\s*,+", ",", joined)
+        joined = re.sub(r"\s{2,}", " ", joined).strip()
+        joined = re.sub(r",\s*([.;]|$)", r"\1", joined)
+        # The seams a removal leaves at the LABEL. "Ana: chastity belt, jeans"
+        # becomes "Ana: , jeans" and "Ana: a chastity belt" becomes "Ana: ."
+        # Both are malformed, and a sheet entry the reader cannot parse is
+        # worse than one item missing from it.
+        joined = re.sub(r":\s*,\s*", ": ", joined)
+        joined = re.sub(r":\s*(?=[.;]|$)", "", joined)
+        # The removed fragment may have carried the line's full stop away
+        # with it. terminate_lines expects one, and without it the next
+        # sheet line welds onto this one -- a name fused to the end of an
+        # attribute list reads as one more item in it.
+        if (line.rstrip().endswith((".", "!", "?")) and joined
+                and not joined.endswith((".", "!", "?"))):
+            joined += "."
+        out_lines.append(joined)
+    return "\n".join(out_lines)
+
+
 def scrub_removed(text, tokens):
     """Drop the parts of `text` that name a removed item.
 
@@ -7596,9 +7653,23 @@ class H3LongVideos:
             # The words stay in every shot; the PICTURE waits for the cover
             # to come off. See defer_tag_for -- a reference reproduces its
             # image and draws the thing, whatever the text says is over it.
-            _deferred = [u for u in _worn_under
-                         if re.search(r"<\s*Picture\s*\d+\s*>", shot_scene)]
+            _deferred = list(_worn_under)
+            # THE WORDS WAIT WITH THE PICTURE. At cfg 1 there is no negative
+            # prompt, so naming a thing draws it -- and with the picture
+            # already withheld and the occlusion clause no longer naming the
+            # belt, the sheet's own mention was the last one standing and it
+            # was enough on its own. Text cannot take itself back; every
+            # wording added to suppress it made it worse.
+            #
+            # Held back, not deleted, and the difference is what made this
+            # feel like deletion the first time: lifting a skirt was not read
+            # as a displacement, so the cover never came off and the item
+            # never returned. That is fixed, the restore verbs are in, and
+            # the report below names the item and the shots. hide_item is
+            # surgical where scrub_removed is not: it takes the phrase and
+            # leaves the entry, so a person's line cannot go with it.
             shot_scene = defer_tag_for(shot_scene, _worn_under)
+            shot_scene = hide_item(shot_scene, _worn_under)
             if _deferred and len(shot_scene) >= 0:
                 deferred_shots.append((len(shots) + 1, list(_worn_under)))
             _under = under_clause(
@@ -8693,11 +8764,12 @@ class H3LongVideos:
         if deferred_shots:
             _items = sorted({i for _n, its in deferred_shots for i in its})
             notes.append(
-                f"the picture for {', '.join(_items)} WAITS on shot(s) "
+                f"{', '.join(_items)} WAITS on shot(s) "
                 f"{', '.join(str(n) for n, _ in deferred_shots)}, where it is under "
-                f"something else. It is deferred, never removed: the item stays in "
-                f"the character memory in every shot exactly as you wrote it, and "
-                f"its <Picture N> comes back the moment the cover comes off. A "
+                f"something else -- BOTH the words and the picture. It is deferred, "
+                f"never removed: your character memory is not edited, and the item "
+                f"comes back in full on the shot that lifts, moves or removes what "
+                f"covers it. A "
                 f"reference is an instruction to REPRODUCE an image, so handing the "
                 f"model a picture of a thing that is under a skirt draws it through "
                 f"the skirt -- measured twice, including with the cover described as "

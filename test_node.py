@@ -1592,6 +1592,47 @@ def test_a_door_is_not_a_room():
               S.first_place(f"Ana walks into the {room}.") == room)
 
 
+def test_holding_an_item_back_never_costs_the_person():
+    """hide_item is surgical where scrub_removed is not, and that distinction is
+    the whole reason it exists.
+
+    scrub_removed drops a whole comma-separated fragment, which is right for a
+    garment that has come off. Used to hold a covered item back it took "green
+    dress, steel collar" down to nothing and the PERSON's line with it, leaving
+    shots with nobody described in them at all. That was reported, twice, as the
+    node removing things from the character memory.
+
+    This takes the item phrase and stops. The name always survives, whatever else
+    the entry held, and so does every other garment in it."""
+    for line, want in (
+            ("Ana: <Picture 1>, she, 28, chastity belt, jeans.",
+             "Ana: <Picture 1>, she, 28, jeans."),
+            ("Ana: she, 28, a steel chastity belt, a skirt.",
+             "Ana: she, 28, a skirt."),
+            ("Ana: chastity belt, jeans.", "Ana: jeans."),
+            ("Ana: a chastity belt.", "Ana.")):
+        got = S.hide_item(line, ["chastity belt"])
+        check(f"{line[:40]!r} -> {got!r}", got == want)
+    # The name is never lost, even when the item was the only thing in the entry.
+    for line in ("Ana: a chastity belt.", "Ana: chastity belt.",
+                 "Ana: <Picture 1>, a chastity belt."):
+        check(f"the name survives: {line[:34]!r}",
+              S.hide_item(line, ["chastity belt"]).startswith("Ana"))
+    # Everything else in the entry survives with it.
+    full = S.hide_item("McKenna: she, <Picture 1>, 22, blonde hair, blue eyes, "
+                       "mirrored steel collar with ring, chastity belt, skin "
+                       "tight shiny black PVC mini-skirt.", ["chastity belt"])
+    for keep in ("<Picture 1>", "blonde hair", "blue eyes", "steel collar",
+                 "mini-skirt", "22"):
+        check(f"kept: {keep}", keep in full)
+    check("...and only the belt is gone", "chastity belt" not in full)
+    # A line terminator is kept, or the next sheet line welds onto this one.
+    check("the full stop survives", full.rstrip().endswith("."))
+    # Nothing named, nothing changed.
+    same = "Ana: she, 28, jeans."
+    check("nothing to hide leaves it alone", S.hide_item(same, []) == same)
+
+
 def test_a_chastity_belt_is_underwear():
     """Asked for directly: "treat the chastity belt as underwear".
 
@@ -4147,6 +4188,7 @@ def main():
     test_one_beat_can_put_on_two_things()
     test_a_neck_is_not_behind_a_back()
     test_a_door_is_not_a_room()
+    test_holding_an_item_back_never_costs_the_person()
     test_a_chastity_belt_is_underwear()
     test_a_beat_names_the_sound_its_props_make()
     test_the_bed_is_built_from_the_scene()
