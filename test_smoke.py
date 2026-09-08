@@ -4154,6 +4154,65 @@ def test_letting_the_cover_fall_puts_it_back():
           str(named))
 
 
+def test_somebody_else_can_lift_your_skirt():
+    r"""Reported from a real shot: "Dana lifts up McKenna's skirt to check the
+    chastity belt" left the belt covered and its picture withheld.
+
+    The rule was right and the parse was not. _DISPLACE took a determiner of
+    the/her/his/their/a/an, which matches no POSSESSIVE NAME, and the apostrophe
+    is not in the [\w\- ] the garment itself is read with -- so the whole match
+    failed and the lift was invisible. One person lifting another's clothing is
+    the ordinary way this gets written.
+
+    Same fault as "enters McKenna's bedroom" on travel, in a different reader, so
+    both now use the same _DET_POSS rather than a second copy that can drift."""
+    print("\n=== somebody else can lift your skirt ===")
+    sheet = ("McKenna: she, 22, a chastity belt, a mini-skirt.\n"
+             "Dana: she, 35, black t-shirt, blue jeans.")
+    for beat in ("Dana lifts up McKenna's skirt to check the chastity belt.",
+                 "Dana lifts McKenna's skirt.",
+                 "Dana pulls McKenna's skirt aside."):
+        got = S.displaced_garments(beat, sheet)
+        check(f"displaced: {beat[:44]!r}", bool(got), str(got))
+    for beat in ("Dana lets McKenna's skirt fall.",
+                 "Dana smooths McKenna's skirt down."):
+        check(f"restored: {beat[:44]!r}",
+              bool(S.restored_garments(beat, sheet)),
+              str(S.restored_garments(beat, sheet)))
+    # A possessive is not a licence to match anything: a chin is still not a
+    # garment, and a name with no garment after it displaces nothing.
+    check("a chin is not displaced",
+          not S.displaced_garments("Dana lifts McKenna's chin.", sheet))
+
+    # END TO END on the reported shot: the belt shows while the skirt is up, and
+    # goes back under when it falls.
+    mem = ("McKenna: she, <Picture 1>, 22, a chastity belt <Picture 2>, "
+           "a mini-skirt.\nDana: she, 35, black t-shirt, blue jeans.")
+    FACE, BELT = torch.rand(1, H, W, 3), torch.rand(1, H, W, 3)
+    rows, ob = [], S.build_conditioning
+
+    def spy(clip, vae, av, p, *a, **k):
+        rows.append((p, len(k.get("refs") or [])))
+        return ob(clip, vae, av, p, *a, **k)
+    S.build_conditioning = spy
+    try:
+        run_node("A home.\n\nDana lifts up McKenna's skirt to check the "
+                 "chastity belt.\n\nMcKenna waits.", character_memory=mem,
+                 ref_image_1=FACE, ref_image_2=BELT)
+    finally:
+        S.build_conditioning = ob
+    check("the lifting shot carries the belt's picture", rows[0][1] == 2,
+          str([n for _, n in rows]))
+    check("...and does not call the skirt opaque over it",
+          "whole, opaque" not in rows[0][0], rows[0][0][-200:])
+    # ...and it STAYS up, because nothing in the next beat puts it back. That is
+    # the documented behaviour of a displacement and the reason restore verbs
+    # exist at all -- not an oversight to assert away.
+    check("...and stays up while nothing puts it back",
+          rows[1][1] == 2 and "whole, opaque" not in rows[1][0],
+          str([n for _, n in rows]))
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -4293,6 +4352,7 @@ def main():
     test_an_under_layer_belongs_to_somebody()
     test_the_picture_arrives_when_the_cover_moves()
     test_letting_the_cover_fall_puts_it_back()
+    test_somebody_else_can_lift_your_skirt()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

@@ -5621,7 +5621,7 @@ _DISPLACE = re.compile(
     r"lift(?:s|ed|ing)?|raise[sd]?|rais(?:es|ed|ing)|hoist(?:s|ed|ing)?|"
     r"hold(?:s|ing)?|held|gather(?:s|ed|ing)?|bunch(?:es|ed|ing)?)\s+"
     r"(?:(" + _DISPLACE_WAY + r")\s+)?"
-    r"((?:the|her|his|their|a|an)\s+)?([\w][\w\- ]{0,28}?)"
+    r"(" + _DET_POSS + r"\s+)?([\w][\w\- ]{0,28}?)"
     r"(?:\s+(" + _DISPLACE_WAY + r"))?"
     r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then)\b|$)", re.I)
 
@@ -5745,7 +5745,7 @@ _PUT_BACK = re.compile(
 # is the same condition displaced_garments uses.
 _PUT_BACK_NAMED = re.compile(
     r"\b" + _RESTORE_VERB + r"\s+"
-    r"(?:the|her|his|their|a|an)\s+([\w][\w\- ]{0,28}?)"
+    + _DET_POSS + r"\s+([\w][\w\- ]{0,28}?)"
     r"(?:\s+(?:fall|drop|down|back|straight|up|closed|shut|together))?"
     r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then|over|again)\b|$)", re.I)
 
