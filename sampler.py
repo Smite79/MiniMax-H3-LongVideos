@@ -4478,7 +4478,10 @@ _FASTEN_WEAK = (r"(?:chains?|ropes?|cords?|cables?|leash(?:es)?|leads?|straps?|"
 # sense is to take the collar off. Floor, ceiling and pillar were missing with it.
 _ANCHOR_POINT = re.compile(
     r"\b(?:" + _FASTEN_PART + r"|" + _FASTEN_S + r"|" + _FASTEN_WEAK + r")"
-    r"\b(?:\s+\S+){0,5}?\s+to\s+(?:the|a|an|her|his|their)\s+"
+    # One determiner list, in the engine, for the same reason the vocabularies
+    # moved there: this one and the engine's drifted apart and a phrasing either
+    # reader missed was a restraint the other half of the node did not know about.
+    r"\b(?:\s+\S+){0,5}?\s+to\s+" + engine.ANCHOR_DET +
     r"((?:bed\s*frames?|bed\s*heads?|headboards?|bed\s*posts?|beds?|rails?|railings?|"
     r"bars?|posts?|rings?|hooks?|pipes?|radiators?|chairs?|tables?|beams?|frames?|"
     r"grates?|grilles?|fences?|walls?|floors?|grounds?|ceilings?|pillars?|columns?|"

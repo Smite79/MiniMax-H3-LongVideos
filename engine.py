@@ -72,6 +72,30 @@ _ADJ = (r"(?:steel|iron|metal|leather|nylon|plastic|rubber|rope|chrome|brass|"
         r"black|silver|white|red|brown|padded|heavy|thin|short|long|thick|"
         r"duct|packing|electrical|zip)")
 
+# Body parts, for the hardware whose part is NOT a property of the item.
+#
+# A collar is the neck and handcuffs are the wrists, and those never need
+# looking up. A chain, a rope, straps and tape go wherever the beat puts them,
+# and reading their part off the table gave "locks a chain around her ankles"
+# as a chain on the WRISTS -- where it then collided with the cuffs already
+# there, two things drawn in one place. That is chains interfering.
+PARTS = (
+    (r"wrists?", "wrists"),
+    (r"ankles?", "ankles"),
+    (r"necks?|throats?", "neck"),
+    (r"mouths?", "mouth"),
+    (r"eyes?", "eyes"),
+    (r"elbows?", "elbows"),
+    (r"knees?", "knees"),
+    (r"thighs?", "thighs"),
+    (r"waists?", "waist"),
+    (r"arms?", "arms"),
+    (r"legs?", "legs"),
+    (r"hands?", "hands"),
+    (r"feet|foot", "feet"),
+)
+PART_VARIES = frozenset({"chain", "rope", "straps", "tape"})
+
 # Where a limb is held. These all describe the ARMS -- that is why a limb
 # position may never be attached to a collar.
 POSITIONS = (
@@ -232,8 +256,29 @@ def _outside_speech(text):
 
 _HW_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r")?\s+)?("
               + "|".join(p for p, _n, _pt in HARDWARE) + r")\b")
+_PART_ONE = _rx(r"\b(" + "|".join(p for p, _n in PARTS) + r")\b")
+# A NOUN carries a determiner, a number or an adjective; a VERB follows its
+# subject. "Sam chains her collar to the ring" introduces nothing to draw -- it
+# fastens the collar that is already named -- and reading that verb as an item
+# put a chain on the wrists of somebody with nothing on their wrists.
+#
+# "and" is deliberately absent: "...to the ring and chains her ankles together"
+# is a second verb, and letting a conjunction vouch for a noun brought the
+# phantom straight back.
+_NOUN_BEFORE = _rx(r"(?:\b(?:a|an|the|her|his|its|their|my|your|our|this|that|"
+                   r"these|those|one|two|three|several|more|another|in|with|by|"
+                   r"of|on|from)\b|[,;:(])\s*(?:" + _ADJ + r"\s+){0,2}$")
 _POSITION = [(_rx(r"\b" + p + r"\b"), name) for p, name in POSITIONS]
-_ANCHOR_AT = _rx(r"\bto\s+(?:the|a|an|her|his|their)\s+(" + ANCHORS + r")\b")
+# What can stand in front of an anchor. "one ring", "the other ring", "a second
+# hook" are the same fixture as "the ring", and the six-word list read them as no
+# anchor at all -- so a collar chained to ONE OF TWO rings was not a restraint at
+# all, nothing latched, and every later shot forgot it. Two people chained to two
+# rings lost both.
+ANCHOR_DET = (r"(?:the|a|an|her|his|its|their|one|another|each|either|that|"
+              r"this|both)\s+(?:(?:other|second|third|first|far|near|nearest|"
+              r"opposite|left|right|upper|lower|top|bottom|same|nearby|steel|"
+              r"iron|metal|heavy|small|large|wooden|old|thick)\s+){0,2}")
+_ANCHOR_AT = _rx(r"\bto\s+" + ANCHOR_DET + r"(" + ANCHORS + r")\b")
 _APPLY = _rx(r"\b(?:" + APPLY_VERB + r")\b")
 _RELEASE = _rx(r"\b(?:" + RELEASE_VERB + r")\b")
 _PLACE_IN = _rx(r"\b(?:in|into|inside|through|down|along|across|to|onto|at)\s+"
@@ -263,27 +308,120 @@ def hardware_spans(text):
     ALL of it, too. The old reader returned only the longest single match, so a
     beat that put on cuffs and a collar recorded one and lost the other for the
     rest of the film."""
-    out, seen = [], {}
-    for m in _HW_ONE.finditer(text or ""):
+    text = text or ""
+    parts = part_spans(text)
+    raw, verb_ats = [], []
+    for m in _HW_ONE.finditer(text):
         adj, noun = (m.group(1) or "").strip(), m.group(2)
         canon, part = next((n, pt) for p, n, pt in HARDWARE
                            if re.fullmatch(p, noun, re.I))
+        # A VERB IS NOT AN ITEM. Only the words that are also verbs need asking,
+        # and only "chain" is one that the table would otherwise turn into a
+        # restraint on a part the beat never mentions.
+        if canon == "chain" and not noun.lower().endswith("ed") \
+                and not _NOUN_BEFORE.search(text[:m.start()]):
+            verb_ats.append(m.start())
+            continue
         written = f"{adj} {noun}".strip().lower()
         # A PARTICIPLE FINDS IT AND DOES NOT NAME IT. "is handcuffed" is how the
         # passive voice writes hardware, but an item recorded as "handcuffed"
         # renders as "The handcuffed stay closed and fastened". Quote the noun.
         if noun.lower().endswith("ed"):
             written = f"{adj} {canon}".strip().lower()
-        if canon in seen:
-            # Same thing, described better the second time: keep the fuller
-            # wording. "collar" then "steel collar" is one collar.
-            i = seen[canon]
+        raw.append([canon, part, written, m.start()])
+    # WHERE IT GOES, for the things that go anywhere. Bound after every item is
+    # known, so the part attaches to the nearest one and a beat naming two of
+    # them does not give both the same place.
+    _ats = [(c, at) for c, _pt, _w, at in raw]
+    _tether = []
+    for row in raw:
+        if row[0] not in PART_VARIES:
+            continue
+        _pt = _nearest_part(parts, row[3], _ats)
+        if _pt:
+            row[1] = _pt
+        elif any(c != row[0] for c, _a in _ats) and _runs_to(text, row[3]):
+            # NO PART OF ITS OWN, beside something that has one, and joined by
+            # "to": it is that thing's TETHER, not a restraint holding a pair of
+            # wrists nobody mentioned. "clips a chain to her collar" was a chain
+            # on the wrists AND a collar on the neck -- two things to draw where
+            # the beat put one.
+            #
+            # "to" matters. "gags her with duct tape" names the gag's MATERIAL
+            # by the same shape, and folding that away lost the tape entirely.
+            _tether.append(row)
+    raw = [r for r in raw if r not in _tether]
+    # A VERB STILL FASTENS SOMETHING, and what it fastens is either an item the
+    # beat names or a part of the body. "...chains her collar to the ring and
+    # chains her ankles together" is both, in that order: the first verb belongs
+    # to the collar and introduces nothing, the second puts a chain on the
+    # ankles. Recorded one and lost the other, which is two restraints becoming
+    # one -- chains interfering.
+    for _vat in verb_ats:
+        _pt = _nearest_part(parts, _vat, _ats)
+        if _pt and not any(c == "chain" and pt == _pt for c, pt, _w, _a in raw):
+            raw.append(["chain", _pt, "chain", _vat])
+    # Nothing named at all: somebody is chained somewhere and the beat never
+    # says where on them. The anchor is still real, so it holds the body rather
+    # than inventing a pair of wrists to hold.
+    if verb_ats and not raw and anchor_in(text):
+        raw.append(["chain", "body", "chain", verb_ats[0]])
+    out, seen = [], {}
+    for canon, part, written, at in raw:
+        # Keyed by the PAIR. Two chains on two parts are two restraints -- a
+        # beat chaining a collar and the ankles recorded one and lost the other
+        # -- while "collar" then "steel collar" is one collar, same part, and
+        # keeps the fuller wording.
+        key = (canon, part)
+        if key in seen:
+            i = seen[key]
             if len(written) > len(out[i][2]):
                 out[i] = (canon, part, written, out[i][3])
             continue
-        seen[canon] = len(out)
-        out.append((canon, part, written, m.start()))
+        seen[key] = len(out)
+        out.append((canon, part, written, at))
     return out
+
+
+def part_spans(text):
+    """Every body part named, as (name, at)."""
+    out = []
+    for m in _PART_ONE.finditer(text or ""):
+        out.append((next(n for p, n in PARTS
+                         if re.fullmatch(p, m.group(1), re.I)), m.start()))
+    return out
+
+
+_RUNS_TO = _rx(r"^\s*\w*\s*(?:to|onto|from)\b")
+
+
+def _runs_to(text, at):
+    """Does the item at `at` run TO something -- is it a tether?
+
+    Read just past the word, so "a chain to her collar" and "a chain running to
+    the ring" both answer yes and "duct tape" answers no."""
+    return bool(_RUNS_TO.search(text[at:][_first_gap(text[at:]):])) \
+        or bool(anchor_in(text))
+
+
+def _first_gap(s):
+    """Index just past the first word of `s`."""
+    m = re.search(r"\s", s)
+    return m.start() if m else len(s)
+
+
+def _nearest_part(parts, at, ats):
+    """The part belonging to the item at `at`, or "".
+
+    English puts it after: "a chain around her ankles", "chains her ankles
+    together". So the first part named AFTER this item wins, unless another
+    item is named in between -- that one owns it instead."""
+    later = [(p, q) for p, q in parts if q > at]
+    for name, q in later:
+        if any(at < other < q for _c, other in ats):
+            break
+        return name
+    return ""
 
 
 def hardware_in(text):
@@ -856,7 +994,7 @@ class Person:
 
     def __init__(self, name):
         self.name = name
-        self.hardware = {}      # canonical -> Restraint
+        self.hardware = {}      # (canonical, part) -> Restraint
         self.worn = []          # garments on the body, as written
         self.removed = []       # garments taken off
         self.displaced = []     # pulled aside but still on
@@ -865,6 +1003,21 @@ class Person:
 
     def restrained(self):
         return bool(self.hardware)
+
+    def kinds(self):
+        """What is on, by canonical name, in the order it went on.
+
+        The key is a (name, part) pair so that a chain on the ankles and a chain
+        on the wrists can both exist. Almost nothing cares about the part, so it
+        asks here instead of unpacking the key."""
+        return [c for c, _pt in self.hardware]
+
+    def hw(self, canon, part=None):
+        """One restraint by name, or None. Give a part to pick between two."""
+        for (c, pt), r in self.hardware.items():
+            if c == canon and (part is None or pt == part):
+                return r
+        return None
 
     def __repr__(self):
         return (f"Person({self.name!r},hw={list(self.hardware)},"
@@ -912,10 +1065,10 @@ class SceneState:
         for canon, part, written, _at in hardware_spans(description or ""):
             if canon in staged_later:
                 continue
-            if canon not in p.hardware:
+            if (canon, part) not in p.hardware:
                 # applied_in = 0, so this never reads as "goes on during this
                 # shot" -- shots are numbered from 1.
-                p.hardware[canon] = Restraint(written or canon, part,
+                p.hardware[(canon, part)] = Restraint(written or canon, part,
                                               position_in(description or ""),
                                               anchor_in(description or ""), 0)
         for g in garments_in(description or ""):
@@ -966,23 +1119,23 @@ class SceneState:
             # near, and a collar held behind a back.
             spans = hardware_spans(beat)
             for canon, part, written, at in spans:
-                p.hardware[canon] = Restraint(
+                # KEYED BY THE PAIR. A chain on the ankles and a chain on the
+                # wrists are two restraints; keyed by name alone the second
+                # overwrote the first and one of them was never drawn again.
+                p.hardware[(canon, part)] = Restraint(
                     written or canon, part,
                     _nearest(position_spans(beat), at, spans),
                     _nearest(anchor_spans(beat), at, spans), shot)
-                changed["applied"].append((wearer, p.hardware[canon]))
-            anc = anchor_in(beat)
-            # A chain named beside another item is that item's TETHER, not a
-            # second restraint holding its own wrists. Fold it in, or the shot
-            # says a chain holds the wrists while a collar holds the neck and
-            # the model has two things to draw where there is one.
-            if anc and len(p.hardware) > 1 and "chain" in p.hardware:
-                for canon, r in p.hardware.items():
-                    if canon != "chain" and not r.anchor:
-                        r.anchor = anc
-                p.hardware.pop("chain", None)
-                changed["applied"] = [(w, r) for w, r in changed["applied"]
-                                      if r.item != "chain"]
+                changed["applied"].append((wearer, p.hardware[(canon, part)]))
+            # A chain named beside another item is that item's TETHER, and it
+            # is folded in by hardware_spans now, where the parts are known.
+            # Doing it here meant popping "chain" whenever one was named with an
+            # anchor -- which also popped a chain that had a part of its OWN, so
+            # "chains her collar to the ring and chains her ankles together"
+            # kept the collar and lost the ankles.
+            # Its anchor needs no transferring either: with the tether gone from
+            # the spans, the anchor binds to the nearest remaining item, which
+            # is the one it was always describing.
         elif releasing:
             # Whoever is actually wearing it. "The guard unlocks the handcuffs"
             # names only the agent, and taking the subject there tried to
@@ -991,10 +1144,14 @@ class SceneState:
             wearer = next((n for n in who if n in held),
                           held[0] if len(held) == 1 else subject)
             p = self.person(wearer)
-            named = [c for c, _pt, _w in hw if c in p.hardware]
+            # Released by NAME, whatever part it is on: an unlocking beat says
+            # "unlocks the chain", not which of two chains, and matching the
+            # pair left one fastened forever.
+            _kinds = {c for c, _pt, _w in hw}
+            named = [k for k in list(p.hardware) if k[0] in _kinds]
             if named:
-                for canon in named:
-                    changed["released"].append((wearer, p.hardware.pop(canon)))
+                for key in named:
+                    changed["released"].append((wearer, p.hardware.pop(key)))
             elif re.search(r"\b(?:them|it|her|him|everything|all\s+of\s+it)\b",
                            beat, re.I):
                 # "the guard releases her" names no item, so all of it comes off.

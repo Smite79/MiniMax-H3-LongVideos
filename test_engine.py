@@ -165,14 +165,73 @@ def test_a_chain_is_a_tether_not_a_second_restraint():
     st, shots = scene([
         "The guard locks a steel collar around Ana's neck and chains it to the wall.",
         "Ana sits down."])
-    hw = list(st.person("Ana").hardware)
+    hw = st.person("Ana").kinds()
     check(f"one item, not two: {hw}", hw == ["collar"], str(hw))
     # Guarded: with the item reader broken there is no collar to index, and a
     # KeyError reports as a crashed suite rather than as the failure it is.
     check("it carries the anchor",
-          "collar" in hw and st.person("Ana").hardware["collar"].anchor == "wall")
+          bool(st.person("Ana").hw("collar"))
+          and st.person("Ana").hw("collar").anchor == "wall")
     check("the shot says so", "fast to the wall" in shots[1], shots[1])
     check("no loose chain in the text", "chain" not in shots[1], shots[1])
+
+
+def test_chains_do_not_interfere():
+    """Reported as chains interfering with each other.
+
+    "chain" is a verb as often as it is a noun, and its part is whatever the
+    beat says -- neither of which the table could express. So every chain
+    landed on the WRISTS, where it collided with the cuffs already there, and a
+    verb put one on somebody with nothing on their wrists at all."""
+    print("\n=== chains do not interfere ===")
+    P = E.hardware_spans
+
+    def kinds(beat):
+        return [(c, pt) for c, pt, _w, _a in P(beat)]
+
+    # THE VERB IS NOT AN ITEM.
+    check("a verb introduces nothing to draw",
+          kinds("Sam chains her collar to the ring.") == [("collar", "neck")],
+          str(kinds("Sam chains her collar to the ring.")))
+    check("...even with no object to fasten",
+          kinds("He chains it shut.") == [], str(kinds("He chains it shut.")))
+    check("...and it does not reach the wrists",
+          "wrists" not in str(kinds(
+              "Sam cuffs her wrists behind her back and chains her collar to "
+              "the ring.")[1:]))
+    # THE PART COMES FROM THE BEAT.
+    check("a chain goes where the beat puts it",
+          kinds("Sam locks a chain around her ankles.") == [("chain", "ankles")],
+          str(kinds("Sam locks a chain around her ankles.")))
+    check("...and a verb still fastens what it names",
+          kinds("Sam chains her ankles together.") == [("chain", "ankles")],
+          str(kinds("Sam chains her ankles together.")))
+    # TWO CHAINS ARE TWO RESTRAINTS. Keyed by name alone, the second overwrote
+    # the first and one of them was never drawn again.
+    two = kinds("Sam chains Kate's collar to the ring and chains her ankles "
+                "together.")
+    check("a second chain is not eaten by the first",
+          two == [("collar", "neck"), ("chain", "ankles")], str(two))
+    both = kinds("Sam locks a chain around her ankles and a chain around her "
+                 "wrists.")
+    check("...two of a kind on two parts both survive",
+          both == [("chain", "ankles"), ("chain", "wrists")], str(both))
+    # A TETHER IS NOT A RESTRAINT OF ITS OWN -- but a material is not a tether.
+    check("a chain running TO something is that thing's tether",
+          kinds("Sam clips a chain to her collar.") == [("collar", "neck")],
+          str(kinds("Sam clips a chain to her collar.")))
+    check("...while a material is kept",
+          ("tape", "wrists") in kinds("Dan gags her with duct tape."),
+          str(kinds("Dan gags her with duct tape.")))
+    # ONE OF TWO RINGS IS STILL A RING. The determiner list was six words, so a
+    # collar chained to "one ring" was not a restraint at all and nothing about
+    # it survived the shot it went on in.
+    check("an anchor takes any determiner",
+          E.anchor_in("Sam chains Kate's collar to one ring.") == "ring")
+    check("...and a qualifier before it",
+          E.anchor_in("Sam chains Mara's collar to the other ring.") == "ring")
+    check("...without swallowing ordinary prose",
+          E.anchor_in("Kate walks to the far side of the room.") == "")
 
 
 def test_a_modifier_belongs_to_its_own_item():
@@ -184,11 +243,12 @@ def test_a_modifier_belongs_to_its_own_item():
         "The guard handcuffs Ana's wrists behind her back and locks a steel "
         "collar around her neck, chained to the wall.",
         "Ana sits down."])
-    hw = st.person("Ana").hardware
+    ana = st.person("Ana")
     # Guarded: with the item reader broken one of these is missing entirely, and
     # a KeyError reports as a crashed suite rather than as the failure it is.
-    check(f"both items recorded: {list(hw)}", "handcuffs" in hw and "collar" in hw)
-    c, k = hw.get("handcuffs"), hw.get("collar")
+    check(f"both items recorded: {ana.kinds()}",
+          "handcuffs" in ana.kinds() and "collar" in ana.kinds())
+    c, k = ana.hw("handcuffs"), ana.hw("collar")
     check("cuffs take the position", bool(c) and c.position == "behind the back")
     check("...and not the wall", bool(c) and c.anchor == "")
     check("the collar takes the wall", bool(k) and k.anchor == "wall")
@@ -383,6 +443,7 @@ def main():
     test_it_comes_off_when_the_text_takes_it_off()
     test_the_shot_that_applies_says_both_ends()
     test_a_chain_is_a_tether_not_a_second_restraint()
+    test_chains_do_not_interfere()
     test_a_modifier_belongs_to_its_own_item()
     test_a_spoken_name_is_not_a_staged_one()
     test_fastening_something_to_a_collar_does_not_date_the_collar()
