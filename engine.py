@@ -138,14 +138,32 @@ _ROOM_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|
 # Multi-word undergarments come FIRST, so the alternation prefers "chastity belt"
 # over the bare "belt" further down -- otherwise the item was recorded as a belt
 # and lost the half that says which kind.
-_GARMENT = (r"chastity[\s-]*(?:belts?|devices?|cages?)|g[\s-]?strings?|"
-            r"boxer[\s-]+shorts?|suspender[\s-]+belts?|garter[\s-]+belts?|"
-            r"thongs?|knickers|briefs|boxers|camisole|corset|slip|lingerie|"
-            r"shirt|blouse|top|t-?shirt|vest|jumper|sweater|hoodie|cardigan|"
-            r"jacket|coat|dress|skirt|trousers|pants|jeans|shorts|leggings|"
-            r"tights|socks|stockings|shoes|boots|heels|gloves|scarf|hat|cap|"
-            r"bra|knickers|panties|underwear|briefs|nappy|diaper|robe|gown|"
-            r"apron|uniform|overalls|dungarees|belt")
+# THE GARMENT VOCABULARY. One list, because there were two and they disagreed --
+# the sampler's had thong and no chastity belt, the engine's had chastity belt and
+# no thong and matched the bare "belt" inside it, so the item came back as a belt.
+# Both were fixed on the same day from opposite ends, which is what a second copy
+# of one idea costs.
+#
+# MULTI-WORD FIRST, always. Alternation is leftmost-first at each position, so
+# "chastity belt" has to be offered before "belt" or the shorter one wins and the
+# half that says which kind is lost.
+GARMENT_PHRASES = (r"chastity[\s-]*(?:belts?|devices?|cages?)|g[\s-]?strings?|"
+                   r"boxer[\s-]+shorts?|sports?[\s-]+bras?|body[\s-]?suits?|"
+                   r"suspender[\s-]+belts?|garter[\s-]+belts?")
+GARMENT_WORDS = (r"shirt|blouse|top|t-shirt|tshirt|dressing-gown|vest|waistcoat|"
+                 r"gilet|jumper|sweater|"
+                 r"sweatshirt|hoodie|cardigan|jacket|blazer|coat|anorak|parka|"
+                 r"poncho|cloak|dress|gown|skirt|kilt|sari|kimono|trousers|pants|"
+                 r"jeans|slacks|chinos|shorts|leggings|joggers|tracksuit|tights|"
+                 r"stockings|socks|shoes|boots|trainers|sneakers|sandals|heels|"
+                 r"slippers|gloves|mittens|scarf|hat|cap|beanie|tie|apron|"
+                 r"overalls|dungarees|uniform|robe|pyjamas|pajamas|nightdress|"
+                 r"nightie|swimsuit|bikini|trunks|romper|jumpsuit|"
+                 r"bra|bralette|brassiere|camisole|undershirt|corset|bustier|"
+                 r"slip|lingerie|knickers|panties|thong|briefs|boxers|underwear|"
+                 r"undies|undercloth|jockstrap|loincloth|nappy|diaper|"
+                 r"clothes|clothing|outfit")
+_GARMENT = GARMENT_PHRASES + r"|" + GARMENT_WORDS
 
 # Garment verbs. A garment has three states -- on, off, pulled aside -- and the
 # shot that CHANGES one has to say both ends of the change, or the model is free
@@ -330,6 +348,43 @@ def garments_in(text):
             out.append(phrase)
     return out
 
+
+
+# Hardware, not clothing. Taking clothes off does not unlock anything, so these
+# are kept out of the garment answer -- the standing rule is that hardware is
+# cleared by an explicit `remove:` and by nothing else.
+_NOT_CLOTHING = re.compile(
+    r"^(?:handcuffs?|cuffs?|shackles?|manacles?|chains?|ropes?|cords?|straps?|"
+    r"collars?|gags?|blindfolds?|restraints?|bindings?|tape|ties?|harness|"
+    r"straitjacket|spreader|hogtie|clamps?|clips?)$", re.I)
+_PHRASE_ONE = _rx(r"\b(?:" + GARMENT_PHRASES + r")\b")
+_WORD_ONE = _rx(r"^(?:" + GARMENT_WORDS + r")s?$")
+
+
+def garment_words(text):
+    """Every garment named, as HEAD WORDS, restraints excluded.
+
+    What the wardrobe logic tracks and compares: ["jeans", "chastity belt"]. Its
+    sister garments_in keeps the adjectives, because a shot has to SAY "blue
+    jeans" while the tracking only has to know they are jeans.
+
+    Multi-word entries are read first and their words removed, so the single-word
+    pass cannot also find "belt" inside "chastity belt" and record the item twice
+    under two names."""
+    text = text or ""
+    out = []
+    for m in _PHRASE_ONE.finditer(text):
+        phrase = re.sub(r"[\s-]+", " ", m.group(0)).strip().lower()
+        if phrase not in out:
+            out.append(phrase)
+    text = _PHRASE_ONE.sub(" ", text)
+    for word in re.findall(r"\b[\w-]{3,}\b", text):
+        low = word.lower().strip("-")
+        if low in out or _NOT_CLOTHING.match(low):
+            continue
+        if _WORD_ONE.match(low):
+            out.append(low)
+    return out
 
 def posture_in(text):
     """The posture this beat puts a body in. '' when it does not."""

@@ -5944,54 +5944,14 @@ def infer_removals(beat, scene):
 #
 # Anything this misses stays described, and the note says which entries were cleared,
 # so a gap is visible rather than silent.
-_GARMENT_WORD = re.compile(
-    r"^(?:shirt|t-shirt|tshirt|top|blouse|jumper|sweater|sweatshirt|hoodie|cardigan|"
-    r"jacket|coat|blazer|vest|waistcoat|gilet|dress|gown|skirt|trousers|pants|jeans|"
-    r"leggings|shorts|tights|stockings|socks|boots|shoes|trainers|sneakers|sandals|"
-    r"heels|slippers|hat|cap|beanie|scarf|gloves|mittens|tie|apron|overalls|dungarees|"
-    r"uniform|robe|dressing-gown|pyjamas|pajamas|nightdress|nightie|swimsuit|bikini|"
-    r"trunks|briefs|boxers|underwear|undershirt|underclothes|bra|knickers|panties|"
-    r"thong|lingerie|camisole|slip|corset|romper|jumpsuit|tracksuit|anorak|parka|"
-    r"poncho|kilt|sari|kimono|cloak|clothes|clothing|outfit)s?$", re.I)
-
-
-# Undergarments whose name is more than one word. garments_in reads word by word,
-# so these were invisible to it: "chastity belt" is neither "chastity" nor "belt",
-# and bare "belt" cannot go in the single-word list because a belt through trouser
-# loops is not underwear. Read as a unit, before the words are split up.
-_MULTIWORD_GARMENT = re.compile(
-    r"\bchastity[\s-]*(?:belts?|devices?|cages?)|\bg[\s-]?strings?|"
-    r"\bboxer[\s-]+shorts?|\bsports?[\s-]+bras?|\bbody[\s-]?suits?|"
-    r"\bsuspender[\s-]+belts?|\bgarter[\s-]+belts?", re.I)
-
-
-def garments_in(text):
-    """Every garment the given wardrobe text names, in order.
-
-    Restraints are excluded on purpose: taking clothes off does not unlock anything,
-    and the standing rule is that hardware is cleared by an explicit `remove:` and by
-    nothing else.
-
-    A chastity belt is UNDERWEAR here, not hardware. It is worn under the clothes,
-    it comes off with them rather than with a key, and every other garment reader
-    already treats it that way -- this one did not, so it was the one thing in the
-    sheet that nothing tracked as clothing."""
-    text = text or ""
-    out = []
-    # Multi-word first, and the words they used are taken out of the text so the
-    # single-word pass cannot also read "belt" out of "chastity belt".
-    for m in _MULTIWORD_GARMENT.finditer(text):
-        phrase = re.sub(r"[\s-]+", " ", m.group(0)).strip().lower()
-        if phrase not in out:
-            out.append(phrase)
-    text = _MULTIWORD_GARMENT.sub(" ", text)
-    for word in re.findall(r"\b[\w-]{3,}\b", text or ""):
-        low = word.lower().strip("-")
-        if low in out or _RESTRAINT_WORD.match(low):
-            continue
-        if _GARMENT_WORD.match(low):
-            out.append(low)
-    return out
+# GARMENTS LIVE IN THE ENGINE. There were two vocabularies here and in
+# engine.py and they disagreed -- this one had thong and no chastity belt,
+# that one had chastity belt and matched the bare "belt" inside it. Both
+# were fixed on the same day from opposite ends. One list now, and the two
+# readers that need different answers are built on it rather than on each
+# other: garment_words gives head words for tracking, garments_in keeps the
+# adjectives for the text.
+garments_in = engine.garment_words
 
 
 # A beat that undresses somebody completely without naming one garment. Every other
