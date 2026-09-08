@@ -796,6 +796,37 @@ def bare_clause(gone, covers=None, worn=""):
     return " " + joined + ", with nothing else worn there."
 
 
+def hide_tag_for(text, items):
+    """Take the <Picture N> off a named item, keeping the item's words.
+
+    A REFERENCE IS AN INSTRUCTION TO REPRODUCE AN IMAGE, and at the near-clean
+    ref_noise_aug this node runs at, it is close to the strongest thing in the
+    prompt -- stronger than any sentence about what is on top of what. So a
+    picture of a chastity belt, sent in a shot where the belt is under a pair of
+    jeans, is an instruction to draw the belt: reported as it poking through the
+    clothes, immediately after the picture was made to travel with the words.
+
+    The words and the picture are separable, and they answer different needs. The
+    author's item stays in the text, because deleting it is what put their own
+    wording out of the prompt three times over. Its reference waits for the cover
+    to come off, because that is the half actually drawing it on top.
+
+    The tag is removed, not just the image withheld: refs are routed BY the tags,
+    and a tag naming a picture the shot does not carry is its own bug."""
+    out = str(text or "")
+    for item in items or []:
+        if not str(item).strip():
+            continue
+        w = re.escape(str(item).strip())
+        # Either side of the item, which is where a sheet puts it: "<Picture 2> a
+        # chastity belt" and "a chastity belt <Picture 2>" are both written.
+        out = re.sub(r"<\s*Picture\s*\d+\s*>\s*((?:a|an|the)\s+)?" + w,
+                     lambda m: (m.group(1) or "") + str(item).strip(), out, flags=re.I)
+        out = re.sub(w + r"\s*<\s*Picture\s*\d+\s*>", str(item).strip(), out,
+                     flags=re.I)
+    return out
+
+
 def is_undergarment(item):
     """Is this one of the things that is ALWAYS worn under clothes?
 
@@ -840,9 +871,20 @@ def under_clause(pairs):
     def _one(u, o):
         # Each garment takes its own number: panties ARE worn, a bra IS; jeans
         # cover THEM, a skirt covers IT.
+        #
+        # THE COVER IS THE PART TO DESCRIBE. "the belt is under the jeans" asks
+        # the model to work out an occlusion from a spatial word, which it does
+        # badly, and the belt came through the denim. What it renders well is a
+        # surface: say the jeans are whole and unbroken over that part of the
+        # body and there is nothing for the belt to show through. Positively
+        # phrased, as everything here has to be at cfg 1 -- this describes the
+        # cloth that IS there, never the thing that must not show.
+        them = "them" if _plural(o) else "it"
+        cover = ("cover" if _plural(o) else "covers")
         return (f"The {u} {'are' if _plural(u) else 'is'} worn under the {o}, "
-                f"covered by {'them' if _plural(o) else 'it'} and showing only "
-                f"as an outline.")
+                f"against the skin and beneath {them}. The {o} {cover} that part "
+                f"of the body completely: whole, opaque and unbroken over it, "
+                f"the outermost thing there and the only one in view.")
 
     return " " + " ".join(_one(u, o) for u, o in pairs[:2])
 
@@ -7693,6 +7735,12 @@ class H3LongVideos:
             shot_scene = scrub_removed(
                 "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
                 visible + _hidden)
+            # ...and the covered item keeps its WORDS but loses its PICTURE. A
+            # reference is an instruction to reproduce an image and outweighs any
+            # sentence about what is on top of what, so sending a picture of the
+            # belt while it is under the jeans draws the belt. Reported as it
+            # poking through the clothes. See hide_tag_for.
+            shot_scene = hide_tag_for(shot_scene, _worn_under)
             _under = under_clause([(u, covers.get(u, "")) for u in _worn_under])
             # A READING COPY, never emitted. The sheet is sent to the model exactly
             # as written; this is only what the node consults when deciding whether

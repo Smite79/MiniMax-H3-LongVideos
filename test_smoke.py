@@ -1125,8 +1125,12 @@ def test_a_beat_can_name_what_the_layering_hid():
     check("the sheet keeps it", "chastity belt" in sh[0].lower(), sh[0][:160])
     check("...placed under the jeans",
           "worn under the jeans" in sh[0].lower(), sh[0][:220])
-    check("...showing only as an outline",
-          "showing only as an outline" in sh[0].lower(), sh[0][:220])
+    check("...and the jeans are described as covering it",
+          "whole, opaque and unbroken" in sh[0].lower(), sh[0][:260])
+    # The PICTURE waits even though the words do not: a reference reproduces
+    # an image and outweighs any sentence about what is on top of what.
+    check("...and its picture waits for the cover to come off",
+          "<Picture 2>" not in sh[0], sh[0][:220])
     check("the beat still says it", "chastity belt" in sh[1].lower(), "")
     check("...word for word, unedited",
           "runs a hand over the chastity belt under her jeans" in sh[1], "")
@@ -1211,10 +1215,10 @@ def test_the_only_tag_being_on_a_covered_thing():
     # The picture travels with the words. The tag is how ref_image_N reaches
     # the shot at all, so withholding it lost the reference -- and a picture
     # the text never claims is read as an extra subject.
-    check("the picture rides along while it is covered",
-          rows[0][1] == 1 and rows[1][1] == 1, str([n for _, n in rows]))
-    check("...and so do the words",
-          all("chastity" in p.lower() for p, _ in rows[:2]), "")
+    check("the picture waits while it is covered",
+          rows[0][1] == 0 and rows[1][1] == 0, str([n for _, n in rows]))
+    check("...but the words do not",
+          all("chastity" in p.lower() for p, _ in rows[:2]), rows[0][0][-160:])
     check("...placed under what covers it",
           all("worn under" in p.lower() for p, _ in rows[:2]),
           rows[0][0][-200:])
@@ -1255,15 +1259,15 @@ def test_an_object_tag_works_without_a_face_picture():
         # The tag is how ref_image_N reaches the shot, so withholding it lost
         # the reference altogether -- and a picture the text never claims is
         # read as an extra subject. It travels with the words now.
-        check(f"{label}: carried while covered",
-              "BELT" in got[0] and "BELT" in got[1], str(got))
-        check(f"{label}: and still there uncovered", "BELT" in got[2], str(got))
+        check(f"{label}: picture waits while covered",
+              "BELT" not in got[0] and "BELT" not in got[1], str(got))
+        check(f"{label}: and arrives uncovered", "BELT" in got[2], str(got))
     # A face picture alongside it still behaves, and still travels every shot.
     got = imgs("Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.")
     check("with a face too, the face is always there",
           all("FACE" in g for g in got), str(got))
-    check("...and the belt in every shot too",
-          all("BELT" in g for g in got), str(got))
+    check("...and the belt from the shot that uncovers it",
+          "BELT" not in got[0] and "BELT" in got[2], str(got))
 
 
 def test_an_untagged_picture_defeats_the_layering():
@@ -3920,6 +3924,56 @@ def test_a_collar_in_the_sheet_is_held_like_hardware():
         check(f"shot {i} holds it", "closed and fastened" in s, s[:180])
 
 
+def test_an_undergarment_keeps_its_words_and_waits_for_its_picture():
+    """The two halves of layering an under-garment, which are NOT the same
+    question and were got wrong in both directions before this settled.
+
+      WORDS   stay. Deleting the author's item is what put their own wording out
+              of the prompt, reported three times, the last a chastity belt with
+              a reference attached to it.
+      PICTURE waits. A reference is an instruction to reproduce an image and at
+              near-clean ref_noise_aug it outweighs any sentence about what is on
+              top of what -- so a picture of the belt, in a shot where the belt is
+              under the jeans, draws the belt. Reported as it poking through the
+              clothes, one commit after the picture was made to travel.
+
+    The tag goes with the picture rather than the image merely being withheld,
+    because refs are routed BY the tags and a tag naming a picture the shot does
+    not carry is its own bug.
+
+    Nothing here comes from a beat: the sheet is the only place the belt is
+    named, so this fails if the sheet stops carrying it."""
+    print("\n=== an undergarment keeps its words, its picture waits ===")
+    mem = "Ana: <Picture 1>, she, 28, blue jeans, a chastity belt <Picture 2>."
+    P = ("A room.\n\nAna stands by the window.\n\n"
+         "Ana takes off her jeans.\n\nAna waits.")
+    img = torch.rand(1, H, W, 3)
+    sh = [b.split("]", 1)[1] for b in
+          run_node(P, plan_only=True, character_memory=mem,
+                   ref_image_1=img, ref_image_2=img)[3].split("[Shot ")[1:]]
+    covered, bare = sh[0], sh[2]
+    # On the SHEET LINE, not merely somewhere in the shot: the under-clause names
+    # the belt too, so checking the whole shot passed even with the sheet scrubbed
+    # -- green for the wrong reason, and the wrong reason was the actual report.
+    sheet_line = [l for l in covered.split(chr(10)) if l.strip().startswith("Ana:")]
+    check("the character memory line survives", bool(sheet_line), covered[:200])
+    check("...still carrying the belt",
+          bool(sheet_line) and "chastity belt" in sheet_line[0].lower(),
+          (sheet_line[0] if sheet_line else covered)[:200])
+    check("...and says it is under the jeans",
+          "worn under the blue jeans" in covered.lower()
+          or "worn under the jeans" in covered.lower(), covered[:260])
+    check("...and describes the jeans as covering it",
+          "whole, opaque and unbroken" in covered.lower(), covered[:260])
+    check("...while its picture waits", "<Picture 2>" not in covered, covered[:200])
+    check("...and the person's own picture does not",
+          "<Picture 1>" in covered, covered[:200])
+    check("the uncovered shot has both", "chastity belt" in bare.lower()
+          and "<Picture 2>" in bare, bare[:220])
+    check("...and stops calling it covered",
+          "whole, opaque and unbroken" not in bare.lower(), bare[:220])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -4055,6 +4109,7 @@ def main():
     test_hardware_waits_for_the_beat_that_puts_it_on()
     test_the_applying_shot_says_where_the_limbs_finish()
     test_a_collar_in_the_sheet_is_held_like_hardware()
+    test_an_undergarment_keeps_its_words_and_waits_for_its_picture()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
