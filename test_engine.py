@@ -266,6 +266,59 @@ def test_fastening_something_to_a_collar_does_not_date_the_collar():
           not E.hardware_in("Dana clips a lead to it"))
 
 
+def test_a_name_is_matched_case_sensitively():
+    """Found by comparing the two files rather than by a report.
+
+    The sampler matched names case-SENSITIVELY, with the reason written beside
+    it: prose capitalises a name, and matching without case makes the word "will"
+    find a character called Will and "grace" find Grace. This file matched
+    case-insensitively and had that bug sitting in it, unreported, because the
+    two files each worked out "who does this beat name" separately.
+
+    One reader now, names_in, and both use it."""
+    print("\n=== a name is matched case-sensitively ===")
+    check("a lowercase 'will' is not Will",
+          E.names_in("The guard will lock the door.", ["Will", "Guard"]) == [],
+          str(E.names_in("The guard will lock the door.", ["Will", "Guard"])))
+    check("...and the real Will still is",
+          E.names_in("Will locks the door.", ["Will"]) == ["Will"])
+    check("'says grace' is not Grace",
+          E.names_in("She says grace.", ["Grace"]) == [])
+    # The two things it already had to do, kept.
+    check("a spoken name is not staged",
+          E.names_in("Dana calls: <d>McKenna?</d>", ["Dana", "McKenna"]) == ["Dana"])
+    check("...and the order is the sentence's",
+          E.names_in("Dana handcuffs McKenna.", ["McKenna", "Dana"])
+          == ["Dana", "McKenna"])
+
+
+def test_the_passive_voice_puts_hardware_on():
+    """Also found by comparison. "McKenna is handcuffed by Dana" is the ordinary
+    way to write it, and this file read NO hardware in it at all -- the table had
+    nouns only, and "handcuffed" is not "handcuffs". The sampler's restraint
+    reader has carried the participles for a long time.
+
+    The participle finds it and never names it: an item recorded as "handcuffed"
+    renders as "The handcuffed stay closed and fastened"."""
+    print("\n=== the passive voice puts hardware on ===")
+    for beat, cast, wearer, item in (
+            ("McKenna is handcuffed by Dana.", ("Dana", "McKenna"), "McKenna",
+             "handcuffs"),
+            ("Ana is collared by the guard.", ("Ana", "Guard"), "Ana", "collar"),
+            ("Ana is gagged.", ("Ana",), "Ana", "gag")):
+        st = E.SceneState()
+        st.read(beat, cast=cast, shot=1)
+        got = [r.item for r in st.person(wearer).hardware.values()]
+        check(f"{beat[:34]!r} -> {got}", item in got, str(got))
+    # ...and the wording is the noun, not the participle.
+    st = E.SceneState()
+    st.read("McKenna is handcuffed by Dana.", cast=("Dana", "McKenna"), shot=1)
+    said = st.continuity(described=["McKenna"])
+    check("the sentence says handcuffs", "handcuffed stay" not in said, said[:120])
+    check("...and the agent wears nothing",
+          not st.person("Dana").restrained())
+
+
 def test_nothing_is_said_twice():
     """The old engine restated the same fact from several readers at once and
     the guards reached 65% of a shot against a 12% beat."""
@@ -333,6 +386,8 @@ def main():
     test_a_modifier_belongs_to_its_own_item()
     test_a_spoken_name_is_not_a_staged_one()
     test_fastening_something_to_a_collar_does_not_date_the_collar()
+    test_a_name_is_matched_case_sensitively()
+    test_the_passive_voice_puts_hardware_on()
     test_nothing_is_said_twice()
     test_a_garment_change_says_both_ends()
     test_pulled_aside_is_not_taken_off()

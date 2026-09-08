@@ -47,23 +47,23 @@ import re
 # Hardware, and the part each kind holds. The part is a property of the ITEM --
 # this is the table whose absence produced "holding the neck behind the back".
 HARDWARE = (
-    (r"hand\s?cuffs?", "handcuffs", "wrists"),
+    (r"hand\s?cuffs?|handcuffed", "handcuffs", "wrists"),
     (r"leg\s?irons?", "leg irons", "ankles"),
     (r"ankle\s+(?:cuffs?|chains?|straps?)", "ankle cuffs", "ankles"),
-    (r"shackles?", "shackles", "ankles"),
-    (r"manacles?", "manacles", "wrists"),
+    (r"shackles?|shackled", "shackles", "ankles"),
+    (r"manacles?|manacled", "manacles", "wrists"),
     (r"zip\s?ties?|cable\s?ties?", "zip ties", "wrists"),
-    (r"collars?|chokers?", "collar", "neck"),
-    (r"leash(?:es)?", "leash", "neck"),
-    (r"gags?", "gag", "mouth"),
-    (r"blindfolds?", "blindfold", "eyes"),
+    (r"collars?|chokers?|collared", "collar", "neck"),
+    (r"leash(?:es)?|leashed", "leash", "neck"),
+    (r"gags?|gagged", "gag", "mouth"),
+    (r"blindfolds?|blindfolded", "blindfold", "eyes"),
     (r"harness(?:es)?", "harness", "body"),
     (r"spreader\s+bars?", "spreader bar", "ankles"),
     (r"straitjackets?", "straitjacket", "arms"),
     (r"ropes?|cords?|twine", "rope", "wrists"),
     (r"straps?", "straps", "wrists"),
     (r"chains?", "chain", "wrists"),
-    (r"cuffs?", "cuffs", "wrists"),
+    (r"cuffs?|cuffed", "cuffs", "wrists"),
     (r"tape", "tape", "wrists"),
 )
 # Material and colour survive because they decide what the thing looks like:
@@ -269,6 +269,11 @@ def hardware_spans(text):
         canon, part = next((n, pt) for p, n, pt in HARDWARE
                            if re.fullmatch(p, noun, re.I))
         written = f"{adj} {noun}".strip().lower()
+        # A PARTICIPLE FINDS IT AND DOES NOT NAME IT. "is handcuffed" is how the
+        # passive voice writes hardware, but an item recorded as "handcuffed"
+        # renders as "The handcuffed stay closed and fastened". Quote the noun.
+        if noun.lower().endswith("ed"):
+            written = f"{adj} {canon}".strip().lower()
         if canon in seen:
             # Same thing, described better the second time: keep the fuller
             # wording. "collar" then "steel collar" is one collar.
@@ -778,6 +783,29 @@ _POSTURE_OF = _POSTURE_OF + (
     ("curled up", _rx(r"\b(?:curled\s+up|curls?\s+up|foetal|fetal)\b")),
 )
 
+
+def names_in(beat, cast):
+    """Names this beat STAGES, in the order the sentence puts them.
+
+    Case-SENSITIVE, and that is not fussiness: prose capitalises a name, and
+    matching without case makes the word "will" find a character called Will and
+    "grace" find Grace. The sampler had that fixed and this file did not, which
+    is what two copies of one idea buys you.
+
+    Speech-stripped, for the same reason it is everywhere else -- "McKenna, where
+    are you?" is how absence gets written, and reading it as presence put a whole
+    sheet entry into a shot the person is not in."""
+    staged = _outside_speech(beat or "")
+    hits = []
+    for n in cast or []:
+        if not n:
+            continue
+        m = re.search(r"\b" + re.escape(str(n)) + r"\b", staged)
+        if m:
+            hits.append((m.start(), n))
+    return [n for _at, n in sorted(hits)]
+
+
 # ---------------------------------------------------------------------------
 # STATE. One object knows what is true, and everything a shot says is rendered
 # from it -- so two clauses cannot contradict each other, because there is only
@@ -920,12 +948,7 @@ class SceneState:
         # ...and read from the STAGED half only. A name inside a line of dialogue
         # is being said, not staged: "Dan says: 'McKenna, put the cuffs on'"
         # would otherwise hand McKenna hardware in a shot she is not in.
-        staged = _outside_speech(beat)
-        who = sorted(
-            (n for n in cast
-             if re.search(r"\b" + re.escape(n) + r"\b", staged, re.I)),
-            key=lambda n: re.search(r"\b" + re.escape(n) + r"\b", staged,
-                                    re.I).start())
+        who = names_in(beat, cast)
         subject = who[0] if who else next(iter(list(self.people) or list(cast)
                                                or [""]))
 

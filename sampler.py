@@ -392,9 +392,11 @@ def sheet_for_beat(sheet, beat, previous=None):
     # McKenna and says: 'McKenna, wait'" keeps her, because the staging half
     # names her. Only a name that appears nowhere but inside the speech is
     # dropped.
-    _staged = _outside_speech(beat or "")
-    named = [n for n, _ in rows
-             if n and re.search(r"\b" + re.escape(n) + r"\b", _staged)]
+    # One reader, in the engine: it strips speech and matches case-sensitively,
+    # and this file's rows keep their own order because nothing here needs the
+    # sentence order the engine's wearer logic does.
+    _here = set(engine.names_in(beat, [n for n, _ in rows if n]))
+    named = [n for n, _ in rows if n in _here]
     # THE WEARER of anything the beat handles. "Dan unlocks the chastity belt"
     # names only Dan, so the shot described only Dan -- and her sheet line went,
     # taking BOTH her <Picture N> tags with it. The shot then unlocked her belt
