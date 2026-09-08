@@ -3893,6 +3893,47 @@ def test_a_collar_in_the_sheet_is_held_like_hardware():
         check(f"shot {i} holds it", "closed and fastened" in s, s[:180])
 
 
+def test_layer_wardrobe_can_be_turned_off():
+    """Reported twice: items disappearing out of the character memory, the second
+    time "a chastity belt with a picture reference and it was dropped".
+
+    The layering was doing it on purpose. A sheet listing jeans and a belt is read
+    as the belt being UNDER them, and a covered garment is left out of the shot
+    text -- with its <Picture N> -- because a described thing is a drawn thing and
+    it would be drawn over its cover. Three earlier fixes built that, the suite
+    pins it, and the info report names what it is holding back.
+
+    So it stays on, and it is now switchable. Breaking the layering for everybody
+    to fix one scene would have traded a reported bug for a worse one; a switch
+    costs one widget, which is why the ceiling in test_node moved by exactly
+    one."""
+    print("\n=== layer_wardrobe can be turned off ===")
+    mem = ("Ana: <Picture 1>, she, 28, grey shirt, jeans, "
+           "a steel chastity belt <Picture 2>.")
+    img = torch.rand(1, H, W, 3)
+    P = "A room.\n\nAna stands by the window.\n\nAna sits down."
+
+    on = run_node(P, plan_only=True, character_memory=mem, ref_image_1=img,
+                  ref_image_2=img, layer_wardrobe=True)[3]
+    off = run_node(P, plan_only=True, character_memory=mem, ref_image_1=img,
+                   ref_image_2=img, layer_wardrobe=False)[3]
+    s_on = on.split("[Shot ")[1].split("]", 1)[1]
+    s_off = off.split("[Shot ")[1].split("]", 1)[1]
+
+    check("on: the covered item is held back", "chastity" not in s_on.lower(), s_on[:160])
+    check("on: and its tag with it", "<Picture 2>" not in s_on)
+    check("off: the memory is passed through whole",
+          "chastity belt" in s_off.lower(), s_off[:200])
+    check("off: including the tag", "<Picture 2>" in s_off)
+    # Neither setting may lose the PERSON's own tag, which is their identity.
+    check("on: the person's tag survives", "<Picture 1>" in s_on)
+    check("off: likewise", "<Picture 1>" in s_off)
+    # ...and nothing else in the entry is disturbed either way.
+    for lbl, s in (("on", s_on), ("off", s_off)):
+        check(f"{lbl}: the rest of the entry is intact",
+              "grey shirt" in s and "jeans" in s and "28" in s, s[:160])
+
+
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -4028,6 +4069,7 @@ def main():
     test_hardware_waits_for_the_beat_that_puts_it_on()
     test_the_applying_shot_says_where_the_limbs_finish()
     test_a_collar_in_the_sheet_is_held_like_hardware()
+    test_layer_wardrobe_can_be_turned_off()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

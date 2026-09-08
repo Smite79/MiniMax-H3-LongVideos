@@ -811,6 +811,33 @@ def reveal_clause(items):
             f"shows there now, still on and unchanged.")
 
 
+_TAGGED_FRAGMENT = re.compile(r"<\s*Picture\s*\d+\s*>", re.I)
+
+
+def tagged_items(sheet):
+    """Head nouns of sheet entries that carry a <Picture N> of their own.
+
+    An item the author has attached a reference to is one they have said, as
+    plainly as this node allows, that they want drawn. It is also identity
+    wiring: the tag is how ref_image_N reaches the shot, and a reference no text
+    claims is read as an extra subject -- the worst failure this node has.
+
+    So a tagged item is never held back as merely HIDDEN. Reported as a chastity
+    belt with a picture reference disappearing out of the character memory: it
+    was inferred to be under the jeans, went into `covered` with the ordinary
+    under-layers, and scrub_removed dropped the fragment -- taking <Picture 2>
+    with it, so the image was loaded, counted in the report as going "where
+    tagged", and tagged nowhere."""
+    out = set()
+    for _n, line in sheet_lines(sheet or ""):
+        for frag in str(line).split(","):
+            if not _TAGGED_FRAGMENT.search(frag):
+                continue
+            for head in entry_heads(frag):
+                out.add(head)
+    return out
+
+
 def hidden_layers(covers, gone, moved=()):
     """Garments still underneath something that is still covering them.
 
@@ -6942,6 +6969,29 @@ class H3LongVideos:
                                "It is synthesis, not a recording: a click, a rattle, "
                                "a rustle, in the right place. Nothing vocal is ever "
                                "built. 0 turns it off; needs auto_sound on."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "layer_wardrobe": ("BOOLEAN", {"default": True,
+                    "tooltip": "Read the sheet as LAYERS, and leave a covered "
+                               "garment out of the shot text until the thing over "
+                               "it comes off.\n\n"
+                               "On, a sheet listing jeans and a chastity belt is "
+                               "read as the belt being under the jeans, so the belt "
+                               "is not described while they are on -- because a "
+                               "described thing is a drawn thing, and it would be "
+                               "drawn OVER them. Its <Picture N> is withheld for the "
+                               "same shots and for the same reason. Both come back "
+                               "the moment the cover is removed or pulled aside, and "
+                               "the info report names what it is holding back.\n\n"
+                               "Off, everything in the character memory is described "
+                               "in every shot, exactly as you wrote it. Nothing is "
+                               "ever held back from your text. The cost is the "
+                               "reason this exists: an under-layer described while "
+                               "it is covered tends to render on top of what covers "
+                               "it.\n\n"
+                               "Turn it off if the node is hiding something you want "
+                               "on screen, and say so in the beat if the layering "
+                               "was right and you only wanted it for one shot -- "
+                               "beats are never scrubbed."}),
             },
         }
 
@@ -6967,7 +7017,8 @@ class H3LongVideos:
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
-            ambient_audio=None, ambient_level=0.25, foley_level=0.35, **_removed):
+            ambient_audio=None, ambient_level=0.25, foley_level=0.35,
+            layer_wardrobe=True, **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
@@ -7200,8 +7251,15 @@ class H3LongVideos:
         # What the script states wins over what the categories imply: a beat saying
         # "takes the shorts off to expose the belt" is the author telling us directly,
         # and it may pair things the lists opposite know nothing about.
-        covers = dict(implied_layers(scene))
-        covers.update(infer_layers([extract_directives(b)[0] for b in beats], scene))
+        # LAYERING IS OPTIONAL. On, a covered garment is left out of the shot
+        # text until the thing over it comes off, because a described thing is a
+        # drawn thing and it would be drawn over its cover. Off, nothing is ever
+        # held back from the character memory -- which is what somebody wants who
+        # has attached a <Picture N> to the item and expects to see it.
+        covers = {}
+        if layer_wardrobe:
+            covers = dict(implied_layers(scene))
+            covers.update(infer_layers([extract_directives(b)[0] for b in beats], scene))
         if covers:
             notes.append("read as layers -- underwear goes under whatever the sheet "
                          "also puts over it, and anything the script itself pairs by "
