@@ -796,6 +796,57 @@ def bare_clause(gone, covers=None, worn=""):
     return " " + joined + ", with nothing else worn there."
 
 
+def is_undergarment(item):
+    """Is this one of the things that is ALWAYS worn under clothes?
+
+    Panties, knickers, thongs, briefs, boxers, underwear, bras, corsets, and
+    chastity belts, devices and cages -- the _UNDER_BY_REGION list, which is why
+    it is read off that list rather than a second copy that could drift from it.
+
+    These are named and placed rather than deleted. A locket under a coat is a
+    different thing: it genuinely cannot be seen, nothing is lost by waiting for
+    the coat to come off, and it keeps the older behaviour."""
+    t = str(item or "").lower()
+    return any(re.search(r"\b(?:" + pat + r")\b", t, re.I)
+               for pat in _UNDER_BY_REGION.values())
+
+
+def under_clause(pairs):
+    """Say that an under-layer is UNDER, rather than deleting it from the sheet.
+
+    Layering used to work by scrubbing: a garment read as covered came out of the
+    shot text entirely, and its <Picture N> with it. The reasoning was sound as
+    far as it went -- a described thing is a drawn thing, and an under-layer
+    described flatly beside its cover gets drawn on top of it -- but the cost was
+    the author's own words disappearing, which was reported three times, the last
+    of them a chastity belt with a reference image attached to it.
+
+    Deleting a thing is not the only way to stop it being drawn on top. Saying
+    where it is works better and keeps the text: the model is told the belt is
+    under the jeans, which is a spatial fact it can render, rather than being
+    told nothing and left to guess. Positively phrased, because at cfg 1 there is
+    no negative prompt -- this says where the thing IS, never where it is not.
+
+    Panties, knickers, thongs, briefs, boxers, underwear, bras, corsets and
+    chastity belts, devices and cages are all in _UNDER_BY_REGION, so they are
+    always the under-layer whatever order the sheet lists them in."""
+    pairs = [(u, o) for u, o in (pairs or []) if u and o]
+    if not pairs:
+        return ""
+
+    def _plural(w):
+        return w.endswith("s") and not w.endswith("ss")
+
+    def _one(u, o):
+        # Each garment takes its own number: panties ARE worn, a bra IS; jeans
+        # cover THEM, a skirt covers IT.
+        return (f"The {u} {'are' if _plural(u) else 'is'} worn under the {o}, "
+                f"covered by {'them' if _plural(o) else 'it'} and showing only "
+                f"as an outline.")
+
+    return " " + " ".join(_one(u, o) for u, o in pairs[:2])
+
+
 def reveal_clause(items):
     """Say what is underneath is what shows now, on the shot that uncovers it.
 
@@ -6969,29 +7020,6 @@ class H3LongVideos:
                                "It is synthesis, not a recording: a click, a rattle, "
                                "a rustle, in the right place. Nothing vocal is ever "
                                "built. 0 turns it off; needs auto_sound on."}),
-                # APPENDED. Saved workflows restore widget values by position.
-                "layer_wardrobe": ("BOOLEAN", {"default": True,
-                    "tooltip": "Read the sheet as LAYERS, and leave a covered "
-                               "garment out of the shot text until the thing over "
-                               "it comes off.\n\n"
-                               "On, a sheet listing jeans and a chastity belt is "
-                               "read as the belt being under the jeans, so the belt "
-                               "is not described while they are on -- because a "
-                               "described thing is a drawn thing, and it would be "
-                               "drawn OVER them. Its <Picture N> is withheld for the "
-                               "same shots and for the same reason. Both come back "
-                               "the moment the cover is removed or pulled aside, and "
-                               "the info report names what it is holding back.\n\n"
-                               "Off, everything in the character memory is described "
-                               "in every shot, exactly as you wrote it. Nothing is "
-                               "ever held back from your text. The cost is the "
-                               "reason this exists: an under-layer described while "
-                               "it is covered tends to render on top of what covers "
-                               "it.\n\n"
-                               "Turn it off if the node is hiding something you want "
-                               "on screen, and say so in the beat if the layering "
-                               "was right and you only wanted it for one shot -- "
-                               "beats are never scrubbed."}),
             },
         }
 
@@ -7018,7 +7046,7 @@ class H3LongVideos:
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
-            layer_wardrobe=True, **_removed):
+            **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
@@ -7256,10 +7284,8 @@ class H3LongVideos:
         # drawn thing and it would be drawn over its cover. Off, nothing is ever
         # held back from the character memory -- which is what somebody wants who
         # has attached a <Picture N> to the item and expects to see it.
-        covers = {}
-        if layer_wardrobe:
-            covers = dict(implied_layers(scene))
-            covers.update(infer_layers([extract_directives(b)[0] for b in beats], scene))
+        covers = dict(implied_layers(scene))
+        covers.update(infer_layers([extract_directives(b)[0] for b in beats], scene))
         if covers:
             notes.append("read as layers -- underwear goes under whatever the sheet "
                          "also puts over it, and anything the script itself pairs by "
@@ -7652,9 +7678,22 @@ class H3LongVideos:
             # node says so in the report and holds ITS OWN clause back, which is
             # the half that was actually asserting a lie. Only removals the
             # author staged still scrub, which is what that mechanism is for.
+            # COVERED IS NOT REMOVED. `covered` used to go in here beside
+            # `visible`, so a garment read as under something came out of the
+            # sheet entirely and took its <Picture N> with it. Reported three
+            # times as items disappearing out of the character memory. Only
+            # removals the AUTHOR staged scrub now; being underneath is said, in
+            # under_clause, not enacted by deletion.
+            # UNDERWEAR IS PLACED, NOT DELETED. Everything else that is covered
+            # still waits: a locket under a coat cannot be seen, nothing is lost
+            # by holding it until the coat comes off, and its picture would ask
+            # the model to draw a thing that is not visible.
+            _worn_under = [u for u in covered if is_undergarment(u)]
+            _hidden = [u for u in covered if u not in _worn_under]
             shot_scene = scrub_removed(
                 "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
-                visible + covered)
+                visible + _hidden)
+            _under = under_clause([(u, covers.get(u, "")) for u in _worn_under])
             # A READING COPY, never emitted. The sheet is sent to the model exactly
             # as written; this is only what the node consults when deciding whether
             # to assert hardware is FASTENED, and it leaves out anything the script
@@ -8360,6 +8399,7 @@ class H3LongVideos:
                 (1, "removal", tail),        # the beat's own action, completing
                 (1, "wearing", _wearing),    # ...and its mirror, a garment going on
                 (2, "revealed", _revealed),  # what shows where it was
+                (2, "under", _under),         # ...and what is underneath, still on
                 (2, "bare", _bare),          # ...or that nothing does
                 (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", fall),           # a body going down needs a landing

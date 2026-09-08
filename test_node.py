@@ -4033,14 +4033,7 @@ def test_schema():
     # hold_scene_state.
     # A ceiling, not a target: the old node had 38 and nobody could find anything.
     # Every one added since the rebuild answers a reported failure.
-    # 38, and the ceiling moved once, deliberately. layer_wardrobe was added
-    # after the character memory was reported twice as having items removed
-    # from it. The layering is right often enough to keep on by default -- an
-    # under-layer described while covered renders on top of its cover -- but
-    # when it is wrong it deletes something the author wrote, and the only
-    # alternative was to break the layering for everybody. A switch is the
-    # cheaper of the two.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 38)
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 37)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4048,11 +4041,10 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-12:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-11:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
-                              "ambient_audio", "ambient_level", "foley_level",
-                              "layer_wardrobe"])
+                              "ambient_audio", "ambient_level", "foley_level"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",

@@ -915,14 +915,21 @@ def test_the_audit_findings_stay_fixed():
              "Mara waits.\n\nMara pulls them back up.\n\nMara stands.", character_memory=m)
     check("displacement uncovers what is under it",
           "thong" in got[2].lower(), got[2][-80:])
+    # UNDERWEAR IS PLACED, NOT DELETED, as of the report that said so for
+    # the third time. It stays in the text and the node says where it is;
+    # the fact protected is the same one, that it is not rendered on top of
+    # what covers it. A locket or a scarf under a coat still waits.
     check("...and putting it back covers it again",
-          "thong" not in got[4].lower(), got[4][-80:])
+          "worn under" in got[4].lower() and "thong" in got[4].lower(),
+          got[4][-110:])
 
     # 4. `gone` only ever grew, so an add: could not re-cover.
     got = sh("A room.\n\nMara pulls off her shorts.\n\nMara waits.\n\n"
              "add: her denim shorts are back on\nMara pulls her shorts on.\n\nMara stands.",
              character_memory=m)
-    check("an add: re-hides the layer under it", "thong" not in got[3].lower(), "")
+    check("an add: re-covers the layer under it",
+          "worn under" in got[3].lower() and "thong" in got[3].lower(),
+          got[3][-110:])
 
     # 5. Stockings stop at the thigh and cover no waistband.
     check("stockings do not cover a belt",
@@ -1113,7 +1120,13 @@ def test_a_beat_can_name_what_the_layering_hid():
          "Mara runs a hand over the chastity belt under her jeans.\n\nMara waits.")
     info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
     sh = [s for s in script.split("---") if s.strip()]
-    check("the sheet still hides it", "chastity belt" not in sh[0].lower(), "")
+    # The sheet KEEPS it and the node says where it is. Deleting it was what
+    # put the author's own words out of the prompt, three reports running.
+    check("the sheet keeps it", "chastity belt" in sh[0].lower(), sh[0][:160])
+    check("...placed under the jeans",
+          "worn under the jeans" in sh[0].lower(), sh[0][:220])
+    check("...showing only as an outline",
+          "showing only as an outline" in sh[0].lower(), sh[0][:220])
     check("the beat still says it", "chastity belt" in sh[1].lower(), "")
     check("...word for word, unedited",
           "runs a hand over the chastity belt under her jeans" in sh[1], "")
@@ -1195,10 +1208,16 @@ def test_the_only_tag_being_on_a_covered_thing():
                  character_memory=sheet + "\nDan: he, 41.", ref_image_2=BELT)
     finally:
         S.build_conditioning = ob
-    check("no picture while it is covered",
-          rows[0][1] == 0 and rows[1][1] == 0, str([n for _, n in rows]))
-    check("...and no words either",
-          not any("chastity" in p.lower() for p, _ in rows[:2]), "")
+    # The picture travels with the words. The tag is how ref_image_N reaches
+    # the shot at all, so withholding it lost the reference -- and a picture
+    # the text never claims is read as an extra subject.
+    check("the picture rides along while it is covered",
+          rows[0][1] == 1 and rows[1][1] == 1, str([n for _, n in rows]))
+    check("...and so do the words",
+          all("chastity" in p.lower() for p, _ in rows[:2]), "")
+    check("...placed under what covers it",
+          all("worn under" in p.lower() for p, _ in rows[:2]),
+          rows[0][0][-200:])
     check("the picture arrives when the shorts come off", rows[2][1] == 1, "")
     check("...and stays after", rows[3][1] == 1, "")
     check("...described too", all("chastity" in p.lower() for p, _ in rows[2:]), "")
@@ -1233,15 +1252,18 @@ def test_an_object_tag_works_without_a_face_picture():
             ("nobody tagged, belt tag last",
              "Mara: she, 22, blue jeans, a chastity belt <Picture 2>.")):
         got = imgs(mem)
-        check(f"{label}: withheld while covered",
-              "BELT" not in got[0] and "BELT" not in got[1], str(got))
-        check(f"{label}: sent when uncovered", "BELT" in got[2], str(got))
+        # The tag is how ref_image_N reaches the shot, so withholding it lost
+        # the reference altogether -- and a picture the text never claims is
+        # read as an extra subject. It travels with the words now.
+        check(f"{label}: carried while covered",
+              "BELT" in got[0] and "BELT" in got[1], str(got))
+        check(f"{label}: and still there uncovered", "BELT" in got[2], str(got))
     # A face picture alongside it still behaves, and still travels every shot.
     got = imgs("Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.")
     check("with a face too, the face is always there",
           all("FACE" in g for g in got), str(got))
-    check("...and the belt only when uncovered",
-          "BELT" not in got[0] and "BELT" in got[2], str(got))
+    check("...and the belt in every shot too",
+          all("BELT" in g for g in got), str(got))
 
 
 def test_an_untagged_picture_defeats_the_layering():
@@ -1281,12 +1303,17 @@ def test_underwear_is_hidden_until_it_is_not():
          "Mara pulls off her shorts.\n\nMara turns around.")
     info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
     sh = [s.lower() for s in script.split("---") if s.strip()]
-    check("while the shorts are on, the panties are not described",
-          "panties" not in sh[0], sh[0][-90:])
+    # UNDERWEAR IS PLACED, NOT DELETED, as of the report that said so for
+    # the third time. It stays in the text and the node says where it is;
+    # the fact protected is the same one, that it is not rendered on top of
+    # what covers it. A locket or a scarf under a coat still waits.
+    check("while the shorts are on, the panties are placed under them",
+          "panties" in sh[0] and "worn under" in sh[0], sh[0][-130:])
     # The belt goes under as well: worn beneath jeans it is COVERED, not forgotten,
     # and it comes back by the same route as any other layer -- the cover comes off,
     # the reveal clause names it, and it stays in the scene from then on.
-    check("...nor the belt", "chastity belt" not in sh[0], sh[0][-90:])
+    check("...and so is the belt",
+          "chastity belt" in sh[0] and "worn under" in sh[0], sh[0][-130:])
     check("...while the shorts themselves are", "shorts" in sh[0], "")
     # The shot that takes them off is where both become visible, and it has to say so
     # or the reveal happens against a body the text says is bare.
@@ -3893,47 +3920,6 @@ def test_a_collar_in_the_sheet_is_held_like_hardware():
         check(f"shot {i} holds it", "closed and fastened" in s, s[:180])
 
 
-def test_layer_wardrobe_can_be_turned_off():
-    """Reported twice: items disappearing out of the character memory, the second
-    time "a chastity belt with a picture reference and it was dropped".
-
-    The layering was doing it on purpose. A sheet listing jeans and a belt is read
-    as the belt being UNDER them, and a covered garment is left out of the shot
-    text -- with its <Picture N> -- because a described thing is a drawn thing and
-    it would be drawn over its cover. Three earlier fixes built that, the suite
-    pins it, and the info report names what it is holding back.
-
-    So it stays on, and it is now switchable. Breaking the layering for everybody
-    to fix one scene would have traded a reported bug for a worse one; a switch
-    costs one widget, which is why the ceiling in test_node moved by exactly
-    one."""
-    print("\n=== layer_wardrobe can be turned off ===")
-    mem = ("Ana: <Picture 1>, she, 28, grey shirt, jeans, "
-           "a steel chastity belt <Picture 2>.")
-    img = torch.rand(1, H, W, 3)
-    P = "A room.\n\nAna stands by the window.\n\nAna sits down."
-
-    on = run_node(P, plan_only=True, character_memory=mem, ref_image_1=img,
-                  ref_image_2=img, layer_wardrobe=True)[3]
-    off = run_node(P, plan_only=True, character_memory=mem, ref_image_1=img,
-                   ref_image_2=img, layer_wardrobe=False)[3]
-    s_on = on.split("[Shot ")[1].split("]", 1)[1]
-    s_off = off.split("[Shot ")[1].split("]", 1)[1]
-
-    check("on: the covered item is held back", "chastity" not in s_on.lower(), s_on[:160])
-    check("on: and its tag with it", "<Picture 2>" not in s_on)
-    check("off: the memory is passed through whole",
-          "chastity belt" in s_off.lower(), s_off[:200])
-    check("off: including the tag", "<Picture 2>" in s_off)
-    # Neither setting may lose the PERSON's own tag, which is their identity.
-    check("on: the person's tag survives", "<Picture 1>" in s_on)
-    check("off: likewise", "<Picture 1>" in s_off)
-    # ...and nothing else in the entry is disturbed either way.
-    for lbl, s in (("on", s_on), ("off", s_off)):
-        check(f"{lbl}: the rest of the entry is intact",
-              "grey shirt" in s and "jeans" in s and "28" in s, s[:160])
-
-
 def test_timing_report():
     print("\n=== the timing breakdown ===")
     P = "A room.\n\nOne.\n\nTwo."
@@ -4069,7 +4055,6 @@ def main():
     test_hardware_waits_for_the_beat_that_puts_it_on()
     test_the_applying_shot_says_where_the_limbs_finish()
     test_a_collar_in_the_sheet_is_held_like_hardware()
-    test_layer_wardrobe_can_be_turned_off()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()
