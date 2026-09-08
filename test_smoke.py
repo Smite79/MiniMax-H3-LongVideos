@@ -1215,9 +1215,9 @@ def test_the_only_tag_being_on_a_covered_thing():
     # The picture travels with the words. The tag is how ref_image_N reaches
     # the shot at all, so withholding it lost the reference -- and a picture
     # the text never claims is read as an extra subject.
-    check("the picture is carried while it is covered",
-          rows[0][1] == 1 and rows[1][1] == 1, str([n for _, n in rows]))
-    check("...and so are the words",
+    check("the picture waits while it is covered",
+          rows[0][1] == 0 and rows[1][1] == 0, str([n for _, n in rows]))
+    check("...but the words are there the whole time",
           all("chastity" in p.lower() for p, _ in rows[:2]), rows[0][0][-160:])
     # The occlusion is carried by the COVER, since a reference cannot be
     # weakened for one image. If the belt still shows through, ref_noise_aug
@@ -1265,15 +1265,15 @@ def test_an_object_tag_works_without_a_face_picture():
         # The tag is how ref_image_N reaches the shot, so withholding it lost
         # the reference altogether -- and a picture the text never claims is
         # read as an extra subject. It travels with the words now.
-        check(f"{label}: picture carried while covered",
-              "BELT" in got[0] and "BELT" in got[1], str(got))
-        check(f"{label}: and still there uncovered", "BELT" in got[2], str(got))
+        check(f"{label}: picture waits while covered",
+              "BELT" not in got[0] and "BELT" not in got[1], str(got))
+        check(f"{label}: and arrives when uncovered", "BELT" in got[2], str(got))
     # A face picture alongside it still behaves, and still travels every shot.
     got = imgs("Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.")
     check("with a face too, the face is always there",
           all("FACE" in g for g in got), str(got))
-    check("...and the belt in every shot too",
-          all("BELT" in g for g in got), str(got))
+    check("...and the belt from the shot that uncovers it",
+          "BELT" not in got[0] and "BELT" in got[2], str(got))
 
 
 def test_an_untagged_picture_defeats_the_layering():
@@ -3983,7 +3983,8 @@ def test_an_undergarment_keeps_its_words_and_waits_for_its_picture():
           or "worn under the jeans" in covered.lower(), covered[:260])
     check("...and describes the jeans as covering it",
           "whole, opaque and unbroken" in covered.lower(), covered[:260])
-    check("...and keeps its picture", "<Picture 2>" in covered, covered[:200])
+    check("...while its picture waits for the cover to move",
+          "<Picture 2>" not in covered, covered[:200])
     check("...and the person's own picture does not",
           "<Picture 1>" in covered, covered[:200])
     check("the uncovered shot has both", "chastity belt" in bare.lower()
@@ -4037,6 +4038,61 @@ def test_an_under_layer_belongs_to_somebody():
     check("alone, it is just the belt",
           "The chastity belt is worn under the skirt" in solo_body,
           solo_body[:240])
+
+
+def test_the_picture_arrives_when_the_cover_moves():
+    """The rule, given directly: "when the skirt has been lifted up to show the
+    chastity belt, that's when it should be shown, or when the clothing on top has
+    been removed."
+
+    Two things stopped that. LIFTING was not a displacement at all -- lift, raise,
+    hoist, gather and bunch were missing from the verb list, so the beat that
+    uncovers the belt moved nothing. And the verbs that carry their own direction
+    were thrown away for not stating one: "lifts her skirt" says which way by
+    saying lift, and the pattern wanted an "up" that nobody writes.
+
+    Then an off-by-one on top of it. The layering read `displaced` before the beat
+    had been added to it, so even a recognised displacement only took effect on
+    the NEXT shot -- the belt came out from under the skirt one shot late."""
+    print("\n=== the picture arrives when the cover moves ===")
+    mem = "McKenna: <Picture 1>, she, 27, a skirt, a chastity belt <Picture 2>."
+    FACE, BELT = torch.rand(1, H, W, 3), torch.rand(1, H, W, 3)
+
+    def refs(prompt):
+        rows, ob = [], S.build_conditioning
+
+        def spy(clip, vae, av, p, *a, **k):
+            rows.append(len(k.get("refs") or []))
+            return ob(clip, vae, av, p, *a, **k)
+        S.build_conditioning = spy
+        try:
+            run_node(prompt, character_memory=mem, ref_image_1=FACE,
+                     ref_image_2=BELT)
+        finally:
+            S.build_conditioning = ob
+        return rows
+
+    for how, beat in (("lifted", "McKenna lifts her skirt."),
+                      ("raised", "McKenna raises her skirt."),
+                      ("held up", "McKenna holds her skirt up."),
+                      ("pulled aside", "McKenna pulls her skirt aside."),
+                      ("removed", "McKenna takes off her skirt.")):
+        got = refs("A home.\n\nMcKenna waits.\n\n" + beat + "\n\nMcKenna waits.")
+        check(f"{how}: face only until the cover moves", got[0] == 1, str(got))
+        check(f"{how}: and the belt from THAT shot, not the next",
+              got[1] == 2, str(got))
+    # Nothing touches it: the picture never arrives, and the words are there all
+    # along -- that is the half that must never wait.
+    quiet = refs("A home.\n\nMcKenna waits.\n\nMcKenna sits.\n\nMcKenna stands.")
+    check("untouched: the picture never arrives", quiet == [1, 1, 1], str(quiet))
+    words = run_node("A home.\n\nMcKenna waits.\n\nMcKenna sits.", plan_only=True,
+                     character_memory=mem)[3]
+    check("...but the belt is in the memory the whole time",
+          words.lower().count("chastity belt") >= 2, words[:200])
+    # A lift is not everything that moves: a chin is not a garment.
+    check("lifting a chin displaces nothing",
+          not S.displaced_garments("McKenna lifts her chin.",
+                                   "McKenna: she, 27, a skirt, a chastity belt."))
 
 
 def test_timing_report():
@@ -4176,6 +4232,7 @@ def main():
     test_a_collar_in_the_sheet_is_held_like_hardware()
     test_an_undergarment_keeps_its_words_and_waits_for_its_picture()
     test_an_under_layer_belongs_to_somebody()
+    test_the_picture_arrives_when_the_cover_moves()
     test_pacing_reaches_the_thin_shots()
     test_a_line_is_spoken_in_one_language()
     test_undressing_does_not_spread()

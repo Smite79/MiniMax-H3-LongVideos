@@ -796,6 +796,45 @@ def bare_clause(gone, covers=None, worn=""):
     return " " + joined + ", with nothing else worn there."
 
 
+def defer_tag_for(text, items):
+    """Take the <Picture N> off an item that is covered THIS SHOT, keeping its
+    words. The tag comes back the moment the cover comes off.
+
+    THIS IS A DEFERRAL, NOT A REMOVAL, and the distinction is the whole point.
+    The item stays in the character memory in every shot, exactly as written. What
+    waits is its reference, and only on the shots where the thing is under
+    something else.
+
+    It waits because a reference is an instruction to REPRODUCE AN IMAGE. At the
+    near-clean ref_noise_aug this node runs at, the node's own report says so:
+    "that asks the model to REPRODUCE them, framing and background included". A
+    picture of a chastity belt, handed to the model for a shot in which the belt
+    is under a skirt, is an instruction to draw the belt, and it outweighs any
+    sentence about what is on top of what. Measured twice, from two different
+    directions: every configuration that sent the picture while the garment was
+    covered rendered it through the cover, including one where the cover was
+    described as whole, opaque and unbroken.
+
+    There is no third option available. Reference strength is ref_noise_aug and it
+    is one number for every image, so the belt's picture cannot be weakened
+    without weakening the face. The tag is what routes the image, so the tag is
+    what waits -- leaving it in while withholding the image would name a picture
+    the shot does not carry, which is its own bug."""
+    out = str(text or "")
+    for item in items or []:
+        if not str(item).strip():
+            continue
+        w = re.escape(str(item).strip())
+        # Either side of the item, which is where a sheet puts it: "<Picture 2> a
+        # chastity belt" and "a chastity belt <Picture 2>" are both written.
+        out = re.sub(r"<\s*Picture\s*\d+\s*>\s*((?:a|an|the)\s+)?" + w,
+                     lambda m: (m.group(1) or "") + str(item).strip(), out,
+                     flags=re.I)
+        out = re.sub(w + r"\s*<\s*Picture\s*\d+\s*>", str(item).strip(), out,
+                     flags=re.I)
+    return out
+
+
 def is_undergarment(item):
     """Is this one of the things that is ALWAYS worn under clothes?
 
@@ -5574,7 +5613,13 @@ _DISPLACE_WAY = (r"back\s+up|back\s+down|down|up|aside|open|back|"
                  r"off\s+(?:one|her|his|their)\s+shoulders?")
 _DISPLACE = re.compile(
     r"\b(?:" + _STRIP_VERB + r"|push(?:es|ed|ing)?|shove[sd]?|roll(?:s|ed|ing)?|"
-    r"hitch(?:es|ed)?|hike[sd]?|open(?:s|ed)?|undo(?:es)?|unzip(?:s|ped)?)\s+"
+    r"hitch(?:es|ed)?|hike[sd]?|open(?:s|ed)?|undo(?:es)?|unzip(?:s|ped)?|"
+    # LIFTING A SKIRT IS DISPLACING IT, and none of these were here. Asked
+    # for directly: "when the skirt has been lifted up to show the chastity
+    # belt, that's when it should be shown". Lifting was not read as moving
+    # anything, so the belt stayed covered through the shot that uncovers it.
+    r"lift(?:s|ed|ing)?|raise[sd]?|rais(?:es|ed|ing)|hoist(?:s|ed|ing)?|"
+    r"hold(?:s|ing)?|held|gather(?:s|ed|ing)?|bunch(?:es|ed|ing)?)\s+"
     r"(?:(" + _DISPLACE_WAY + r")\s+)?"
     r"((?:the|her|his|their|a|an)\s+)?([\w][\w\- ]{0,28}?)"
     r"(?:\s+(" + _DISPLACE_WAY + r"))?"
@@ -5636,6 +5681,14 @@ def displaced_garments(beat, scene):
     for m in _DISPLACE.finditer(beat):
         way = (m.group(1) or m.group(4) or "").lower().strip()
         thing = re.sub(r"\s+", " ", (m.group(3) or "")).strip().lower()
+        # SOME VERBS CARRY THEIR OWN DIRECTION. "lifts her skirt" says which way
+        # by saying lift, and the direction word this pattern wants is simply not
+        # written -- so the match was thrown away for having no `way`, and the one
+        # beat that uncovers the layer beneath did nothing. Read on the matched
+        # text rather than a new capture group, which would renumber the rest.
+        if not way and re.match(r"\s*(?:lift|rais|hoist|gather|bunch)", m.group(0),
+                                re.I):
+            way = "up"
         if not way or not thing or thing in seen:
             continue
         # The garment has to be one the scene already dresses them in, and the head
@@ -7339,6 +7392,7 @@ class H3LongVideos:
         # Each sheet line is one person, so the layers are read line by line and
         # the owner is kept. Anything the SCENE paragraph implies has no owner and
         # is left unattributed, which is right: it belongs to the set, not a body.
+        deferred_shots = []       # (shot, items whose picture waits this shot)
         covers, cover_owner = {}, {}
         for _who, _line in sheet_lines(sheet):
             for _u, _o in implied_layers(_line).items():
@@ -7680,9 +7734,15 @@ class H3LongVideos:
             # it -- but it is no longer covering what is under it. Without this a
             # beat pulling the shorts down to show the thong described the thong
             # in that shot only, and the layering hid it again in the next.
+            # THIS BEAT'S displacements, read here rather than 500 lines further
+            # down where the latch is updated. The layering consumed 
+            # before the beat had been added to it, so the shot that LIFTS the
+            # skirt still saw it covering, and the belt came out from under it one
+            # shot late. The latch below is unchanged; this only looks ahead.
+            _moved_now = {g for g, _h in displaced_garments(body, shot_sheet or sheet)}
             covered = hidden_layers(covers,
                                     [g for g in visible if g not in restored],
-                                    displaced.keys())
+                                    set(displaced) | _moved_now)
             # A BEAT that names a covered garment. Beats are passed through word for
             # word and never scrubbed -- that is the node's oldest promise -- so the
             # layering can take the belt out of the sheet and the beat can put it
@@ -7778,6 +7838,14 @@ class H3LongVideos:
             # entirely -- there is no weaker setting for one image, only
             # ref_noise_aug for all of them. So it stays, and the cover carries
             # the weight. See under_clause.
+            # The words stay in every shot; the PICTURE waits for the cover
+            # to come off. See defer_tag_for -- a reference reproduces its
+            # image and draws the thing, whatever the text says is over it.
+            _deferred = [u for u in _worn_under
+                         if re.search(r"<\s*Picture\s*\d+\s*>", shot_scene)]
+            shot_scene = defer_tag_for(shot_scene, _worn_under)
+            if _deferred and len(shot_scene) >= 0:
+                deferred_shots.append((len(shots) + 1, list(_worn_under)))
             _under = under_clause(
                 [(u, covers.get(u, ""),
                   cover_owner.get(u, "") if len(_here) > 1 else "")
@@ -8859,6 +8927,20 @@ class H3LongVideos:
                 f"the standing hold. Take the hardware off the sheet entry and let the "
                 f"beat put it on, or drop the beat if she wears it throughout. Your "
                 f"wording is never edited, so this one is yours")
+        if deferred_shots:
+            _items = sorted({i for _n, its in deferred_shots for i in its})
+            notes.append(
+                f"the picture for {', '.join(_items)} WAITS on shot(s) "
+                f"{', '.join(str(n) for n, _ in deferred_shots)}, where it is under "
+                f"something else. It is deferred, never removed: the item stays in "
+                f"the character memory in every shot exactly as you wrote it, and "
+                f"its <Picture N> comes back the moment the cover comes off. A "
+                f"reference is an instruction to REPRODUCE an image, so handing the "
+                f"model a picture of a thing that is under a skirt draws it through "
+                f"the skirt -- measured twice, including with the cover described as "
+                f"whole and opaque. Reference strength is ref_noise_aug and it is one "
+                f"number for every image, so this one cannot be weakened without "
+                f"weakening the face")
         if applied_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in applied_shots)} put the hardware "
