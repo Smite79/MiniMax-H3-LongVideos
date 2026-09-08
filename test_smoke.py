@@ -1215,10 +1215,16 @@ def test_the_only_tag_being_on_a_covered_thing():
     # The picture travels with the words. The tag is how ref_image_N reaches
     # the shot at all, so withholding it lost the reference -- and a picture
     # the text never claims is read as an extra subject.
-    check("the picture waits while it is covered",
-          rows[0][1] == 0 and rows[1][1] == 0, str([n for _, n in rows]))
-    check("...but the words do not",
+    check("the picture is carried while it is covered",
+          rows[0][1] == 1 and rows[1][1] == 1, str([n for _, n in rows]))
+    check("...and so are the words",
           all("chastity" in p.lower() for p, _ in rows[:2]), rows[0][0][-160:])
+    # The occlusion is carried by the COVER, since a reference cannot be
+    # weakened for one image. If the belt still shows through, ref_noise_aug
+    # is the only lever left and it moves every reference at once.
+    check("...with the cover described as opaque over it",
+          all("whole, opaque and unbroken" in p.lower() for p, _ in rows[:2]),
+          rows[0][0][-200:])
     check("...placed under what covers it",
           all("worn under" in p.lower() for p, _ in rows[:2]),
           rows[0][0][-200:])
@@ -1259,15 +1265,15 @@ def test_an_object_tag_works_without_a_face_picture():
         # The tag is how ref_image_N reaches the shot, so withholding it lost
         # the reference altogether -- and a picture the text never claims is
         # read as an extra subject. It travels with the words now.
-        check(f"{label}: picture waits while covered",
-              "BELT" not in got[0] and "BELT" not in got[1], str(got))
-        check(f"{label}: and arrives uncovered", "BELT" in got[2], str(got))
+        check(f"{label}: picture carried while covered",
+              "BELT" in got[0] and "BELT" in got[1], str(got))
+        check(f"{label}: and still there uncovered", "BELT" in got[2], str(got))
     # A face picture alongside it still behaves, and still travels every shot.
     got = imgs("Mara: <Picture 1>, she, blue jeans, a chastity belt <Picture 2>.")
     check("with a face too, the face is always there",
           all("FACE" in g for g in got), str(got))
-    check("...and the belt from the shot that uncovers it",
-          "BELT" not in got[0] and "BELT" in got[2], str(got))
+    check("...and the belt in every shot too",
+          all("BELT" in g for g in got), str(got))
 
 
 def test_an_untagged_picture_defeats_the_layering():
@@ -3965,7 +3971,7 @@ def test_an_undergarment_keeps_its_words_and_waits_for_its_picture():
           or "worn under the jeans" in covered.lower(), covered[:260])
     check("...and describes the jeans as covering it",
           "whole, opaque and unbroken" in covered.lower(), covered[:260])
-    check("...while its picture waits", "<Picture 2>" not in covered, covered[:200])
+    check("...and keeps its picture", "<Picture 2>" in covered, covered[:200])
     check("...and the person's own picture does not",
           "<Picture 1>" in covered, covered[:200])
     check("the uncovered shot has both", "chastity belt" in bare.lower()
