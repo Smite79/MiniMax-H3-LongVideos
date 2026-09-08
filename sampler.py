@@ -816,15 +816,21 @@ def under_clause(pairs):
         # body and there is nothing for the belt to show through. Positively
         # phrased, as everything here has to be at cfg 1 -- this describes the
         # cloth that IS there, never the thing that must not show.
-        them = "them" if _plural(o) else "it"
         cover = "cover" if _plural(o) else "covers"
-        are = "are" if _plural(u) else "is"
-        mine = f"{who}'s " if who else "The "
-        hers = f"{who}'s " if who else "the "
-        return (f"{mine}{u} {are} worn under {hers}{o}, against the skin and "
-                f"beneath {them}. The {o} {cover} that part of the body "
-                f"completely: whole, opaque and unbroken over it, the outermost "
-                f"thing there and the only one in view.")
+        whose = f"{who}'s " if who else "The "
+        # THE COVER ONLY. This used to open with "{u} is worn under the {o}",
+        # which names the hidden garment in the one shot that must not show it --
+        # and at cfg 1 there is no negative prompt, so naming a thing draws it.
+        # Measured: with the picture already withheld, the belt was still named
+        # twice in a covered shot, once by the author's sheet entry and once
+        # here. This clause was the half that could be removed.
+        #
+        # What survives is the half that works: a SURFACE, which the model
+        # renders well, described as unbroken over the part of the body in
+        # question. `u` is deliberately unused -- it is the thing not to mention.
+        return (f"{whose}{o} {cover} the hips and waist completely: whole, "
+                f"opaque and unbroken, the outermost layer there and the only "
+                f"one in view.")
 
     return " " + " ".join(_one(*p) for p in pairs[:2])
 

@@ -920,16 +920,14 @@ def test_the_audit_findings_stay_fixed():
     # the fact protected is the same one, that it is not rendered on top of
     # what covers it. A locket or a scarf under a coat still waits.
     check("...and putting it back covers it again",
-          "worn under" in got[4].lower() and "thong" in got[4].lower(),
-          got[4][-110:])
+          "whole, opaque and unbroken" in got[4].lower(), got[4][-130:])
 
     # 4. `gone` only ever grew, so an add: could not re-cover.
     got = sh("A room.\n\nMara pulls off her shorts.\n\nMara waits.\n\n"
              "add: her denim shorts are back on\nMara pulls her shorts on.\n\nMara stands.",
              character_memory=m)
     check("an add: re-covers the layer under it",
-          "worn under" in got[3].lower() and "thong" in got[3].lower(),
-          got[3][-110:])
+          "whole, opaque and unbroken" in got[3].lower(), got[3][-130:])
 
     # 5. Stockings stop at the thigh and cover no waistband.
     check("stockings do not cover a belt",
@@ -1123,8 +1121,12 @@ def test_a_beat_can_name_what_the_layering_hid():
     # The sheet KEEPS it and the node says where it is. Deleting it was what
     # put the author's own words out of the prompt, three reports running.
     check("the sheet keeps it", "chastity belt" in sh[0].lower(), sh[0][:160])
-    check("...placed under the jeans",
-          "worn under the jeans" in sh[0].lower(), sh[0][:220])
+    # The clause names the COVER. The belt is named once, by the sheet.
+    check("...and the jeans are described as covering it",
+          "jeans cover the hips and waist completely" in sh[0].lower(),
+          sh[0][:240])
+    check("...and the node does not name the belt a second time",
+          sh[0].lower().count("chastity belt") == 1, sh[0][:240])
     check("...and the jeans are described as covering it",
           "whole, opaque and unbroken" in sh[0].lower(), sh[0][:260])
     # The PICTURE waits even though the words do not: a reference reproduces
@@ -1225,8 +1227,8 @@ def test_the_only_tag_being_on_a_covered_thing():
     check("...with the cover described as opaque over it",
           all("whole, opaque and unbroken" in p.lower() for p, _ in rows[:2]),
           rows[0][0][-200:])
-    check("...placed under what covers it",
-          all("worn under" in p.lower() for p, _ in rows[:2]),
+    check("...with the cover described as opaque over it",
+          all("whole, opaque and unbroken" in p.lower() for p, _ in rows[:2]),
           rows[0][0][-200:])
     check("the picture arrives when the shorts come off", rows[2][1] == 1, "")
     check("...and stays after", rows[3][1] == 1, "")
@@ -1317,13 +1319,14 @@ def test_underwear_is_hidden_until_it_is_not():
     # the third time. It stays in the text and the node says where it is;
     # the fact protected is the same one, that it is not rendered on top of
     # what covers it. A locket or a scarf under a coat still waits.
-    check("while the shorts are on, the panties are placed under them",
-          "panties" in sh[0] and "worn under" in sh[0], sh[0][-130:])
+    check("while the shorts are on, the shorts are the outermost layer",
+          "panties" in sh[0] and "whole, opaque and unbroken" in sh[0],
+          sh[0][-150:])
     # The belt goes under as well: worn beneath jeans it is COVERED, not forgotten,
     # and it comes back by the same route as any other layer -- the cover comes off,
     # the reveal clause names it, and it stays in the scene from then on.
-    check("...and so is the belt",
-          "chastity belt" in sh[0] and "worn under" in sh[0], sh[0][-130:])
+    check("...and the belt is named once, by the sheet",
+          sh[0].count("chastity belt") == 1, sh[0][-150:])
     check("...while the shorts themselves are", "shorts" in sh[0], "")
     # The shot that takes them off is where both become visible, and it has to say so
     # or the reveal happens against a body the text says is bare.
@@ -3978,9 +3981,9 @@ def test_an_undergarment_keeps_its_words_and_waits_for_its_picture():
     check("...still carrying the belt",
           bool(sheet_line) and "chastity belt" in sheet_line[0].lower(),
           (sheet_line[0] if sheet_line else covered)[:200])
-    check("...and says it is under the jeans",
-          "worn under the blue jeans" in covered.lower()
-          or "worn under the jeans" in covered.lower(), covered[:260])
+    check("...and the jeans are described as covering it",
+          "cover the hips and waist completely" in covered.lower(),
+          covered[:260])
     check("...and describes the jeans as covering it",
           "whole, opaque and unbroken" in covered.lower(), covered[:260])
     check("...while its picture waits for the cover to move",
@@ -4019,24 +4022,25 @@ def test_an_under_layer_belongs_to_somebody():
           "chastity belt" not in sh[0].lower(), sh[0][:220])
     check("...nor about a skirt she does not own",
           "skirt" not in sh[0].lower(), sh[0][:220])
-    check("McKenna's shot places it under her skirt",
-          "worn under" in sh[1].lower() and "chastity belt" in sh[1].lower(),
-          sh[1][:240])
+    check("McKenna's shot describes the skirt covering it",
+          "skirt covers the hips and waist" in sh[1].lower()
+          and "chastity belt" in sh[1].lower(), sh[1][:240])
     check("...and Dana's later shot is clean again",
           "chastity belt" not in sh[2].lower(), sh[2][:220])
     # Both in one shot: the belt has to say WHOSE, or it lands on either woman.
     two = run_node("A home.\n\nDana and McKenna stand in the hall.",
                    plan_only=True, character_memory=mem)[3]
     body = two.split("]", 1)[1]
-    check("with both described, the belt is attributed",
-          "McKenna's chastity belt" in body, body[:300])
+    # Attribution moved to the cover, which is the garment now named.
+    check("with both described, the cover is attributed",
+          "McKenna's skirt covers" in body, body[:300])
     check("...and the name is not mangled", "Mckenna" not in body, body[:300])
     # One person, and no attribution needed.
     solo = run_node("A home.\n\nMcKenna waits.", plan_only=True,
                     character_memory="McKenna: she, 27, a skirt, a chastity belt.")[3]
     solo_body = solo.split("]", 1)[1]
-    check("alone, it is just the belt",
-          "The chastity belt is worn under the skirt" in solo_body,
+    check("alone, it is just the skirt",
+          "The skirt covers the hips and waist completely" in solo_body,
           solo_body[:240])
 
 
