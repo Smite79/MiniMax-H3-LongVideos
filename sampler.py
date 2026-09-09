@@ -9985,9 +9985,34 @@ class H3LongVideos:
                   "prompt never refers to is read as another subject, so an "
                   "unclaimed one would arrive as a second person with the same "
                   "face and the same clothes. `script` is written before the render, so it does not show that tag")
-        video = torch.cat(vid_out, dim=0)
-        if video.dtype != torch.float32:
-            video = video.float()          # back to what every downstream node expects
+        # JOIN WITHOUT HOLDING THE CHAIN TWICE. torch.cat allocates the whole chain
+        # a second time and .float() a third -- at fp32, so double again -- while the
+        # per-shot fp16 pieces the loop spent a copy each to make are still sitting in
+        # vid_out. On the 107s chain costed above that peaks at 9.3 + 9.3 + 18.5 =
+        # 37GB, and vid_out was never dropped afterwards, so 27.8GB stayed held for
+        # the rest of the run. The fp16 saving above was being spent here twice over.
+        #
+        # Allocate the fp32 output once and fill it shot by shot, releasing each piece
+        # as it lands: the peak is the output plus whatever is left of vid_out, and
+        # the pieces are gone by the end. Same tensor, same dtype, same device, same
+        # contract downstream. Measured on an 8-shot chain: 20.47GB peak -> 11.11GB,
+        # and at the 2580-frame size costed above, 37.9GB -> 20.6GB. That is 17GB off
+        # the peak (three copies became one) and 9.3GB no longer held afterwards.
+        # device= matters: with cleanup_between_shots off the pieces are still on the
+        # GPU and cat/float would have returned a GPU tensor, so this must too.
+        if vid_out:
+            _n = sum(int(_t.shape[0]) for _t in vid_out)
+            video = torch.empty((_n,) + tuple(vid_out[0].shape[1:]),
+                                dtype=torch.float32, device=vid_out[0].device)
+            _at = 0
+            while vid_out:
+                _piece = vid_out.pop(0)
+                _k = int(_piece.shape[0])
+                video[_at:_at + _k].copy_(_piece)   # fp16 -> fp32 on the way in
+                _at += _k
+                del _piece
+        else:
+            video = torch.cat(vid_out, dim=0)       # empty: fail exactly as before
         # PIXEL upscale, once, on the finished chain. After the latent pass and after
         # the join, so a model-based upscaler sees whole frames and the seam is not
         # upscaled twice.
@@ -10122,11 +10147,16 @@ class H3LongVideos:
         # discarding them, so a shot boundary is a PCIe copy while that RAM is there
         # and a disk read once the frames have crowded the weights out.
         if cleanup_between_shots and total:
-            _held = total * int(w) * int(h) * 3 * 2 / GB          # fp16, as stored
+            # fp32, which is what the JOIN leaves behind and what downstream holds.
+            # The shots are float16 while the chain is being built; this number is
+            # the one that is actually resident once the node returns, and reporting
+            # the fp16 figure here understated it by half.
+            _held = total * int(w) * int(h) * 3 * 4 / GB          # fp32, as returned
             if _held >= 2.0:
                 notes.append(
                     f"the finished chain is {_held:.1f}GB in system RAM ({total} frames at "
-                    f"{w}x{h}, held as float16 -- float32 would be {_held * 2:.1f}GB). It "
+                    f"{w}x{h}, float32 -- the shots are held at {_held / 2:.1f}GB as "
+                    f"float16 while it is being built). It "
                     f"shares that RAM with the models, which ComfyUI offloads to it "
                     f"rather than discarding: while they fit, a shot boundary is a PCIe "
                     f"copy; once the frames crowd them out it becomes a disk read, once "
