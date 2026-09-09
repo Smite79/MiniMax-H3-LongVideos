@@ -354,7 +354,51 @@ _BY_WORDS = (
 _BY_WORDS_SET = tuple((n, frozenset(w.split())) for n, w in _BY_WORDS)
 
 
-def language_of(text, fallback="English"):
+# THE AUTHOR SAYING WHICH LANGUAGE IT IS.
+#
+# The word vote needs two function words before it will name a language, and
+# ordinary speech often carries one:
+#
+#     "Oh, du siehst heute toll aus, Schatz!"      -- du
+#     "OK, das reicht mir jetzt wirklich!"         -- das
+#
+# Both are unmistakably German to a reader and both scored 1, so both fell back --
+# and in a script whose other lines are English, the fallback is English, so the
+# German line was actively TOLD it is English. The line then fights its own
+# delivery, which is the failure the whole language hold exists to prevent.
+#
+# But the author had already said which language it is, in the stage direction,
+# where anybody writing this puts it: "says in German". spoken_text() strips
+# everything outside the quotes before the vote ever sees it, so the one
+# unambiguous statement in the beat was the one thing thrown away.
+#
+# REQUIRES A SPEECH FRAME, so a nationality is not a language: "in German" and
+# "speaks German" match, "the German soldier" and "a German car" do not. Adjectives
+# people actually write are allowed between ("in broken German").
+_LANG_NAMES = tuple(n for n, _ in _BY_SCRIPT) + tuple(n for n, _ in _BY_WORDS)
+_LANG_ADJ = (r"(?:fluent|broken|perfect|rapid|halting|accented|flawless|bad|"
+             r"basic|simple|quiet|loud|slow|fast)\s+")
+_NAMED_LANG = re.compile(
+    r"\b(?:in|into|speaks?|speaking|spoke|spoken|"
+    r"switch(?:es|ed|ing)?\s+to|repl(?:y|ies|ied)\s+in|answers?\s+in|"
+    r"says?\s+in|said\s+in|ask(?:s|ed)?\s+in)\s+"
+    r"(?:" + _LANG_ADJ + r")?"
+    r"(" + "|".join(_LANG_NAMES) + r")\b", re.I)
+
+
+def language_named(text):
+    """The language the TEXT ITSELF says is being spoken, or ''.
+
+    The author's own statement, read from the stage direction rather than voted
+    for out of the line. See _NAMED_LANG for why a speech frame is required."""
+    m = _NAMED_LANG.search(str(text or ""))
+    if not m:
+        return ""
+    said = m.group(1).lower()
+    return next((n for n in _LANG_NAMES if n.lower() == said), "")
+
+
+def language_of(text, fallback="English", named=""):
     """The language `text` is written in, or `fallback` when it cannot tell.
 
     Conservative on purpose: naming the WRONG language is worse than naming the
@@ -375,6 +419,11 @@ def language_of(text, fallback="English"):
     # English both) is not a language.
     if best[0] >= 2 and best[0] > runner[0]:
         return best[1]
+    # The author said so, and the vote could not tell. A statement beats a guess
+    # that abstained -- but NOT a script: Cyrillic is not a matter of opinion, and
+    # that branch has already returned above.
+    if named:
+        return named
     return fallback
 
 

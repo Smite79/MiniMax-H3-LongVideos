@@ -3310,6 +3310,50 @@ def test_a_line_is_spoken_in_one_language():
                     'Kate dice: "No sé lo que estás haciendo con eso."\n\n'
                     'Kate dice: "Sí."', which=2)
     check("...and the short line follows the script", short == "Spanish", short)
+    # ...AND ORDINARY SPEECH CARRIES ONE FUNCTION WORD, NOT TWO. The vote needs two
+    # before it will name a language, and these are unmistakably German to a reader:
+    #     "Oh, du siehst heute toll aus, Schatz!"   -- du
+    #     "OK, das reicht mir jetzt wirklich!"      -- das
+    # Both scored 1 and abstained. Inside a script whose other lines are English the
+    # fallback is English, so the German line was actively TOLD it is English and the
+    # delivery then fights its own words. The author had already said which language
+    # it is, in the stage direction -- and spoken_text() strips everything outside
+    # the quotes before the vote sees it, so that statement was the one thing thrown
+    # away. Reported by a user reading the code.
+    for _line in ('Klaus approaches her and says in German '
+                  '"Oh, du siehst heute toll aus, Schatz!"',
+                  'Klaus angrily stares at her and says in German '
+                  '"OK, das reicht mir jetzt wirklich!"'):
+        _got = said_in("A kitchen.\n\nKlaus waits.\n\n" + _line)
+        check(f"one function word, but the author said German: {_line[42:62]!r}",
+              _got == "German", _got)
+    # The worst case is a mixed script, where the fallback is not merely uninformed
+    # but wrong: this beat's own stage direction has to outrank it.
+    _mixed = ('A kitchen.\n\nMara says: "Where have you been all evening, exactly?"\n\n'
+              'Klaus says in German "OK, das reicht mir jetzt wirklich!"\n\n'
+              'Mara says: "That is not what I asked you and you know it."')
+    # s[0] is Shot 1: the scene paragraph is not a shot, so the German line is s[1].
+    check("the German line in an English script is German",
+          said_in(_mixed, 1) == "German", said_in(_mixed, 1))
+    check("...and the English ones stay English",
+          said_in(_mixed, 0) == "English" and said_in(_mixed, 2) == "English",
+          f"{said_in(_mixed, 0)}/{said_in(_mixed, 2)}")
+    # A NATIONALITY IS NOT A LANGUAGE. A speech frame is required, so these say
+    # nothing and the line is read the way it always was.
+    for _t in ("The German soldier looks up.", "A German car pulls in.",
+               "She pets the German shepherd.", "Klaus is German.",
+               "The Spanish tiles are cold.", "A French window stands open."):
+        check(f"not a language: {_t[:34]!r}", not S.engine.language_named(_t))
+    for _t, _w in (("She speaks German to him.", "German"),
+                   ("He replies in broken German.", "German"),
+                   ("She switches to Spanish.", "Spanish"),
+                   ("He asked in Russian where the key was.", "Russian")):
+        check(f"named: {_t[:34]!r}", S.engine.language_named(_t) == _w)
+    # A CONFIDENT VOTE STILL WINS. The statement resolves an abstention; it does not
+    # overrule the words, because naming the wrong language is the failure here.
+    check("the vote is not overruled by a stray mention",
+          S.engine.language_of("Je ne sais pas ce que vous faites",
+                               named="German") == "French")
     # Non-Latin characters are a strong language signal and easy to miss by eye.
     check("plain English is clean", S.non_latin_in('Kate says: "Hello."') == [])
     check("...and accented Latin is not flagged",

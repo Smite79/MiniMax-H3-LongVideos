@@ -7481,7 +7481,14 @@ class H3LongVideos:
         # THE WHOLE SCRIPT'S language, as the per-shot fallback. A single short
         # line -- "Si." -- carries no evidence on its own, and reading it alone
         # would call it English inside a Spanish script.
-        _script_lang = engine.language_of(engine.spoken_text(prompt or ""))
+        # ...and where the vote abstains on the whole script, the author's own
+        # statement anywhere in it settles the fallback rather than English:
+        # a script with ONE line in it, carrying one function word, is a script
+        # whose language nothing could vote for.
+        _script_voted = engine.language_of(engine.spoken_text(prompt or ""),
+                                           fallback="")
+        _script_lang = (_script_voted or engine.language_named(prompt or "")
+                        or "English")
         told_shots = []           # shots whose line orders somebody about
         dialogue_marked = []      # shots whose quotes became <d>...</d>
         poses = {}                # name -> the posture a beat put them in
@@ -8842,8 +8849,12 @@ class H3LongVideos:
             # line itself, falling back to the language the script as a whole is
             # in, so one short line ("Si.") in a Spanish script is not called
             # English on a technicality.
+            # ...and THIS beat's own stage direction outranks the script-wide
+            # fallback, so one German line inside an English script is not told it
+            # is English -- which is what a fallback alone does to it.
             _shot_lang = engine.language_of(engine.spoken_text(body),
-                                            fallback=_script_lang)
+                                            fallback=_script_lang,
+                                            named=engine.language_named(body))
             _lang = (LANGUAGE_HOLD.format(lang=_shot_lang)
                      if (_speaks and not _voiced) else "")
             if _lang and _shot_lang not in _langs_used:
