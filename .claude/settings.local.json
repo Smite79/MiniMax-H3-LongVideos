@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"C:/Users/Helios/.claude/projects/D--ComfyUI-windows-portable-ComfyUI-custom-nodes-H3-LongVideos-V1/\" | head -20)",
+      "Read(//c/Users/Helios/.claude/projects/D--ComfyUI-windows-portable-ComfyUI-custom-nodes-H3-LongVideos-V1/**)",
+      "Bash(git checkout *)",
+      "Bash(git branch *)",
+      "Bash(python test_prompt_logic.py)"
+    ]
+  }
+}
