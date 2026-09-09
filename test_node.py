@@ -4021,6 +4021,51 @@ def test_a_written_sound_is_recognised():
         check(f"...but heard: {_t[:32]!r}", S.sound_described(_t))
 
 
+def test_a_vae_that_tiles_itself_is_not_asked_to():
+    print("\n=== the tiled detour costs 3x on a VAE that owns its tiling ===")
+    # MiniMaxH3VideoVAE.decode_tiled is `return self.decode(z)` -- every tile_t and
+    # overlap this node computes is discarded, so the widget's tiling was never
+    # happening on H3. What the detour bought was buffers: decode_tiled reaches
+    # _decode_tiled_owned, which calls the model with output_buffer=None (so
+    # decode_temporal allocates its own at torch.FLOAT32) and then makes an fp16
+    # copy=True of it -- 2.60 + 1.30 GB per shot, against 1.30 for comfy's
+    # VAE.decode, which preallocates one fp16 result and passes it as output_buffer.
+    class _FSM:
+        comfy_has_chunked_io = True
+
+    class _Owns:
+        handles_tiling = True
+        first_stage_model = _FSM()
+        def __init__(self): self.calls = []
+        def decode(self, z):
+            self.calls.append("decode"); return torch.rand(1, 3, 8, 16, 16)
+        def decode_tiled(self, z, **kw):
+            self.calls.append("decode_tiled"); return torch.rand(1, 3, 8, 16, 16)
+
+    class _Plain(_Owns):
+        handles_tiling = False
+        first_stage_model = None
+
+    _lat = {"samples": torch.zeros(1, 24, 4, 4, 4)}
+    _v = _Owns(); S._decode_video(_v, _lat, True)
+    check("owns its tiling: tiled=True still goes to decode()", _v.calls == ["decode"])
+    _v = _Owns(); S._decode_video(_v, _lat, False)
+    check("...and tiled=False is unchanged", _v.calls == ["decode"])
+    # NOT a blanket claim that tiling is useless. A VAE that does not tile itself,
+    # or cannot be written into, keeps the old path exactly.
+    _p = _Plain(); S._decode_video(_p, _lat, True)
+    check("a plain VAE still gets decode_tiled", _p.calls == ["decode_tiled"])
+    _p = _Plain(); S._decode_video(_p, _lat, False)
+    check("...and its untiled path is unchanged", _p.calls == ["decode"])
+    # BOTH conditions are required: owning the tiling is not enough if the model
+    # cannot accept an output buffer, because then decode() allocates fp32 too.
+    class _NoBuf(_Owns):
+        class _F: comfy_has_chunked_io = False
+        first_stage_model = _F()
+    _n = _NoBuf(); S._decode_video(_n, _lat, True)
+    check("tiling owned but no chunked IO -> old path kept", _n.calls == ["decode_tiled"])
+
+
 def test_the_overlay_does_not_copy_a_chain_it_will_not_draw_on():
     print("\n=== H3 Overlay does not clone what it will not touch ===")
     # The clone was unconditional and the "no overlay text given" note was decided
@@ -4395,6 +4440,7 @@ def main():
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
     test_a_written_sound_is_recognised()
+    test_a_vae_that_tiles_itself_is_not_asked_to()
     test_the_overlay_does_not_copy_a_chain_it_will_not_draw_on()
     test_behind_the_back_is_read_however_it_is_written()
     test_a_bound_body_lying_down_has_something_under_it()

@@ -2183,7 +2183,39 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
                            keep_loaded=_resident(keep or (vae,)))
         except Exception:
             pass
-    if tiled:
+    # A VAE THAT ALREADY TILES DOES NOT NEED TO BE ASKED TO, AND ASKING COSTS 3x.
+    #
+    # MiniMaxH3VideoVAE.decode_tiled is, in full:
+    #
+    #     def decode_tiled(self, z, **kwargs):
+    #         return self.decode(z)
+    #
+    # Every tile_t/overlap_t/tile_x/tile_y this function computes is discarded, so
+    # the tiling the widget promises is not happening here -- the model tiles
+    # internally either way (256px spatial, 17-frame temporal), which is why
+    # comfy/sd.py sets handles_tiling on it.
+    #
+    # What the detour costs is the OUTPUT BUFFER. comfy's VAE.decode preallocates
+    # ONE result at vae_output_dtype and hands it to the model as output_buffer=,
+    # and MiniMaxH3VideoVAE.decode_temporal writes finalized chunks straight into
+    # it. Going through decode_tiled instead reaches _decode_tiled_owned, which
+    # calls the model with output_buffer=None -- so decode_temporal allocates its
+    # own at torch.float32 -- and then makes an fp16 `copy=True` of that. Two
+    # buffers, the larger of them at double width:
+    #
+    #     tiled : fp32 2.60GB + fp16 copy 1.30GB = 3.90GB per shot
+    #     decode: one preallocated fp16          = 1.30GB per shot
+    #
+    # at 362 frames of 1056x608. Every shot, on the node's own default.
+    #
+    # So: when the VAE owns its tiling AND can be written into, the un-tiled call IS
+    # the tiled one, minus the copies. Anything else keeps the old path -- this is a
+    # detour around a detour, not a claim that tiling is useless.
+    _owns_tiling = bool(getattr(vae, "handles_tiling", False) and getattr(
+        getattr(vae, "first_stage_model", None), "comfy_has_chunked_io", False))
+    if tiled and _owns_tiling:
+        imgs = vae.decode(latent)
+    elif tiled:
         # Temporal + spatial tiling. Without tile_t the VAE expands the WHOLE latent
         # clip at once, which on a 243-frame 1344x768 shot is the single largest
         # allocation in the run -- and on an unpruned checkpoint that is already
