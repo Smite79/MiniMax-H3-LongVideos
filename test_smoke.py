@@ -911,6 +911,21 @@ def test_a_bare_region_is_said_on_every_shot():
                  "Kate looks at the door.\n\nKate listens.", character_memory=mem)
     check("a removal is held the same way",
           all("chest" in s for s in off), " ".join(off[-1].split())[-120:])
+    # THE BEAT THAT NAMES ONLY THE OTHER PERSON. Reported after the first fix
+    # shipped: "bra still popped into ONE beat". That beat is this one -- she is
+    # not in its cast, so the clause was skipped, and the keyframe still shows
+    # her, so the region went unspecified for exactly one shot and the prior
+    # filled it. Attributed, because the shot describes somebody else.
+    other = _shots("A bare room with a crate.\n\n"
+                   "Kate takes off her shirt and drops it on the crate.\n\n"
+                   "Sam watches from the doorway.\n\n"
+                   "Kate turns towards him.", character_memory=mem)
+    check("a beat naming only the other person still says it",
+          "chest" in other[1], " ".join(other[1].split())[-140:])
+    check("...and says WHOSE chest it is", "Kate's chest" in other[1],
+          " ".join(other[1].split())[-140:])
+    check("...and names her when both are described",
+          "Kate's chest" in other[2], " ".join(other[2].split())[-140:])
     # ...and dressing again stops it, or she is told her chest is bare over a shirt.
     back = _shots("A bare room.\n\nKate takes off her shirt.\n\n"
                   "Kate puts on her shirt.\n\nKate listens.", character_memory=mem)

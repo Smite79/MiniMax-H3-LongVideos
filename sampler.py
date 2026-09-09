@@ -694,7 +694,7 @@ def bare_clause(gone, covers=None, worn=""):
     return bare_hold(regions, covers, worn, gone)
 
 
-def bare_hold(regions, covers=None, worn="", gone=()):
+def bare_hold(regions, covers=None, worn="", gone=(), whose=""):
     """Say those regions are bare -- from STATE, so it outlives its beat.
 
     The same suppression as the removal beat, because it is the same sentence:
@@ -741,6 +741,13 @@ def bare_hold(regions, covers=None, worn="", gone=()):
     # joined as written it read "and The feet and ankles are bare".
     out = out[:2]
     joined = out[0] + "".join(", and " + s[0].lower() + s[1:] for s in out[1:])
+    # WHOSE, when the shot describes somebody else as well. An unattributed "the
+    # chest is bare" in a shot about two people is a region belonging to nobody,
+    # and the model picks. The hardware hold has said "on <name>" for the same
+    # reason since it was written.
+    if whose:
+        joined = f"{whose}'s " + joined[4:] if joined.startswith("The ") else \
+            f"{whose}: " + joined
     return " " + joined + ", with nothing else worn there."
 
 
@@ -7406,8 +7413,11 @@ class H3LongVideos:
             # undresses somebody names no garment, so the wardrobe to clear is read
             # off their sheet entries -- and only theirs. Undressing one person must
             # not take the other one's clothes off.
+            # Bound whether or not the guard runs: the previous shot's cast is read
+            # further down, to keep saying what is bare about somebody the keyframe
+            # still carries, and that has nothing to do with the guard being on.
+            _was = list(active)
             if character_guard:
-                _was = list(active)
                 shot_sheet, active = sheet_for_beat(sheet, body, active)
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
                     notes.append(f"shot {len(shots) + 1} describes only "
@@ -7718,18 +7728,33 @@ class H3LongVideos:
                 # a shot ends up guarding the previous shot's cast.
                 _who_here = (active if character_guard else
                              [n for n, _ in sheet_lines(shot_sheet) if n])
-                _bare_now, _still_on = [], []
-                for _n in (_who_here or []):
+                # ...and ALSO for anybody the keyframe still carries. A beat that
+                # names only the other person -- "Sam watches from the doorway" --
+                # left her out of the shot's cast, so nothing said what was on her
+                # chest for that one beat, and the model filled it in. Reported as
+                # a bra popping into ONE beat: this is the beat.
+                #
+                # The previous shot's cast, because that is the frame this shot
+                # opens on. It is one continuity sentence, not a sheet entry --
+                # no face, no wardrobe, nothing that would stage a person who is
+                # not there. She is already in the picture; the words only have to
+                # stop contradicting it.
+                _carried_on = [n for n in (_was or []) if n not in (_who_here or [])]
+                _rows = []
+                for _n in list(_who_here or []) + _carried_on:
                     _q = _state.people.get(_n)
-                    for _r in (_q.bare if _q else []):
-                        if _r not in _bare_now:
-                            _bare_now.append(_r)
-                    _still_on += list(_q.worn) if _q else []
-                # WHAT IS ACTUALLY ON, from the state -- not the sheet. The sheet
-                # still lists the shirt, because the character memory is never
-                # edited, so passing it here suppressed every region the sheet
-                # ever mentioned and the clause could only speak about feet.
-                _bare = bare_hold(_bare_now, covers, ", ".join(_still_on))
+                    if _q and _q.bare:
+                        # WHAT IS ACTUALLY ON, from the state -- not the sheet.
+                        # The sheet still lists the shirt, because the character
+                        # memory is never edited, so passing it here suppressed
+                        # every region the sheet ever mentioned and the clause
+                        # could only ever speak about feet.
+                        _rows.append((_n, list(_q.bare), ", ".join(_q.worn)))
+                _name_it = (len(_rows) > 1 or len(_who_here or []) > 1
+                            or any(_n in _carried_on for _n, _r, _o in _rows))
+                _bare = "".join(
+                    bare_hold(_rg, covers, _on, whose=(_n if _name_it else ""))
+                    for _n, _rg, _on in _rows)
                 if _bare:
                     bare_held.append(len(shots) + 1)
             if _bare:
