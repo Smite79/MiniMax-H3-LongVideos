@@ -4021,6 +4021,64 @@ def test_a_written_sound_is_recognised():
         check(f"...but heard: {_t[:32]!r}", S.sound_described(_t))
 
 
+def test_the_upscale_path_does_not_hold_the_chain_twice():
+    print("\n=== the upscale path streams instead of concatenating ===")
+    # Both chunk loops in _upscale_frames did out.append(...) then
+    # torch.cat(out, dim=0) -- the shape the finished-chain join was rebuilt to
+    # stop, at a LARGER size, and `out` is a local that is never cleared, so it
+    # survived the cat AND the trailing resize. 9.26GB per copy per doubling:
+    # 37GB x2 at 2x, 148GB x2 with the RealESRGAN_x4plus in models/upscale_models.
+    _put, _done = S._stream_chunks(0)
+    check("nothing put -> nothing returned", _done() is None)
+    for _total, _step in ((10, 3), (10, 10), (1, 4), (9, 4), (7, 1)):
+        _pieces = [torch.rand(min(_step, _total - i), 4, 6, 3)
+                   for i in range(0, _total, _step)]
+        _put, _done = S._stream_chunks(_total)
+        for _pc in _pieces:
+            _put(_pc)
+        check(f"streamed {_total} in steps of {_step} == torch.cat",
+              torch.equal(_done(), torch.cat(_pieces, dim=0)))
+    # ...and the destination is sized from the FIRST chunk, so the upscaler's scale
+    # factor does not have to be known in advance.
+    _put, _done = S._stream_chunks(4)
+    _put(torch.rand(2, 40, 60, 3)); _put(torch.rand(2, 40, 60, 3))
+    check("destination takes the chunk's own H/W", tuple(_done().shape) == (4, 40, 60, 3))
+
+    # _resize_short_edge ran the WHOLE chain through one comfy.utils.lanczos call,
+    # which is three full-length list comprehensions plus a torch.stack, with the
+    # two biggest transients at fp32 -- double the chain's own width. ~147GB to
+    # produce a 29GB result at 2580 frames, and it fires on a DOWNSCALE too.
+    _seen = []
+    _real = S.comfy.utils.common_upscale if hasattr(S.comfy.utils, "common_upscale") else None
+    def _fake(sm, wdt, hgt, method, crop):
+        _seen.append(int(sm.shape[0]))
+        return torch.nn.functional.interpolate(sm.float(), size=(hgt, wdt),
+                                               mode="nearest").to(sm.dtype)
+    S.comfy.utils.common_upscale = _fake
+    try:
+        _f = torch.rand(70, 64, 96, 3)
+        _got = S._resize_short_edge(_f, 96)
+        check("the resize is chunked, not one call", len(_seen) > 1)
+        check(f"...no chunk exceeds RESIZE_CHUNK ({S.RESIZE_CHUNK})",
+              max(_seen) <= S.RESIZE_CHUNK)
+        check("...every frame is accounted for", sum(_seen) == 70)
+        check("...and the result is the whole batch", tuple(_got.shape) == (70, 96, 128, 3))
+        _seen.clear()
+        _same = S._resize_short_edge(_f, 96)
+        check("...chunking is deterministic", torch.equal(_got, _same))
+        # The no-op short-circuit must survive: an already-correct size allocates
+        # nothing at all, which is the common case when target_short_edge matches.
+        _seen.clear()
+        _nop = torch.rand(4, 64, 64, 3)
+        check("an already-correct size is a no-op",
+              S._resize_short_edge(_nop, 64) is _nop and not _seen)
+    finally:
+        if _real is not None:
+            S.comfy.utils.common_upscale = _real
+        else:
+            del S.comfy.utils.common_upscale
+
+
 def test_a_vae_that_tiles_itself_is_not_asked_to():
     print("\n=== the tiled detour costs 3x on a VAE that owns its tiling ===")
     # MiniMaxH3VideoVAE.decode_tiled is `return self.decode(z)` -- every tile_t and
@@ -4440,6 +4498,7 @@ def main():
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
     test_a_written_sound_is_recognised()
+    test_the_upscale_path_does_not_hold_the_chain_twice()
     test_a_vae_that_tiles_itself_is_not_asked_to()
     test_the_overlay_does_not_copy_a_chain_it_will_not_draw_on()
     test_behind_the_back_is_read_however_it_is_written()

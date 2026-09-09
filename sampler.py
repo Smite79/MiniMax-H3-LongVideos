@@ -6443,9 +6443,76 @@ def scrub_removed(text, tokens):
 
 # --- upscaling ---------------------------------------------------------------
 
-def _resize_short_edge(frames, target, method="lanczos"):
+# How many frames go through one resize call. The whole chain used to go in one,
+# which is what made this the largest allocation in the node -- see below.
+RESIZE_CHUNK = 32
+
+
+def _stream_chunks(total):
+    """A collector that writes upscaled chunks into ONE destination as they land.
+
+    Both chunk loops in _upscale_frames used `out.append(...)` then
+    `frames = torch.cat(out, dim=0)`. That is the shape the finished-chain join was
+    rebuilt to stop, at a LARGER size: the list holds the whole upscaled chain and
+    the cat allocates a second one, both live at the cat, and `out` is a local that
+    is never cleared -- so it survives the cat, survives the trailing resize, and is
+    still bound at the return. Meanwhile the CALLER's pre-upscale chain cannot be
+    dropped either, because `part = frames[s:s+batch]` is a view into it.
+
+    At 2580 frames of 1056x608 that is 9.26GB per copy per doubling: 37GB x2 at 2x,
+    and 148GB x2 with the RealESRGAN_x4plus that is sitting in models/upscale_models.
+    Preallocating from the first chunk and copying into it removes exactly one of
+    those two, and drops the list at the same time.
+
+    The destination is sized from the FIRST chunk, so the model's scale factor does
+    not have to be known in advance, and the frame count is the caller's own -- an
+    upscaler changes width and height, never the number of frames."""
+    state = {"dst": None, "at": 0}
+
+    def put(piece):
+        if state["dst"] is None:
+            state["dst"] = torch.empty((int(total),) + tuple(piece.shape[1:]),
+                                       dtype=piece.dtype, device=piece.device)
+        k = int(piece.shape[0])
+        end = min(state["at"] + k, state["dst"].shape[0])
+        if end > state["at"]:
+            state["dst"][state["at"]:end].copy_(piece[:end - state["at"]])
+        state["at"] = end
+
+    def done():
+        d, at = state["dst"], state["at"]
+        if d is None:
+            return None
+        return d if at == d.shape[0] else d[:at]
+
+    return put, done
+
+
+def _resize_short_edge(frames, target, method="lanczos", chunk=0):
     """Resize a [B,H,W,C] frame batch so its short edge == target (keeping aspect,
-    snapped to /32). Plain high-quality resize -- enlarges, doesn't add detail."""
+    snapped to /32). Plain high-quality resize -- enlarges, doesn't add detail.
+
+    IN CHUNKS, BECAUSE LANCZOS IS FOUR FULL-LENGTH COPIES. The whole chain went
+    into one common_upscale call, and comfy.utils.lanczos is three successive list
+    comprehensions over every frame at once:
+
+        images = [Image.fromarray(...) for image in samples]        # N at source size
+        images = [image.resize(...) for image in images]            # N at target size
+        images = [torch.from_numpy(np.array(im).astype(np.float32)/255.) ...]
+        result = torch.stack(images)
+        return result.to(samples.device, samples.dtype)
+
+    A comprehension builds the new list completely before rebinding the name, so at
+    each rebind BOTH are live; then torch.stack allocates a full copy while its list
+    still exists, and .to() allocates the result while the stack still exists. Note
+    the astype(np.float32): the input is fp16 but the two largest transients are at
+    DOUBLE its width. At 2580 frames to a 1080 short edge that peaked around 147GB
+    to produce a 29GB result, and it fires on a DOWNSCALE too.
+
+    Chunked, the peak is the result plus one chunk's worth of that machinery. It is
+    bit-identical: PIL resizes each frame independently, so per-chunk and per-chain
+    give the same pixels. The early return for an already-correct size is kept, so
+    the common no-op case still allocates nothing."""
     b, h, w, c = frames.shape
     if min(h, w) == target:
         return frames
@@ -6453,9 +6520,14 @@ def _resize_short_edge(frames, target, method="lanczos"):
         nh = target; nw = max(32, int(round(target * w / h / 32) * 32))
     else:
         nw = target; nh = max(32, int(round(target * h / w / 32) * 32))
-    s = frames.movedim(-1, 1)
-    s = comfy.utils.common_upscale(s, nw, nh, method, "disabled")
-    return s.movedim(1, -1)
+    step = max(1, int(chunk) or RESIZE_CHUNK)
+    out = torch.empty((b, nh, nw, c), dtype=frames.dtype, device=frames.device)
+    for i in range(0, b, step):
+        part = comfy.utils.common_upscale(
+            frames[i:i + step].movedim(-1, 1), nw, nh, method, "disabled")
+        out[i:i + step].copy_(part.movedim(1, -1))
+        del part
+    return out
 
 
 def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
@@ -6487,7 +6559,7 @@ def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
                 cur = min(frames.shape[1], frames.shape[2])
                 if cur > 0:
                     scale = max(1, min(4, int(round(int(target_short_edge) / cur))))
-            out = []
+            _put, _done = _stream_chunks(frames.shape[0])
             n = frames.shape[0]
             step = max(1, int(batch))
             for st in range(0, n, step):
@@ -6501,10 +6573,10 @@ def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
                         continue
                 if res is None:
                     raise RuntimeError("RTX node signature not recognized")
-                out.append(res.detach().to("cpu"))
+                _put(res.detach().to("cpu"))
                 del res, part
                 _deep_cleanup()
-            frames = torch.cat(out, dim=0)
+            frames = _done()
             note = f"RTX Video Super Resolution x{scale}"
             if target_short_edge and int(target_short_edge) > 0:
                 frames = _resize_short_edge(frames, int(target_short_edge))
@@ -6520,15 +6592,15 @@ def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
             if loader is None or applier is None:
                 raise RuntimeError("upscale-model nodes not found")
             up_model = _invoke_node(loader, model_name=model_name)
-            out = []
+            _put, _done = _stream_chunks(frames.shape[0])
             n = frames.shape[0]
             for s in range(0, n, max(1, int(batch))):
                 part = frames[s:s + max(1, int(batch))]
                 res = _invoke_node(applier, upscale_model=up_model, image=part)
-                out.append(res.detach().to("cpu"))
+                _put(res.detach().to("cpu"))
                 del res, part
                 _deep_cleanup()
-            frames = torch.cat(out, dim=0)
+            frames = _done()
             note = f"upscaled with {model_name}"
         except Exception as e:
             mode = "lanczos"
