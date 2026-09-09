@@ -8543,9 +8543,34 @@ class H3LongVideos:
             # shot is carrying, not off the beat: the beat that lays her down is
             # rarely the shot the propped arm shows up in.
             _lying_now = any(_p == "lying down" for _p in poses.values())
-            _pose = pose_clause(_anchor_now.split(", at the")[0].strip()
-                                if _anchor_now else
-                                (anchored or "").split(", at the")[0].strip(),
+            # WHERE THE WRISTS ARE MAY ONLY EVER BE SAID ONCE, IN THE SCENE.
+            #
+            # restrained is set by `restraint_present(body) or
+            # restraint_present(_scene_for_state)` -- the beat OR the scene. The
+            # anchor was read from the beat alone. So the ordinary way of writing
+            # this -- "McKenna: ..., handcuffed behind her back" on the sheet, or a
+            # scene paragraph saying it once, and beats that never repeat it --
+            # marked her restrained and left the position empty for the whole film.
+            #
+            # pose_clause looks its argument up in a dict, so empty is not a shorter
+            # sentence, it is NO sentence: never told the wrists are together, never
+            # told the arms are behind the body, and never told what takes the weight
+            # when she lies down, because that clause reads this same anchor. Where
+            # the text says nothing the model puts the hands where the picture wants
+            # them, which is under her, propping her up.
+            #
+            # Reported twice, and neither the weight clause nor the wider anchor
+            # vocabulary could reach it: both fixed readers that were never being
+            # shown the text the position was written in.
+            #
+            # The BEAT still wins where it says one -- a beat that moves the wrists
+            # is the author changing them -- and the latch still wins over the
+            # scene, so this is only the fallback for a position that was stated
+            # once and never repeated. _anchor_now itself is left alone: it is what
+            # _holding keys off to tell a staging shot from the ones after it.
+            _pose_pos = (_anchor_now or anchored
+                         or (limb_anchor(_scene_for_state) if restrained else ""))
+            _pose = pose_clause(_pose_pos.split(", at the")[0].strip(),
                                 lying=_lying_now)
             hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
                     if _applying

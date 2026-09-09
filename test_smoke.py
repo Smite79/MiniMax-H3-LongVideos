@@ -2596,6 +2596,31 @@ def test_the_decode_keeps_the_vae_it_is_about_to_use():
     check("no current_loaded_models at all is survivable", S._resident([model]) == [])
 
 
+def test_the_position_may_only_be_written_once_in_the_scene():
+    print("\n=== the wrists are placed even when only the scene says where ===")
+    # restrained is set by the beat OR the scene; the anchor was read from the beat
+    # alone. So the ordinary way of writing this -- said once in the scene or on the
+    # sheet, never repeated in a beat -- marked her restrained with no position, and
+    # pose_clause looks its argument up in a dict, so empty is NO sentence rather
+    # than a shorter one. Never told the wrists are together, never told the arms are
+    # behind her, and never told what carries her weight when she lies down. Reported
+    # twice as her arm propping her up.
+    _p = ("Inside a van at night. McKenna lies in the back, wrists cuffed behind her back.\n"
+          "McKenna: she, 26, dark hair.\n\n"
+          "Dan gets into the van and looks at her.\n\n"
+          "She lays down on her side.")
+    _shots = run_node(_p)[3].split("\n---\n")
+    check("the position reaches every shot from the scene alone",
+          all("wrists together at the small of the back" in _s for _s in _shots))
+    check("...and the lying shot is told what carries her weight",
+          "take the weight of the body" in _shots[-1])
+    # A BEAT THAT MOVES THEM STILL WINS. The scene is only the fallback.
+    _moved = run_node("Inside a van. McKenna sits, wrists cuffed behind her back.\n\n"
+                      "Dan cuffs her wrists above her head.")[3]
+    check("a beat that moves the wrists overrides the scene",
+          "above the head" in _moved and "small of the back" not in _moved.split("Both arms")[-1])
+
+
 def test_finished_shots_are_held_in_half_precision():
     print("\n=== the chain does not crowd the weights out of RAM ===")
     # ComfyUI offloads models to system RAM rather than discarding them, so a shot
@@ -4685,6 +4710,7 @@ def main():
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
     test_the_decode_keeps_the_vae_it_is_about_to_use()
+    test_the_position_may_only_be_written_once_in_the_scene()
     test_finished_shots_are_held_in_half_precision()
     test_detail_trend()
     test_timing_report()
