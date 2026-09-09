@@ -498,13 +498,33 @@ def sheet_for_beat(sheet, beat, previous=None):
 _ENTRANCE = re.compile(
     r"\b(?:walk|step|come|run|stride|hurry|move|wander|burst|barge|slip|climb)"
     r"(?:s|ed|ing)?\s+(?:in|into|through|up|over|back|out\s+of)\b"
-    r"|\benter(?:s|ed|ing)?\b|\barriv(?:es?|ed|ing)\b|\bappear(?:s|ed|ing)?\b"
+    r"|\benter(?:s|ed|ing)?\b|\barriv(?:es?|ed|ing)\b"
     r"|\bjoin(?:s|ed|ing)?\b|\breturn(?:s|ed|ing)?\b|\bfollow(?:s|ed|ing)?\b"
-    r"|\bshows?\s+up\b|\bturns?\s+up\b|\blets?\s+\w+\s+in\b", re.I)
+    r"|\blets?\s+\w+\s+in\b", re.I)
+# APPEARING IS NOT ARRIVING, and the difference is the whole reason this list
+# exists. A staged arrival keeps the previous frame as the keyframe, because
+# somebody walking in through a door has a path into a frame that does not have
+# them in it -- they cross the edge of it. "Appears", "shows up", "turns up"
+# describe the RESULT, not the movement: there is no path, so the only way for
+# the model to put them into that frame is to fade them up inside it. Reported as
+# ghosting on a character introduction, which is exactly what that looks like.
+#
+# So they are introductions in position instead, and the shot cuts to her already
+# there -- which is what the words mean.
+#
+# Taking them out of the list above is the whole fix. A guard that ALSO looked
+# for them and cancelled an arrival was written here and removed: with the words
+# gone from the list it never changed an answer, and the one case it did reach --
+# a beat with a real entrance and an "appears" in it, "walks in and appears calm"
+# -- it got wrong, cancelling an arrival that plainly happens. The disable-check
+# is what showed it was dead: reverting it left every case green.
 
 
 def arrives_in(text):
-    """Does this beat stage somebody arriving?"""
+    """Does this beat stage somebody arriving -- moving into the frame?
+
+    A word that only says they are suddenly THERE does not count, however much it
+    reads like an entrance -- see the note on _ENTRANCE."""
     return bool(_ENTRANCE.search(text or ""))
 
 
@@ -1699,6 +1719,21 @@ _NON_LATIN = re.compile(
     r"\u2018\u2019\u201C\u201D\u2013\u2014\u2026]")
 
 
+# Things inside a line that have no single spoken form: a number, a time, a date,
+# an abbreviation, an acronym, a symbol. The model reads the line as text and
+# picks one -- "7:30" as "seven thirty" or "seven three zero", "Dr." as "doctor"
+# or "dee arr" -- and the picking is what mispronounced dialogue is.
+#
+# The abbreviations are a LIST, not a shape. "[A-Z][a-z]{0,3}\." also matches the
+# end of any short sentence, so "No." would have been reported as an abbreviation
+# in every script that has somebody saying no.
+_HARD_TO_SAY = re.compile(
+    r"\b\d[\d:.,/\-]*\d\b|\b\d\b"
+    r"|\b(?:Mr|Mrs|Ms|Dr|Prof|Sgt|Lt|Capt|Rev|Hon|St|Ave|Rd|Blvd|Jr|Sr|"
+    r"vs|etc|approx|dept|Inc|Ltd|Co)\."
+    r"|[&%$#@+=]", re.I)
+
+
 def non_latin_in(text):
     """The distinct non-Latin characters in this text, in order. [] when clean."""
     out = []
@@ -1812,6 +1847,15 @@ def mark_dialogue(beat):
             return m.group(0)
         before = b[max(0, m.start() - 40):m.start()]
         if re.search(r"(?:" + _SAYS + r")\b[^.]{0,12}$|[:,]\s*$", before, re.I):
+            return "<d>" + said + "</d>"
+        # ...or the cue comes AFTER it. '"Come here," Dana says.' is how half of
+        # written dialogue is punctuated, and only the text BEFORE the quote was
+        # ever consulted -- so that form was never marked at all, and an unmarked
+        # line is a line the audio branch was never told is spoken. Quotation
+        # marks say nothing to the model on their own.
+        after = b[m.end():m.end() + 40]
+        if re.match(r"[\s,]*(?:[A-Za-z][\w'’-]*\s+){0,2}?(?:" + _SAYS + r")\b",
+                    after, re.I):
             return "<d>" + said + "</d>"
         return m.group(0)
 
@@ -7241,6 +7285,7 @@ class H3LongVideos:
         unattributed = []         # shots whose line names no speaker
         mouth_named = []          # shots with a line, holding the OTHER mouths
         language_shots = []       # shots told which language the line is in
+        _spoken_words = {}        # shot -> words actually inside the quotes
         _langs_used = []          # ...and which languages those turned out to be
         # THE WHOLE SCRIPT'S language, as the per-shot fallback. A single short
         # line -- "Si." -- carries no evidence on its own, and reading it alone
@@ -8554,6 +8599,13 @@ class H3LongVideos:
                 told_shots.append(len(shots) + 1)
             if _lang:
                 language_shots.append(len(shots) + 1)
+            # How much of this shot the line actually fills. A short line in a long
+            # shot leaves the audio branch with time and nothing to put in it, and
+            # what it puts there is more speech -- the line again. Counted here
+            # where the beat is; judged against the shot length further down.
+            _said_words = len(engine.spoken_text(body).split())
+            if _said_words:
+                _spoken_words[len(shots) + 1] = _said_words
             _device = device_voice_clause(body) if (_device_line and _has_people) else ""
             if _device:
                 device_shots.append(len(shots) + 1)
@@ -9107,6 +9159,58 @@ class H3LongVideos:
                 f"Write the dialogue in the language you want spoken; a line too "
                 f"short to tell falls back to the rest of the script, then to "
                 f"{SPOKEN_LANGUAGE}")
+        # A LINE THAT DOES NOT FILL ITS SHOT. H3 is joint: the audio branch runs
+        # for the whole shot, and a short line in a long one leaves it with time
+        # and nothing to say. What it does with that time is say the line again.
+        # Reported as dialogue duplication.
+        #
+        # A REPORT, not a clause. "the line said once" was tried as prompt text
+        # and made it worse -- more speech words on a shot is more reason for the
+        # branch to make speech -- so this says it to YOU instead, where the fix
+        # is to shorten the shot or write more line.
+        _roomy = []
+        for _n, _w in sorted(_spoken_words.items()):
+            _sec = (lens[_n - 1] / H3_FPS) if _n - 1 < len(lens) else 0.0
+            _need = _w / 2.5 + 0.5      # ~150 words a minute, plus a breath
+            if _sec > 0 and _sec > _need * 2:
+                _roomy.append((_n, _w, _sec, _need))
+        if _roomy:
+            notes.append(
+                "shot(s) " + ", ".join(
+                    f"{n} ({w} word{'s' if w != 1 else ''} of line, about "
+                    f"{need:.1f}s, in a {sec:.1f}s shot)"
+                    for n, w, sec, need in _roomy)
+                + " leave more than half their length with no line in it. The audio "
+                  "branch runs for the whole shot and fills what is left, and what "
+                  "it fills it with is the line again -- that is where doubled "
+                  "dialogue comes from. Shorten those shots (shot_length 'from the "
+                  "beat', or a lower shot_seconds), or give the beat more to say. "
+                  "Room tone is already laid under them, which is what makes the "
+                  "silence survivable at all")
+        # WHAT A LINE CANNOT BE READ ALOUD FROM. Digits, times and abbreviations
+        # have no single pronunciation -- "7:30" is "seven thirty" and also "seven
+        # three zero", "Dr." is "doctor" and also "dee arr", "1985" is a year and
+        # also four digits -- so the model picks, and picking wrong is what
+        # mispronunciation sounds like. Written out, there is nothing to pick.
+        #
+        # Reported, never rewritten: the one promise this node makes about your
+        # text is that it goes to the model as you wrote it.
+        _hard = []
+        _said_all = engine.spoken_text(prompt or "")
+        for _m in _HARD_TO_SAY.finditer(_said_all):
+            _t = _m.group(0).strip()
+            if _t and _t not in _hard:
+                _hard.append(_t)
+        if _hard:
+            notes.append(
+                f"the dialogue contains {len(_hard)} thing(s) with no single way "
+                f"to say them out loud: {', '.join(_hard[:10])}. A joint model "
+                f"reads the line as text and chooses a pronunciation -- \"7:30\" is "
+                f"\"seven thirty\" and equally \"seven three zero\", \"Dr.\" is "
+                f"\"doctor\" and equally \"dee arr\" -- and the choice is where "
+                f"mispronounced dialogue comes from. Spell them the way they should "
+                f"be SPOKEN and there is nothing left to choose. They are NOT "
+                f"rewritten: your words go to the model as you wrote them")
         _odd = non_latin_in(prompt) + non_latin_in(character_memory or "") \
             + non_latin_in(anchor or "")
         _odd = list(dict.fromkeys(_odd))

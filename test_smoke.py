@@ -886,6 +886,79 @@ def _shots(P, **kw):
             if x.strip()]
 
 
+def test_appearing_is_not_arriving():
+    """REPORTED: ghosting on a character introduction.
+
+    A staged ARRIVAL keeps the previous frame as the keyframe, because somebody
+    walking in through a door has a path into a frame that does not have them in
+    it. "Appears", "shows up", "turns up" describe the result and not the
+    movement -- there is no path, so the only way into that frame is to fade up
+    inside it, which is what ghosting is."""
+    print("\n=== appearing is not arriving ===")
+    for beat, want in (("McKenna walks in through the door.", True),
+                       ("McKenna enters the room.", True),
+                       ("McKenna comes into the room.", True),
+                       ("McKenna follows her in.", True),
+                       ("McKenna appears in the doorway.", False),
+                       ("McKenna shows up at the door.", False),
+                       ("McKenna turns up beside her.", False),
+                       ("McKenna appears.", False)):
+        check(f"{beat!r} arrives={want}", S.arrives_in(beat) is want,
+              str(S.arrives_in(beat)))
+    # "appears" is also the ordinary word for SEEMS, and cancelling a real
+    # entrance on it loses the arrival it was describing.
+    check("a real entrance survives an opinion",
+          S.arrives_in("McKenna walks in and appears calm.") is True)
+    check("...and so does this one",
+          S.arrives_in("McKenna enters and appears nervous.") is True)
+
+
+def test_a_line_is_marked_however_it_is_punctuated():
+    """REPORTED: dialogue duplication and words pronounced wrongly.
+
+    '"Come here," Dana says.' is how half of written dialogue is punctuated, and
+    only the text BEFORE a quote was consulted for a speech cue -- so that form
+    was never wrapped in <d>...</d> at all. Quotation marks say nothing to the
+    model; an unmarked line is one the audio branch was never told is spoken."""
+    print("\n=== a line is marked however it is punctuated ===")
+    for beat in ('"Come here," Dana says.', '"Come here," she says.',
+                 '"Come here," Dana said quietly.'):
+        check(f"marked: {beat!r}", "<d>" in S.mark_dialogue(beat),
+              S.mark_dialogue(beat))
+    check("the cue-first form still works",
+          S.mark_dialogue('Dana says: "Come here."').count("<d>") == 1)
+    # A scare quote is not a line, whichever side the words are on.
+    for beat in ('She wore a "vintage" coat.', 'He called it a "problem" yesterday.',
+                 'The sign said "exit" in red.'):
+        check(f"not a line: {beat!r}", "<d>" not in S.mark_dialogue(beat),
+              S.mark_dialogue(beat))
+    # A SHORT LINE IN A LONG SHOT is where doubled dialogue comes from: the audio
+    # branch runs the whole shot and fills what is left with the line again.
+    # Reported, not clause -- "the line said once" as prompt text made it worse.
+    mem = "Dana: she, 35."
+    thin = run_node("A room.\n\nDana says: \"No.\"\n\nDana waits.",
+                    plan_only=True, character_memory=mem)[2]
+    check("a line that does not fill its shot is reported",
+          "no line in it" in thin, thin[-200:])
+    full = run_node("A room.\n\nDana says: \"I told you last night that this was "
+                    "going to happen and you did not listen to a word of it.\"",
+                    plan_only=True, character_memory=mem)[2]
+    check("...and a line that does fill it is not", "no line in it" not in full)
+    # Numbers and abbreviations have no single spoken form, and the model picks.
+    hard = run_node('A room.\n\nDana says: "Dr. Vale gets here at 7:30."',
+                    plan_only=True, character_memory=mem)[2]
+    check("unsayable text in a line is reported", "no single way" in hard)
+    check("...naming what it found", "7:30" in hard and "Dr." in hard)
+    soft = run_node('A room.\n\nDana says: "Doctor Vale gets here at half seven."',
+                    plan_only=True, character_memory=mem)[2]
+    check("...and spelled-out dialogue is clean", "no single way" not in soft)
+    # Only inside the quotes: narration is never spoken, so its digits are fine.
+    narr = run_node('A room.\n\nDana checks the clock at 7:30.\n\n'
+                    'Dana says: "You should have told me."',
+                    plan_only=True, character_memory=mem)[2]
+    check("...and narration is left alone", "no single way" not in narr)
+
+
 def test_a_two_word_sheet_name_does_not_duplicate_her():
     """REPORTED: a duplicate Mistress, in the FIRST beat -- so nothing to do with
     keyframes or carried frames. sheet_lines took a one-word name, "Mistress
@@ -4577,6 +4650,8 @@ def main():
     test_undressing_does_not_spread()
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
+    test_appearing_is_not_arriving()
+    test_a_line_is_marked_however_it_is_punctuated()
     test_a_two_word_sheet_name_does_not_duplicate_her()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
