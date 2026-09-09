@@ -2606,6 +2606,54 @@ def test_the_decode_keeps_the_vae_it_is_about_to_use():
     check("no current_loaded_models at all is survivable", S._resident([model]) == [])
 
 
+def test_the_chain_is_never_held_twice():
+    print("\n=== the chain is one allocation from first shot to return ===")
+    # The per-shot list existed because the total length was not known until the loop
+    # ended -- and it IS known: plan_lengths fixes `lens` before the first shot
+    # samples, every entry is on H3's 17k+5 grid, and trim_seam only ever REMOVES a
+    # frame, so sum(lens) is a hard upper bound. Writing each shot into a destination
+    # allocated up front deletes the last double-hold in the node: even after the
+    # join was rewritten to drain the list, both were fully live at the moment it
+    # started -- 9.26GB of destination beside 9.26GB of pieces, on top of 44.64GB of
+    # staged weights, which is where the render was being killed.
+    #
+    # Checked structurally rather than by RSS: if the chain came from a preallocated
+    # destination, the returned tensor is a VIEW onto storage larger than itself, by
+    # exactly the frames trim_seam took out of the seams.
+    for _n in (2, 4, 8):
+        _P = "A room.\n\n" + "\n\n".join(f"Beat {_i}." for _i in range(_n))
+        _out = run_node(_P)
+        _v, _shots = _out[0], _out[6]
+        _per_frame = _v.shape[1] * _v.shape[2] * 3 * _v.element_size()
+        _slack = _v.untyped_storage().nbytes() - _v.numel() * _v.element_size()
+        check(f"{_n} beats: the chain is a view of one destination",
+              _slack == (_shots - 1) * _per_frame,
+              f"slack {_slack} vs {(_shots - 1) * _per_frame}")
+    # ...and it is still the right pixels, in range, in the output dtype.
+    _out = run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
+    _v = _out[0]
+    check("...and still float32 by default", _v.dtype == torch.float32, str(_v.dtype))
+    check("...and still in range", float(_v.min()) >= 0.0 and float(_v.max()) <= 1.0)
+    check("...and the frame count is unchanged", _v.shape[0] == _out[5])
+
+    # THE OVERFLOW PATH. Not reachable on the real VAE, which decodes a shot to
+    # exactly the length it was planned at -- but "not reachable" is a claim about
+    # somebody else's code, so a VAE that over-decodes must still return a correct
+    # chain, just by the slower route.
+    _real_decode = FakeVAE.decode
+    try:
+        FakeVAE.decode = lambda self, latent: torch.rand(
+            max(1, (latent.shape[2] - 2) // 5 * 17 + 5) + 3, H, W, 3).to(_vae_out_dtype())
+        _o = run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
+        _vo = _o[0]
+        check("a VAE that over-decodes still returns a chain", _vo.shape[0] > 0)
+        check("...of the length it actually decoded", _vo.shape[0] == _o[5])
+        check("...in range", float(_vo.min()) >= 0.0 and float(_vo.max()) <= 1.0)
+        check("...and in the output dtype", _vo.dtype == torch.float32)
+    finally:
+        FakeVAE.decode = _real_decode
+
+
 def test_the_position_may_only_be_written_once_in_the_scene():
     print("\n=== the wrists are placed even when only the scene says where ===")
     # restrained is set by the beat OR the scene; the anchor was read from the beat
@@ -4814,6 +4862,7 @@ def main():
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
     test_the_decode_keeps_the_vae_it_is_about_to_use()
+    test_the_chain_is_never_held_twice()
     test_the_position_may_only_be_written_once_in_the_scene()
     test_finished_shots_are_held_in_half_precision()
     test_detail_trend()

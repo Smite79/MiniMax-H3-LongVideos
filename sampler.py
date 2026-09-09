@@ -9973,6 +9973,9 @@ class H3LongVideos:
         fresh = []
         t_start = time.perf_counter()
         vid_out, aud_out, sr = [], [], 44100
+        # THE FINISHED CHAIN, ALLOCATED ONCE, BEFORE THE FIRST SHOT LANDS IN IT.
+        # vid_out survives only as the overflow path -- see the shot write below.
+        _dst, _at = None, 0
         av_fix = 0                  # samples of A/V drift corrected across the chain
         _captured = {}              # name -> a frame from the last shot they were in
         _captured_from = {}         # name -> which shot that frame came from
@@ -10278,8 +10281,50 @@ class H3LongVideos:
             # Free, not a trade: fp16 carries ~3 decimal digits over 0..1, and the
             # output is 8-bit. Converted back at the join, so nothing downstream sees
             # a different dtype.
-            vid_out.append(imgs.to("cpu", torch.float16, copy=True)
-                           if cleanup_between_shots else imgs)
+            # STRAIGHT INTO THE FINISHED CHAIN, not into a list to be joined later.
+            #
+            # The per-shot list existed because the total length was not known until
+            # the loop ended -- and it IS known: plan_lengths fixed `lens` before the
+            # first shot sampled, every entry is on H3's 17k+5 grid, and trim_seam
+            # only ever REMOVES a frame, so sum(lens) is a hard upper bound. With the
+            # destination allocated up front each shot is written where it belongs
+            # and the join has nothing left to do.
+            #
+            # That deletes the last double-hold in the node. Even after the join was
+            # rewritten to drain the list, both were still fully live at the moment
+            # it started: 9.26GB of destination beside 9.26GB of pieces, 18.51GB of
+            # chain on top of 44.64GB of staged weights, which is where the render
+            # was being killed. Now the chain is one copy from first shot to return.
+            #
+            # It also drops the copy=True. That was duplicating a whole shot (1.30GB)
+            # purely to detach it from the decode buffer; copy_ into the destination
+            # detaches it just the same, and converts device and dtype on the way, so
+            # one copy does what two did.
+            #
+            # ON AN fp32 INSTALL THIS TRADES SUSTAINED FOR PEAK, deliberately. The
+            # list was fp16 while the render ran and widened only at the join, so a
+            # 107s chain sat at 9.26GB and spiked to 27.77GB; the destination is the
+            # OUTPUT dtype throughout, so it sits at 18.51GB and never spikes. Peak
+            # is what the OOM killer reads, and on an --fp16-intermediates install --
+            # where the output dtype is fp16 anyway -- both numbers improve.
+            #
+            # The overflow branch is not reachable on the real VAE, which decodes a
+            # shot to exactly the length it was planned at. It exists because "not
+            # reachable" is a claim about somebody else's code, and a wrong frame
+            # count should cost a slower path, not a crash.
+            _k = int(imgs.shape[0])
+            if _dst is None and _k:
+                _dst = torch.empty(
+                    (max(_k, int(sum(lens))),) + tuple(imgs.shape[1:]),
+                    dtype=_image_out_dtype(),
+                    device=(torch.device("cpu") if cleanup_between_shots
+                            else imgs.device))
+            if _dst is not None and _at + _k <= _dst.shape[0]:
+                _dst[_at:_at + _k].copy_(imgs)
+                _at += _k
+            else:
+                vid_out.append(imgs.to("cpu", torch.float16, copy=True)
+                               if cleanup_between_shots else imgs)
             aud_out.append(wav["waveform"].to("cpu", copy=True) if cleanup_between_shots
                            else wav["waveform"])
             del imgs, wav
@@ -10332,17 +10377,34 @@ class H3LongVideos:
         # the peak (three copies became one) and 9.3GB no longer held afterwards.
         # device= matters: with cleanup_between_shots off the pieces are still on the
         # GPU and cat/float would have returned a GPU tensor, so this must too.
+        # THERE IS NO JOIN LEFT. Every shot was written into _dst as it was decoded,
+        # so the chain is already assembled and this is a view onto it -- zero new
+        # bytes at the moment that used to be the peak of the whole render.
+        #
+        # _at is short of the capacity by exactly one frame per seam that trim_seam
+        # removed, so the slice keeps a few frames of slack allocated rather than
+        # copying the chain to reclaim them: shots-1 frames against a copy of the
+        # whole thing is not a trade worth making.
         if vid_out:
-            _n = sum(int(_t.shape[0]) for _t in vid_out)
-            video = torch.empty((_n,) + tuple(vid_out[0].shape[1:]),
-                                dtype=_image_out_dtype(), device=vid_out[0].device)
-            _at = 0
+            # OVERFLOW ONLY -- a VAE that decoded a shot longer than it was planned
+            # at. Assemble both halves the old way, which costs the extra copy this
+            # rewrite exists to remove, on a path the real VAE never takes.
+            _extra = sum(int(_t.shape[0]) for _t in vid_out)
+            _ref = _dst if _dst is not None else vid_out[0]
+            video = torch.empty((_at + _extra,) + tuple(_ref.shape[1:]),
+                                dtype=_image_out_dtype(), device=_ref.device)
+            if _dst is not None and _at:
+                video[:_at].copy_(_dst[:_at])
+            _dst = None
+            _w = _at
             while vid_out:
                 _piece = vid_out.pop(0)
-                _k = int(_piece.shape[0])
-                video[_at:_at + _k].copy_(_piece)   # fp16 -> fp32 on the way in
-                _at += _k
+                _k2 = int(_piece.shape[0])
+                video[_w:_w + _k2].copy_(_piece)
+                _w += _k2
                 del _piece
+        elif _dst is not None:
+            video = _dst if _at == _dst.shape[0] else _dst[:_at]
         else:
             video = torch.cat(vid_out, dim=0)       # empty: fail exactly as before
         # PIXEL upscale, once, on the finished chain. After the latent pass and after
