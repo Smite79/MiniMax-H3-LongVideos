@@ -176,6 +176,46 @@ def test_a_chain_is_a_tether_not_a_second_restraint():
     check("no loose chain in the text", "chain" not in shots[1], shots[1])
 
 
+def test_the_material_survives_as_written():
+    """REPORTED: a mirrored steel collar rendering as a black leather one.
+
+    The modifier list was twenty-odd words, so "mirrored" and "nickel" were not
+    modifiers at all: "a mirrored steel collar" was recorded as "steel collar"
+    and "a brushed nickel collar" as plain "collar". The guard repeats that
+    shortened name once a shot, every shot after the first, and the prior for a
+    bare collar is a black leather one -- so the node was asking for the thing
+    that was reported."""
+    print("\n=== the material survives as written ===")
+
+    def hw(t):
+        return [w for _c, _p, w, _a in E.hardware_spans(t)]
+
+    check("a finish is part of the name",
+          hw("a mirrored steel collar") == ["mirrored steel collar"],
+          str(hw("a mirrored steel collar")))
+    check("...and a metal it never listed",
+          hw("a brushed nickel collar") == ["brushed nickel collar"],
+          str(hw("a brushed nickel collar")))
+    check("...and three words of it",
+          hw("a mirrored stainless steel collar")
+          == ["mirrored stainless steel collar"],
+          str(hw("a mirrored stainless steel collar")))
+    check("a hyphenated finish passes whole, unlisted",
+          hw("a mirror-finish steel collar") == ["mirror-finish steel collar"],
+          str(hw("a mirror-finish steel collar")))
+    check("what already worked still works",
+          hw("a black leather collar") == ["black leather collar"])
+    check("garments keep theirs too",
+          E.garments_in("a mirrored PVC skirt") == ["mirrored pvc skirt"],
+          str(E.garments_in("a mirrored PVC skirt")))
+    # A VERB IS NOT A MODIFIER. "-ed" is a verb far more often than an adjective,
+    # and capturing one would put an action into the name of the thing.
+    for t, want in (("She grabbed her collar.", ["collar"]),
+                    ("He unlocked the collar.", ["collar"]),
+                    ("He dropped the steel collar.", ["steel collar"])):
+        check(f"no verb in the name: {t!r}", hw(t) == want, str(hw(t)))
+
+
 def test_a_two_word_name_is_still_a_name():
     """REPORTED: a duplicate Mistress, present in the very first beat.
 
@@ -537,6 +577,7 @@ def main():
     test_it_comes_off_when_the_text_takes_it_off()
     test_the_shot_that_applies_says_both_ends()
     test_a_chain_is_a_tether_not_a_second_restraint()
+    test_the_material_survives_as_written()
     test_a_two_word_name_is_still_a_name()
     test_a_bare_region_stays_bare()
     test_a_squat_is_held()

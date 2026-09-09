@@ -68,8 +68,35 @@ HARDWARE = (
 )
 # Material and colour survive because they decide what the thing looks like:
 # "steel collar" must not come back as "collar" two shots later.
-_ADJ = (r"(?:steel|iron|metal|leather|nylon|plastic|rubber|rope|chrome|brass|"
-        r"black|silver|white|red|brown|padded|heavy|thin|short|long|thick|"
+# WHAT THE AUTHOR CALLED IT. This decides how much of the wording survives into
+# the guard clauses, and the guard is what every shot after the first repeats --
+# so a word missing here is a word the model stops hearing.
+#
+# It was twenty-odd words, and "a mirrored steel collar" came back as "steel
+# collar" while "a brushed nickel collar" came back as "collar". A bare "collar"
+# repeated once a shot is a bare collar, and the prior for that is a black
+# leather one -- which is exactly what was reported.
+#
+# Hyphenated compounds pass whole ("mirror-finish", "chrome-plated"), so an
+# unusual finish survives without being listed. Bare participles are NOT
+# accepted: "-ed" is a verb far more often than a modifier, and capturing one
+# would put an action into the name of the thing.
+_ADJ = (r"(?:[A-Za-z]+-[A-Za-z]+|"
+        # materials
+        r"steel|stainless|iron|metal|metallic|nickel|chrome|chromed|brass|"
+        r"bronze|copper|pewter|gunmetal|titanium|alumini?um|gold|golden|silver|"
+        r"platinum|leather|pleather|suede|velvet|satin|silk|lace|mesh|nylon|"
+        r"plastic|rubber|latex|silicone|neoprene|vinyl|pvc|canvas|denim|cotton|"
+        r"wool|woollen|linen|rope|wood|wooden|ceramic|glass|resin|"
+        # finishes
+        r"mirrored|mirror|polished|brushed|burnished|hammered|plated|anodi[sz]ed|"
+        r"matte|matt|gloss|glossy|shiny|dull|tempered|hardened|welded|riveted|"
+        r"studded|spiked|lined|padded|quilted|ribbed|textured|smooth|"
+        # colours
+        r"black|white|red|blue|green|grey|gray|brown|pink|purple|tan|cream|navy|"
+        r"crimson|scarlet|ivory|amber|olive|"
+        # size and build
+        r"heavy|light|thin|thick|wide|narrow|short|long|small|large|broad|slim|"
         r"duct|packing|electrical|zip)")
 
 # Body parts, for the hardware whose part is NOT a property of the item.
@@ -368,7 +395,9 @@ def _outside_speech(text):
     return _SPOKEN_SPAN.sub(" ", text or "")
 
 
-_HW_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r")?\s+)?("
+# THREE modifiers, not two: "mirrored stainless steel collar" is three words and
+# a noun, and the third was the first to be dropped.
+_HW_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
               + "|".join(p for p, _n, _pt in HARDWARE) + r")\b")
 _PART_ONE = _rx(r"\b(" + "|".join(p for p, _n in PARTS) + r")\b")
 # A NOUN carries a determiner, a number or an adjective; a VERB follows its
@@ -381,7 +410,7 @@ _PART_ONE = _rx(r"\b(" + "|".join(p for p, _n in PARTS) + r")\b")
 # phantom straight back.
 _NOUN_BEFORE = _rx(r"(?:\b(?:a|an|the|her|his|its|their|my|your|our|this|that|"
                    r"these|those|one|two|three|several|more|another|in|with|by|"
-                   r"of|on|from)\b|[,;:(])\s*(?:" + _ADJ + r"\s+){0,2}$")
+                   r"of|on|from)\b|[,;:(])\s*(?:" + _ADJ + r"\s+){0,3}$")
 _POSITION = [(_rx(r"\b" + p + r"\b"), name) for p, name in POSITIONS]
 # What can stand in front of an anchor. "one ring", "the other ring", "a second
 # hook" are the same fixture as "the ring", and the six-word list read them as no
@@ -399,7 +428,8 @@ _PLACE_IN = _rx(r"\b(?:in|into|inside|through|down|along|across|to|onto|at)\s+"
                 r"(?:the|a|an|her|his|their)\s+(" + _ROOM_MOD + r"(?:" + PLACES
                 + r"))\b")
 _PLACE_WORD = _rx(r"\b(?:" + PLACES + r")\b")
-_GARMENT_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r")?\s+)?(" + _GARMENT + r"s?)\b")
+_GARMENT_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
+                   + _GARMENT + r"s?)\b")
 _POSTURE = [(_rx(r"\b(?:" + p + r")\b"), name) for p, name in POSTURES]
 _TAKES_OFF = _rx(r"\b" + TAKES_OFF + r"\b")
 _PUTS_ON = _rx(r"\b" + PUTS_ON + r"\b")
