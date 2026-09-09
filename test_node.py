@@ -4021,6 +4021,42 @@ def test_a_written_sound_is_recognised():
         check(f"...but heard: {_t[:32]!r}", S.sound_described(_t))
 
 
+def test_behind_the_back_is_read_however_it_is_written():
+    print("\n=== the wrists are behind the back however that is typed ===")
+    # Reported: her hands are simply not bound together behind her back. The anchor
+    # pattern required the literal word "back" after the possessive, so the common
+    # ways of writing the same position recorded NOTHING -- and nothing is not a
+    # shorter clause, it is pose_clause returning "" and the shot never being told
+    # where the wrists are at all. One of the misses was "at the small of her back",
+    # which is the phrase the node's own pose clause prints back.
+    for _t in ("Dan handcuffs her wrists behind her back.",
+               "Her hands are cuffed behind her.",
+               "Her wrists are bound together behind her.",
+               "Dan cuffs her hands together at the small of her back.",
+               "Her hands are cuffed at the small of her back.",
+               "She is cuffed, hands behind back.",
+               "Her arms are pinned behind her.",
+               "Her hands are bound behind her back with cuffs."):
+        check(f"reads as behind the back: {_t[:44]!r}",
+              S.limb_anchor(_t) == "behind the back")
+    # ...and the pose clause then has something to say, which is the point.
+    check("...and that gives the shot a pose to state",
+          "wrists together" in S.pose_clause(S.limb_anchor("Her hands are cuffed behind her.")))
+    # "behind her" ON ITS OWN CANNOT MATCH. limb_anchor only runs on a shot already
+    # holding a restraint, and in one of those "Dan stands behind her" is an ordinary
+    # sentence -- matching it would anchor her wrists to where he is standing.
+    for _t in ("Dan stands behind her.", "Dan steps in behind her and looks down.",
+               "The van is parked behind her.", "He walks behind her to the barn.",
+               "Dan closes the door behind her.", "She hears him behind her."):
+        check(f"a person behind her is not her wrists: {_t[:38]!r}",
+              not S.limb_anchor(_t))
+    # The other positions are untouched.
+    for _t, _want in (("Her wrists are cuffed above her head.", "above the head"),
+                      ("Her hands are cuffed at her waist.", "at the waist"),
+                      ("Her arms are out to the sides.", "out to the sides")):
+        check(f"unchanged: {_want}", S.limb_anchor(_t) == _want)
+
+
 def test_a_bound_body_lying_down_has_something_under_it():
     print("\n=== a bound body lying down rests on itself ===")
     # Reported: she lies on her side and an arm is under her supporting her, while
@@ -4323,6 +4359,7 @@ def main():
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
     test_a_written_sound_is_recognised()
+    test_behind_the_back_is_read_however_it_is_written()
     test_a_bound_body_lying_down_has_something_under_it()
     test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()

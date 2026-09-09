@@ -4668,6 +4668,30 @@ _LIMB_ANCHOR = (
     (r"(?:above|over)\s+(?:her|his|their|the)\s+head|overhead|"
      r"stretched\s+(?:up|upward)", "above the head"),
     (r"behind\s+(?:her|his|their|the)\s+back", "behind the back"),
+    # THE SAME PLACE, WRITTEN THE WAYS PEOPLE WRITE IT. The line above needs the
+    # literal word "back" after the possessive, so every one of these recorded
+    # NOTHING -- and nothing here is not a smaller clause, it is pose_clause
+    # returning "" and the shot never being told where the wrists are at all.
+    # Reported as her hands simply not being bound together behind her.
+    #
+    #   "cuffed behind her"                  -- the back is implied and not typed
+    #   "at the small of her back"            -- which is the phrase THIS NODE
+    #                                            prints back in its own pose clause
+    #   "hands behind back"                   -- no possessive, as stage directions
+    #                                            are written
+    #
+    # "behind her" cannot be matched on its own: limb_anchor only runs on a shot
+    # already holding a restraint, and in one of those "Dan stands behind her" is an
+    # ordinary sentence that would anchor her wrists to his position. So each form
+    # below carries its own evidence -- a limb, or a fastening participle, within a
+    # few words of it.
+    (r"(?:hands?|wrists?|arms?)\s+(?:\w+\s+){0,3}?behind\s+(?:her|his|their)\b",
+     "behind the back"),
+    (r"(?:cuffed|handcuffed|bound|tied|shackled|manacled|strapped|secured|"
+     r"fastened|locked|pinned|clasped|held)\s+(?:\w+\s+){0,2}?"
+     r"behind\s+(?:her|his|their)\b", "behind the back"),
+    (r"at\s+the\s+small\s+of\s+(?:her|his|their|the)\s+back", "behind the back"),
+    (r"\b(?:hands?|wrists?|arms?)\s+behind\s+back\b", "behind the back"),
     (r"in\s+front\s+of\s+(?:her|his|their)\s+(?:body|chest|waist)", "in front of the body"),
     (r"(?:out\s+)?to\s+the\s+sides?|spread\s+wide", "out to the sides"),
     (r"at\s+(?:her|his|their|the)\s+waist", "at the waist"),
