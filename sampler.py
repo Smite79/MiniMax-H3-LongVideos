@@ -7739,6 +7739,19 @@ class H3LongVideos:
                 # no face, no wardrobe, nothing that would stage a person who is
                 # not there. She is already in the picture; the words only have to
                 # stop contradicting it.
+                # NOT gated on the shot starting fresh, though the frame is the
+                # reason this exists. That gate was written and reverted: the shot
+                # that uncovers a region is a removal shot, restart_after_removal
+                # makes the NEXT one fresh, and that next one is exactly the shot
+                # this clause is for -- so the gate disabled the fix in every real
+                # case while the reported bug stayed.
+                #
+                # The residual risk is real and stated: on a fresh shot nothing
+                # pictorial carries her, so naming her is one sentence about
+                # somebody the beat did not stage. It is one clause, not a sheet
+                # entry, and the alternative is the region the model fills in by
+                # itself. If a duplicate of the UNDRESSED character ever shows up,
+                # this is the first thing to look at.
                 _carried_on = [n for n in (_was or []) if n not in (_who_here or [])]
                 _rows = []
                 for _n in list(_who_here or []) + _carried_on:
@@ -9481,7 +9494,19 @@ class H3LongVideos:
                 _was_here = [n for n in (shot_cast[i - 1] if i - 1 < len(shot_cast)
                                          else []) if n]
                 _here_now = shot_cast[i] if i < len(shot_cast) else []
-                if _was_here and all(n in _here_now for n in _was_here):
+                # ...and NOT when somebody in that frame already has a portrait of
+                # their own in this shot. Their identity is carried by that
+                # picture; the carried frame would be a SECOND picture of the same
+                # person, and two pictures of one person is how a duplicate of her
+                # gets drawn. Reported as a duplicate Mistress: her sheet portrait
+                # went in as <Picture 1> and this frame as <Picture 2>, both of
+                # her. The recovered-frame path below skips tagged people for the
+                # same reason and this was written without that skip.
+                #
+                # The room is lost on those shots, back to the fresh start it was
+                # before. A re-imagined set is a smaller bug than a second person.
+                if _was_here and all(n in _here_now for n in _was_here) \
+                        and not any(n in _tagged_names for n in _was_here):
                     _handoff_ref = True
                     _carried.append((i + 1, list(_was_here),
                                      list(_placed_shots[i])))

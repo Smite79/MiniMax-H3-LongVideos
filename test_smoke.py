@@ -886,6 +886,49 @@ def _shots(P, **kw):
             if x.strip()]
 
 
+def test_a_carried_room_is_not_a_second_picture_of_somebody():
+    """REPORTED: a duplicate Mistress.
+
+    The room-carry sends the previous shot's last frame as a REFERENCE, so a shot
+    introducing somebody in position keeps the set instead of re-imagining it. If
+    the person in that frame already has a portrait on the sheet, the shot gets
+    two pictures of her -- her <Picture 1> and the carried frame -- and two
+    pictures of one person is how a second one gets drawn. The recovered-frame
+    path skips tagged people for exactly this reason; this was written without
+    that skip."""
+    print("\n=== a carried room is not a second picture of somebody ===")
+    sent = []
+    _bc = S.build_conditioning
+
+    def spy(clip, vae, avae, prompt, w, h, length, **kw):
+        sent.append((len(kw.get("refs") or []), bool(kw.get("handoff_as_ref"))))
+        return _bc(clip, vae, avae, prompt, w, h, length, **kw)
+
+    P = ("A panelled study.\n\nThe Mistress stands at the window.\n\n"
+         "Ana is already kneeling by the desk, watching the Mistress.\n\n"
+         "Ana lowers her eyes.")
+    S.build_conditioning = spy
+    try:
+        run_node(P, character_memory=("Mistress: she, 38, a black dress. <Picture 1>\n"
+                                      "Ana: she, 24, a shirt."),
+                 ref_image_1=torch.rand(1, H, W, 3))
+    finally:
+        S.build_conditioning = _bc
+    check("the shot that introduces somebody carries no second picture of her",
+          not any(as_ref for _n, as_ref in sent), str(sent))
+    check("...and her own portrait still goes in", sent[1][0] == 1, str(sent))
+    # Untagged: nothing carries her identity, so the room IS carried -- that is
+    # the continuity fix and it has to survive this.
+    sent2 = []
+    S.build_conditioning = lambda c, v, a, p, w, h, l, **kw: (
+        sent2.append(bool(kw.get("handoff_as_ref"))) or _bc(c, v, a, p, w, h, l, **kw))
+    try:
+        run_node(P, character_memory="Mistress: she, 38, a black dress.\nAna: she, 24.")
+    finally:
+        S.build_conditioning = _bc
+    check("with no portrait in play the room is still carried", any(sent2), str(sent2))
+
+
 def test_a_bare_region_is_said_on_every_shot():
     """REPORTED: a bra comes back on somebody topless, and the sheet never had one.
 
@@ -4485,6 +4528,7 @@ def main():
     test_undressing_does_not_spread()
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
+    test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
     test_a_squat_survives_speech_and_undressing()
     print()
