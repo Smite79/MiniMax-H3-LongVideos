@@ -1108,6 +1108,21 @@ _POSTURE_OF = _POSTURE_OF + (
     ("bent over", _rx(r"\b(?:bends?\s+over|bent\s+over|leans?\s+over|"
                       r"leaned\s+over|doubles?\s+over)\b")),
     ("curled up", _rx(r"\b(?:curled\s+up|curls?\s+up|foetal|fetal)\b")),
+    # ROLLING ONTO A SIDE IS STILL LYING DOWN. "McKenna rolls onto her side" set no
+    # posture at all -- the lying verbs are all lie/lay/sprawl and none of them is
+    # how you write a body that is ALREADY down changing which way it faces. So a
+    # beat that put her on her side left the hold saying nothing, and the shot after
+    # it was told nothing about how she was left.
+    #
+    # It also decides whether the weight gets named: the pose clause only says what
+    # is under a bound body when it knows the body is off its feet (see
+    # POSE_LYING_WEIGHT in sampler.py), and that reads this posture.
+    #
+    # The possessive is required. "the barrel rolls onto its side" is not a person,
+    # and _NOT_A_BODY does not cover roll.
+    ("lying down", _rx(r"\broll(?:s|ed|ing)?\s+(?:over\s+)?(?:on)?to\s+"
+                       r"(?:her|his|their)\s+"
+                       r"(?:side|back|front|stomach|belly)\b")),
 )
 
 

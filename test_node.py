@@ -4021,6 +4021,37 @@ def test_a_written_sound_is_recognised():
         check(f"...but heard: {_t[:32]!r}", S.sound_described(_t))
 
 
+def test_a_bound_body_lying_down_has_something_under_it():
+    print("\n=== a bound body lying down rests on itself ===")
+    # Reported: she lies on her side and an arm is under her supporting her, while
+    # the cuffs are meant to be holding both hands behind her back. The pose clause
+    # was already on that shot saying both arms are behind -- where the arms ARE
+    # does not settle what is BEARING THE WEIGHT, and the model used the arm.
+    _up = S.pose_clause("behind the back")
+    _down = S.pose_clause("behind the back", lying=True)
+    check("on her feet, the pose clause is unchanged", "take the weight" not in _up)
+    check("lying down, the weight is named", "shoulder and the hip" in _down)
+    check("...and the arms are still said to be behind", "behind the body" in _down)
+    # Positively phrased: at cfg 1 nothing is negated, so the clause says what IS
+    # under her rather than what is not.
+    for _neg in (" no ", " not ", "nothing", "never", "without"):
+        check(f"no negation in the clause: {_neg.strip()!r}", _neg not in _down.lower())
+    # Only behind the back. Hands in front or above the head CAN prop a body up and
+    # it is not wrong that they do.
+    for _pos in ("above the head", "in front of the body", "out to the sides",
+                 "at the waist"):
+        check(f"untouched when lying: {_pos}",
+              S.pose_clause(_pos) == S.pose_clause(_pos, lying=True))
+    check("an unknown position still says nothing",
+          S.pose_clause("sideways", lying=True) == "")
+    # ...and the posture that feeds it has to be readable off how people write it.
+    for _b in ("McKenna rolls onto her side.", "She rolled onto her back.",
+               "He rolls over onto his stomach.", "She lays down on her side."):
+        check(f"reads as lying: {_b[:34]!r}", S.engine.posture_in(_b) == "lying down")
+    for _b in ("The barrel rolls onto its side.", "The van rolls to a stop."):
+        check(f"...and an object is not a body: {_b[:32]!r}", not S.engine.posture_in(_b))
+
+
 def test_a_body_under_effort_has_a_voice():
     print("\n=== effort makes a sound, and it is a voice ===")
     # H3 is joint, so silence on the audio branch tells the model the person makes no
@@ -4292,6 +4323,7 @@ def main():
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
     test_a_written_sound_is_recognised()
+    test_a_bound_body_lying_down_has_something_under_it()
     test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()
     test_schema()

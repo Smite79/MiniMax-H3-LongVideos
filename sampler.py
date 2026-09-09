@@ -4224,10 +4224,39 @@ _POSE_OF_POSITION = {
 }
 
 
-def pose_clause(position):
-    """One sentence describing the BODY a limb position makes. "" when unknown."""
-    said = _POSE_OF_POSITION.get(str(position or "").strip().lower(), "")
-    return f" {said}." if said else ""
+# A BODY LYING DOWN NEEDS SOMETHING UNDER IT, and if the text does not say what,
+# the model picks -- and what it picks for somebody on their side is the arm it has
+# seen under every other body on its side: propped on the elbow, forearm out front.
+# That is a hand in front of the body, which is the one place these wrists cannot be.
+#
+# Reported as her arm supporting her while the cuffs were meant to be holding her
+# hands behind her back. The pose clause was already on that shot saying both arms
+# are behind -- being told where the arms ARE does not settle what is BEARING THE
+# WEIGHT, and between an arm it can see a use for and a sentence about wrists, the
+# picture went with the arm.
+#
+# So name the contact. Positively, like everything else here: at cfg 1 nothing is
+# negated, and "no arm under her" is the word "arm" next to the word "under". The
+# shoulder and hip are what a bound body on its side actually rests on, and a
+# shoulder taking the weight is an elbow with nothing to do.
+#
+# Only for wrists BEHIND THE BACK. Hands in front or above the head can prop a body
+# up and it is not wrong that they do, so a clause forbidding it there would be
+# taking away a shape the author may have wanted.
+POSE_LYING_WEIGHT = "The shoulder and the hip take the weight of the body"
+
+
+def pose_clause(position, lying=False):
+    """One sentence describing the BODY a limb position makes. "" when unknown.
+
+    `lying` adds what is under it -- see POSE_LYING_WEIGHT."""
+    key = str(position or "").strip().lower()
+    said = _POSE_OF_POSITION.get(key, "")
+    if not said:
+        return ""
+    if lying and key == "behind the back":
+        said = f"{said}. {POSE_LYING_WEIGHT}"
+    return f" {said}."
 
 
 def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False,
@@ -8485,9 +8514,15 @@ class H3LongVideos:
                         where=_pos)
             # The limb pose, said as a body, on every shot the position holds --
             # the applying shot included, where it says where they FINISH.
+            # ...and whether anybody holding that position is off their feet, which
+            # is what decides if the weight needs naming. Read off the poses this
+            # shot is carrying, not off the beat: the beat that lays her down is
+            # rarely the shot the propped arm shows up in.
+            _lying_now = any(_p == "lying down" for _p in poses.values())
             _pose = pose_clause(_anchor_now.split(", at the")[0].strip()
                                 if _anchor_now else
-                                (anchored or "").split(", at the")[0].strip())
+                                (anchored or "").split(", at the")[0].strip(),
+                                lying=_lying_now)
             hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
