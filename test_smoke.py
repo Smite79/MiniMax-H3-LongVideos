@@ -99,6 +99,17 @@ class FakeCLIP:
         return [[torch.zeros(1, 8, 16), {}]]
 
 
+def _vae_out_dtype():
+    """What a real VAE.decode hands back: VAE.vae_output_dtype() IS
+    model_management.intermediate_dtype() (comfy/sd.py). The stubs returned fp32
+    unconditionally, so every assertion about what the node does with the VAE's
+    dtype was passing on a fixture that could not produce the interesting case."""
+    try:
+        return _mm.intermediate_dtype()
+    except Exception:
+        return torch.float32
+
+
 class FakeVAE:
     upscale_ratio = (4, 8, 8)
     latent_dim = 3
@@ -113,7 +124,7 @@ class FakeVAE:
 
     def decode(self, latent):
         t = latent.shape[2] if latent.ndim == 5 else 1
-        return torch.rand(t * 4, H, W, 3)
+        return torch.rand(t * 4, H, W, 3).to(_vae_out_dtype())
 
     def decode_tiled(self, latent, **kw):
         return self.decode(latent)
@@ -137,7 +148,7 @@ class FakeAudioVAE:
     def decode(self, latent):
         # Real layout is [B, L, C]; _decode_audio movedim's it to [B, C, L].
         n = latent.shape[-1] if latent.ndim >= 2 else 16
-        return torch.rand(1, n * 800, 2)
+        return torch.rand(1, n * 800, 2).to(_vae_out_dtype())
 
 
 class FakeModel:
@@ -2622,6 +2633,16 @@ def test_finished_shots_are_held_in_half_precision():
         check("...still in range", float(_h.min()) >= 0.0 and float(_h.max()) <= 1.0)
         _o = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
         check("...cleanup off too", _o.dtype == torch.float16, str(_o.dtype))
+        # THE AUDIO DOES NOT FOLLOW IT. fp16 is 16x finer than the 8 bits an image
+        # goes out at and 8x COARSER than the 16 a waveform does -- ~12 effective
+        # bits -- and the whole soundtrack is 0.018GB against 9.3GB of frames, so
+        # following the flag here would trade an audible loss for nothing. The bed is
+        # mixed on after the join, so a narrow accumulator adds up coarse as well.
+        _pair = run_node("A room.\n\nOne.\n\nTwo.")
+        _w = _pair[1]["waveform"] if isinstance(_pair[1], dict) else _pair[1]
+        check("images follow the flag, audio does not",
+              _pair[0].dtype == torch.float16 and _w.dtype == torch.float32,
+              f"{_pair[0].dtype}/{_w.dtype}")
         _mm.intermediate_dtype = lambda: torch.float32
         check("flag off -> float32 again", S._image_out_dtype() == torch.float32)
         check("...byte for byte what it returned before",

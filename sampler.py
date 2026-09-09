@@ -10115,7 +10115,24 @@ class H3LongVideos:
                                              upscale_target_short_edge, upscale_batch)
             if up_note:
                 notes.append(up_note)
+        # AUDIO IS FLOAT32 WHATEVER THE FRAMES ARE, and this is the one place the two
+        # branches must not follow the same rule. --fp16-intermediates is a good trade
+        # on pixels and a bad one on a waveform, because what each is quantised to at
+        # the end is not the same:
+        #
+        #   images  0..1, out at 8 bits : fp16 step 2.4e-04 against 3.9e-03 -- 16x finer
+        #                                 than the output can show. Invisible.
+        #   audio  -1..1, out at 16 bits: fp16 step 2.4e-04 against 3.1e-05 -- 8x
+        #                                 COARSER than the format. ~12 effective bits.
+        #
+        # And it buys nothing: the frames are 9.3GB of the chain and the whole
+        # soundtrack is 0.018GB, so holding it at full width costs 18MB of the 58.9GB
+        # that made this render fit. The bed is mixed onto this AFTER the join and the
+        # levelling runs over the joined track, so a narrow accumulator is not merely
+        # stored coarse, it is added up coarse.
         audio = torch.cat(aud_out, dim=-1)
+        if audio.dtype != torch.float32:
+            audio = audio.float()
         # ...and the ambient bed goes on last, over the joined soundtrack rather than
         # per shot, so the loop runs continuously through the cuts instead of
         # restarting at each one. A bed that resets every shot is a bed you can hear.
