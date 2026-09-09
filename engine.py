@@ -282,17 +282,13 @@ DISPLACES = (r"(?:pulls?|pulled|pushes?|pushed|tugs?|tugged|hikes?|hiked|"
              r"rolls?|rolled|lifts?|lifted|yanks?|yanked|shoves?|shoved)"
              + _GAP + r"(?:aside|up|down|open)\b")
 
-POSTURES = (
-    (r"kneels?|kneeling|knelt|on\s+(?:her|his|their)\s+knees", "kneeling"),
-    (r"sits?|sitting|sat|seated", "sitting"),
-    (r"lies?|lying|lay|laid\s+(?:down|out)|on\s+(?:her|his|their)\s+back",
-     "lying down"),
-    (r"stands?|standing|stood|gets?\s+up|got\s+up|rises?|rose", "standing"),
-    (r"squats?|squatting|squatted", "squatting"),
-    (r"crouch(?:es|ing|ed)?", "crouching"),
-    (r"bent\s+over|bends?\s+over|leans?\s+over", "bent over"),
-    (r"curled\s+up|foetal|fetal", "curled up"),
-)
+# POSTURES and the _POSTURE list built from it used to live here. Nothing read
+# _POSTURE -- it was a second, dead copy of the posture vocabulary, and it had
+# already drifted from the live one: it never learned squatting as distinct from
+# crouching, and it would not have learned rolling onto a side either. That is the
+# divergence the note above _POSTURE_OF warns about, sitting in the same file.
+# The live table is _POSTURE_OF, which sampler.py imports by reference
+# (sampler._POSTURE_OF IS engine._POSTURE_OF), so there is one of these now.
 
 
 def _rx(pattern):
@@ -430,7 +426,6 @@ _PLACE_IN = _rx(r"\b(?:in|into|inside|through|down|along|across|to|onto|at)\s+"
 _PLACE_WORD = _rx(r"\b(?:" + PLACES + r")\b")
 _GARMENT_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
                    + _GARMENT + r"s?)\b")
-_POSTURE = [(_rx(r"\b(?:" + p + r")\b"), name) for p, name in POSTURES]
 _TAKES_OFF = _rx(r"\b" + TAKES_OFF + r"\b")
 _PUTS_ON = _rx(r"\b" + PUTS_ON + r"\b")
 _DISPLACES = _rx(r"\b" + DISPLACES + r"\b")
