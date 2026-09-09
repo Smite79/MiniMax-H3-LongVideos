@@ -1277,6 +1277,19 @@ def sound_described(text):
 # Matched against the BEAT only, never the scene. Sourcing it from the scene as well
 # would put a chain rattling into a shot where nobody moves, because the scene says
 # there is a chain -- the beat is what decides whether anything makes a noise.
+# The six, as their own table, because two readers need them and a second copy
+# would drift. sounds_for suppresses a LONE vocal -- the beat carries it verbatim
+# and the node has nothing to add over the top -- and named_vocals_in below does
+# not, because a shot whose clause is spoken as a CLOSED list has to name it.
+_VOCAL_FROM = (
+    (r"\bwhimper(?:s|ing|ed)?\b",                   "whimpering"),
+    (r"\bsob(?:s|bing|bed)?\b",                     "sobbing"),
+    (r"\bmoan(?:s|ing|ed)?\b",                      "moaning"),
+    (r"\bgroan(?:s|ing|ed)?\b",                     "groaning"),
+    (r"\bscream(?:s|ing|ed)?\b",                    "screaming"),
+    (r"\bwhin(?:e|es|ing|ed)\b",                    "whining"),
+)
+
 _SOUND_FROM = (
     # A VOCAL THE BEAT NAMES IS THE ONE THE SHOT MAKES, and it goes FIRST.
     #
@@ -1304,12 +1317,7 @@ _SOUND_FROM = (
     # Speech verbs are NOT here. shout and whisper are lines being delivered and
     # belong to the dialogue path, which suppresses the mouth guard and opens the
     # branch on purpose. These six are non-speech vocalisations only.
-    (r"\bwhimper(?:s|ing|ed)?\b",                   "whimpering"),
-    (r"\bsob(?:s|bing|bed)?\b",                     "sobbing"),
-    (r"\bmoan(?:s|ing|ed)?\b",                      "moaning"),
-    (r"\bgroan(?:s|ing|ed)?\b",                     "groaning"),
-    (r"\bscream(?:s|ing|ed)?\b",                    "screaming"),
-    (r"\bwhin(?:e|es|ing|ed)\b",                    "whining"),
+    *_VOCAL_FROM,
     (r"\b(?:walk(?:s|ed|ing)?|step(?:s|ped|ping)?|pace[sd]?|enters?|runs?|"
      r"approach(?:es|ed)?|creep(?:s|ing)?|crept|sneak(?:s|ing)?|shuffl(?:e|es|ing)|"
      r"stumbl(?:e|es|ing)|stagger(?:s|ing)?|feet)\b",  "footsteps"),
@@ -1572,6 +1580,30 @@ def sounds_for(beat, held=()):
     if out and all(p in _NAMED_VOCALS for p in out):
         return []
     return out
+
+
+def named_vocals_in(beat):
+    """The non-speech vocals THIS BEAT NAMES, in the order the table lists them.
+
+    sounds_for deliberately returns [] when a vocal is all the beat says: the beat
+    goes to the model verbatim and the node has nothing to add over the top of it.
+    That is right where the node then says nothing -- and wrong the moment it says
+    something EXCLUSIVE.
+
+    "She screams." is sound_described, so _own is true and the inferred list is
+    zeroed; exertion_in is also true, so _voiced keeps the branch open rather than
+    letting the shot be muted; then the ambient bed is appended and only=not _speaks
+    closes the list. The shot was conditioned on "The only sound is an engine
+    idling" -- an exclusive claim, against a beat that says she screams, on the one
+    kind of shot whose branch is open and therefore has to fill itself with
+    something. Reproduced on "She screams.", "She sobs quietly." and "She starts
+    whimpering and thrashes in her restraints."
+
+    So the closed list gets the author's own vocal put back into it. This adds
+    nothing the node inferred -- these are the author's words, matched literally --
+    and it is what keeps the exclusive sentence true."""
+    b = str(beat or "")
+    return [phrase for pat, phrase in _VOCAL_FROM if re.search(pat, b, re.I)]
 
 
 def sound_clause(phrases, only=False):
@@ -8988,6 +9020,28 @@ class H3LongVideos:
             # shut and to sound like a door swinging in the same breath.
             heard = ([] if (not auto_sound or _own)
                      else sounds_for(body, held=[_state_key(t) for t, _ in _pairs]))
+            # ...AND THE AUTHOR'S OWN VOCAL GOES BACK IN, because the sentence below
+            # is EXCLUSIVE. The zeroing above is right in intent -- nothing this node
+            # infers may claim to be the sound of a shot the author already scored --
+            # but it drops the author's word along with the inferences, and what is
+            # appended next is the ambient bed. On a shot kept open by _voiced the
+            # result was an exclusive claim naming only the bed:
+            #
+            #   "She screams."          -> "The only sound is an engine idling."
+            #   "She sobs quietly."     -> "The only sound is an engine idling."
+            #   "...starts whimpering"  -> "The only sound is an engine idling."
+            #
+            # Reproduced on all three. That is the node telling the model the scream
+            # is not happening, on precisely the shots whose branch is open and which
+            # therefore must fill themselves with something.
+            #
+            # Only the six vocals, matched literally in the beat -- the author's own
+            # words, not an inference -- so "nothing inferred may unsilence a shot"
+            # still holds. A beat whose written sound is NOT a vocal is muted
+            # outright by _mute_written and reaches no clause at all, which is a
+            # different path and reports itself.
+            if _own:
+                heard = [v for v in named_vocals_in(body) if v not in heard] + heard
             if _will_silence:
                 # The audio is pinned to silence for this shot's whole length, so a
                 # sentence saying what it sounds like would describe an acoustic the

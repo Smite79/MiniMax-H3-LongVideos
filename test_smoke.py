@@ -2606,6 +2606,52 @@ def test_the_decode_keeps_the_vae_it_is_about_to_use():
     check("no current_loaded_models at all is survivable", S._resident([model]) == [])
 
 
+def test_an_exclusive_sound_clause_never_denies_the_beat():
+    print("\n=== the closed list names the sound the author wrote ===")
+    # REPRODUCED, then fixed. sound_described("She screams.") is true, so _own zeroes
+    # the inferred list; exertion_in is ALSO true, so _voiced keeps the branch open
+    # instead of letting the shot be muted; then the ambient bed is appended and
+    # only=not _speaks CLOSES the list. The shot was conditioned on
+    #
+    #     "The only sound is an engine idling."
+    #
+    # against a beat that says she screams -- an exclusive claim that the scream is
+    # not happening, made on exactly the shots whose branch is open and which
+    # therefore have to fill themselves with something.
+    def _clause(_beat):
+        _sh = run_node(f"Inside a van at night.\n\n{_beat}", plan_only=True)[3]
+        _m = re.search(r"(The only sound[^.]*\.|It sounds like[^.]*\.)", _sh)
+        return _m.group(1) if _m else ""
+
+    for _beat, _word in (("She screams.", "screaming"),
+                         ("She sobs quietly.", "sobbing"),
+                         ("She starts whimpering and thrashes in her restraints.",
+                          "whimpering"),
+                         ("She moans and pulls against the cuffs.", "moaning")):
+        _c = _clause(_beat)
+        check(f"the clause names it: {_word}", _word in _c, f"{_beat!r} -> {_c!r}")
+        check(f"...and no longer claims the bed is the only sound: {_word}",
+              not re.match(r"The only sound is an? [a-z ]+\.$", _c), _c)
+    # A NON-VOCAL written sound is a different path and must stay on it: it is muted
+    # outright by _mute_written, reaches no clause, and the info reports the trade.
+    _chain = "The chain rattles against the frame."
+    check("a written non-vocal sound still takes the muted path", _clause(_chain) == "",
+          _clause(_chain))
+    _info = run_node(f"Inside a van at night.\n\n{_chain}", plan_only=True)[2]
+    check("...and the trade is still reported",
+          "gave up the sound you wrote" in _info)
+    # And a beat that names NO sound is untouched -- the node must not start
+    # inventing vocals here.
+    check("a silent beat gains no vocal", _clause("He walks in.") == "")
+    # named_vocals_in is the author's own word, matched literally -- not an inference.
+    check("named_vocals_in reads the beat", S.named_vocals_in("She screams.") == ["screaming"])
+    check("...and finds nothing where nothing is named",
+          S.named_vocals_in("He walks in.") == [])
+    check("...and it is the same table sounds_for uses",
+          all(v in S._NAMED_VOCALS for _p, v in S._VOCAL_FROM)
+          and len(S._VOCAL_FROM) == len(S._NAMED_VOCALS))
+
+
 def test_the_chain_is_never_held_twice():
     print("\n=== the chain is one allocation from first shot to return ===")
     # The per-shot list existed because the total length was not known until the loop
@@ -4862,6 +4908,7 @@ def main():
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
     test_the_decode_keeps_the_vae_it_is_about_to_use()
+    test_an_exclusive_sound_clause_never_denies_the_beat()
     test_the_chain_is_never_held_twice()
     test_the_position_may_only_be_written_once_in_the_scene()
     test_finished_shots_are_held_in_half_precision()
