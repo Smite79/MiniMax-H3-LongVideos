@@ -4034,6 +4034,32 @@ def test_a_body_under_effort_has_a_voice():
     # branch itself and nothing is added over the top of it.
     check("a beat naming the sound is left alone", S.sounds_for("She moans.") == [])
     check("...but it does count as asking for audio", S.sound_described("She moans."))
+    # ...and it stays left alone however many vocals it names, because the whole list
+    # is still the author's and the node still has nothing to add over the top.
+    check("two named vocals, still nothing added", S.sounds_for("She moans and sobs.") == [])
+    # BUT THE CLAUSE IS EMITTED CLOSED. "The only sounds are ..." with anything else in
+    # it and the vocal left out does not omit the vocal, it DENIES it -- and the
+    # substitute it denied it with was "moans of effort", inferred from the motion verb.
+    # Two failures came back from that one line: micro-babble where the vocal should
+    # have been, and, because the face follows the audio branch, a shot of distress
+    # rendered smiling. The named vocal has to be IN the list once the list is spoken.
+    for _b, _want in (("She whimpers and thrashes in her restraints.", "whimpering"),
+                      ("She sobs and pulls against the cuffs.", "sobbing"),
+                      ("She screams and thrashes in her restraints.", "screaming"),
+                      ("She moans and thrashes in her restraints.", "moaning")):
+        _got = S.sounds_for(_b)
+        check(f"named vocal survives a mixed list: {_want}", _want in _got)
+        check(f"...and retires the inferred effort phrase: {_want}",
+              not any("moans of effort" in _s for _s in _got))
+    # A beat with NO vocal named is untouched -- the effort phrase is what stops the
+    # face going flat and this must not have taken it away.
+    check("no vocal named, effort phrase still there",
+          any("moans of effort" in _s for _s in S.sounds_for("She thrashes in her restraints.")))
+    # One mouth, one sound. "wakes up" and "thrashes" both fired and the shot was told
+    # it sounded like unsteady breathing AND breathing -- two of three slots, same thing.
+    _dup = S.sounds_for("She wakes up and thrashes in her restraints.")
+    check("no duplicate breathing in one clause",
+          not ("breathing" in _dup and any("moans of effort" in _s for _s in _dup)))
     for _w in ("gasps", "whimpers", "groans", "pants", "sobs"):
         check(f"{_w} is heard as a sound the author wrote", S.sound_described(f"She {_w}."))
     # Effort is read from the AUTHOR's verb, so it belongs with a quoted line and a

@@ -1278,6 +1278,38 @@ def sound_described(text):
 # would put a chain rattling into a shot where nobody moves, because the scene says
 # there is a chain -- the beat is what decides whether anything makes a noise.
 _SOUND_FROM = (
+    # A VOCAL THE BEAT NAMES IS THE ONE THE SHOT MAKES, and it goes FIRST.
+    #
+    # These were missing entirely: sound_described() reads them off _SOUND_CUE and
+    # opens the audio branch, but nothing put them into the sound clause, so the
+    # word the author wrote reached neither branch. What the shot was told instead
+    # was inferred from the MOTION verb beside it -- "she whimpers and thrashes"
+    # produced "unsteady breathing, with gasps and moans of effort" and no whimper.
+    #
+    # Two failures came back from that, and they are the same substitution:
+    #
+    #   - The clause is emitted with only=True, a CLOSED list. "The only sounds
+    #     are ... moans of effort" does not merely omit the whimpering, it asserts
+    #     the whimpering is not there, against a beat that says it is.
+    #   - "moans" is the one vocal that reads as readily as pleasure. The face
+    #     follows the audio branch on a joint model (see sound_clause), so a shot
+    #     of distress conditioned on moans of effort renders a woman smiling.
+    #     Reported exactly that way.
+    #
+    # FIRST in the tuple because sounds_for stops at MAX_SOUNDS, and on the beat
+    # this was reported from the budget was already full of engine, restraints and
+    # the inferred effort phrase before any vocal could be reached. What the author
+    # wrote outranks what the node inferred; that is the whole of the ordering rule.
+    #
+    # Speech verbs are NOT here. shout and whisper are lines being delivered and
+    # belong to the dialogue path, which suppresses the mouth guard and opens the
+    # branch on purpose. These six are non-speech vocalisations only.
+    (r"\bwhimper(?:s|ing|ed)?\b",                   "whimpering"),
+    (r"\bsob(?:s|bing|bed)?\b",                     "sobbing"),
+    (r"\bmoan(?:s|ing|ed)?\b",                      "moaning"),
+    (r"\bgroan(?:s|ing|ed)?\b",                     "groaning"),
+    (r"\bscream(?:s|ing|ed)?\b",                    "screaming"),
+    (r"\bwhin(?:e|es|ing|ed)\b",                    "whining"),
     (r"\b(?:walk(?:s|ed|ing)?|step(?:s|ped|ping)?|pace[sd]?|enters?|runs?|"
      r"approach(?:es|ed)?|creep(?:s|ing)?|crept|sneak(?:s|ing)?|shuffl(?:e|es|ing)|"
      r"stumbl(?:e|es|ing)|stagger(?:s|ing)?|feet)\b",  "footsteps"),
@@ -1373,7 +1405,26 @@ _SOUND_FROM = (
 )
 MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
 # {specific: (generals it retires)} -- see sounds_for.
-_SOUND_SUPERSEDES = {"cuffs ratcheting closed": ("cuffs knocking",)}
+# The inferred effort phrase and the bare breath are what a NAMED vocal replaces:
+# one mouth is making one sound, and saying it twice spends two of three slots on
+# the same thing -- the crowding this table exists to stop. The effort phrase also
+# retires the bare "breathing" on its own, with no vocal named at all: "wakes up"
+# and "thrashes" both fired and a shot came back listing "unsteady breathing, with
+# gasps and moans of effort AND breathing".
+_VOCAL_RETIRES = ("unsteady breathing, with gasps and moans of effort", "breathing")
+# The six above, as a set: see the tail of sounds_for for why they are special-cased.
+_NAMED_VOCALS = frozenset(("whimpering", "sobbing", "moaning", "groaning",
+                           "screaming", "whining"))
+_SOUND_SUPERSEDES = {
+    "cuffs ratcheting closed": ("cuffs knocking",),
+    "unsteady breathing, with gasps and moans of effort": ("breathing",),
+    "whimpering": _VOCAL_RETIRES,
+    "sobbing": _VOCAL_RETIRES,
+    "moaning": _VOCAL_RETIRES,
+    "groaning": _VOCAL_RETIRES,
+    "screaming": _VOCAL_RETIRES,
+    "whining": _VOCAL_RETIRES,
+}
 
 # The SPACE, as opposed to the things in it. Read from the scene, and this is the one
 # thing that safely can be: a chain standing in the scene must not rattle in a shot
@@ -1505,6 +1556,21 @@ def sounds_for(beat, held=()):
     for specific, general in _SOUND_SUPERSEDES.items():
         if specific in out:
             out = [p for p in out if p == specific or p not in general]
+    # WHAT YOU WROTE WINS -- and when it is ALL you wrote, winning means the node
+    # says nothing. "She moans." is already the sound of its shot, in the beat, going
+    # to the model verbatim; a sentence adding "the only sound is moaning" over the
+    # top of it is the node restating the author to the author's own reader.
+    #
+    # But that only holds while the vocal is the WHOLE list. The clause is emitted
+    # closed -- "The only sounds are ..." -- so as soon as anything else is in it,
+    # leaving the vocal out stops being silence and becomes a denial: a beat reading
+    # "she starts whimpering and thrashes in her restraints" was conditioned on "the
+    # only sounds are an engine outside, restraints pulling taut and unsteady
+    # breathing, with gasps and moans of effort", which asserts the whimpering is not
+    # happening and substitutes a vocal that is not a distress word. The face follows
+    # the audio branch, so that shot came back smiling. Both halves were reported.
+    if out and all(p in _NAMED_VOCALS for p in out):
+        return []
     return out
 
 
