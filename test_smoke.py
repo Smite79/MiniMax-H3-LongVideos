@@ -2619,6 +2619,35 @@ def test_the_position_may_only_be_written_once_in_the_scene():
                       "Dan cuffs her wrists above her head.")[3]
     check("a beat that moves the wrists overrides the scene",
           "above the head" in _moved and "small of the back" not in _moved.split("Both arms")[-1])
+    # THE POSTURE HAD THE SAME ASYMMETRY. A scene reading "McKenna lies in the back"
+    # put nobody in a posture, so a restrained body the script never lays down ON
+    # SCREEN was never known to be off its feet and the weight clause could not fire.
+    def _weight(_p):
+        return ["take the weight" in _s for _s in run_node(_p)[3].split("\n---\n")]
+    check("the scene alone can say she is lying",
+          _weight("Inside a van at night. McKenna lies in the back, wrists cuffed "
+                  "behind her back.\n\nDan gets into the van and looks at her.\n\n"
+                  "He watches her.") == [True, True])
+    check("...with a sheet too",
+          _weight("Inside a van. McKenna lies in the back, wrists cuffed behind her "
+                  "back.\nMcKenna: she, 26, dark hair.\n\nDan gets into the van."
+                  "\n\nHe watches her.") == [True, True])
+    # AND A BEAT OUTRANKS IT. The scene paragraph is stamped into every shot, so
+    # believing it over a beat that stands her up would hold her down for the rest of
+    # the film. Note the latch cannot carry this when the script names no cast --
+    # posture_in needs people -- so the guard is "no beat has stated a posture yet".
+    check("a beat that stands her up ends it, for good",
+          _weight("Inside a van. McKenna lies in the back, wrists cuffed behind her "
+                  "back.\n\nShe gets to her feet.\n\nDan looks at her.") == [False, False])
+    check("nobody in hardware, nothing said",
+          _weight("A bedroom. Nora lies on the bed.\n\nShe looks at the ceiling.") == [False])
+    check("restrained but nobody said lying, nothing said",
+          _weight("A barn. McKenna stands, wrists cuffed behind her back.\n\n"
+                  "Dan looks at her.") == [False])
+    check("and the beat that lays her down still fires it",
+          _weight("Inside a van. McKenna sits in the back, wrists cuffed behind her "
+                  "back.\nMcKenna: she, 26, dark hair.\n\nShe lays down on her side.")
+          == [True])
 
 
 def test_finished_shots_are_held_in_half_precision():

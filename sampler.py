@@ -7458,6 +7458,13 @@ class H3LongVideos:
         voiced_only = []
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
+        # Has any BEAT stated a posture yet? The scene fallback for the weight
+        # clause stops the moment one does. Film-level on purpose: it is the
+        # degraded path, taken when the per-person latch cannot fill because the
+        # script names no cast, and in that state there is nobody to attribute a
+        # posture to either. It errs towards saying nothing, which is the old
+        # behaviour.
+        beat_said_posture = False
         restrained_who = set()    # who is actually in the hardware
         anchored = ""             # where fastened limbs are held
         worn_item = ""            # the hardware, in the author's words
@@ -8543,6 +8550,38 @@ class H3LongVideos:
             # shot is carrying, not off the beat: the beat that lays her down is
             # rarely the shot the propped arm shows up in.
             _lying_now = any(_p == "lying down" for _p in poses.values())
+            # ...and the posture may only be written once in the scene too, which is
+            # the same asymmetry the anchor below had: a scene reading "McKenna lies
+            # in the back" put nobody in a posture, because posture_in reads the
+            # beat. So a restrained body the script never lays down ON SCREEN was
+            # never known to be off its feet, and the weight clause -- the whole
+            # point of which is bodies that are -- could not fire for it.
+            #
+            # ONLY for somebody the shot holds in hardware, and only while NOTHING
+            # is latched for them. A beat that stands her up latches standing and
+            # this stops: the scene paragraph still says she lies in the back, and
+            # believing it over the beat would hold her down for the rest of the
+            # film. The author's beat outranks the author's scene, always.
+            #
+            # The posture HOLD is deliberately not given this. That sentence exists
+            # to carry a pose the scene text does not, and the scene is stamped into
+            # every shot verbatim -- "McKenna is still lying down" beside a scene
+            # that just said she is lying in the back is the node repeating the
+            # author back to the author. What was missing was the physics, not the
+            # restatement.
+            # restrained_who can be EMPTY while restrained is True -- it is filled
+            # from the beat that applies the hardware, and a script whose restraint
+            # is only ever stated in the scene never has such a beat. So "nothing
+            # latched for the people in the hardware" has to degrade to "nothing
+            # latched at all" rather than refusing to answer, or this misses exactly
+            # the scripts it was written for.
+            if engine.posture_in(body):
+                beat_said_posture = True
+            if not _lying_now and restrained and not beat_said_posture:
+                _watch = restrained_who or set()
+                _free = (not any(n in poses for n in _watch)) if _watch else (not poses)
+                if _free and engine.posture_in(_scene_for_state) == "lying down":
+                    _lying_now = True
             # WHERE THE WRISTS ARE MAY ONLY EVER BE SAID ONCE, IN THE SCENE.
             #
             # restrained is set by `restraint_present(body) or
