@@ -886,6 +886,39 @@ def _shots(P, **kw):
             if x.strip()]
 
 
+def test_a_breath_does_not_hold_the_branch_open():
+    """REPORTED: micro-babble at the start of a scene, as somebody goes to talk.
+
+    "Dana takes a breath." is the beat people write immediately before a line,
+    and it read as the author asking for a sound -- so the audio branch stayed
+    open for the whole shot with half a second of breath in it. An open branch on
+    a joint model fills itself, and at 4-8 steps the last audio step clears
+    30-50% of the denoising in one jump, so what it fills with is a voice."""
+    print("\n=== a breath does not hold the branch open ===")
+    for beat in ("Dana takes a breath.", "Dana draws breath to answer.",
+                 "Dana takes a deep breath and turns to her.",
+                 "Dana catches her breath."):
+        check(f"closed: {beat!r}", not S.sound_described(beat))
+    # SUSTAINED breathing is the sound of its shot and stays. So does everything
+    # somebody asked for by name -- silencing those would be taking away what was
+    # written, which is a different bug from the one being fixed.
+    for beat in ("She breathes hard through the gag.", "Dana is breathing hard.",
+                 "Dana sighs.", "Dana gasps.", "Dana moans.", "The door slams."):
+        check(f"open: {beat!r}", S.sound_described(beat))
+    # ...and not when something else in the beat lasts.
+    check("a breath beside a chain still opens it",
+          S.sound_described("Dana takes a breath as the chain rattles."))
+    # The trade is REPORTED: a breath that will not be heard is a change to what
+    # was written, and finding that out from the render is worse than reading it.
+    info = run_node("A room.\n\nDana takes a breath.\n\nDana says: \"Listen.\"",
+                    plan_only=True, character_memory="Dana: she, 35.")[2]
+    check("the silenced breath is reported", "stage a breath" in info)
+    check("...and says how to get it back", "in the same beat as the line" in info)
+    quiet = run_node("A room.\n\nDana waits.", plan_only=True,
+                     character_memory="Dana: she, 35.")[2]
+    check("...and a beat with no breath says nothing", "stage a breath" not in quiet)
+
+
 def test_appearing_is_not_arriving():
     """REPORTED: ghosting on a character introduction.
 
@@ -4650,6 +4683,7 @@ def main():
     test_undressing_does_not_spread()
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
+    test_a_breath_does_not_hold_the_branch_open()
     test_appearing_is_not_arriving()
     test_a_line_is_marked_however_it_is_punctuated()
     test_a_two_word_sheet_name_does_not_duplicate_her()

@@ -1230,9 +1230,45 @@ _SOUND_CUE = re.compile(
     r"knock(?:s|ing)?|tap(?:s|ping)?|whoosh(?:es|ing)?|sizzl(?:e|es|ing))\b", re.I)
 
 
+# A BREATH IS NOT ENOUGH SOUND TO HOLD A BRANCH OPEN.
+#
+# "Dana takes a breath." is the beat people write immediately before a line, and
+# it read as the author asking for a sound -- so the audio branch stayed open for
+# the whole shot with nothing in it but half a second of breathing. An open
+# branch on a joint model fills itself, and at 4-8 steps the last audio step
+# clears 30-50% of the denoising in one jump, so what it fills with is a voice.
+# Reported as micro-babble at the start of a scene, just as somebody goes to talk.
+#
+# Only the PREPARATORY breath, and only when it is all there is.
+#
+# Sustained breathing is a different thing and does fill a shot: "she breathes
+# hard through the gag" is the sound of that shot, and silencing it would be
+# taking away a sound somebody asked for by name. So would sighs, gasps, moans.
+# What this catches is the single indrawn breath before a line -- one gesture,
+# half a second, against a whole shot of open branch.
+#
+# And only when nothing else is making a noise: "takes a breath as the chain
+# rattles" still opens it, because the chain has something to say for the rest.
+_BREATH_WORD = re.compile(r"\bbreath(?:s|es|ing)?\b|\bbreathe[sd]?\b", re.I)
+_BREATH_PREP = re.compile(
+    r"\b(?:takes?|took|taking|draws?|drew|drawing|catch(?:es)?|caught|"
+    r"suck(?:s|ed)?|pull(?:s|ed)?|lets?\s+out|releases?)\s+"
+    r"(?:in\s+)?(?:a|an|her|his|their|one|another|deep|long|slow|sharp|\s)*"
+    r"breath\b|\bwith\s+a\s+breath\b|\ba\s+(?:deep\s+|long\s+|slow\s+|sharp\s+)?"
+    r"breath\b", re.I)
+
+
 def sound_described(text):
-    """Does this beat ask for a sound the audio branch should make?"""
-    return bool(_SOUND_CUE.search(text or ""))
+    """Does this beat ask for a sound the audio branch should make?
+
+    A breath on its own does not: see _BREATH_ONLY."""
+    t = text or ""
+    hits = [h for h in (m.group(0).strip() for m in _SOUND_CUE.finditer(t)) if h]
+    if not hits:
+        return False
+    if all(_BREATH_WORD.fullmatch(h) for h in hits) and _BREATH_PREP.search(t):
+        return False
+    return True
 
 
 # What a staged action sounds like. The beat already says what happens; the sound it
@@ -7286,6 +7322,7 @@ class H3LongVideos:
         mouth_named = []          # shots with a line, holding the OTHER mouths
         language_shots = []       # shots told which language the line is in
         _spoken_words = {}        # shot -> words actually inside the quotes
+        _breath_shots = []        # shots whose only sound was a breath
         _langs_used = []          # ...and which languages those turned out to be
         # THE WHOLE SCRIPT'S language, as the per-shot fallback. A single short
         # line -- "Si." -- carries no evidence on its own, and reading it alone
@@ -8474,6 +8511,12 @@ class H3LongVideos:
             # every version that let an inference open the branch babbled.
             _speaks = has_speech(body)
             _own = sound_described(body)
+            # A breath before a line no longer holds the branch open. Recorded so
+            # the trade is visible: a breath that will not be heard is a change to
+            # what was written, and finding that out from the render is worse than
+            # reading it here.
+            if not _own and not _speaks and _BREATH_PREP.search(body):
+                _breath_shots.append(len(shots) + 1)
             # A beat staging EFFORT or vocal reaction is asking for a voice, and that
             # is read from the author's own verbs -- "thrashes", "writhes", "moans" --
             # so it belongs with a quoted line and a written sound, not with the things
@@ -9195,6 +9238,18 @@ class H3LongVideos:
         #
         # Reported, never rewritten: the one promise this node makes about your
         # text is that it goes to the model as you wrote it.
+        if _breath_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in _breath_shots)} stage a "
+                f"breath and nothing else audible, so they are conditioned on "
+                f"silence and the breath is NOT heard. A single indrawn breath "
+                f"is half a second; holding the audio branch open for a whole "
+                f"shot to render it leaves the rest of that shot open, and an "
+                f"open branch on a joint model fills itself with a voice -- "
+                f"which is the babble that arrives just before somebody speaks. "
+                f"To hear it, put the breath in the same beat as the line, or "
+                f"give the shot a sound that lasts: breathing hard, a chain, "
+                f"footsteps")
         _hard = []
         _said_all = engine.spoken_text(prompt or "")
         for _m in _HARD_TO_SAY.finditer(_said_all):
