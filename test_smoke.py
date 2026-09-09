@@ -886,6 +886,27 @@ def _shots(P, **kw):
             if x.strip()]
 
 
+def test_a_two_word_sheet_name_does_not_duplicate_her():
+    """REPORTED: a duplicate Mistress, in the FIRST beat -- so nothing to do with
+    keyframes or carried frames. sheet_lines took a one-word name, "Mistress
+    Vale:" parsed as unlabelled, and an unlabelled line is global: her whole
+    description went into every shot with no name attached."""
+    print("\n=== a two-word sheet name does not duplicate her ===")
+    mem = "Mistress Vale: she, 38, tall, dark hair, a black dress.\nAna: she, 24."
+    got = _shots("A panelled study.\n\nThe Mistress stands at the window.\n\n"
+                 "Ana kneels by the desk.", character_memory=mem)
+    check("the sheet line is attributed, not global",
+          "tall, dark hair" not in got[1], " ".join(got[1].split())[:170])
+    check("...and she is described in her own shot",
+          "tall, dark hair" in got[0], " ".join(got[0].split())[:170])
+    # The old failure in one assertion: two descriptions of a woman in one shot.
+    both = "Mistress: she, 38, a black dress.\nMistress Vale: she, 38, tall, dark hair."
+    one = _shots("A panelled study.\n\nThe Mistress stands at the window.",
+                 character_memory=both)
+    check("one beat naming one woman describes one woman",
+          one[0].count("she, 38") == 1, " ".join(one[0].split())[:200])
+
+
 def test_a_carried_room_is_not_a_second_picture_of_somebody():
     """REPORTED: a duplicate Mistress.
 
@@ -4528,6 +4549,7 @@ def main():
     test_undressing_does_not_spread()
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
+    test_a_two_word_sheet_name_does_not_duplicate_her()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
     test_a_squat_survives_speech_and_undressing()

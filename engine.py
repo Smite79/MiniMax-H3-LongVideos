@@ -1002,6 +1002,33 @@ _POSTURE_OF = _POSTURE_OF + (
 )
 
 
+# Words that are capitalised at the start of a sentence whatever they mean, so
+# their capital says nothing about whether they are a name. "May I come in?"
+# staged a character called Aunt May. Mid-sentence the capital is informative
+# again, and these are accepted there.
+_SENTENCE_START_ALSO = frozenset("""
+may will can must might shall should would could does did was were are is
+let get go come take put look stop wait now then there here this that these
+those one some all any no yes so but and or if when while after before both
+say tell keep hold turn open close pull push move step down
+""".split())
+
+
+def _alias_at(word, staged):
+    """Where a one-word stand-in for a longer name appears, or None.
+
+    A capital at the start of a sentence is free, so a word that is ordinary
+    English there has to earn its match somewhere else in the beat."""
+    fallback = None
+    for m in re.finditer(r"\b" + re.escape(word) + r"\b", staged):
+        opens = re.search(r"(?:^|[.!?;:]\s*|[\"'“]\s*)$", staged[:m.start()])
+        if not opens:
+            return m.start()
+        if word.lower() not in _SENTENCE_START_ALSO and fallback is None:
+            fallback = m.start()
+    return fallback
+
+
 def names_in(beat, cast):
     """Names this beat STAGES, in the order the sentence puts them.
 
@@ -1014,13 +1041,34 @@ def names_in(beat, cast):
     are you?" is how absence gets written, and reading it as presence put a whole
     sheet entry into a shot the person is not in."""
     staged = _outside_speech(beat or "")
-    hits = []
-    for n in cast or []:
-        if not n:
-            continue
-        m = re.search(r"\b" + re.escape(str(n)) + r"\b", staged)
+    names = [str(n) for n in (cast or []) if n]
+    hits, found = [], set()
+    for n in names:
+        m = re.search(r"\b" + re.escape(n) + r"\b", staged)
         if m:
             hits.append((m.start(), n))
+            found.add(n)
+    # A SHEET NAME IS OFTEN LONGER THAN WHAT THE BEATS CALL HER. "Mistress Vale"
+    # on the sheet and "the Mistress" in every beat matched nothing, so her line
+    # was in no shot at all and the model invented her from scratch each time.
+    #
+    # One word of the name, and only when that word is hers alone: with both
+    # "Mistress" and "Mistress Vale" on the sheet, "Mistress" belongs to the
+    # first and picking either would be a guess. Titles are short and shared, so
+    # a word under three letters never stands in.
+    for n in names:
+        if n in found or " " not in n:
+            continue
+        for w in n.split():
+            if len(w) < 3 or not w[:1].isupper():
+                continue
+            if any(w == o or w in o.split() for o in names if o != n):
+                continue
+            m = _alias_at(w, staged)
+            if m is not None:
+                hits.append((m, n))
+                found.add(n)
+                break
     return [n for _at, n in sorted(hits)]
 
 

@@ -176,6 +176,39 @@ def test_a_chain_is_a_tether_not_a_second_restraint():
     check("no loose chain in the text", "chain" not in shots[1], shots[1])
 
 
+def test_a_two_word_name_is_still_a_name():
+    """REPORTED: a duplicate Mistress, present in the very first beat.
+
+    The sheet's name parser took ONE word, so "Mistress Vale:" parsed as no name
+    at all -- and an unlabelled sheet line belongs to everyone and is never
+    dropped. Her whole physical description rode into every shot with no name on
+    it, beside the character it was meant to describe. Two women, one of them
+    anonymous, in a beat that named one person.
+
+    The other half is here: a sheet name is often longer than what the beats call
+    her, and matching only the whole name put her line in NO shot instead."""
+    print("\n=== a two-word name is still a name ===")
+    check("a longer name answers to one of its words",
+          E.names_in("The Mistress stands at the window.",
+                     ["Mistress Vale", "Ana"]) == ["Mistress Vale"])
+    check("...or to the other one",
+          E.names_in("Vale looks up.", ["Mistress Vale", "Ana"]) == ["Mistress Vale"])
+    # Ambiguous: the word belongs to somebody else outright, so picking either is
+    # a guess, and guessing is how the wrong person gets into a shot.
+    check("a word another character owns stands in for nobody",
+          E.names_in("The Mistress stands at the window.",
+                     ["Mistress", "Mistress Vale", "Ana"]) == ["Mistress"])
+    # A capital at the start of a sentence is free.
+    check("an opening 'May' is not Aunt May",
+          E.names_in("May I come in?", ["Aunt May", "Ana"]) == [])
+    check("...but a mid-sentence one is",
+          "Aunt May" in E.names_in("Ana looks at May.", ["Aunt May", "Ana"]))
+    check("an opening 'Will' is not Will Barnes",
+          E.names_in("Will you wait?", ["Will Barnes", "Ana"]) == [])
+    check("...and a word that is nobody's verb still opens a sentence",
+          E.names_in("Vale looks up.", ["Mistress Vale"]) == ["Mistress Vale"])
+
+
 def test_a_bare_region_stays_bare():
     """REPORTED: a bra comes back on somebody topless -- and the character had no
     bra anywhere on the sheet.
@@ -504,6 +537,7 @@ def main():
     test_it_comes_off_when_the_text_takes_it_off()
     test_the_shot_that_applies_says_both_ends()
     test_a_chain_is_a_tether_not_a_second_restraint()
+    test_a_two_word_name_is_still_a_name()
     test_a_bare_region_stays_bare()
     test_a_squat_is_held()
     test_chains_do_not_interfere()

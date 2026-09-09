@@ -279,7 +279,17 @@ def sheet_lines(sheet):
     for ln in (sheet or "").splitlines():
         if not ln.strip():
             continue
-        m = re.match(r"\s*([A-Z][\w'’-]{0,24})\s*:\s*\S", ln)
+        # UP TO THREE CAPITALISED WORDS. One word only, and "Mistress Vale:",
+        # "Miss Kane:", "Aunt May:" all failed to parse -- so the line kept its
+        # description and lost its name, and an unlabelled line belongs to
+        # everyone and is never dropped. A full physical description of a woman
+        # then rode into EVERY shot with no name on it, beside the character it
+        # was meant to be. Reported as a duplicate Mistress in the first beat.
+        #
+        # Each extra word has to be capitalised too, so "Both women: tired" and
+        # "The room: dim" stay unlabelled and global, as they were.
+        m = re.match(r"\s*([A-Z][\w'’-]{0,24}(?:\s+[A-Z][\w'’-]{0,24}){0,2})"
+                     r"\s*:\s*\S", ln)
         out.append((m.group(1) if m else None, ln.strip()))
     return out
 
