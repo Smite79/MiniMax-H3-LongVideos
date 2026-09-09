@@ -2604,6 +2604,30 @@ def test_finished_shots_are_held_in_half_precision():
     # concat must not trip over a dtype it did not expect.
     off = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
     check("cleanup off still returns float32", off.dtype == torch.float32, str(off.dtype))
+    # ...and float32 because THAT is what this ComfyUI asks for between nodes, not
+    # because the number is written into the node. An install run with
+    # --fp16-intermediates has a VAE whose own decode returns fp16
+    # (VAE.vae_output_dtype is model_management.intermediate_dtype), so widening the
+    # chain to fp32 there is 9.3GB of system RAM spent against the staged weights to
+    # hand fp16-native nodes something they never asked for. That machine was killed
+    # by the OOM killer at 96% twice.
+    check("no flag at all -> float32, as before", S._image_out_dtype() == torch.float32)
+    _mm.intermediate_dtype = lambda: torch.float16
+    try:
+        check("--fp16-intermediates -> the chain follows it",
+              S._image_out_dtype() == torch.float16)
+        _h = run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")[0]
+        check("...and what comes out really is float16", _h.dtype == torch.float16,
+              str(_h.dtype))
+        check("...still in range", float(_h.min()) >= 0.0 and float(_h.max()) <= 1.0)
+        _o = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
+        check("...cleanup off too", _o.dtype == torch.float16, str(_o.dtype))
+        _mm.intermediate_dtype = lambda: torch.float32
+        check("flag off -> float32 again", S._image_out_dtype() == torch.float32)
+        check("...byte for byte what it returned before",
+              run_node("A room.\n\nOne.\n\nTwo.")[0].dtype == torch.float32)
+    finally:
+        del _mm.intermediate_dtype
 
 
 def test_detail_trend():

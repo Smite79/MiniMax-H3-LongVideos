@@ -2806,6 +2806,34 @@ def _resident(models):
     return out
 
 
+def _image_out_dtype():
+    """The dtype ComfyUI itself hands between nodes on THIS install.
+
+    The join used to end in a hard-coded .float(), commented "back to what every
+    downstream node expects". That was true when it was written and is not a
+    constant: ComfyUI has --fp16-intermediates, and on an install running it the
+    VAE's own decode already returns fp16 -- VAE.vae_output_dtype() IS
+    model_management.intermediate_dtype() (comfy/sd.py) -- as do EmptyLatentImage
+    and the rest of nodes.py. So on that install the node was taking frames the
+    VAE handed it in fp16, widening them to fp32 nothing had asked for, and
+    handing them to nodes whose own convention is fp16.
+
+    It is the largest thing this node holds, so the widening is not free: the
+    2580-frame chain costed at the join is 9.3GB as fp16 and 18.5GB as fp32,
+    against 44.6GB of staged weights on a 62GB machine -- which is the difference
+    between the render finishing and the OOM killer taking the server. Reported as
+    exactly that, twice.
+
+    Asked, not assumed, and never widened: whatever ComfyUI says it wants between
+    nodes is what the chain is built in. An install with the flag off is told
+    float32 and gets float32, byte for byte what it got before. Older builds have
+    no intermediate_dtype at all, so the fallback is the old constant."""
+    try:
+        return mm.intermediate_dtype()
+    except Exception:
+        return torch.float32
+
+
 def _evict_all_but(keep_model, latent=None):
     """Unload every model EXCEPT the diffusion model from the GPU.
 
@@ -10069,7 +10097,7 @@ class H3LongVideos:
         if vid_out:
             _n = sum(int(_t.shape[0]) for _t in vid_out)
             video = torch.empty((_n,) + tuple(vid_out[0].shape[1:]),
-                                dtype=torch.float32, device=vid_out[0].device)
+                                dtype=_image_out_dtype(), device=vid_out[0].device)
             _at = 0
             while vid_out:
                 _piece = vid_out.pop(0)
@@ -10213,16 +10241,18 @@ class H3LongVideos:
         # discarding them, so a shot boundary is a PCIe copy while that RAM is there
         # and a disk read once the frames have crowded the weights out.
         if cleanup_between_shots and total:
-            # fp32, which is what the JOIN leaves behind and what downstream holds.
-            # The shots are float16 while the chain is being built; this number is
-            # the one that is actually resident once the node returns, and reporting
-            # the fp16 figure here understated it by half.
-            _held = total * int(w) * int(h) * 3 * 4 / GB          # fp32, as returned
+            # MEASURED off the tensor, not assumed. This said "* 4" for float32 while
+            # the chain was float16 during the render and, since the join started
+            # asking ComfyUI what dtype it wants, may be float16 when it is returned
+            # too -- so a fixed width here is a number that is wrong on one install
+            # or the other. element_size() is right on both.
+            _bytes = video.element_size()
+            _held = total * int(w) * int(h) * 3 * _bytes / GB
+            _dt = "float16" if _bytes == 2 else "float32"
             if _held >= 2.0:
                 notes.append(
                     f"the finished chain is {_held:.1f}GB in system RAM ({total} frames at "
-                    f"{w}x{h}, float32 -- the shots are held at {_held / 2:.1f}GB as "
-                    f"float16 while it is being built). It "
+                    f"{w}x{h}, {_dt}). It "
                     f"shares that RAM with the models, which ComfyUI offloads to it "
                     f"rather than discarding: while they fit, a shot boundary is a PCIe "
                     f"copy; once the frames crowd them out it becomes a disk read, once "
