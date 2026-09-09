@@ -881,6 +881,71 @@ def test_a_sheet_that_claims_hardware_too_early():
     check("said once, not per shot", many.count("already lists it as worn") == 1, "")
 
 
+def _shots(P, **kw):
+    return [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True, **kw)[3])
+            if x.strip()]
+
+
+def test_a_bare_region_is_said_on_every_shot():
+    """REPORTED: a bra comes back on somebody topless, and the sheet never had one.
+
+    Nothing restored it -- the model INVENTED it, because the clause saying the
+    chest is uncovered was only ever on the beat that uncovered it. From the next
+    shot that region was unspecified, and an unspecified region is filled from the
+    model's own prior.
+
+    End to end on purpose. The state half of this lives in the engine and is
+    tested there; the clause is written here, and an engine test passes whether
+    or not the shot ever says it."""
+    print("\n=== a bare region is said on every shot ===")
+    mem = "Kate: she, 24, a shirt, jeans.\nSam: he, 40."
+    got = _shots("A bare room.\n\nKate is topless, sitting on the crate.\n\n"
+                 "Kate looks at the door.\n\nKate listens.", character_memory=mem)
+    for i, s in enumerate(got, 1):
+        check(f"shot {i} says the chest is bare", "chest" in s and "bare" in s,
+              " ".join(s.split())[-120:])
+    check("...and it names the chest, not just the shoulders",
+          all("chest, shoulders and arms are bare" in s for s in got))
+    # Undressing reaches the same place, and the sheet must not re-dress her.
+    off = _shots("A bare room.\n\nKate takes off her shirt.\n\n"
+                 "Kate looks at the door.\n\nKate listens.", character_memory=mem)
+    check("a removal is held the same way",
+          all("chest" in s for s in off), " ".join(off[-1].split())[-120:])
+    # ...and dressing again stops it, or she is told her chest is bare over a shirt.
+    back = _shots("A bare room.\n\nKate takes off her shirt.\n\n"
+                  "Kate puts on her shirt.\n\nKate listens.", character_memory=mem)
+    check("dressing again stops the clause", "chest" not in back[-1],
+          " ".join(back[-1].split())[-120:])
+
+
+def test_a_squat_survives_speech_and_undressing():
+    """REPORTED: she does not stay squatting, she stands up on her own.
+
+    posture_cleared read the whole beat INCLUDING quoted speech, so a line with a
+    travel word in it cleared the pose -- "Someone is coming" is about somebody
+    else. And "takes off her shirt" matched the travel list on "takes", so
+    undressing cleared it too, which is why the two reports arrived together."""
+    print("\n=== a squat survives speech and undressing ===")
+    mem = "Kate: she, 24, a shirt, jeans.\nSam: he, 40."
+    got = _shots("A bare room.\n\nKate squats down beside the crate.\n\n"
+                 "Kate says: \"Someone is coming.\"\n\n"
+                 "Kate takes off her shirt.\n\nKate listens.", character_memory=mem)
+    # got[0] stages the squat and has the author's own words for it; the hold
+    # starts on the shot after.
+    check("the author's word is kept, not swapped for a crouch",
+          "still squatting" in got[1], " ".join(got[1].split())[-120:])
+    check("a spoken travel word does not stand her up",
+          "still squatting" in got[2], " ".join(got[2].split())[-120:])
+    check("...nor does taking a garment off",
+          "still squatting" in got[3], " ".join(got[3].split())[-120:])
+    # Real travel still clears it: a hold that survives walking away is a hold
+    # arguing with its own shot.
+    walk = _shots("A bare room.\n\nKate squats down beside the crate.\n\n"
+                  "Kate walks to the door.\n\nKate listens.", character_memory=mem)
+    check("walking away does clear it", "still squatting" not in walk[2],
+          " ".join(walk[2].split())[-120:])
+
+
 def test_the_audit_findings_stay_fixed():
     print("\n=== nine defects found by audit, each held down ===")
     mem3 = "Mara: she, 22.\nKate: she, 20.\nDan: he, 41."
@@ -4405,6 +4470,8 @@ def main():
     test_undressing_does_not_spread()
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
+    test_a_bare_region_is_said_on_every_shot()
+    test_a_squat_survives_speech_and_undressing()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

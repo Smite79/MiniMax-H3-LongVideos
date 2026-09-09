@@ -96,6 +96,40 @@ PARTS = (
 )
 PART_VARIES = frozenset({"chain", "rope", "straps", "tape"})
 
+# Which region a garment leaves uncovered when it comes off. Only what can be
+# placed with certainty; a garment that cannot be placed gets no clause, because
+# a wrong region is worse than none.
+#
+# Lives here, with the other vocabularies, because the BARE state is state -- it
+# outlives the beat that caused it, and the clause that says so has to be
+# writable from any later shot.
+REGION_OF = (
+    (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|tights|"
+     r"pantyhose|jeggings|culottes|tracksuit\s+bottoms", "legs",
+     "The legs are bare from the hip down"),
+    (r"socks|stockings|hold-?ups|boots|shoes|trainers|sneakers|sandals|heels",
+     "feet", "The feet and ankles are bare"),
+    # THE CHEST IS THE POINT. This said "The arms and shoulders are bare" and
+    # stopped there, so a shirt coming off left the one region a bra occupies
+    # unspecified -- and an unspecified region is filled by the model's own
+    # prior. Reported as a bra coming back on somebody topless, on a character
+    # whose sheet never listed a bra: it was never restored, it was invented.
+    (r"top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|hoodie|cardigan|"
+     r"jacket|coat|tunic|bra|bralette|camisole|vest", "torso",
+     "The chest, shoulders and arms are bare skin"),
+    (r"gloves|mittens", "hands", "The hands are bare"),
+)
+# Being in that state rather than arriving at it. "Kate is topless" takes nothing
+# off, so every removal path had nothing to remove and no shot ever said what was
+# on her chest. "naked eye" and "naked flame" are not people.
+NUDITY = (
+    (r"topless|bare-?chested|bare-?breasted|shirtless|"
+     r"stripped\s+to\s+the\s+waist|strips\s+to\s+the\s+waist", ("torso",)),
+    (r"bottomless|bare\s+from\s+the\s+waist\s+down", ("legs",)),
+    (r"naked(?!\s+(?:eye|flame))|nude|in\s+the\s+nude|wearing\s+nothing|"
+     r"with\s+no\s+clothes|stark\s+naked", ("torso", "legs", "feet")),
+)
+
 # Where a limb is held. These all describe the ARMS -- that is why a limb
 # position may never be attached to a collar.
 POSITIONS = (
@@ -227,7 +261,8 @@ POSTURES = (
     (r"lies?|lying|lay|laid\s+(?:down|out)|on\s+(?:her|his|their)\s+back",
      "lying down"),
     (r"stands?|standing|stood|gets?\s+up|got\s+up|rises?|rose", "standing"),
-    (r"crouch(?:es|ing|ed)?|squats?|squatting", "crouching"),
+    (r"squats?|squatting|squatted", "squatting"),
+    (r"crouch(?:es|ing|ed)?", "crouching"),
     (r"bent\s+over|bends?\s+over|leans?\s+over", "bent over"),
     (r"curled\s+up|foetal|fetal", "curled up"),
 )
@@ -381,6 +416,47 @@ def hardware_spans(text):
         seen[key] = len(out)
         out.append((canon, part, written, at))
     return out
+
+
+_REGION_RX = tuple((_rx(r"\b(?:" + p + r")\b"), region, said)
+                   for p, region, said in REGION_OF)
+_NUDITY_RX = tuple((_rx(r"\b(?:" + p + r")\b"), regions) for p, regions in NUDITY)
+
+
+def region_of(garment):
+    """The region a garment covers, or "" when it cannot be placed."""
+    for rx, region, _said in _REGION_RX:
+        if rx.search(str(garment or "")):
+            return region
+    return ""
+
+
+def nudity_in(text):
+    """The regions a beat says are bare BY DESCRIPTION, widest match first."""
+    out = []
+    for rx, regions in _NUDITY_RX:
+        if rx.search(text or ""):
+            for r in regions:
+                if r not in out:
+                    out.append(r)
+    return out
+
+
+def bare_sentence(region):
+    """How to say a region is bare, or "" for one with no wording."""
+    return next((s for _rx, r, s in _REGION_RX if r == region), "")
+
+
+def _bare_on(p, regions):
+    for r in ([regions] if isinstance(regions, str) else regions):
+        if r and r not in p.bare:
+            p.bare.append(r)
+
+
+def _bare_off(p, regions):
+    for r in ([regions] if isinstance(regions, str) else regions):
+        if r in p.bare:
+            p.bare.remove(r)
 
 
 def part_spans(text):
@@ -915,7 +991,11 @@ _NOT_A_BODY = re.compile(r"\b(?:it|chair|table|box|case|bag|door|house|room|"
 # the one that drives the posture guard -- so "Ana crouches" set no posture at
 # all and the next shot was told nothing about how she was left.
 _POSTURE_OF = _POSTURE_OF + (
-    ("crouching", _rx(r"\b(?:crouch(?:es|ing|ed)?|squats?|squatting|squatted)\b")),
+    # SQUATTING IS NOT CROUCHING. Folded together, a script that said "squats"
+    # was held as "still crouching" -- a different shape of body, and not the
+    # word the author chose. The hold says back what was written.
+    ("squatting", _rx(r"\b(?:squats?|squatting|squatted)\b")),
+    ("crouching", _rx(r"\b(?:crouch(?:es|ing|ed)?)\b")),
     ("bent over", _rx(r"\b(?:bends?\s+over|bent\s+over|leans?\s+over|"
                       r"leaned\s+over|doubles?\s+over)\b")),
     ("curled up", _rx(r"\b(?:curled\s+up|curls?\s+up|foetal|fetal)\b")),
@@ -990,7 +1070,7 @@ class Restraint:
 
 class Person:
     __slots__ = ("name", "hardware", "worn", "removed", "displaced",
-                 "posture", "place")
+                 "posture", "place", "bare")
 
     def __init__(self, name):
         self.name = name
@@ -1000,6 +1080,12 @@ class Person:
         self.displaced = []     # pulled aside but still on
         self.posture = ""
         self.place = ""
+        # Regions with nothing on them. A LATCH, not a one-shot fact: the beat
+        # that uncovered a region is the only shot that used to say so, and every
+        # shot after it left that region unspecified -- which the model fills
+        # from its own prior. Reported as a bra coming back on a topless
+        # character who never had one on the sheet.
+        self.bare = []
 
     def restrained(self):
         return bool(self.hardware)
@@ -1071,8 +1157,16 @@ class SceneState:
                 p.hardware[(canon, part)] = Restraint(written or canon, part,
                                               position_in(description or ""),
                                               anchor_in(description or ""), 0)
+        # ...unless it has already come OFF. The sheet is re-read every shot and
+        # the character memory is never edited, so a garment removed in shot 2
+        # was put straight back on the body by the sheet in shot 3 -- and the
+        # clause saying that region is bare then went silent, because something
+        # "still worn" covered it. What the script did outranks what the sheet
+        # lists; the sheet says what she has, not what is on her now.
+        _off = [_garment_key(x) for x in p.removed]
         for g in garments_in(description or ""):
-            if _garment_key(g) not in [_garment_key(x) for x in p.worn]:
+            key = _garment_key(g)
+            if key not in [_garment_key(x) for x in p.worn] and key not in _off:
                 p.worn.append(g)
         return p
 
@@ -1174,6 +1268,7 @@ class SceneState:
                     p.worn = [x for x in p.worn if _garment_key(x) != key]
                     p.displaced = [x for x in p.displaced
                                    if _garment_key(x) != key]
+                    _bare_on(p, region_of(g))
                 elif _PUTS_ON.search(beat):
                     if key not in [_garment_key(x) for x in p.worn]:
                         p.worn.append(g)
@@ -1181,10 +1276,35 @@ class SceneState:
                     p.removed = [x for x in p.removed if _garment_key(x) != key]
                     p.displaced = [x for x in p.displaced
                                    if _garment_key(x) != key]
+                    # Covered again: the latch has to release, or a character who
+                    # dresses is told for the rest of the film that the region is
+                    # bare, over the garment she just put on.
+                    _bare_off(p, region_of(g))
                 elif _DISPLACES.search(beat):
                     if key not in [_garment_key(x) for x in p.displaced]:
                         p.displaced.append(g)
                         changed["displaced"].append((wearer_g, g))
+
+        # BEING in the state, rather than arriving at it. No garment is named and
+        # nothing comes off, so every removal path had nothing to do and no shot
+        # ever said what was on the chest.
+        _nude = nudity_in(beat)
+        if _nude:
+            for n in (who or ([subject] if subject else [])):
+                q = self.person(n)
+                _bare_on(q, _nude)
+                # ...and it takes the garments OFF. Saying somebody is topless
+                # names no garment, so nothing was removed and the sheet's shirt
+                # stayed on the body -- which then suppressed the very clause
+                # that says the chest is bare, because something "still worn"
+                # covered the region. The state has to agree with itself.
+                for g in list(q.worn):
+                    if region_of(g) in _nude:
+                        q.worn.remove(g)
+                        if _garment_key(g) not in [_garment_key(x)
+                                                   for x in q.removed]:
+                            q.removed.append(g)
+                            changed["removed"].append((n, g))
 
         pose = posture_in(beat)
         if pose and subject:

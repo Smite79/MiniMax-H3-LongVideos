@@ -176,6 +176,67 @@ def test_a_chain_is_a_tether_not_a_second_restraint():
     check("no loose chain in the text", "chain" not in shots[1], shots[1])
 
 
+def test_a_bare_region_stays_bare():
+    """REPORTED: a bra comes back on somebody topless -- and the character had no
+    bra anywhere on the sheet.
+
+    Nothing was restoring it. The clause saying a region is uncovered fired only
+    on the beat that uncovered it, so every later shot left that region
+    unspecified, and an unspecified region is filled by the model's own prior.
+    The prior put a bra there and the keyframe carried it on."""
+    print("\n=== a bare region stays bare ===")
+    st = E.SceneState()
+    st.declare("Kate", "Kate: she, 24, a shirt, jeans.")
+    for i, b in enumerate(["Kate is topless, sitting on the crate.",
+                           "Kate looks at the door."], 1):
+        st.read(b, ["Kate"], i)
+    k = st.person("Kate")
+    check("being topless takes the shirt off", "shirt" not in str(k.worn), str(k.worn))
+    check("...and latches the region", k.bare == ["torso"], str(k.bare))
+    # The sheet is re-read every shot and is never edited, so it used to put the
+    # shirt straight back on and the bare clause went silent from shot 2.
+    st.declare("Kate", "Kate: she, 24, a shirt, jeans.")
+    check("the sheet does not put it back on", "shirt" not in str(k.worn), str(k.worn))
+    check("...so the region is still bare", k.bare == ["torso"], str(k.bare))
+    # Dressing again releases it, or she is told the chest is bare over a shirt.
+    st.read("Kate puts on her shirt.", ["Kate"], 3)
+    check("dressing releases the latch", k.bare == [], str(k.bare))
+    # Removal reaches the same state as description.
+    st2 = E.SceneState()
+    st2.declare("Kate", "Kate: she, 24, a shirt, jeans.")
+    st2.read("Kate takes off her shirt.", ["Kate"], 1)
+    check("a removal latches it too", st2.person("Kate").bare == ["torso"],
+          str(st2.person("Kate").bare))
+    check("naked reaches every region",
+          E.nudity_in("Kate is naked.") == ["torso", "legs", "feet"])
+    check("...and a naked flame is not a person", E.nudity_in("a naked flame") == [])
+    check("the torso sentence names the CHEST -- where the bra was invented",
+          "chest" in E.bare_sentence("torso"), E.bare_sentence("torso"))
+
+
+def test_a_squat_is_held():
+    """REPORTED: she does not stay squatting, she stands up on her own.
+
+    Two causes, both in posture_cleared. It read the whole beat including quoted
+    speech, so `Kate says: "Someone is coming."` cleared the pose on "coming" --
+    a travel verb, inside the line, about somebody else. And "takes off her
+    shirt" matched the travel list on "takes", so undressing cleared it too."""
+    print("\n=== a squat is held ===")
+    check("a squat is a squat, not a crouch",
+          E.posture_in("Kate squats down.") == "squatting",
+          E.posture_in("Kate squats down."))
+    check("...and a crouch is still a crouch",
+          E.posture_in("Kate crouches by the door.") == "crouching")
+    st = E.SceneState()
+    for i, b in enumerate(["Kate squats down beside the crate.",
+                           "Kate says: \"Someone is coming.\"",
+                           "Kate takes off her shirt.",
+                           "Kate listens."], 1):
+        st.read(b, ["Kate"], i)
+        check(f"shot {i} still has her squatting",
+              st.person("Kate").posture == "squatting", st.person("Kate").posture)
+
+
 def test_chains_do_not_interfere():
     """Reported as chains interfering with each other.
 
@@ -443,6 +504,8 @@ def main():
     test_it_comes_off_when_the_text_takes_it_off()
     test_the_shot_that_applies_says_both_ends()
     test_a_chain_is_a_tether_not_a_second_restraint()
+    test_a_bare_region_stays_bare()
+    test_a_squat_is_held()
     test_chains_do_not_interfere()
     test_a_modifier_belongs_to_its_own_item()
     test_a_spoken_name_is_not_a_staged_one()

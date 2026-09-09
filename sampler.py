@@ -665,17 +665,7 @@ def revealed_by(covers, gone):
 # Which region of the body a garment leaves uncovered when it comes off. Only what
 # the node can place with certainty; a garment it cannot place gets no clause, since
 # a wrong region is worse than none.
-_REGION_OF = (
-    (re.compile(r"\b(?:shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|"
-                r"joggers|tights|pantyhose|jeggings|culottes|tracksuit\s+bottoms)\b",
-                re.I), "legs", "The legs are bare from the hip down"),
-    (re.compile(r"\b(?:socks|stockings|hold-?ups|boots|shoes|trainers|sneakers|"
-                r"sandals|heels)\b", re.I), "feet", "The feet and ankles are bare"),
-    (re.compile(r"\b(?:top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|"
-                r"hoodie|cardigan|jacket|coat|tunic)\b", re.I), "torso",
-     "The arms and shoulders are bare"),
-    (re.compile(r"\b(?:gloves|mittens)\b", re.I), "hands", "The hands are bare"),
-)
+_REGION_OF = engine._REGION_RX
 
 
 def bare_clause(gone, covers=None, worn=""):
@@ -696,12 +686,34 @@ def bare_clause(gone, covers=None, worn=""):
     silent when another garment the character still wears covers the same region."""
     if not gone:
         return ""
+    regions = []
+    for item in gone:
+        r = engine.region_of(item)
+        if r and r not in regions:
+            regions.append(r)
+    return bare_hold(regions, covers, worn, gone)
+
+
+def bare_hold(regions, covers=None, worn="", gone=()):
+    """Say those regions are bare -- from STATE, so it outlives its beat.
+
+    The same suppression as the removal beat, because it is the same sentence:
+    silent when the sheet names a layer underneath (reveal_clause has that one),
+    and silent when a garment still worn covers the region.
+
+    The reason it exists apart from bare_clause is the report: a bra coming back
+    on somebody topless, on a character with no bra anywhere on the sheet. The
+    clause only ever fired on the beat that uncovered the region, so every shot
+    after it said nothing about that region -- and an unspecified region is
+    filled by the model's own prior. Nothing was restoring the bra. The prior was
+    inventing one, and the keyframe then carried the invention forward."""
+    if not regions:
+        return ""
     under = {str(u).lower() for u in (covers or {})}
     said, out = set(), []
-    for item in gone:
-        item = str(item)
+    for _region in regions:
         for rx, region, sentence in _REGION_OF:
-            if not rx.search(item) or region in said:
+            if region != _region or region in said:
                 continue
             # Something else still on the body covers this region: not bare.
             if any(rx.search(w) for w in (worn or "").split(",")
@@ -4898,13 +4910,37 @@ _HANDLES = re.compile(
     re.I)
 
 
+def _real_travel(span):
+    """Does this span actually move somebody, or does it just LOOK like it?
+
+    "takes off her shirt" matched the travel list on "takes" -- the list has it
+    for "takes her to the car" -- so undressing cleared the posture latch and the
+    shot after was told nothing about how the body was left. Reported as a squat
+    not being held: she stood up on her own.
+
+    Only this one phrasal is excluded. "walks off" and "runs off" are locomotion
+    and the particle does not change that; it is the HANDLING verb that makes
+    "takes off" mean something else entirely."""
+    for m in _TRAVEL_VERB.finditer(span or ""):
+        if re.match(r"\s+off\b", (span or "")[m.end():m.end() + 6], re.I) \
+                and re.match(r"(?:takes?|took|taking)$", m.group(0), re.I):
+            continue
+        return True
+    return False
+
+
 def posture_cleared(beat, poses):
     """{name} whose latched posture this beat contradicts without restating one.
 
     The beat is the author's own words and outranks a hold: where it puts somebody
     on their feet, the hold has to let go or it argues with the shot it is standing
     next to."""
-    b = str(beat or "")
+    # WHAT SHE SAYS IS NOT WHAT SHE DOES. Read whole, this cleared the latch on
+    # `Kate says: "Someone is coming."` -- "coming" is a travel verb, inside the
+    # quoted line, about somebody else entirely. The pose was dropped and the next
+    # shot was told nothing about how the body was left, so she stood up on her
+    # own. Reported as a squat not being held.
+    b = _outside_speech(str(beat or ""))
     out = set()
     if not b:
         return out
@@ -4915,7 +4951,7 @@ def posture_cleared(beat, poses):
         # What this beat has them doing, up to the end of the clause.
         stop = re.search(r"[.;!?]", b[m.end():])
         span = b[m.end():m.end() + (stop.start() if stop else len(b))]
-        if _TRAVEL_VERB.search(span):
+        if _real_travel(span):
             out.add(name)
         elif pose == "lying down" and _HANDLES.search(span):
             out.add(name)
@@ -7210,6 +7246,7 @@ class H3LongVideos:
         paced_shots = []          # shots told to spread their action
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
+        bare_held = []            # ...and shots told a region is STILL bare
         crowded = []              # (shot, clauses dropped for room)
         absent_hold = []          # shots where the wearer is not on screen
         exposed_by_beat = []      # (shot, garments the beat names while covered)
@@ -7666,6 +7703,35 @@ class H3LongVideos:
             # Both firing said it twice and attributed it twice.
             _bare = ("" if (_revealed or bare)
                      else bare_clause(toks, covers, shot_sheet))
+            # ...and on EVERY shot after it, from state, for as long as the
+            # region has nothing on it. Said only on the uncovering beat, the
+            # region went unspecified from the next shot on -- and the model
+            # fills an unspecified region from its own prior. Reported as a bra
+            # coming back on a topless character whose sheet never had one.
+            #
+            # Only for people this shot describes: a region belonging to nobody
+            # in the frame is the sentence that draws the body to own it.
+            if not _bare and not bare and not _revealed:
+                # The same people _described names further down; that is computed
+                # after this clause, so the expression is repeated rather than
+                # moved -- moving it ahead of the sheet work it depends on is how
+                # a shot ends up guarding the previous shot's cast.
+                _who_here = (active if character_guard else
+                             [n for n, _ in sheet_lines(shot_sheet) if n])
+                _bare_now, _still_on = [], []
+                for _n in (_who_here or []):
+                    _q = _state.people.get(_n)
+                    for _r in (_q.bare if _q else []):
+                        if _r not in _bare_now:
+                            _bare_now.append(_r)
+                    _still_on += list(_q.worn) if _q else []
+                # WHAT IS ACTUALLY ON, from the state -- not the sheet. The sheet
+                # still lists the shirt, because the character memory is never
+                # edited, so passing it here suppressed every region the sheet
+                # ever mentioned and the clause could only speak about feet.
+                _bare = bare_hold(_bare_now, covers, ", ".join(_still_on))
+                if _bare:
+                    bare_held.append(len(shots) + 1)
             if _bare:
                 bared_shots.append(len(shots) + 1)
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
