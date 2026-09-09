@@ -328,14 +328,32 @@ class H3Overlay:
         # would put the watermark onto the upstream result -- so a second run with a
         # different text composites over the first, and the sampler's own `images`
         # output carries text it never drew. Work on a copy.
+        #
+        # ONLY WHEN THERE IS SOMETHING TO DRAW. The clone was unconditional and the
+        # "no overlay text given" note was decided six lines BELOW it, so wiring this
+        # node with both fields empty -- which is how it sits in a workflow while you
+        # are still writing the script -- copied the entire finished chain to say it
+        # had changed nothing. That is 9.3GB at 2580 frames, held beside the
+        # sampler's own output, which ComfyUI is still holding in its RAM cache: the
+        # same double-hold the sampler's own join was rebuilt to stop, recreated one
+        # node later, while the weights are still staged.
+        #
+        # blend_layer is the only writer in apply_overlays and it is reached only
+        # inside `if (watermark or "").strip():` / `if (intro or "").strip():`, so
+        # with neither set nothing writes and the upstream tensor is safe to pass
+        # through untouched. .cpu() without .clone() is a no-op on a tensor that is
+        # already there, which after the sampler it always is.
+        wanted = bool((watermark_text or "").strip() or (intro_text or "").strip())
+        if not wanted:
+            return (images.detach().cpu(),
+                    "no overlay text given -- frames unchanged")
         frames = images.detach().cpu().clone()
         frames, note = apply_overlays(
             frames, max(1, int(fps)), watermark_text, watermark_position, watermark_size,
             watermark_opacity, watermark_margin, intro_text, intro_seconds,
             intro_fade, intro_size, intro_position, overlay_font, overlay_stroke)
         if not note:
-            wanted = bool((watermark_text or "").strip() or (intro_text or "").strip())
-            note = "overlays applied" if wanted else "no overlay text given -- frames unchanged"
+            note = "overlays applied"
         return (frames, note)
 
 

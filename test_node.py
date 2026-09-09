@@ -4021,6 +4021,42 @@ def test_a_written_sound_is_recognised():
         check(f"...but heard: {_t[:32]!r}", S.sound_described(_t))
 
 
+def test_the_overlay_does_not_copy_a_chain_it_will_not_draw_on():
+    print("\n=== H3 Overlay does not clone what it will not touch ===")
+    # The clone was unconditional and the "no overlay text given" note was decided
+    # BELOW it, so this node wired with both fields empty -- how it sits in a
+    # workflow while the script is still being written -- copied the whole finished
+    # chain to report that it had changed nothing. 9.3GB at 2580 frames, held beside
+    # the sampler's own output which ComfyUI is still caching: the same double-hold
+    # the sampler's join was rebuilt to stop, one node later.
+    import importlib.util as _u, os as _os
+    _sp = _u.spec_from_file_location("h3_overlay_t",
+                                     _os.path.join(_HERE, "overlay.py"))
+    _ov = _u.module_from_spec(_sp); _sp.loader.exec_module(_ov)
+    _N = _ov.NODE_CLASS_MAPPINGS["H3Overlay"]()
+    _src = torch.rand(8, 32, 48, 3)
+    _mark = _src.clone()
+
+    _out, _note = _N.run(images=_src, fps=24)
+    check("nothing to draw -> no copy is made", _out.data_ptr() == _src.data_ptr())
+    check("...and it still says so", "frames unchanged" in _note)
+    check("...and the upstream tensor is untouched", torch.equal(_src, _mark))
+    check("...shape and dtype pass through",
+          _out.shape == _src.shape and _out.dtype == _src.dtype)
+    # Whitespace is not text. " " must take the same path as "".
+    _ws, _ = _N.run(images=_src, fps=24, watermark_text="   ", intro_text="\n")
+    check("whitespace is not something to draw", _ws.data_ptr() == _src.data_ptr())
+
+    # AND THE COPY IS STILL MADE WHEN THERE IS. apply_overlays composites IN PLACE,
+    # so without a copy the watermark lands on the SAMPLER's cached output and a
+    # second run composites over the first.
+    _out2, _note2 = _N.run(images=_src, fps=24, watermark_text="HELLO")
+    check("something to draw -> a copy IS made", _out2.data_ptr() != _src.data_ptr())
+    check("...the upstream tensor is STILL untouched", torch.equal(_src, _mark))
+    check("...and the frames really were drawn on", not torch.equal(_out2, _src))
+    check("...and it says what it did", "watermark" in _note2 or "overlays applied" in _note2)
+
+
 def test_behind_the_back_is_read_however_it_is_written():
     print("\n=== the wrists are behind the back however that is typed ===")
     # Reported: her hands are simply not bound together behind her back. The anchor
@@ -4359,6 +4395,7 @@ def main():
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
     test_a_written_sound_is_recognised()
+    test_the_overlay_does_not_copy_a_chain_it_will_not_draw_on()
     test_behind_the_back_is_read_however_it_is_written()
     test_a_bound_body_lying_down_has_something_under_it()
     test_a_body_under_effort_has_a_voice()
