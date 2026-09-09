@@ -3073,10 +3073,38 @@ def test_a_line_is_spoken_in_one_language():
           "spoken in English" in sh[1])
     check("...and the silent ones are not",
           "spoken in" not in sh[0] and "spoken in" not in sh[2])
-    check("info names the shots", "told it is spoken in English" in info)
+    check("info names the shots", "told which language it is spoken in" in info)
     # Positively phrased: naming the unwanted language would ask for it.
     check("no language is named but the wanted one",
           not any(w in sh[1] for w in ("not in", "Spanish", "French", "Chinese")))
+    # ...AND IT IS NOT ALWAYS ENGLISH. The clause named English and only English,
+    # so a script written in anything else was told its own line is spoken in a
+    # language it is not, and the delivery fought the words. Read from the line.
+    def said_in(script_text, which=1):
+        s = [x for x in re.split(r"(?=\[Shot )",
+                                 run_node(script_text, plan_only=True)[3]) if x.strip()]
+        m = re.search(r"The line is spoken in ([^.]*)\.", " ".join(s[which].split()))
+        return m.group(1) if m else ""
+
+    for _lang, _line in (
+            ("Spanish", 'Kate dice: "No sé lo que estás haciendo con eso."'),
+            ("French", 'Kate dit: "Je ne sais pas ce que vous faites."'),
+            ("German", 'Kate sagt: "Ich weiss nicht was du da machst."'),
+            ("Russian", 'Kate says: "Не знаю '
+                        'что ты дела'
+                        'ешь."'),
+            ("Japanese", 'Kate says: "何をしているの？"'),
+    ):
+        got = said_in("A room.\n\nKate waits.\n\n" + _line)
+        check(f"a line in {_lang} is called {_lang}", got == _lang, got)
+    # A line too short to carry evidence takes the language of the script it is in,
+    # not English on a technicality.
+    # Shot 3 is the short one -- "Si." carries no evidence of its own, and read
+    # alone it would be called English inside a Spanish script.
+    short = said_in('Una habitación.\n\nKate espera.\n\n'
+                    'Kate dice: "No sé lo que estás haciendo con eso."\n\n'
+                    'Kate dice: "Sí."', which=2)
+    check("...and the short line follows the script", short == "Spanish", short)
     # Non-Latin characters are a strong language signal and easy to miss by eye.
     check("plain English is clean", S.non_latin_in('Kate says: "Hello."') == [])
     check("...and accented Latin is not flagged",

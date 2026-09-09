@@ -1672,6 +1672,15 @@ def speakers_in(beat, sheet=""):
 # Positively phrased, and stated once: at cfg 1 there is no negative prompt, so
 # "not in another language" would name the other language. Naming the wanted one is
 # the whole mechanism.
+# The FALLBACK, not the rule. This was the rule -- the clause named English and
+# only English -- so a script written in any other language was told its own line
+# is spoken in English, and the delivery fought the words. Users asked for that
+# restriction to come out.
+#
+# Naming NOTHING is not the way out: unnamed is where the branch picks a language
+# on its own, which is the "sounds like gibberish" report this clause answers. So
+# the language is read off the line, and this is only what stands in when the line
+# is too short to tell.
 SPOKEN_LANGUAGE = "English"
 LANGUAGE_HOLD = " The line is spoken in {lang}."
 
@@ -7232,6 +7241,11 @@ class H3LongVideos:
         unattributed = []         # shots whose line names no speaker
         mouth_named = []          # shots with a line, holding the OTHER mouths
         language_shots = []       # shots told which language the line is in
+        _langs_used = []          # ...and which languages those turned out to be
+        # THE WHOLE SCRIPT'S language, as the per-shot fallback. A single short
+        # line -- "Si." -- carries no evidence on its own, and reading it alone
+        # would call it English inside a Spanish script.
+        _script_lang = engine.language_of(engine.spoken_text(prompt or ""))
         told_shots = []           # shots whose line orders somebody about
         dialogue_marked = []      # shots whose quotes became <d>...</d>
         poses = {}                # name -> the posture a beat put them in
@@ -8519,8 +8533,16 @@ class H3LongVideos:
             # A shot with a line is told what language it is in. Every shot with a
             # line, not only the ones with a listener to hold: a single speaker can
             # deliver the line in whatever language the model picks.
-            _lang = (LANGUAGE_HOLD.format(lang=SPOKEN_LANGUAGE)
+            # ...in the language THIS shot's line is written in. Read from the
+            # line itself, falling back to the language the script as a whole is
+            # in, so one short line ("Si.") in a Spanish script is not called
+            # English on a technicality.
+            _shot_lang = engine.language_of(engine.spoken_text(body),
+                                            fallback=_script_lang)
+            _lang = (LANGUAGE_HOLD.format(lang=_shot_lang)
                      if (_speaks and not _voiced) else "")
+            if _lang and _shot_lang not in _langs_used:
+                _langs_used.append(_shot_lang)
             # A quoted ORDER is still in the shot's words, and a model renders what
             # the words describe. Give the listener something to be doing, so the
             # instruction is not the only thing in the frame about their body.
@@ -9074,13 +9096,17 @@ class H3LongVideos:
         if language_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in language_shots)} carry a line, "
-                f"so each is told it is spoken in {SPOKEN_LANGUAGE}. H3 is joint and "
-                f"multilingual: the prose conditions the audio branch, and a branch "
-                f"told a line is spoken but never told in WHAT will pick a language "
-                f"-- fluent delivery in one nobody asked for sounds like babble to "
-                f"anybody expecting {SPOKEN_LANGUAGE}. Said positively, because at "
-                f"cfg 1 there is no negative prompt and naming the unwanted language "
-                f"would ask for it")
+                f"so each is told which language it is spoken in -- "
+                f"{', '.join(_langs_used) or SPOKEN_LANGUAGE}, read from the line "
+                f"itself rather than fixed. H3 is joint and multilingual: the prose "
+                f"conditions the audio branch, and a branch told a line is spoken "
+                f"but never told in WHAT will pick a language -- fluent delivery in "
+                f"one nobody asked for sounds like babble to anybody expecting the "
+                f"one they wrote. Said positively, because at cfg 1 there is no "
+                f"negative prompt and naming the unwanted language would ask for it. "
+                f"Write the dialogue in the language you want spoken; a line too "
+                f"short to tell falls back to the rest of the script, then to "
+                f"{SPOKEN_LANGUAGE}")
         _odd = non_latin_in(prompt) + non_latin_in(character_memory or "") \
             + non_latin_in(anchor or "")
         _odd = list(dict.fromkeys(_odd))
@@ -9091,7 +9117,14 @@ class H3LongVideos:
                 f"strong signal about which language to speak, and one pasted glyph "
                 f"is easy to miss by eye. They are NOT removed -- the node passes "
                 f"your words through -- so retype them if the delivery is coming out "
-                f"in a language you did not ask for")
+                f"in a language you did not ask for"
+                # ...and when the script IS in that language, this is not a warning
+                # at all. Reporting a Cyrillic script as a stray glyph would be the
+                # node telling somebody their own dialogue looks like a mistake.
+                + (f". Your dialogue reads as {_script_lang}, though, so these are "
+                   f"most likely meant to be here -- the lines are told they are "
+                   f"spoken in {_script_lang}"
+                   if _script_lang != SPOKEN_LANGUAGE else ""))
         if mouth_named:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in mouth_named)} have a line, so "

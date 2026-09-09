@@ -276,6 +276,85 @@ _SPOKEN_SPAN = re.compile(r"<d>.*?</d>|[\"“][^\"“”]{1,400}?[\"”]",
                           re.S)
 
 
+def spoken_text(text):
+    """Only what people SAY, with the markers stripped. "" when nobody speaks."""
+    said = []
+    for m in _SPOKEN_SPAN.finditer(text or ""):
+        s = m.group(0)
+        s = s[3:-4] if s.startswith("<d>") else s[1:-1]
+        if s.strip():
+            said.append(s.strip())
+    return " ".join(said)
+
+
+# WHICH LANGUAGE A LINE IS IN, read off the line itself.
+#
+# The node used to name English and only English. That clause is not decoration
+# -- H3 is joint and multilingual, and an audio branch told a line is spoken but
+# never told in WHAT picks one, which is where "sounds like gibberish" came from
+# -- but the language it named was hard-coded, so a script written in any other
+# language was told its own line is spoken in English and the delivery fought the
+# words. Naming nothing is not the way out of that. Naming what the author
+# actually wrote is.
+#
+# A script settles it outright; a Latin alphabet is shared, so common words vote.
+_BY_SCRIPT = (
+    # Kana before Han: Japanese uses both, so Han alone is what makes it Chinese.
+    ("Japanese", r"[぀-ヿ]"),
+    ("Korean", r"[가-힯ᄀ-ᇿ]"),
+    ("Chinese", r"[一-鿿㐀-䶿]"),
+    ("Greek", r"[Ͱ-Ͽἀ-῿]"),
+    ("Hebrew", r"[֐-׿]"),
+    ("Arabic", r"[؀-ۿݐ-ݿ]"),
+    ("Hindi", r"[ऀ-ॿ]"),
+    ("Thai", r"[฀-๿]"),
+    # Letters Russian lacks, or words it spells differently -- Ukrainian written
+    # without і/ї/є still says "що" where Russian says "что".
+    ("Ukrainian", r"[ЄЇєіїґ]|\b(?:що|це|ти|але|дуже|треба|дякую|немає)\b"),
+    ("Russian", r"[Ѐ-ӿ]"),
+)
+_BY_SCRIPT_RX = tuple((n, re.compile(p)) for n, p in _BY_SCRIPT)
+# Function words. Content words are what a translator changes; these are what
+# stay, and a line or two of dialogue carries several.
+_BY_WORDS = (
+    ("English", "the and is are you that not it to of in for with but what have"),
+    ("Spanish", "el la los las que de y no se es por con para pero muy sí está"),
+    ("French", "le la les des que de et ne pas est vous je pour avec au ça"),
+    ("German", "der die das und nicht ist ich du sie wir mit für auf ein aber"),
+    ("Italian", "il lo la che di non è sono per con questo come più sei ma"),
+    ("Portuguese", "os as que de não é para com você isso mais está eu sou"),
+    ("Dutch", "de het een en niet is ik je dat van voor met maar hij zijn"),
+    ("Polish", "nie jest to się na że do co jak ale jestem tak mnie"),
+    ("Turkish", "bir bu ve için ne değil çok ben sen var yok ama beni"),
+    ("Swedish", "och att det är inte jag du en för med men han hon"),
+)
+_BY_WORDS_SET = tuple((n, frozenset(w.split())) for n, w in _BY_WORDS)
+
+
+def language_of(text, fallback="English"):
+    """The language `text` is written in, or `fallback` when it cannot tell.
+
+    Conservative on purpose: naming the WRONG language is worse than naming the
+    one the author most likely wanted, so a Latin-alphabet guess has to win by a
+    clear margin before it displaces the fallback."""
+    t = str(text or "")
+    if not t.strip():
+        return fallback
+    for name, rx in _BY_SCRIPT_RX:
+        if rx.search(t):
+            return name
+    words = set(re.findall(r"[^\W\d_]+", t.lower(), re.UNICODE))
+    if not words:
+        return fallback
+    scores = sorted(((len(words & ws), n) for n, ws in _BY_WORDS_SET), reverse=True)
+    best, runner = scores[0], scores[1]
+    # Two hits, and ahead of everything else. One shared word ("no" is Spanish and
+    # English both) is not a language.
+    if best[0] >= 2 and best[0] > runner[0]:
+        return best[1]
+    return fallback
+
+
 def _outside_speech(text):
     """The beat with everything anybody SAYS taken out.
 
