@@ -123,8 +123,18 @@ class FakeVAE:
         return torch.zeros(1, 24, max(1, n), H // 16, W // 16)
 
     def decode(self, latent):
+        # H3'S OWN GRID, not t*4. The real VAE's upscale_ratio is
+        # (lambda a: max(1, (a - 2) // 5 * 17 + 5), 16, 16) -- comfy/sd.py -- so a
+        # shot planned at 73 frames encodes to 22 latents and decodes back to 73.
+        # t*4 gave 88, and nothing noticed because nothing asserted the round trip.
+        #
+        # It matters now: the shot loop is about to preallocate the finished chain
+        # from sum(lens), which is only a valid bound if a shot decodes to the
+        # length it was planned at. Against t*4 every shot overruns by 20%, the
+        # whole suite takes the overflow path, and a disable-check on the streaming
+        # fix would read "the fix does not work" when the fixture is what is wrong.
         t = latent.shape[2] if latent.ndim == 5 else 1
-        return torch.rand(t * 4, H, W, 3).to(_vae_out_dtype())
+        return torch.rand(max(1, (t - 2) // 5 * 17 + 5), H, W, 3).to(_vae_out_dtype())
 
     def decode_tiled(self, latent, **kw):
         return self.decode(latent)
@@ -3747,6 +3757,37 @@ def test_the_ambient_bed_reaches_the_soundtrack():
           "have no quoted line and no sound described" in info)
 
 
+def _foley_spans(prompt, n_shots_hint=None, **kw):
+    """Per-shot mean of ONLY the sound this node builds, isolated by subtraction.
+
+    These tests used to read `mean > 0.25` on the finished soundtrack, which is not
+    a measurement of the built sound: it is the built sound PLUS whatever else is in
+    that span, and room tone goes under every shot whose branch is already open. The
+    0.25 was tuned against a fixture that decoded every shot to the same inflated
+    length; on H3's real grid the same room tone fills a larger fraction of a shorter
+    shot, and the baseline crosses 0.25 with the node building nothing there. `info`
+    is unambiguous that it built nothing -- "sound built into the shot itself on shot
+    2", and no other -- so the threshold was reading the floor, not the signal.
+
+    Running the same prompt with foley_level=0 gives that floor, and the difference
+    is the built sound alone. foley_for is stubbed to a flat 1.0, so a span that
+    receives it moves by a wide margin and a span that does not moves by ~0."""
+    _real = S.foley_for
+    try:
+        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
+        on = run_node(prompt, **kw)
+    finally:
+        S.foley_for = _real
+    off = run_node(prompt, **dict(kw, foley_level=0.0))
+    wav_on, wav_off, n = on[1]["waveform"], off[1]["waveform"], on[6]
+    span_on = int(wav_on.shape[-1]) // max(n, 1)
+    span_off = int(wav_off.shape[-1]) // max(n, 1)
+    deltas = [float(wav_on[..., i * span_on:(i + 1) * span_on].mean())
+              - float(wav_off[..., i * span_off:(i + 1) * span_off].mean())
+              for i in range(n)]
+    return on, deltas, [i + 1 for i, d in enumerate(deltas) if d > 0.3]
+
+
 def test_built_sound_lands_in_the_right_shot():
     """END TO END, and testing the PLACEMENT rather than the note. The note names the
     shot from the same loop that does the mixing, so it would read correctly even if
@@ -3760,21 +3801,23 @@ def test_built_sound_lands_in_the_right_shot():
          # assertion: its branch is open and already making that sound from the
          # same prose, and building over it would double every rattle.
          "The guard drags the chain and says: \"Sit down.\"")
-    _real = S.foley_for
-    try:
-        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
-        out = run_node(P, character_memory=mem, ambient_level=0.0, foley_level=0.5)
-    finally:
-        S.foley_for = _real
+    out, means, hot = _foley_spans(P, character_memory=mem, ambient_level=0.0,
+                                   foley_level=0.5, shot_length="fixed")
     wav, info, per_shot = out[1]["waveform"], out[2], out[4]
     check("info names the shot", "sound built into the shot itself" in info)
     # The fake model is random with mean ~0, so a span carrying the marker has a
     # mean near +0.5 and every other span sits near 0.
+    #
+    # EQUAL SPANS NEED EQUAL SHOTS, and shot_length="fixed" is what promises that.
+    # This read the soundtrack as n equal slices while the shots were sized "from
+    # the beat", i.e. each from its own line -- so the slice boundaries were not the
+    # shot boundaries and a marker in one shot bled into its neighbours' means. It
+    # passed only because the stub VAE decoded every shot to the same length
+    # regardless of what it was planned at (t*4), so the fixture was hiding the
+    # test's own arithmetic. With the stub on H3's real grid the shots differ, as
+    # they do in a render, and the assumption has to be stated rather than inherited.
     n_shots = out[6]
-    span = int(wav.shape[-1]) // max(n_shots, 1)
-    means = [float(wav[..., i * span:(i + 1) * span].mean()) for i in range(n_shots)]
-    hot = [i + 1 for i, m in enumerate(means) if m > 0.25]
-    check("shot 2 carries the built sound", 2 in hot, f"means {[round(m,2) for m in means]}")
+    check("shot 2 carries the built sound", 2 in hot, f"deltas {[round(m,2) for m in means]}")
     check("the speaking shot does not", 3 not in hot,
           f"means {[round(m,2) for m in means]}")
     check("the shot with nothing to sound does not", 1 not in hot,
@@ -3846,17 +3889,9 @@ def test_built_sound_reaches_an_effort_shot():
     P = ("A cell.\n\nShe sits on the bunk.\n\n"
          "She strains against the cuffs.\n\n"
          "They rock together on the bed.")
-    _real = S.foley_for
-    try:
-        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
-        out = run_node(P, ambient_level=0.0, foley_level=0.5)
-    finally:
-        S.foley_for = _real
+    out, means, hot = _foley_spans(P, ambient_level=0.0, foley_level=0.5)
     wav, info, n_shots = out[1]["waveform"], out[2], out[6]
-    span = int(wav.shape[-1]) // max(n_shots, 1)
-    means = [float(wav[..., i * span:(i + 1) * span].mean()) for i in range(n_shots)]
-    hot = [i + 1 for i, m in enumerate(means) if m > 0.25]
-    shown = f"means {[round(m, 2) for m in means]}"
+    shown = f"deltas {[round(m, 2) for m in means]}"
     check("the restrained effort shot sounds", 2 in hot, shown)
     check("the furniture effort shot sounds", 3 in hot, shown)
     check("a shot with nothing to sound stays quiet", 1 not in hot, shown)
@@ -3882,16 +3917,12 @@ def test_built_sound_reaches_an_effort_shot():
     # An author-written sound still opens the branch and still suppresses the mix:
     # that shot's audio is already making it.
     W = ("A cell.\n\nThe chain drags on the concrete, and she says: \"Wait.\"")
-    try:
-        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
-        out2 = run_node(W, ambient_level=0.0, foley_level=0.5)
-    finally:
-        S.foley_for = _real
-    w2, n2 = out2[1]["waveform"], out2[6]
-    s2 = int(w2.shape[-1]) // max(n2, 1)
-    m2 = [float(w2[..., i * s2:(i + 1) * s2].mean()) for i in range(n2)]
-    check("a written sound still suppresses the mix", all(m < 0.25 for m in m2),
-          f"means {[round(m, 2) for m in m2]}")
+    # Same subtraction as above: what is asserted is that NOTHING was built here,
+    # and the finished level cannot say that -- a shot whose branch is open carries
+    # room tone whether the node built anything or not.
+    _, m2, hot2 = _foley_spans(W, ambient_level=0.0, foley_level=0.5)
+    check("a written sound still suppresses the mix", not hot2,
+          f"deltas {[round(m, 2) for m in m2]}")
     # Silencing OFF says "pin nothing, let the model sound every shot" -- and then
     # there is no shot the model cannot make, which is the only reason anything is
     # built here. The effort shots kept their built layer while the model was also
