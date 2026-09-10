@@ -2474,6 +2474,69 @@ def test_the_audio_branch_gets_a_soft_landing():
     check("it is never inserted twice", len(once) == len(SIMPLE) + 1, str(once))
 
 
+def test_a_kidnapping_reads_as_one_without_being_declared():
+    print("\n=== the beats are allowed to say what the film is ===")
+    # Reported: "she is still smiling in every beat, despite this being a kidnapping
+    # situation that was not defined in the anchor."
+    #
+    # That last clause is the whole bug. film_stages_duress read binding hardware
+    # from the CHARACTER SHEET and distress verbs from the beats -- and a kidnapping
+    # is neither. Nobody writes "McKenna: she, 26, handcuffs" for an abduction; the
+    # hardware goes on during the film, in the beats, and the beats use coercion
+    # verbs that were nowhere in the distress list. Ten beats of an explicit
+    # abduction returned False:
+    #
+    #     Dan grabs McKenna from behind and covers her mouth.
+    #     Dan drags McKenna towards the van.
+    #     Dan ties McKenna's wrists behind her back.
+    #     Dan puts a strip of tape over McKenna's mouth.
+    #     McKenna is bound and gagged in the back.
+    #     Dan pulls a hood over McKenna's head.
+    #
+    # Not one of them registered, so the film had no mood, so every face came from
+    # the portrait prior, which is pleasant. She smiled through her own abduction.
+    MEM = "McKenna: she, 26, dark hair, a red jacket.\nDan: he, 40, a work coat."
+    for _b in ("Dan grabs McKenna from behind and covers her mouth.",
+               "Dan drags McKenna towards the van.",
+               "Dan forces McKenna into the back of the van.",
+               "Dan ties McKenna's wrists behind her back.",
+               "Dan puts a strip of tape over McKenna's mouth.",
+               "Dan holds McKenna down.",
+               "Dan shoves McKenna against the wheel arch.",
+               "McKenna is bound and gagged in the back.",
+               "Dan pulls a hood over McKenna's head.",
+               "McKenna tries to get away."):
+        check(f"the beat stages duress: {_b[:38]!r}",
+              S.film_stages_duress([_b], MEM), "")
+
+    # AND IT IS NOT JUST THE FILM'S MOOD -- the shot he drags her in is a shot her
+    # face is in, so that shot gets the face clause too, not only the tone.
+    sh = [" ".join(x.split()) for x in
+          re.split(r"(?=\[Shot )",
+                   run_node("A lane at night.\n\nDan drags McKenna towards the van."
+                            "\n\nDan opens the rear doors.", plan_only=True,
+                            character_memory=MEM, anchor="Handheld, night.")[3])
+          if x.strip()]
+    check("the coercion beat gets the face, not just the tone",
+          "shows the strain" in sh[1], sh[1][-170:])
+    check("...and the beat without her still carries the film's mood",
+          "The mood is grim" in sh[2], sh[2][-170:])
+
+    # STILL NOT INVENTED. The verbs need a PERSON: an object being grabbed, dragged
+    # or forced is a prop, not a victim, and a film of those is not a grim film.
+    for _b in ("Kate grabs a coffee and leaves.",
+               "Kate drags the case to the door.",
+               "Kate forces the window open.",
+               "Kate ties her hair back.",
+               "Kate tapes the box shut.",
+               "Kate pulls the hood of the car open."):
+        check(f"a prop is not a victim: {_b[:34]!r}",
+              not S.film_stages_duress([_b], "Kate: she, 30, a grey coat."), "")
+    check("an ordinary film is still left alone",
+          not S.film_stages_duress(["Kate makes the coffee.", "Sam reads the paper."],
+                                   "Kate: she, 30.\nSam: he, 33."))
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5740,6 +5803,7 @@ def main():
     test_the_audio_branch_gets_a_soft_landing()
     test_an_anchor_says_when_it_has_taken_the_scenes_place()
     test_a_grim_film_is_grim_in_every_shot()
+    test_a_kidnapping_reads_as_one_without_being_declared()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()

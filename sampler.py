@@ -4285,6 +4285,76 @@ DURESS_MOOD = " The mood is grim."
 DURESS_FACE = " The mood is grim; the face shows the strain of it, the mouth set."
 
 
+# COERCION -- A KIDNAPPING IS NOT A DISTRESS VERB AND IT IS NOT IN THE SHEET.
+#
+# Reported: "she is still smiling in every beat, despite this being a kidnapping
+# situation that was not defined in the anchor." That last clause is the bug.
+# film_stages_duress read binding hardware from the CHARACTER SHEET and distress
+# verbs from the beats, and an abduction is neither: nobody writes "McKenna: she,
+# 26, handcuffs" for one -- the hardware goes ON during the film, in the beats --
+# and the beats use verbs that were nowhere in the distress list. Ten beats of an
+# explicit abduction returned False, so the film had no mood, so every face came
+# from the portrait prior, which is pleasant.
+#
+# THE VERBS NEED A PERSON. Grabbing, dragging, forcing and shoving are all ordinary
+# things to do to an OBJECT -- a coffee, a case, a window -- and a film of those is
+# not a grim film. So each one has to take a person: a pronoun, or a capitalised
+# name. That single requirement is what separates "drags McKenna towards the van"
+# from "drags the case to the door", and it is tested both ways.
+_COERCION = re.compile(
+    r"\b(?:grab(?:s|bed|bing)?|drag(?:s|ged|ging)?|forc(?:e|es|ed|ing)|"
+    r"shov(?:e|es|ed|ing)|haul(?:s|ed|ing)?|bundl(?:e|es|ed|ing)|"
+    r"seiz(?:e|es|ed|ing)|snatch(?:es|ed|ing)?|pin(?:s|ned|ning)?|"
+    r"restrain(?:s|ed|ing)?|manhandl(?:e|es|ed|ing)|overpower(?:s|ed|ing)?|"
+    r"subdu(?:e|es|ed|ing)|wrestl(?:e|es|ed|ing))\s+"
+    # (?-i:) MATTERS. The whole pattern is case-insensitive, which turned [A-Z]
+    # into "any letter" and let "drags THE case" and "forces THE window" read as
+    # coercion. The capital is the only thing separating a name from a determiner.
+    r"(?:her|him|them|(?-i:[A-Z][\w-]+))\b"
+    # ...and the phrases that carry it without a bare transitive verb.
+    r"|\b(?:holds?|held|holding|pins?|pinned|forces?|forced)\s+"
+    r"(?:her|him|them|(?-i:[A-Z][\w-]+))\s+(?:down|still|against|into|in)\b"
+    r"|\bcover(?:s|ed|ing)?\s+(?:her|his|their|[\w-]+['\u2019]s)\s+mouth\b"
+    r"|\bhoods?\s+(?:over|on)\b|\bhooded\b|\bblindfold(?:s|ed|ing)?\b"
+    r"|\bagainst\s+(?:her|his|their)\s+will\b"
+    r"|\bkidnap(?:s|ped|ping)?\b|\babduct(?:s|ed|ing|ion)?\b|\bhostage\b"
+    # Trying to get out is duress by definition.
+    r"|\btr(?:y|ies|ied|ying)\s+to\s+(?:get\s+away|get\s+out|escape|run|pull\s+free)\b"
+    r"|\b(?:break(?:s|ing)?|broke|pull(?:s|ed|ing)?)\s+free\b"
+    r"|\bescap(?:e|es|ed|ing)\b", re.I)
+
+# Hardware being APPLIED, in a beat. The same words as _BOUND_HARDWARE plus the
+# forms an action uses -- a sheet says "tied", a beat says "ties" -- and each one
+# still has to reach a person or a part of one, so taping a box shut is not an
+# abduction.
+# What a restraint can actually be put on. "Ties her hair back" and "tapes the box
+# shut" use the same verbs and are not abductions, so the verb has to reach either a
+# PERSON or a part of one that can be bound.
+_BINDABLE = (r"wrists?|hands?|ankles?|feet|foot|legs?|arms?|mouth|head|neck|"
+             r"thumbs?|fingers?|elbows?|knees?")
+_BINDING_ACT = re.compile(
+    r"\b(?:ties?|tying|tied|bind(?:s|ing)?|bound|cuff(?:s|ed|ing)?|"
+    r"gag(?:s|ged|ging)?|shackl(?:e|es|ed|ing)|chain(?:s|ed|ing)?|"
+    r"tap(?:e|es|ed|ing))\s+(?:up\s+)?"
+    r"(?:(?:her|his|their|(?-i:[A-Z][\w-]+)'s)\s+(?:" + _BINDABLE + r")"
+    r"|(?:her|him|them|(?-i:[A-Z][\w-]+))(?=\s+(?:up|to|behind|against|with|at)\b|[.,;]|$))"
+    r"|\b(?:bound|gagged|cuffed|shackled|chained|tied)\s+"
+    r"(?:and\s+\w+\s+)?(?:at|to|behind|in|up|with|over)\b"
+    r"|\bis\s+(?:bound|gagged|cuffed|shackled|chained|tied)\b"
+    r"|\b(?:tape|rope|cord|zip\s*tie|cable\s*tie|gag|hood|blindfold)\s+"
+    r"(?:over|across|around|round|on)\s+"
+    r"(?:her|his|their|(?-i:[A-Z][\w-]+)'s)\b", re.I)
+
+
+def beat_stages_duress(beat):
+    """Does this BEAT stage duress -- distress, coercion, or hardware going on?
+
+    The three readings that do not need a character sheet. See _COERCION for why
+    every coercion verb has to take a person."""
+    b = beat or ""
+    return bool(_DISTRESS.search(b) or _COERCION.search(b) or _BINDING_ACT.search(b))
+
+
 def film_stages_duress(beats, sheet=""):
     """Does this FILM stage duress anywhere -- binding hardware, or a distress verb?
 
@@ -4296,7 +4366,7 @@ def film_stages_duress(beats, sheet=""):
     for _, ln in sheet_lines(sheet or ""):
         if _BOUND_HARDWARE.search(ln or ""):
             return True
-    return any(_DISTRESS.search(b or "") for b in (beats or []))
+    return any(beat_stages_duress(b) for b in (beats or []))
 
 
 # BINDING hardware, which is narrower than restraint hardware. restraint_present is
@@ -4327,7 +4397,7 @@ def duress_face(beat, wearers, described, film_duress=False):
     if not described:
         return ""
     who = [n for n, ln in (wearers or []) if n and _BOUND_HARDWARE.search(ln or "")]
-    if not who and _DISTRESS.search(beat or ""):
+    if not who and beat_stages_duress(beat):
         who = [n for n in (described or []) if n]
     if who:
         return DURESS_FACE
