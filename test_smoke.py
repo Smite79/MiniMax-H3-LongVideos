@@ -2121,8 +2121,8 @@ def test_her_look_does_not_land_on_him():
                                             character_memory=MEM)[3]) if x.strip()]
     check("the beat that stages the look gets the clause",
           "turned to the lane" in sh[1], sh[1][-160:])
-    check("...and the shot she is not in does not",
-          "turned to the lane" not in sh[2], sh[2][-160:])
+    check("...and the shot she is not in never claims it impersonally",
+          "The eyes and the head are turned to the lane" not in sh[2], sh[2][-160:])
 
     # ...and where she IS still in the shot, the look is hers by name, because a
     # second person in frame is a second pair of eyes the impersonal wording could
@@ -2134,15 +2134,23 @@ def test_her_look_does_not_land_on_him():
     sh2 = [" ".join(x.split()) for x in
            re.split(r"(?=\[Shot )", run_node(P2, plan_only=True,
                                              character_memory=MEM)[3]) if x.strip()]
+    # Attributed -- by name, or by her pronoun where another clause in the same
+    # shot has already spent the naming. Either way it is HERS and cannot be read
+    # as his, which is the guarantee. A bare "The eyes and the head" cannot.
     check("the held look is attributed once two people are in the shot",
-          "McKenna's eyes and head are turned to the treeline" in sh2[1], sh2[1][-200:])
+          ("McKenna's eyes and head are turned to the treeline" in sh2[1]
+           or "Her eyes and head are turned to the treeline" in sh2[1]), sh2[1][-200:])
 
     # The clause itself, both ways.
     check("impersonal with nobody named",
           S.gaze_hold("TV") == " The eyes and the head are turned to the TV.")
     check("...and named when it has to be",
-          S.gaze_hold("TV", "Mara") == " Mara's eyes and head are turned to the TV.")
-    check("nothing named, nothing said", S.gaze_hold("", "Mara") == "")
+          S.gaze_hold("TV", "Mara's") == " Mara's eyes and head are turned to the TV.")
+    check("...or by pronoun where the name is already spent in this shot",
+          S.gaze_hold("TV", "her") == " Her eyes and head are turned to the TV.")
+    check("...and a person target takes no article",
+          S.gaze_hold("Dan", "", True) == " The eyes and the head are turned to Dan.")
+    check("nothing named, nothing said", S.gaze_hold("", "Mara's") == "")
     check("info says the look was attributed",
           "a look belongs to whoever" in run_node(P, plan_only=True,
                                                   character_memory=MEM)[2])
@@ -2258,6 +2266,83 @@ def test_a_grim_film_is_grim_in_every_shot():
     check("off with hold_gaze, like the face it belongs to",
           "mood is grim" not in run_node(P, plan_only=True, character_memory=MEM,
                                          hold_gaze=False)[3])
+
+
+def test_a_look_survives_the_next_beat():
+    print("\n=== the look she was given does not evaporate ===")
+    # Reported: "when she looks at the van in one beat, she's gazing at the camera in
+    # the next beat and not looking at the van."
+    #
+    # ed0d2a6 gave the latch an owner. It did not make the latch SURVIVE. Measured
+    # over seven plausible next-beats, the look held in two:
+    #
+    #     McKenna waits.                    -> held
+    #     McKenna pulls at the cuffs.       -> held
+    #     McKenna watches him.              -> LOST
+    #     Dan opens the driver's door.      -> LOST
+    #     Dan walks to the driver's door.   -> LOST
+    #     Dan lifts the case into the back. -> LOST
+    #
+    # Two different causes, neither of them the latch:
+    #
+    #   1. "watches him" clears the look -- she IS looking somewhere else -- but
+    #      `him` is refused as a target, so nothing replaces it and the shot says
+    #      nothing about her eyes at all. Nothing is the lens.
+    #   2. A beat that names only Dan drops her from the shot text completely, so
+    #      she has no sheet line, no pose and no look, while still being in the
+    #      van in the picture the next shot starts from.
+    MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
+           "Dan: he, 40, a work coat.")
+
+    def two(second):
+        sh = [" ".join(x.split()) for x in
+              re.split(r"(?=\[Shot )",
+                       run_node("A lane at night.\n\nMcKenna looks at the van.\n\n" + second,
+                                plan_only=True, character_memory=MEM,
+                                anchor="Handheld, night exterior.")[3]) if x.strip()]
+        return sh[1], sh[2]
+
+    # 1. A LOOK AT A PERSON IS A LOOK. The old rule -- "restating a pronoun says
+    # nothing the beat did not" -- is true against a neutral model and false against
+    # one whose prior is a portrait: the choice is not between the beat's word and a
+    # restatement, it is between the beat's word and the lens.
+    _, b = two("McKenna watches him.")
+    check("a look at a person is said, not dropped",
+          "turned to Dan" in b, b[-200:])
+    _, b2 = two("McKenna looks at Dan.")
+    check("...and a look at a NAME is a look too", "turned to Dan" in b2, b2[-200:])
+    # Only where it is unambiguous. Three people and a bare "him" resolves to
+    # nobody, and guessing which is worse than saying nothing.
+    THREE = MEM + "\nSam: he, 35, a hood."
+    amb = " ".join(run_node("A lane at night.\n\nMcKenna watches him while Dan and "
+                            "Sam wait.", plan_only=True, character_memory=THREE,
+                            anchor="Handheld, night exterior.")[3].split())
+    check("an ambiguous pronoun resolves to nobody",
+          "turned to Dan" not in amb and "turned to Sam" not in amb, amb[-200:])
+
+    # 2. SHE IS STILL IN THE VAN. A beat about Dan does not take her out of the
+    # frame -- the next shot starts from a picture with her in it -- so a look she
+    # was given goes on being hers. Named, because the shot's own text describes
+    # only Dan and an impersonal sentence would land on him: that was ed0d2a6.
+    for _second in ("Dan opens the driver's door.",
+                    "Dan lifts the case into the back."):
+        _, c = two(_second)
+        check(f"her look is carried past {_second[:22]!r}",
+              "McKenna's eyes and head are turned to the van" in c, c[-200:])
+    # ...for ONE shot, not forever. Two beats she is absent from and the claim
+    # stops: the node knows she was in the previous picture, not where she is now.
+    sh = [" ".join(x.split()) for x in
+          re.split(r"(?=\[Shot )",
+                   run_node("A lane at night.\n\nMcKenna looks at the van.\n\n"
+                            "Dan opens the driver's door.\n\nDan starts the engine.",
+                            plan_only=True, character_memory=MEM,
+                            anchor="Handheld, night exterior.")[3]) if x.strip()]
+    check("...and is not still being claimed two beats later",
+          "McKenna's eyes" not in sh[3], sh[3][-200:])
+    # And a beat that walks her off ends it, as before.
+    _, d = two("McKenna walks away down the lane.")
+    check("walking her off still ends the look",
+          "turned to the van" not in d, d[-200:])
 
 
 def test_mouths_stay_shut_with_no_line():
@@ -5521,6 +5606,7 @@ def main():
     test_a_face_under_duress_is_not_a_portrait()
     test_her_whimper_does_not_free_his_mouth()
     test_her_look_does_not_land_on_him()
+    test_a_look_survives_the_next_beat()
     test_an_anchor_says_when_it_has_taken_the_scenes_place()
     test_a_grim_film_is_grim_in_every_shot()
     test_script_is_what_was_sent()

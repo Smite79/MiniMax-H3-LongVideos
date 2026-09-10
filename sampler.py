@@ -5327,7 +5327,64 @@ _NOT_A_TARGET = frozenset(
     "time moment thing things way".split())
 
 
-def look_target(beat):
+# A LOOK AT A PERSON IS A LOOK.
+#
+# The old rule was "restating a pronoun says nothing the beat did not, and the other
+# person is in frame to be looked at anyway". That is true against a neutral model
+# and false against one whose prior is a portrait: the choice is not between the
+# beat's word and a restatement of it, it is between the beat's word and the LENS.
+# Reported as "she looks at the van in one beat and gazes at the camera in the
+# next" -- and measured, "McKenna watches him" was the commonest way to lose it:
+# the look moved, which cleared the latch correctly, and then nothing replaced it.
+#
+# Neither existing pattern can even see a person. Both require a determiner before
+# the target -- the|a|an|her|his|their -- so "watches Dan" and "looks at Dan" match
+# nothing at all.
+_LOOK_AT_WHO = re.compile(
+    r"\b(?:look(?:s|ed|ing)?|star(?:e|es|ed|ing)|gaz(?:e|es|ed|ing)|"
+    r"glanc(?:e|es|ed|ing)|peer(?:s|ed|ing)?)\s+"
+    r"(?:back\s+|down\s+|up\s+|over\s+|round\s+|around\s+|straight\s+|right\s+)?"
+    + _GAZE_PREP + r"\s+([A-Z][\w-]+|him|her|them|he|she|they)\b"
+    r"|\b(?:watch(?:es|ed|ing)?|stud(?:y|ies|ied|ying)|examin(?:e|es|ed|ing))\s+"
+    r"([A-Z][\w-]+|him|her|them)\b", re.I)
+# Which pronoun can be which. A gendered pronoun narrows the field, so a scene with
+# a man and a woman resolves "him" without guessing; "them" does not narrow it and
+# only lands where exactly one other person is there to land on.
+_PRONOUN_SEX = {"him": "he", "he": "he", "her": "she", "she": "she"}
+
+
+def _person_looked_at(beat, sheet="", described=()):
+    """The PERSON this beat says somebody is watching. '' when it is not resolvable.
+
+    Only where it is unambiguous. Three people and a bare "him" resolves to nobody,
+    and guessing which one is worse than saying nothing: a shot told the wrong
+    sightline is a shot that has to be reshot, while a shot told none is only back
+    where it was."""
+    m = _LOOK_AT_WHO.search(beat or "")
+    if not m:
+        return ""
+    raw = (m.group(1) or m.group(2) or "").strip()
+    if not raw:
+        return ""
+    rows = {n: ln for n, ln in sheet_lines(sheet or "") if n}
+    # A NAME, spelled as the sheet spells it.
+    for n in rows:
+        if raw.lower() == n.lower():
+            return n
+    # A PRONOUN. Whoever else is in the shot, if that is one person -- and if the
+    # pronoun is gendered, only the people whose entry agrees with it.
+    want = _PRONOUN_SEX.get(raw.lower())
+    here = [n for n in (described or []) if n in rows]
+    # The looker is not the one being looked at.
+    looker = subjects_for(beat, sheet, _LOOK_VERB_SRC)
+    here = [n for n in here if n not in set(looker)]
+    if want:
+        here = [n for n in here
+                if re.search(r"\b" + want + r"\b", rows.get(n, ""), re.I)]
+    return here[0] if len(here) == 1 else ""
+
+
+def look_target(beat, sheet="", described=()):
     """What this beat says somebody is looking at. '' when it names nothing."""
     for pat in (_LOOK_AT, _WATCH):
         m = pat.search(beat or "")
@@ -5337,7 +5394,7 @@ def look_target(beat):
         if not target or target.lower() in _NOT_A_TARGET:
             continue
         return target
-    return ""
+    return _person_looked_at(beat, sheet, described)
 
 
 # Going somewhere ends a look. Held across it, "the eyes are on the TV" follows
@@ -5381,7 +5438,7 @@ def looks_somewhere(beat):
     return bool(_LOOK_VERB.search(beat or ""))
 
 
-def gaze_hold(target, who=""):
+def gaze_hold(target, who="", is_person=False):
     """One sentence putting the eyes and the head on the thing the beat named.
 
     NAMED when the caller says to, which it does once a second person is in the
@@ -5400,9 +5457,16 @@ def gaze_hold(target, who=""):
     # SHORT. Nineteen words restating a nine-word beat is most of the shot spent
     # agreeing with it, and the guards crowding out the action is what "the
     # character did not do what I told it" looks like from the outside.
+    what = target if is_person else f"the {target}"
     if who:
-        return f" {who}'s eyes and head are turned to the {target}."
-    return f" The eyes and the head are turned to the {target}."
+        # A PRONOUN WHERE THE NAME IS ALREADY SPENT. A person is named once in a
+        # shot's guard text -- two clauses naming the same person is what put a
+        # second girl in frame at the moment of cuffing. But the clause that
+        # already named her is standing right beside this one, so "her eyes" has
+        # its antecedent and costs no second naming. Used only where no one else
+        # in the shot shares the pronoun.
+        return f" {who[0].upper()}{who[1:]} eyes and head are turned to {what}."
+    return f" The eyes and the head are turned to {what}."
 
 
 def forced_pose(text):
@@ -9413,14 +9477,17 @@ class H3LongVideos:
             # turned to the lane behind them." That is his head on her sightline,
             # and it is the same defect as the vocal flag -- a per-person fact kept
             # in a shot-level variable.
-            _look_now = look_target(body) if hold_gaze else ""
+            _look_now = (look_target(body, shot_sheet, _described)
+                         if hold_gaze else "")
             _lookers = (subjects_for(body, shot_sheet, _LOOK_VERB_SRC)
                         if hold_gaze else [])
+            _look_is_person = bool(_look_now) and any(
+                _look_now == _n for _n, _ in sheet_lines(shot_sheet))
             if _look_now:
                 # Whoever the beat says is looking. If it names nobody, everybody it
                 # describes -- which is what the single string did for everyone.
                 for _n in (_lookers or (_described or [])):
-                    looking_at[_n] = _look_now
+                    looking_at[_n] = (_look_now, _look_is_person)
             elif (looks_somewhere(body) or arrives_in(body) or falls_in(body)
                   or turns_in(body, cast) or _MOVES_OFF.search(body or "")):
                 # Clear only the people this beat actually moved or turned. When it
@@ -9430,15 +9497,17 @@ class H3LongVideos:
                          or subjects_for(body, shot_sheet, _MOVES_OFF_SRC))
                 for _n in (_ends or list(looking_at)):
                     looking_at.pop(_n, None)
-            # ...and said only for people this shot DESCRIBES. That is the whole
-            # fix: a look belongs to somebody, and somebody who is not in the shot
-            # cannot be looking anywhere in it.
-            _gazers = [n for n in (_described or []) if looking_at.get(n)]
-            _gaze = (gaze_hold(looking_at[_gazers[0]],
-                               _gazers[0] if len(_described or []) >= 2 else "")
-                     if (hold_gaze and _gazers) else "")
-            if _gaze:
-                gaze_shots.append(len(shots) + 1)
+            # ...and said for people this shot describes, PLUS anybody who was in
+            # the previous shot and whom this beat has not moved off. She is still
+            # in the van when the beat is about him: the next shot starts from a
+            # picture with her in it, and dropping her from the text is what leaves
+            # her with nothing to do but face the lens. ONE shot of memory -- the
+            # node knows she was in the last picture, not where she is now.
+            _carried = [n for n in _was
+                        if n not in set(_described or []) and looking_at.get(n)
+                        and n not in set(subjects_for(body, sheet, _MOVES_OFF_SRC))]
+            _gazers = [n for n in (_described or []) if looking_at.get(n)] + _carried
+            _gaze = ""
             # ONE sentence for the hardware. The hold, the name of the thing and
             # where it holds were three separate clauses written for three separate
             # reports, each naming the same object again -- 53 words about one pair
@@ -9729,6 +9798,63 @@ class H3LongVideos:
             # because tape drifted into the nearest commoner object. Throwing that
             # away would have cost more than the derivations ever did, so the
             # builders stay and the engine feeds them.
+            # THE GAZE CLAUSE IS DECIDED HERE, where every other clause is known,
+            # because whether it may name anybody depends on what they already say.
+            #
+            # A person is named ONCE in a shot's guard text. That is not a style
+            # rule: two clauses naming the same person is what put a second girl in
+            # frame at the moment of cuffing, and there is a test on it. So:
+            #
+            #   - A PERSON target needs no looker's name at all. Nobody turns their
+            #     eyes to themselves, so "the eyes and the head are turned to Dan"
+            #     can only be the other person's eyes -- unambiguous, and it spends
+            #     no naming on her. It is skipped only if the TARGET is already
+            #     named, which is the case where it would be her second mention.
+            #   - An OBJECT target names the looker once two people are in frame,
+            #     and is skipped rather than repeat a name.
+            #
+            # Skipping is not a loss: it leaves the shot exactly where it was before
+            # any of this, while the shots that CAN carry it now do.
+            if hold_gaze and _gazers:
+                _g = _gazers[0]
+                _target, _is_person = looking_at[_g]
+                _elsewhere = " ".join([
+                    hold, _posture, _pose, _travel, _where, _told, turn, _duress,
+                    _mouth, _revealed, _under, _bare, _wearing, tail, _moved,
+                    anchors, _state_clause, _device, _sound, _pace, fall])
+
+                def _named_already(_n):
+                    return bool(re.search(r"\b" + re.escape(_n) + r"\b", _elsewhere))
+
+                def _their_pronoun(_n):
+                    """'her'/'his'/'their', if nobody else in the shot shares it."""
+                    _rows = {a: b for a, b in sheet_lines(shot_sheet) if a}
+                    _m = re.search(r"\b(she|he|they)\b", _rows.get(_n, ""), re.I)
+                    if not _m:
+                        return ""
+                    _sex = _m.group(1).lower()
+                    for _o in (_described or []):
+                        if _o != _n and re.search(r"\b" + _sex + r"\b",
+                                                  _rows.get(_o, ""), re.I):
+                            return ""
+                    return {"she": "her", "he": "his", "they": "their"}[_sex]
+
+                if _is_person:
+                    # Nobody turns their eyes to themselves, so an impersonal
+                    # sentence naming the TARGET can only be the other person's
+                    # eyes. It spends no naming on the looker at all.
+                    if not _named_already(_target):
+                        _gaze = gaze_hold(_target, "", True)
+                elif len(_described or []) >= 2 or _g not in set(_described or []):
+                    _who = "" if _named_already(_g) else f"{_g}'s"
+                    if not _who:
+                        _who = _their_pronoun(_g)
+                    if _who:
+                        _gaze = gaze_hold(_target, _who)
+                else:
+                    _gaze = gaze_hold(_target)
+            if _gaze:
+                gaze_shots.append(len(shots) + 1)
             _guards = [
                 (1, "removal", tail),        # the beat's own action, completing
                 (1, "wearing", _wearing),    # ...and its mirror, a garment going on
