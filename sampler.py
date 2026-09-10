@@ -4301,6 +4301,23 @@ DURESS_FACE = " The mood is grim; the face shows the strain of it, the mouth set
 # not a grim film. So each one has to take a person: a pronoun, or a capitalised
 # name. That single requirement is what separates "drags McKenna towards the van"
 # from "drags the case to the door", and it is tested both ways.
+# THE OBJECT HAS TO BE THE PERSON, NOT SOMETHING THEY OWN.
+#
+# "grabs her keys", "snatches her coat", "seizes her chance", "forces her way to the
+# bar", "pins Ellie's painting to the fridge" -- all read as coercion, because `her`
+# and `him` and a name are as often possessives as objects. Measured on 93 ordinary
+# domestic beats, this was most of 65 false positives, and one of them is enough to
+# stamp "The mood is grim" on a whole comedy.
+#
+# So the pronoun or name has to be the END of the object: a clause boundary, or one
+# of the words that can only follow a completed object. "grabs her from behind" is
+# coercion; "grabs her keys" is a Tuesday.
+_OBJ_IS_THE_PERSON = (
+    r"(?=\s*(?:[.,;:!?\"\u201d]|$)|\s+(?:into|out|off|from|down|up|towards?|to|"
+    r"against|across|onto|through|back|away|and|by|in|on|over|behind|while|as|"
+    r"before|after|until|so|but|with|without|aside|apart|hard|roughly|violently|"
+    r"bodily|clear|free|upright|sideways|forward|backwards?)\b)")
+
 _COERCION = re.compile(
     r"\b(?:grab(?:s|bed|bing)?|drag(?:s|ged|ging)?|forc(?:e|es|ed|ing)|"
     r"shov(?:e|es|ed|ing)|haul(?:s|ed|ing)?|bundl(?:e|es|ed|ing)|"
@@ -4310,13 +4327,31 @@ _COERCION = re.compile(
     # (?-i:) MATTERS. The whole pattern is case-insensitive, which turned [A-Z]
     # into "any letter" and let "drags THE case" and "forces THE window" read as
     # coercion. The capital is the only thing separating a name from a determiner.
-    r"(?:her|him|them|(?-i:[A-Z][\w-]+))\b"
+    r"(?:her|him|them|(?-i:[A-Z][\w-]+))" + _OBJ_IS_THE_PERSON
     # ...and the phrases that carry it without a bare transitive verb.
-    r"|\b(?:holds?|held|holding|pins?|pinned|forces?|forced)\s+"
+    + r"|\b(?:holds?|held|holding|pins?|pinned|forces?|forced)\s+"
     r"(?:her|him|them|(?-i:[A-Z][\w-]+))\s+(?:down|still|against|into|in)\b"
     r"|\bcover(?:s|ed|ing)?\s+(?:her|his|their|[\w-]+['\u2019]s)\s+mouth\b"
-    r"|\bhoods?\s+(?:over|on)\b|\bhooded\b|\bblindfold(?:s|ed|ing)?\b"
+
     r"|\bagainst\s+(?:her|his|their)\s+will\b"
+    # PASSIVE VOICE. "She was grabbed from behind", "is bundled into the back",
+    # "were hauled out of the church" -- the victim is the SUBJECT, so nothing
+    # follows the verb and every active pattern above misses. This was the single
+    # largest family of misses: an author writing an abduction reaches for the
+    # passive precisely because the victim is the one the sentence is about.
+    #
+    # The trailing preposition is what keeps "the photo is taken at noon" out: a
+    # person is taken FROM, INTO, OUT OF, AWAY. A thing is just taken.
+    r"|\b(?:was|were|is|are|been|being|got)\s+(?:\w+\s+){0,2}?"
+    r"(?:grabbed|dragged|forced|shoved|hauled|bundled|seized|snatched|pinned|"
+    r"restrained|manhandled|overpowered|subdued|taken|carried|marched|walked|"
+    r"loaded|bundled|driven|led)\s+"
+    r"(?:from|into|out|off|away|down|to|in|through|aboard|across|onto|with)\b"
+    # CAPTIVITY, which often has no verb of violence in it at all.
+    r"|\bheld\s+(?:captive|prisoner|hostage)\b"
+    r"|\b(?:captors?|hostages?|abduction|kidnapping)\b"
+    r"|\b(?:held|taken|kept)\s+captive\b"
+    r"|\blocked\s+(?:in|inside|up)\b"
     r"|\bkidnap(?:s|ped|ping)?\b|\babduct(?:s|ed|ing|ion)?\b|\bhostage\b"
     # Trying to get out is duress by definition.
     r"|\btr(?:y|ies|ied|ying)\s+to\s+(?:get\s+away|get\s+out|escape|run|pull\s+free)\b"
@@ -4327,35 +4362,180 @@ _COERCION = re.compile(
 # forms an action uses -- a sheet says "tied", a beat says "ties" -- and each one
 # still has to reach a person or a part of one, so taping a box shut is not an
 # abduction.
-# What a restraint can actually be put on. "Ties her hair back" and "tapes the box
-# shut" use the same verbs and are not abductions, so the verb has to reach either a
-# PERSON or a part of one that can be bound.
-_BINDABLE = (r"wrists?|hands?|ankles?|feet|foot|legs?|arms?|mouth|head|neck|"
-             r"thumbs?|fingers?|elbows?|knees?")
+# WHAT A RESTRAINT IS PUT ON: A BODY.
+#
+# The first version of this asked whether binding words appeared near a person, and
+# a sweep of 512 beats showed what English does with those words when nobody is
+# being restrained at all:
+#
+#     She is bound for Lisbon on the early flight.
+#     At full time it is still tied at two apiece.
+#     She's tied up in meetings until four.
+#     He has been chained to that desk for eleven years.
+#     The ledger is bound in green cloth.
+#     The boat is tied up at the jetty.
+#     He gagged at the smell coming off the bins.
+#     He pulls the hood on his parka up against the drizzle.
+#
+# Every one read as STRONG evidence, and one strong beat is enough to stamp "The
+# mood is grim" on a whole film. `bound`, `tied`, `chained` and `gagged` are all
+# idioms before they are restraints.
+#
+# So the state forms are gone. Binding has to reach a BODY PART, or a person plus
+# the furniture people actually get tied to. That is what a restraint is; the rest
+# is a figure of speech.
+_BINDABLE = (r"wrists?|ankles?|hands|feet|legs?|arms?|mouth|thumbs?|knees|elbows")
+_TIE_TO = (r"chair|bed|bedframe|headboard|radiator|pipe|post|stake|banister|"
+           r"bannister|frame|hook|ring|beam|column|tree")
 _BINDING_ACT = re.compile(
+    # ties her wrists, cuffs his ankles, gags her, tapes McKenna's mouth
     r"\b(?:ties?|tying|tied|bind(?:s|ing)?|bound|cuff(?:s|ed|ing)?|"
-    r"gag(?:s|ged|ging)?|shackl(?:e|es|ed|ing)|chain(?:s|ed|ing)?|"
-    r"tap(?:e|es|ed|ing))\s+(?:up\s+)?"
-    r"(?:(?:her|his|their|(?-i:[A-Z][\w-]+)'s)\s+(?:" + _BINDABLE + r")"
-    r"|(?:her|him|them|(?-i:[A-Z][\w-]+))(?=\s+(?:up|to|behind|against|with|at)\b|[.,;]|$))"
-    r"|\b(?:bound|gagged|cuffed|shackled|chained|tied)\s+"
-    r"(?:and\s+\w+\s+)?(?:at|to|behind|in|up|with|over)\b"
-    r"|\bis\s+(?:bound|gagged|cuffed|shackled|chained|tied)\b"
-    r"|\b(?:tape|rope|cord|zip\s*tie|cable\s*tie|gag|hood|blindfold)\s+"
-    r"(?:over|across|around|round|on)\s+"
-    r"(?:her|his|their|(?-i:[A-Z][\w-]+)'s)\b", re.I)
+    r"shackl(?:e|es|ed|ing)|chain(?:s|ed|ing)?|zip-?ti(?:e|es|ed))\s+(?:up\s+)?"
+    r"(?:her|his|their|(?-i:[A-Z][\w-]+)'s)\s+(?:" + _BINDABLE + r")\b"
+    # taping is strapping unless it reaches a mouth, or wrists held together
+    r"|\btap(?:e|es|ed|ing)\s+(?:up\s+)?(?:her|his|their|(?-i:[A-Z][\w-]+)'s)\s+"
+    r"(?:mouth\b|(?:wrists?|ankles?|hands)\s+(?:together|behind|to)\b)"
+    # wrists cable-tied, ankles taped -- the participle fragment
+    r"|\b(?:" + _BINDABLE + r")\s+(?:\w+\s+){0,2}?"
+    r"(?:tied|taped|cuffed|bound|chained|shackled|zip-?tied|strapped)\b"
+    # tied TO the things people get tied to
+    r"|\b(?:tied|cuffed|bound|shackled|chained|strapped|handcuffed)\s+"
+    r"(?:her|him|them|(?-i:[A-Z][\w-]+)\s+)?(?:to|against)\s+"
+    r"(?:the|a|an|that|this|his|her|their)\s+(?:" + _TIE_TO + r")\b"
+    # hardware named as being ON a body
+    r"|\b(?:handcuffs?|cuffs|rope|ropes|cord|cords|chains?|shackles|zip\s*ties?|"
+    r"cable\s*ties?|duct\s*tape|tape|gag|blindfold)\s+(?:\w+\s+){0,2}?"
+    r"(?:on|around|round|over|across|behind)\s+"
+    r"(?:her|his|their|(?-i:[A-Z][\w-]+)'s|the)\s+(?:" + _BINDABLE + r"|head|eyes|face)\b"
+    # A person gagged -- the person, not a smell he gagged at.
+    r"|\bgag(?:s|ged|ging)\s+(?:her|him|them|(?-i:[A-Z][\w-]+))\b"
+    # A bag or hood put over SOMEBODY ELSE'S head. Bare `hooded` and `blindfolded`
+    # are out: a hooded parka, a hooded dressing gown, a hooded teenager and a
+    # blindfold wine tasting all read as abduction, and one strong beat is enough
+    # to call a whole film grim. The article is what carries it -- "a hood over her
+    # head" is done TO her, "her hood over her head" is her own coat in the rain.
+    r"|\b(?:a|the|another)\s+(?:bag|hood|sack|pillowcase)\s+over\s+"
+    r"(?:her|his|their|(?-i:[A-Z][\w-]+)'s|the)\s+head\b"
+    r"|\bblindfold(?:s|ed|ing)?\s+(?:her|him|them|(?-i:[A-Z][\w-]+))\b"
+    # A PERSON in a bound state. `tied` and `chained` are left out of this one
+    # deliberately -- "her hands are tied, politically speaking", "he has been
+    # chained to that desk for eleven years" -- and `bound` needs guarding against
+    # the commonest idiom of all, which is a departure board.
+    r"|\b(?:she|he|they|(?-i:[A-Z][\w-]+))\s+(?:\w+\s+){0,2}?"
+    r"(?:is|are|was|were|had\s+been|has\s+been|got)\s+(?:\w+\s+){0,2}?"
+    r"(?:bound(?!\s+for\b)|gagged|cuffed|handcuffed|shackled)\b",
+    re.I)
 
 
-def beat_stages_duress(beat):
-    """Does this BEAT stage duress -- distress, coercion, or hardware going on?
+# STRONG EVIDENCE AND WEAK EVIDENCE, because English will not do better.
+#
+# Swept across 512 beats of six scenario families, the distress list alone produced
+# 87 false positives, and they are not fixable by patching it:
+#
+#     The children scream all the way down the waterslide.
+#     The baby cries in the next room.
+#     She strains to hear the platform announcement.
+#     She winces at the price and buys it anyway.
+#     She screams with laughter as the boat slaps down off the wake.
+#
+# `screams`, `cries`, `strains`, `winces`, `panics` and `begs` mean distress or they
+# mean a good day out, and no pattern can tell which from the words alone. What CAN
+# tell is the rest of the film. So the evidence is graded:
+#
+#   STRONG -- says duress on its own and is almost never innocent: hardware on a
+#             body, a captor, a hostage, an abduction, being locked in, something
+#             done against somebody's will.
+#   WEAK   -- an ambiguous verb: the distress words, and the ordinary coercion verbs
+#             that are equally at home in a garden centre.
+#
+# A film is grim if ANY beat is strong, or if TWO are weak. One ambiguous verb is
+# not enough to stamp "The mood is grim" on somebody's comedy; two is little enough
+# that a real abduction -- which is nothing but coercion verbs -- always lands.
+#
+# And a WEAK beat gets the face clause only in a film already established as grim.
+# That is the point of grading: "she screams" is terror in an abduction and delight
+# on a waterslide, and the film is the only thing that knows which.
+_DURESS_STRONG = re.compile(
+    r"\bheld\s+(?:captive|prisoner|hostage)\b"
+    r"|\b(?:captors?|hostages?|abduction|kidnapping)\b"
+    r"|\b(?:held|taken|kept)\s+captive\b"
+    r"|\bkidnap(?:s|ped|ping)?\b|\babduct(?:s|ed|ing|ion)?\b"
+    r"|\blocked\s+(?:in|inside|up)\b"
+    r"|\bagainst\s+(?:her|his|their)\s+will\b", re.I)
 
-    The three readings that do not need a character sheet. See _COERCION for why
-    every coercion verb has to take a person."""
+
+def beat_duress_strength(beat):
+    """'' , 'weak' or 'strong'. See _DURESS_STRONG for why the grading exists."""
     b = beat or ""
-    return bool(_DISTRESS.search(b) or _COERCION.search(b) or _BINDING_ACT.search(b))
+    if _DURESS_STRONG.search(b) or _BINDING_ACT.search(b):
+        return "strong"
+    if _DISTRESS.search(b) or _COERCION.search(b):
+        return "weak"
+    return ""
 
 
-def film_stages_duress(beats, sheet=""):
+def beat_stages_duress(beat, film_duress=True):
+    """Does this BEAT stage duress?
+
+    Strong evidence always counts. Weak evidence counts only where the FILM is
+    already grim, because that is the context that says which meaning an ambiguous
+    verb has. Defaults to True so a caller asking about a beat in isolation gets
+    the old, generous reading."""
+    strength = beat_duress_strength(beat)
+    return strength == "strong" or (strength == "weak" and bool(film_duress))
+
+
+# THE AUTHOR CAN JUST SAY IT, AND THAT BEATS ANY AMOUNT OF GUESSING.
+#
+# Swept across 512 beats of six scenario families, inference alone does not work and
+# the numbers say so plainly. Simulating 8-beat films:
+#
+#     evidence needed   duress films read grim   ordinary films read grim
+#     2 weak                     73.5%                    87.8%
+#     3 weak                     57.1%                    82.5%
+#     strong only                44.5%                    28.5%
+#
+# At every setting an ORDINARY film was as likely to be called grim as a duress one,
+# because the words overlap: `screams` is a waterslide, `tied` is a boat, `bound` is
+# a flight to Lisbon, `chained` is a desk job. That is not a pattern that needs more
+# work, it is English, and no bag of patterns is going to separate them.
+#
+# So the ANCHOR is asked first. It is already the film-wide declaration -- "framing
+# that belongs to the whole film" -- and a tone belongs there beside the lighting.
+# Said there, it is authoritative in BOTH directions: a film declared warm is never
+# given a grim mood however its beats read, and that is the escape hatch for every
+# false positive above.
+#
+# Only where the anchor says nothing does this fall back to inference, and then only
+# on STRONG evidence, because an unasked-for grim mood on somebody's comedy is a
+# visible defect while a missing one is recoverable by typing six words. info says
+# which of the three happened every run.
+_MOOD_GRIM = re.compile(
+    r"\b(?:grim|bleak|tense|menacing|sinister|harrowing|distressing|brutal|"
+    r"frightening|terrifying|desperate|oppressive|claustrophobic|ominous|"
+    r"threatening|violent|grave|sombre|somber|dread|hostile|cruel|"
+    r"kidnap(?:ping)?|abduction|captivity|hostage|abusive|coercive)\b", re.I)
+_MOOD_LIGHT = re.compile(
+    r"\b(?:warm|comic|comedy|cheerful|joyful|joyous|happy|light[-\s]?hearted|"
+    r"playful|romantic|tender|sunny|upbeat|gentle|affectionate|celebratory|"
+    r"whimsical|carefree|domestic\s+bliss|feel[-\s]?good)\b", re.I)
+
+
+def mood_declared(anchor):
+    """'grim', 'light' or '' -- what the ANCHOR says the film's tone is.
+
+    Both directions matter. A film declared warm must never be handed a grim mood
+    however its beats read, because that is the one reliable way out of a wrong
+    inference; and a film declared grim needs no inference at all."""
+    a = anchor or ""
+    if _MOOD_LIGHT.search(a):
+        return "light"
+    if _MOOD_GRIM.search(a):
+        return "grim"
+    return ""
+
+
+def film_stages_duress(beats, sheet="", anchor=""):
     """Does this FILM stage duress anywhere -- binding hardware, or a distress verb?
 
     Read once, over the whole script, because a shot of the captor alone is grim on
@@ -4363,10 +4543,13 @@ def film_stages_duress(beats, sheet=""):
     clause uses, and the same refusals: a collar alone is not duress, and a film
     that stages neither is left alone in every shot. The node does not get to decide
     that somebody's film is bleak."""
+    said = mood_declared(anchor)
+    if said:
+        return said == "grim"
     for _, ln in sheet_lines(sheet or ""):
         if _BOUND_HARDWARE.search(ln or ""):
             return True
-    return any(beat_stages_duress(b) for b in (beats or []))
+    return any(beat_duress_strength(b) == "strong" for b in (beats or []))
 
 
 # BINDING hardware, which is narrower than restraint hardware. restraint_present is
@@ -4397,7 +4580,7 @@ def duress_face(beat, wearers, described, film_duress=False):
     if not described:
         return ""
     who = [n for n, ln in (wearers or []) if n and _BOUND_HARDWARE.search(ln or "")]
-    if not who and beat_stages_duress(beat):
+    if not who and beat_stages_duress(beat, film_duress):
         who = [n for n in (described or []) if n]
     if who:
         return DURESS_FACE
@@ -8292,7 +8475,8 @@ class H3LongVideos:
         # -- that is where the wrists usually are. A shot of the captor alone is grim
         # on account of what the sheet says three beats ago, so this cannot be a
         # per-shot question. See film_stages_duress.
-        _film_duress = film_stages_duress(beats, sheet)
+        _film_mood = mood_declared(anchor)
+        _film_duress = film_stages_duress(beats, sheet, anchor)
         if _dupes:
             notes.append(
                 f"{', '.join(_dupes)} described more than once -- character_memory and a "
@@ -10677,6 +10861,41 @@ class H3LongVideos:
                 f"lips-closed line loses to a stream that has decided somebody is "
                 f"talking. Shots staging effort are left out on purpose -- straining is "
                 f"vocal and that mouth should be open. Off with mouths_shut_when_no_line")
+        # WHICH OF THE THREE HAPPENED, every run, because the inference is weak and
+        # the author needs to know when it decided nothing.
+        if _film_mood == "grim":
+            notes.append(
+                f"the anchor declares the film's tone, so every shot carries \"The mood "
+                f"is grim.\" and no guessing is done. That is the reliable way to set "
+                f"it: swept over 512 beats, inferring a mood from the beats alone "
+                f"called an ORDINARY film grim as often as a duress one, because the "
+                f"words overlap -- screams is a waterslide, tied is a boat, bound is a "
+                f"flight to Lisbon, chained is a desk job")
+        elif _film_mood == "light":
+            notes.append(
+                f"the anchor declares a light tone, so no grim mood is applied to any "
+                f"shot whatever the beats say. That is the override for a wrong "
+                f"reading, and it wins outright")
+        elif _film_duress:
+            notes.append(
+                f"no tone is declared in the anchor, and the beats or the character "
+                f"sheet carry UNAMBIGUOUS duress -- hardware on a body, a captor, an "
+                f"abduction, being locked in -- so every shot carries \"The mood is "
+                f"grim.\" Only unambiguous evidence counts here: ordinary coercion "
+                f"verbs and distress words are not enough on their own, because "
+                f"grabbing, dragging and screaming are as much a garden centre and a "
+                f"waterslide as an abduction. Write the tone into the anchor to settle "
+                f"it either way")
+        elif any(beat_duress_strength(b) for b in beats):
+            notes.append(
+                f"some beats read as though they MIGHT stage duress -- coercion or "
+                f"distress verbs -- but nothing unambiguous, so no mood was applied and "
+                f"every face is left to the model, whose prior for a described person "
+                f"is a pleasant posed portrait. If this film has a tone, write it into "
+                f"the anchor: 'grim', 'tense', 'a kidnapping' and the like turn it on "
+                f"for every shot, and 'warm' or 'comic' turn it off for good. Measured "
+                f"over 512 beats, guessing from the beats alone is no better than a "
+                f"coin toss, so it does not guess")
         if vocal_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in vocal_shots)} have a vocal that "

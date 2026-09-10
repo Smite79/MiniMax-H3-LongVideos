@@ -1963,8 +1963,19 @@ def test_a_face_under_duress_is_not_a_portrait():
 
     check("a restrained shot says what the face is doing",
           "shows the strain" in face("McKenna lies against the wheel arch."), "")
-    check("...and so does a beat staging distress",
-          "shows the strain" in face("Kate struggles and twists away.", mem=PLAIN), "")
+    # A beat with UNAMBIGUOUS duress in it does too, with no sheet hardware at all.
+    check("...and so does a beat staging unambiguous duress",
+          "shows the strain" in face("Kate is bound and gagged on the floor.",
+                                     mem=PLAIN), "")
+    # ...but an ambiguous one alone does NOT, and that is deliberate. See
+    # _DURESS_STRONG: "struggles" is a maths homework as often as a restraint, and
+    # one such beat used to stamp a grim mood on a whole comedy.
+    check("...while one ambiguous beat alone does not",
+          "shows the strain" not in face("Kate struggles and twists away.",
+                                         mem=PLAIN), "")
+    check("...unless the anchor says what the film is",
+          "shows the strain" in face("Kate struggles and twists away.", mem=PLAIN,
+                                     anchor="Handheld. A tense, grim abduction."), "")
     # NOT INVENTED. Only what the scene already establishes -- hardware the sheet
     # lists, or the author's own distress verbs. A shot staging neither gets
     # nothing: a node that decides how everybody feels is a node writing the film.
@@ -2251,8 +2262,25 @@ def test_a_grim_film_is_grim_in_every_shot():
     check("the mood is read from the sheet's hardware",
           S.film_stages_duress(["Dan closes the hatch."],
                                "McKenna: she, 26, cuffs on her wrists."))
-    check("...or from your own distress verbs in any beat",
-          S.film_stages_duress(["Kate makes the coffee.", "Kate sobs."], PLAIN))
+    check("...or from unambiguous duress in any beat",
+          S.film_stages_duress(["Kate makes the coffee.",
+                                "Kate is held captive in the cellar."], PLAIN))
+    # AND NOT from an ambiguous one. Measured over 512 beats of six scenario
+    # families, inferring from ambiguous verbs called an ORDINARY film grim as often
+    # as a duress one -- 87.8% against 73.5% at two weak beats -- so it does not.
+    check("...but never from an ambiguous verb alone",
+          not S.film_stages_duress(["Kate makes the coffee.", "Kate sobs."], PLAIN))
+    # THE ANCHOR SETTLES IT, both ways, and outranks everything.
+    check("a declared tone turns it on",
+          S.film_stages_duress(["Kate makes the coffee."], PLAIN,
+                               "Wide. A grim, claustrophobic film."))
+    check("...and a declared light tone turns it off outright",
+          not S.film_stages_duress(["Kate is bound and gagged in the cellar."], PLAIN,
+                                   "Wide. A warm, comic short."))
+    check("mood_declared reads both directions",
+          S.mood_declared("A tense kidnapping, handheld") == "grim"
+          and S.mood_declared("Warm, romantic, golden hour") == "light"
+          and S.mood_declared("Handheld, 35mm, night") == "")
     check("...and a collar alone is still not duress",
           not S.film_stages_duress(["Kate makes the coffee."],
                                    "Kate: she, 30, a leather collar."))
@@ -2496,18 +2524,44 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
     # Not one of them registered, so the film had no mood, so every face came from
     # the portrait prior, which is pleasant. She smiled through her own abduction.
     MEM = "McKenna: she, 26, dark hair, a red jacket.\nDan: he, 40, a work coat."
+    SCRIPT = ["Dan grabs McKenna from behind and covers her mouth.",
+              "Dan drags McKenna towards the van.",
+              "Dan forces McKenna into the back of the van.",
+              "Dan ties McKenna's wrists behind her back.",
+              "Dan puts a strip of tape over McKenna's mouth.",
+              "Dan holds McKenna down.",
+              "Dan shoves McKenna against the wheel arch.",
+              "McKenna is bound and gagged in the back.",
+              "Dan pulls a hood over McKenna's head.",
+              "McKenna tries to get away."]
+    check("the whole script reads as an abduction",
+          S.film_stages_duress(SCRIPT, MEM), "")
+    # Graded, because the words differ in how much they prove. Hardware on a body
+    # says duress on its own; grabbing and dragging are equally a garden centre.
+    for _b in ("Dan ties McKenna's wrists behind her back.",
+               "Dan puts a strip of tape over McKenna's mouth.",
+               "McKenna is bound and gagged in the back.",
+               "Dan pulls a hood over McKenna's head."):
+        check(f"unambiguous: {_b[:40]!r}",
+              S.beat_duress_strength(_b) == "strong", S.beat_duress_strength(_b))
     for _b in ("Dan grabs McKenna from behind and covers her mouth.",
                "Dan drags McKenna towards the van.",
                "Dan forces McKenna into the back of the van.",
-               "Dan ties McKenna's wrists behind her back.",
-               "Dan puts a strip of tape over McKenna's mouth.",
                "Dan holds McKenna down.",
                "Dan shoves McKenna against the wheel arch.",
-               "McKenna is bound and gagged in the back.",
-               "Dan pulls a hood over McKenna's head.",
                "McKenna tries to get away."):
-        check(f"the beat stages duress: {_b[:38]!r}",
-              S.film_stages_duress([_b], MEM), "")
+        check(f"seen, but ambiguous: {_b[:40]!r}",
+              S.beat_duress_strength(_b) == "weak", S.beat_duress_strength(_b))
+    # PASSIVE VOICE, which is how half an abduction gets written and which every
+    # active pattern missed: the victim is the subject, so nothing follows the verb.
+    for _b in ("She was grabbed from behind on the towpath.",
+               "She is bundled into the back of the van.",
+               "They were hauled out of the church one at a time.",
+               "He was walked out of the building between two men.",
+               "She is loaded into the back like freight.",
+               "He is being held captive somewhere in the north of the city."):
+        check(f"passive voice is seen: {_b[:40]!r}",
+              S.beat_duress_strength(_b) != "", "")
 
     # AND IT IS NOT JUST THE FILM'S MOOD -- the shot he drags her in is a shot her
     # face is in, so that shot gets the face clause too, not only the tone.
@@ -2515,7 +2569,8 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
           re.split(r"(?=\[Shot )",
                    run_node("A lane at night.\n\nDan drags McKenna towards the van."
                             "\n\nDan opens the rear doors.", plan_only=True,
-                            character_memory=MEM, anchor="Handheld, night.")[3])
+                            character_memory=MEM,
+                            anchor="Handheld, night. A grim abduction.")[3])
           if x.strip()]
     check("the coercion beat gets the face, not just the tone",
           "shows the strain" in sh[1], sh[1][-170:])
