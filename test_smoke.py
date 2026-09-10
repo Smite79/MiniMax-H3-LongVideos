@@ -2345,6 +2345,66 @@ def test_a_look_survives_the_next_beat():
           "turned to the van" not in d, d[-200:])
 
 
+def test_the_bed_survives_an_anchor():
+    print("\n=== the room tone that was supposed to fill the lead-in ===")
+    # Reported: "there is still babble at the opening stages of the beat."
+    #
+    # This file already knows the mechanism and wrote it down: "a line is a second
+    # or two; the shot is five to ten, and the audio branch is open for all of it
+    # ... the only thing it knows is happening in this shot is somebody talking, so
+    # it invents more talking to occupy the lead-in." Its answer was that "what
+    # occupies the time around it is ROOM TONE. A branch with a bed to lay down does
+    # not need to invent a voice to fill the space."
+    #
+    # The bed was not there. scene_ambient reads the anchor and the SCENE -- and
+    # with `anchor` filled in there is no scene paragraph, because every paragraph
+    # is a beat. Measured on the same prompt:
+    #
+    #     anchor set   3 shots   ambient bed per shot: NO  NO  NO
+    #     no anchor    2 shots   ambient bed per shot: yes yes
+    #
+    # room_tone already has the fallback for exactly this and says so at its call
+    # site: "The opening beat is the fallback: with `anchor` set there is no scene
+    # paragraph, and an anchor describes the camera rather than the room."
+    # scene_ambient never got one, so the film's bed died whenever anyone filled in
+    # the widget the tooltips tell them to fill in.
+    MEM = "McKenna: she, 26, dark hair.\nDan: he, 40, a work coat."
+    P = ("A van interior, night. The engine is running.\n\n"
+         "Dan looks back and says: \"Sit still.\"\n\n"
+         "McKenna says: \"Where are we going?\"")
+
+    def beds(**kw):
+        sh = [" ".join(x.split()) for x in
+              re.split(r"(?=\[Shot )", run_node(P, plan_only=True,
+                                                character_memory=MEM, **kw)[3])
+              if x.strip()]
+        return [("sounds like" in x or "only sound" in x) for x in sh]
+
+    withq = beds(anchor="Handheld, tight interior.")
+    check("the speaking shots keep their bed with an anchor set",
+          all(withq[1:]), str(withq))
+    plain = beds()
+    check("...exactly as they do without one", all(plain), str(plain))
+    check("the bed itself is read from the opening beat",
+          S.scene_ambient("Handheld, tight interior.") == ""
+          and S.scene_ambient("Handheld, tight interior.",
+                              "A van interior, night. The engine is running.")
+          == "an engine idling")
+    # It still cannot OPEN a branch -- that is the one thing an inference may never
+    # do here, and it is why every wordless shot does not get a voice with its bed.
+    Q = ("A van interior, night. The engine is running.\n\nMcKenna waits.")
+    q = [" ".join(x.split()) for x in
+         re.split(r"(?=\[Shot )", run_node(Q, plan_only=True, character_memory=MEM,
+                                           anchor="Handheld, tight interior.")[3])
+         if x.strip()]
+    check("a wordless shot still gets no bed and stays silent",
+          not any("sounds like" in x for x in q), q[-1][-150:])
+    check("info says where the bed was read from",
+          "read from the opening beat" in run_node(P, plan_only=True,
+                                                   character_memory=MEM,
+                                                   anchor="Handheld, tight interior.")[2])
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5607,6 +5667,7 @@ def main():
     test_her_whimper_does_not_free_his_mouth()
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()
+    test_the_bed_survives_an_anchor()
     test_an_anchor_says_when_it_has_taken_the_scenes_place()
     test_a_grim_film_is_grim_in_every_shot()
     test_script_is_what_was_sent()

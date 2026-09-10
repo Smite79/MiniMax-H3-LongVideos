@@ -8277,7 +8277,22 @@ class H3LongVideos:
         here = place_named(scene) or first_place(scene)
         # The film's ambient bed, read from the anchor and the scene rather
         # than typed into every beat. See scene_ambient.
-        ambient_bed = scene_ambient(anchor, scene) if auto_sound else ""
+        # THE OPENING BEAT IS THE FALLBACK, the same one room_tone has had all along
+        # and for the same stated reason: with `anchor` set there is no scene
+        # PARAGRAPH, and an anchor describes the camera rather than the room. Without
+        # it the film's bed died for everybody who filled in the widget the tooltips
+        # tell them to fill in -- and the bed is what this file's own answer to
+        # lead-in babble depends on: "a branch with a bed to lay down does not need
+        # to invent a voice to fill the space." Reported as babble at the opening of
+        # the beat, measured as three speaking shots with no sound clause at all.
+        #
+        # Read only when the scene names nothing, exactly as room_tone reads it, so
+        # a film whose scene DOES name a space is unchanged.
+        _opening = extract_directives(beats[0])[0] if beats else ""
+        ambient_bed = (scene_ambient(anchor, scene)
+                       or scene_ambient(anchor, _opening)) if auto_sound else ""
+        _bed_src = ("the anchor and the scene" if scene_ambient(anchor, scene)
+                    else "the opening beat")
         ambient_shots = []        # shots given the bed
         posture_shots = []        # shots told to keep a standing posture
         travel_shots = []         # shots that move between places
@@ -8382,14 +8397,13 @@ class H3LongVideos:
         # The acoustic of the space, read once: it is the same room in every shot.
         # The opening beat is the fallback: with `anchor` set there is no scene
         # paragraph, and an anchor describes the camera rather than the room.
-        _opening = extract_directives(beats[0])[0] if beats else ""
         _room = room_tone(scene, _opening) if auto_sound else ""
         _room_src = "the scene" if room_tone(scene) else "the opening beat"
         # The same two readings, kept for the MIX and not gated on auto_sound.
         # auto_sound governs what goes in the PROMPT, which is a conditioning-side
         # question -- the mixed bed conditions nothing, so turning the prompt-side
         # inference off should not also silence the room.
-        _mix_bed = scene_ambient(anchor, scene)
+        _mix_bed = scene_ambient(anchor, scene) or scene_ambient(anchor, _opening)
         _mix_room = room_tone(scene, _opening)
         if _room:
             notes.append(f"room tone read from {_room_src}: {_room}. It goes under the "
@@ -10339,7 +10353,7 @@ class H3LongVideos:
         if ambient_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in ambient_shots)} were given an "
-                f"ambient bed read from the anchor and the scene -- \"{ambient_bed}\". "
+                f"ambient bed read from {_bed_src} -- \"{ambient_bed}\". "
                 f"It goes under shots whose audio branch is ALREADY open: ones with a "
                 f"line, or with a sound you wrote yourself. It can never open one. "
                 f"AMBIENCE ON EVERY SHOT WAS TRIED AND DOES NOT WORK: the bed was "
