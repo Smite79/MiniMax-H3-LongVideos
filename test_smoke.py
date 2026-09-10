@@ -2400,6 +2400,56 @@ def test_references_ride_with_the_keyframe():
         FakeCLIP.tokenize = orig
 
 
+def test_audio_sigma_reads_the_scheduler():
+    print("\n=== the last audio sigma follows the SCHEDULER, not just the formula ===")
+    # The closed form a/(steps + a - 1) is exact for `simple` and WRONG for every
+    # other scheduler. Measured on a real ComfyUI at 5 steps, shift_audio 3.0:
+    #     simple      0.4286   (the formula agrees)
+    #     beta        0.2981
+    #     kl_optimal  0.0030   <- 143x smaller than the formula claims
+    # The note that fires above 0.40 therefore warned about babble that a scheduler
+    # had already fixed, and advised lowering shift_audio -- the wrong lever, when
+    # the fix was one dropdown away. comfy/ldm/minimax/model.py:569 derives the
+    # audio sigma from the VIDEO sigma (time_shift_sigma), so the ladder the
+    # scheduler produces is what decides this, not a closed form.
+    import comfy.samplers as _cs
+    _ms_mod = sys.modules.setdefault("comfy.model_sampling",
+                                     types.ModuleType("comfy.model_sampling"))
+    setattr(sys.modules["comfy"], "model_sampling", _ms_mod)
+    seen = []
+    def _fake(model_sampling, scheduler, steps):
+        seen.append((scheduler, steps))
+        return [1.0, 0.669, 0.416, 0.201, 0.003, 0.0]   # kl_optimal-shaped tail
+    class _FakeMS:
+        def set_parameters(self, **kw): self.kw = kw
+    _had = getattr(_cs, "calculate_sigmas", None)
+    _had_ms = getattr(_ms_mod, "ModelSamplingDiscreteFlow", None)
+    _cs.calculate_sigmas = _fake
+    _ms_mod.ModelSamplingDiscreteFlow = _FakeMS
+    try:
+        got = S.last_audio_sigma(5, 3.0, scheduler="kl_optimal")
+    finally:
+        if _had is None:
+            del _cs.calculate_sigmas
+        else:
+            _cs.calculate_sigmas = _had
+        if _had_ms is None:
+            del _ms_mod.ModelSamplingDiscreteFlow
+        else:
+            _ms_mod.ModelSamplingDiscreteFlow = _had_ms
+    check("it asks the scheduler for the real ladder", seen == [("kl_optimal", 5)], str(seen))
+    check("...and reports that, not the formula's 0.43", got < 0.05, f"{got:.4f}")
+
+
+def test_audio_sigma_falls_back_to_the_closed_form():
+    print("\n=== ...and without a real ComfyUI it still gives the `simple` answer ===")
+    # The stub has no calculate_sigmas. The closed form is exact for `simple`, which
+    # is the shipped default, so nothing regresses where the formula was right.
+    got = S.last_audio_sigma(5, 3.0)
+    check("closed form still exact for simple", abs(got - 3.0 / 7.0) < 1e-6, f"{got:.4f}")
+    check("...and 8 steps still gives the documented 0.30",
+          abs(S.last_audio_sigma(8, 3.0) - 0.30) < 1e-6, f"{S.last_audio_sigma(8, 3.0):.4f}")
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -4955,6 +5005,8 @@ def main():
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
     test_a_breath_does_not_hold_the_branch_open()
+    test_audio_sigma_reads_the_scheduler()
+    test_audio_sigma_falls_back_to_the_closed_form()
     test_appearing_is_not_arriving()
     test_a_line_is_marked_however_it_is_punctuated()
     test_a_two_word_sheet_name_does_not_duplicate_her()

@@ -3359,7 +3359,7 @@ def _direct_model_sampling(model, shift_video, shift_audio):
     return m
 
 
-def last_audio_sigma(steps, shift_audio):
+def last_audio_sigma(steps, shift_audio, scheduler="simple", shift_video=None):
     """How much audio noise is still left going into the FINAL sampling step.
 
     The audio branch runs on its own shifted timeline: time_shift_sigma inverts the
@@ -3382,7 +3382,65 @@ def last_audio_sigma(steps, shift_audio):
         a = float(shift_audio)
     except (TypeError, ValueError):
         return 0.0
+    # THE SCHEDULER DECIDES THIS, and the closed form agrees with exactly one of them.
+    #
+    # comfy/ldm/minimax/model.py:569 derives the audio sigma from the VIDEO sigma --
+    # sigma_a = time_shift_sigma(sigma_v, shift_v, shift_a) -- so what reaches the
+    # last step is whatever ladder the SCHEDULER produced, re-shifted. The formula
+    # below reproduces that only for `simple`. Measured, 5 steps, shift_audio 3.0:
+    #
+    #     simple      0.4286   formula agrees
+    #     beta        0.2981   formula is 44% high
+    #     kl_optimal  0.0030   formula is 143x high
+    #
+    # The note this feeds fires above 0.40 and told the reader "only the step count
+    # and shift_audio matter". On kl_optimal that warned about babble the scheduler
+    # had already removed, and sent them to lower shift_audio -- a dial that cannot
+    # reach 0.003 at any legal value -- when one dropdown does it.
+    v = float(shift_video) if shift_video else _WIDGET_RANGE["shift_video"][0]
+    try:
+        import comfy.samplers as _cs
+        import comfy.model_sampling as _cms
+        _calc = getattr(_cs, "calculate_sigmas", None)
+        if _calc is not None:
+            _ms = _cms.ModelSamplingDiscreteFlow()
+            _ms.set_parameters(shift=v)
+            _sig = [float(x) for x in _calc(_ms, str(scheduler), n)]
+            _last = next((x for x in reversed(_sig) if x > 0.0), 0.0)
+            # invert to the base grid at shift_video, re-apply shift_audio
+            _base = _last / (v + _last * (1.0 - v))
+            return a * _base / (1.0 + (a - 1.0) * _base)
+    except Exception:
+        # No real ComfyUI (tests stub it), or a scheduler this install lacks. The
+        # closed form is exact for `simple`, which is the shipped default.
+        pass
     return a / (n + a - 1.0) if (n + a - 1.0) > 0 else 0.0
+
+
+def scheduler_that_finishes_audio(steps, shift_audio, shift_video=None,
+                                  current="simple", target=0.10):
+    """The shipped scheduler that leaves the LEAST audio noise on the last step.
+
+    Returns (name, sigma) when a different one would get under `target` and beat
+    what is selected, else None. Named rather than silently switched: the schedule
+    shape changes the picture too, and that is the reader's call to make."""
+    try:
+        import comfy.samplers as _cs
+        names = list(getattr(_cs.KSampler, "SCHEDULERS", []) or [])
+    except Exception:
+        return None
+    now = last_audio_sigma(steps, shift_audio, current, shift_video)
+    best, best_s = None, now
+    for nm in names:
+        if nm == current:
+            continue
+        try:
+            sg = last_audio_sigma(steps, shift_audio, nm, shift_video)
+        except Exception:
+            continue
+        if sg > 0.0 and sg < best_s:
+            best, best_s = nm, sg
+    return (best, best_s) if (best is not None and best_s <= target) else None
 
 
 # What shift_audio 3.0 leaves on the last step at the 8 this node defaults to.
@@ -9975,7 +10033,10 @@ class H3LongVideos:
         # this and the answer is the same one the render would get.
         # The audio branch's own last step. Reported whenever it is steep, because
         # shift_video is the dial people reach for and it does not touch this.
-        _last_a = last_audio_sigma(steps, shift_audio)
+        _last_a = last_audio_sigma(steps, shift_audio, scheduler, shift_video)
+        # A SCHEDULER CAN END THIS OUTRIGHT, and this note used to deny it.
+        _alt_sched = scheduler_that_finishes_audio(steps, shift_audio, shift_video,
+                                                   scheduler)
         # Never advise RAISING it: the target is a ceiling on the last step, not a
         # setting to move towards from below.
         _fix_a = min(shift_audio_for(steps), float(shift_audio or 0.0) or 1.0)
@@ -9987,12 +10048,19 @@ class H3LongVideos:
                 f"resolving that much at once invents whatever is easiest, which is a "
                 f"voice. It is the step where babble appears. shift_VIDEO does not "
                 f"change this: time_shift_sigma inverts the video shift and re-applies "
-                f"the audio one, so only the step count and shift_audio matter. "
-                f"LOWER shift_audio or raise steps -- sigma rises with shift_audio, "
-                f"so raising it makes this worse. shift_audio {_fix_a:.2f} at "
-                f"{int(steps)} steps leaves {last_audio_sigma(steps, _fix_a):.2f}, "
+                f"the audio one. "
+                + (f"The SCHEDULER is the biggest dial here and '{scheduler}' is not "
+                   f"using it: '{_alt_sched[0]}' at these same {int(steps)} steps and "
+                   f"the same shift_audio leaves {_alt_sched[1]:.3f} instead of "
+                   f"{_last_a:.2f}, because it spends steps in the low-sigma tail "
+                   f"where the fine detail of speech is resolved. Try that first. "
+                   if _alt_sched else "")
+                + f"Otherwise LOWER shift_audio or raise steps -- sigma rises with "
+                f"shift_audio, so raising it makes this worse. shift_audio "
+                f"{_fix_a:.2f} at {int(steps)} steps leaves "
+                f"{last_audio_sigma(steps, _fix_a, scheduler, shift_video):.2f}, "
                 f"against the {DEFAULT_LAST_AUDIO_SIGMA:.2f} the default 3.0 leaves "
-                f"at 8 steps; sigma = shift_audio / (steps + shift_audio - 1)")
+                f"at 8 steps on 'simple'.")
         # Probed whenever silencing is ON, not only when a shot is silent today:
         # an ambient bed can cover every shot, and the answer still matters for
         # the moment one is not covered -- and for knowing the wiring is sound.
