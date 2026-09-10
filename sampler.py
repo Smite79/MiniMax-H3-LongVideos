@@ -27,7 +27,6 @@ What this node does is the part a prompt cannot do -- the mechanics of chaining:
 Everything about what the video should CONTAIN is yours to write.
 """
 
-import gc
 import math
 import os
 import re
@@ -2963,17 +2962,13 @@ def _is_oom(e):
 
 
 def _deep_cleanup():
-    """Release VRAM + RAM between shots so a long chain doesn't accumulate and OOM.
-    Runs a Python GC pass (frees dereferenced tensors / CPU buffers), then empties
-    the CUDA allocator's cached blocks and IPC handles. Cheap relative to sampling;
-    called once per beat.
+    """Release cached VRAM between shots so a long chain does not accumulate and OOM.
 
     It unloads NOTHING. soft_empty_cache(force) ignores `force` in current ComfyUI
     (model_management.py:2050) -- the body only reaches empty_cache() and
     ipc_collect() -- so this drops cached blocks, not models. The `True` is kept
     only for older builds that read it; the older comment here claimed this took an
     unload_all_models path, and it does not."""
-    gc.collect()
     try:
         mm.soft_empty_cache(True)
     except TypeError:
@@ -3152,11 +3147,10 @@ def flush_for_model_change(model):
         pass
     # Never let a cleanup failure abort the run: the flush is best-effort hygiene,
     # and a partially-flushed card is still better than raising here.
-    for _ in range(2):                  # 2nd pass frees blocks released by the 1st
-        try:
-            _deep_cleanup()
-        except Exception:
-            pass
+    try:
+        _deep_cleanup()
+    except Exception:
+        pass
     old_fmt, _n, old_sz, _c = prev
     new_fmt = fp[0]
     return (f"model changed since last run ({old_fmt} ~{old_sz / GB:.1f}GB -> {new_fmt} "
@@ -3341,7 +3335,10 @@ def frame_detail(img):
     frame it runs on is the model's own output, so shot 11 is sampled from a
     picture that has been through ten decode/encode cycles. Softening that
     compounds is invisible shot to shot and obvious end to end -- so measure it."""
-    x = img.float()
+    # This is diagnostic only. Sampling at most roughly 256 points per axis avoids
+    # allocating a full-resolution float32 copy of every shot's final frame.
+    step = max(1, max(int(img.shape[0]), int(img.shape[1])) // 256)
+    x = img[::step, ::step].float()
     if x.dim() == 3 and x.shape[-1] >= 3:
         x = x[..., :3].mean(dim=-1)
     elif x.dim() == 3:

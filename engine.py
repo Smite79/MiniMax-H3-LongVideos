@@ -726,9 +726,10 @@ def garments_in(text):
 _CLAUSE_BOUNDARY = re.compile(r"[,;]|\b(?:and|while)\b", re.I)
 
 
-def _clause_at(text, at):
+def _clause_at(text, at, boundaries=None):
     """Return the clause containing character offset `at` and its start offset."""
-    boundaries = list(_CLAUSE_BOUNDARY.finditer(text or ""))
+    if boundaries is None:
+        boundaries = list(_CLAUSE_BOUNDARY.finditer(text or ""))
     lo = max((m.end() for m in boundaries if m.end() <= at), default=0)
     hi = min((m.start() for m in boundaries if m.start() > at), default=len(text))
     return text[lo:hi], lo
@@ -1420,6 +1421,8 @@ class SceneState:
                                                or [""]))
 
         spans = hardware_spans(beat)
+        garments = list(_GARMENT_ONE.finditer(beat))
+        boundaries = list(_CLAUSE_BOUNDARY.finditer(beat)) if spans or garments else []
         applying = bool(spans) and bool(_APPLY.search(beat))
         releasing = bool(_RELEASE.search(beat))
 
@@ -1430,7 +1433,7 @@ class SceneState:
             # to both items produced handcuffs chained to a wall they were never
             # near, and a collar held behind a back.
             for canon, part, written, at in spans:
-                clause, lo = _clause_at(beat, at)
+                clause, lo = _clause_at(beat, at, boundaries)
                 item_at = at - lo
                 apply_at = max((m.start() for m in _APPLY.finditer(clause)
                                 if m.start() <= item_at), default=-1)
@@ -1485,10 +1488,10 @@ class SceneState:
         # and guessing is how a garment came off a beat before the beat that
         # took it off.
         if subject:
-            for m in _GARMENT_ONE.finditer(beat):
+            for m in garments:
                 g = f"{(m.group(1) or '').strip()} {m.group(2)}".strip().lower()
                 key = _garment_key(g)
-                clause, lo = _clause_at(beat, m.start())
+                clause, lo = _clause_at(beat, m.start(), boundaries)
                 item_at = m.start() - lo
                 actions = [(x.start(), "off") for x in _TAKES_OFF.finditer(clause)
                            if x.start() <= item_at]
