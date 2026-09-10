@@ -6352,6 +6352,29 @@ def hide_item(text, items):
                 new = re.sub(r"(?:\b\w+[\w-]*\s+){0,3}?\b"
                              + re.escape(str(item).strip()) + r"\b",
                              "", new, flags=re.I)
+            # THE PRINT ON A COVERED GARMENT GOES WITH THE GARMENT.
+            #
+            # Reported: a thong under shorts, lettering on the thong, and the
+            # lettering rendered ON THE SHORTS. The removal above takes the item
+            # plus up to three words IN FRONT of it and nothing behind, so
+            #     "denim shorts, a black thong with \"PRINCESS\" across the front."
+            # became
+            #     "denim shorts, with \"PRINCESS\" across the front."
+            # -- the garment deleted out from under its own modifier, which then
+            # sits in the list right after the shorts. A described print is a drawn
+            # print and it is drawn on whatever garment is still there to carry it.
+            # It survived the emptiness test below because that only strips
+            # articles: the leftovers read as '"PRINCESS"acrossthefront'.
+            #
+            # So a fragment this removal EMPTIED OF GARMENTS goes whole. Narrowly:
+            # only when something was actually removed from it, only when no
+            # garment word is left -- "a thong and denim shorts" keeps the shorts,
+            # which is the case hide_item exists to protect -- and never when the
+            # fragment carries the person's LABEL, which would take their name out
+            # of the sheet with it.
+            if (new != frag and ":" not in frag
+                    and not garments_in(new) and re.search(r"\w", new)):
+                continue
             # An article left standing alone ("a", "the") is not a garment,
             # so the fragment goes. A fragment carrying the person's LABEL
             # never reaches this test empty -- the removal takes the item and

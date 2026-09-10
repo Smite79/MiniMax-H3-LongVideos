@@ -2450,6 +2450,43 @@ def test_audio_sigma_falls_back_to_the_closed_form():
     check("...and 8 steps still gives the documented 0.30",
           abs(S.last_audio_sigma(8, 3.0) - 0.30) < 1e-6, f"{S.last_audio_sigma(8, 3.0):.4f}")
 
+def test_a_hidden_garments_lettering_goes_with_it():
+    print("\n=== the print on a covered garment is covered too ===")
+    # Reported from a real render: a thong under shorts, with lettering on the
+    # thong, and the lettering came out ON THE SHORTS.
+    #
+    # hide_item took the item plus up to three words IN FRONT of it and nothing
+    # behind, so
+    #     "denim shorts, a black thong with \"PRINCESS\" across the front."
+    # became
+    #     "denim shorts, with \"PRINCESS\" across the front."
+    # -- the garment deleted out from under its own modifier, which then sits in
+    # the list directly after the shorts. A described print is a drawn print, and
+    # it is drawn on whatever garment is still there to carry it.
+    #
+    # The fragment survived because the emptiness test only strips articles: what
+    # was left read as '"PRINCESS"acrossthefront', which is not empty.
+    T = 'McKenna: she, 26, denim shorts, a black thong with "PRINCESS" across the front.'
+    got = S.hide_item(T, ["a black thong"])
+    check("the lettering leaves with the garment", "princess" not in got.lower(), got)
+    check("...and the outer garment stays", "denim shorts" in got.lower(), got)
+    check("...and the person keeps her line", "McKenna" in got, got)
+
+    # Lettering written BEFORE the noun fails the same way, because the adjective
+    # window is \\w-only and a quoted word breaks it: it left 'a "PRINCESS" .'
+    T2 = 'McKenna: she, 26, denim shorts, a "PRINCESS" lettered thong.'
+    got2 = S.hide_item(T2, ["thong"])
+    check("...also when the print is written first",
+          "princess" not in got2.lower(), got2)
+
+    # THE NARROW HALF. A fragment naming a SECOND garment must not be dropped
+    # whole -- that is the bug hide_item exists to avoid ("green dress, steel
+    # collar" going to nothing), so only a fragment with no garment left in it goes.
+    T3 = "McKenna: she, 26, a thong and denim shorts."
+    got3 = S.hide_item(T3, ["thong"])
+    check("a fragment naming another garment keeps it",
+          "denim shorts" in got3.lower(), got3)
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -5005,6 +5042,7 @@ def main():
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
     test_a_breath_does_not_hold_the_branch_open()
+    test_a_hidden_garments_lettering_goes_with_it()
     test_audio_sigma_reads_the_scheduler()
     test_audio_sigma_falls_back_to_the_closed_form()
     test_appearing_is_not_arriving()
