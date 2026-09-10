@@ -1675,9 +1675,30 @@ _SAYS = (r"says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|calls?|"
          r"breathes?|breathed|hisses|hissed")
 
 
+# HOW FAR A SUBJECT REACHES TO ITS VERB -- and the asymmetry that gave a woman's
+# line to the phone in her hand.
+#
+# _DEVICE_SAYS reaches THREE words to find its speech verb. This reached two. So
+# "Mara picks up the phone and says" -- four words between the person and the verb,
+# one between the phone and it -- read as the phone talking, and every beat of the
+# shape "somebody handles a machine, then speaks" hit it. On a joint model that is
+# the worst reading of the beat available: the branch opens because there IS a line,
+# the mouth guard shuts the only face in frame because the line is judged not hers,
+# and her own words play out of the object she just picked up.
+#
+# This file already states the rule -- if there is any chance a person has the line,
+# the person keeps it -- so the person's reach is now the wider one. Bounded by the
+# SENTENCE, never past it: 'Mara sits on the sofa. The TV says: "..."' is a real
+# device line, and a gap that crossed the full stop would take it straight back off
+# the television.
+_TO_VERB = r"[^.!?\n]{0,80}?"
+
+# A possessive is not a speaker. "Dana's phone says" is the phone talking.
+_NOT_POSSESSIVE = r"(?!['\u2019]s\b)"
+
 _PERSON_SAYS = re.compile(
-    r"\b(?:he|she|they|i|we|you|" + _NOT_A_NAME + r"[A-Z][\w-]+)\s+"
-    r"(?:[\w,']+\s+){0,2}?(?:" + _SAYS + r")\b")
+    r"\b(?:he|she|they|i|we|you|" + _NOT_A_NAME + r"[A-Z][\w-]+)\b" + _NOT_POSSESSIVE
+    + _TO_VERB + r"\s(?:" + _SAYS + r")\b")
 
 
 def speech_is_a_devices(beat, sheet=""):
@@ -1688,13 +1709,20 @@ def speech_is_a_devices(beat, sheet=""):
     b = beat or ""
     if not has_speech(b) or not _DEVICE_SAYS.search(b):
         return False
-    if _PERSON_SAYS.search(b):
+    # WHO IS TALKING IS SETTLED OUTSIDE THE QUOTE. What a machine SAYS is not
+    # evidence about who said it -- an answerphone playing "Mara, Dan called you
+    # back." names two people and a speech verb, and reading the line's own
+    # contents as an attribution handed the message back to whoever it mentioned.
+    # Strip the spoken spans and attribute what is left. This is also what lets the
+    # reach above be widened safely: the only text it can now cross is narration.
+    outside = _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", b))
+    if _PERSON_SAYS.search(outside):
         return False
     # A name from the sheet with a speech verb after it, which the pattern above
     # only catches when the name happens to be capitalised in the beat.
     for n, _ in sheet_lines(sheet):
-        if n and re.search(r"\b" + re.escape(n) + r"\b(?:\s+[\w,']+){0,2}?\s+"
-                           r"(?:" + _SAYS + r")\b", b, re.I):
+        if n and re.search(r"\b" + re.escape(n) + r"\b" + _NOT_POSSESSIVE + _TO_VERB
+                           + r"\s(?:" + _SAYS + r")\b", outside, re.I):
             return False
     return True
 

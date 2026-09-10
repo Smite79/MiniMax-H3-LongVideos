@@ -3021,7 +3021,13 @@ def test_a_machines_line_is_not_the_actors_line():
                'The radio announces: "Line four is delayed."',
                'The intercom crackles: "Come to the desk."',
                'The television plays: "...and back after this."',
-               'Mara watches the screen. The TV goes: "Breaking news."'):
+               'Mara watches the screen. The TV goes: "Breaking news."',
+               # The person's reach stops at the sentence and outside the quote.
+               # A name spoken BY the machine is not a speaker in the room, and a
+               # person in an earlier sentence is not the one talking now --
+               # either would take a real device line back off the device.
+               'The answerphone plays: "Mara, Dan called you back."',
+               'Mara puts the kettle on. The radio says: "All units."'):
         check(f"the machine has it: {_b[:40]!r}", S.speech_is_a_devices(_b, sheet))
     # If a person might have the line, the person keeps it. Muting somebody's real
     # line is far worse than a mouth moving, so every doubtful case goes their way --
@@ -3032,7 +3038,19 @@ def test_a_machines_line_is_not_the_actors_line():
                'The TV says: "Storms." She whispers: "No."',
                'Dan asks: "Is it on?"',
                '"Turn it off," Mara mutters at the television.',
-               'Mara watches the TV. "I hate this."'):
+               'Mara watches the TV. "I hate this."',
+               # A PERSON HANDLING THE MACHINE STILL HAS THE LINE. The device
+               # pattern reached three words to find its verb and the person
+               # pattern reached two, so "Mara picks up the phone and says" --
+               # four words -- read as the phone talking. On a joint model that
+               # is the worst available reading of the beat: the branch opens,
+               # the mouth guard closes the only face in frame, and her own line
+               # plays out of the object in her hand.
+               'Mara grabs the phone and says: "Get someone here."',
+               'Mara picks up the phone and says: "Get someone here."',
+               'Mara slams the phone down and says: "Get someone here."',
+               'Dan turns off the radio and says: "Enough."',
+               'Mara crosses the room, picks up the phone, and says: "Now."'):
         check(f"the person keeps it: {_b[:40]!r}", not S.speech_is_a_devices(_b, sheet))
     # No quote at all is not a device line either -- there is no line to reassign.
     check("no line, nothing to attribute",
