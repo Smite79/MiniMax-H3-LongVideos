@@ -2148,6 +2148,53 @@ def test_her_look_does_not_land_on_him():
                                                   character_memory=MEM)[2])
 
 
+def test_an_anchor_says_when_it_has_taken_the_scenes_place():
+    print("\n=== the scene paragraph that quietly became a shot ===")
+    # Reported: "van was not in the same direction as the beat prior. Van direction
+    # moved."
+    #
+    # Filling in `anchor` makes EVERY paragraph a beat -- the anchor is then the
+    # scene. That is deliberate and the tooltip says so. What it means in practice
+    # is that a prompt whose first paragraph is scene text loses that text after
+    # shot 1: the van's heading, the location, the time of night are stated once,
+    # rendered as their own shot, and never carried again.
+    #
+    #     no anchor    4 shots   van direction carried: yes yes yes yes
+    #     with anchor  5 shots   van direction carried: yes NO  NO  NO  NO
+    #
+    # Nothing said so at runtime. The tooltip is in the widget; the person hits this
+    # after a render, and what they see is the van turning round between shots.
+    P = ("A white van parked facing away down the lane, rear doors open, night.\n\n"
+         "Dan lifts her into the back.\n\n"
+         "Dan closes one of the rear doors.")
+    MEM = "Dan: he, 40, a work coat."
+    info = run_node(P, plan_only=True, character_memory=MEM,
+                    anchor="Handheld, night exterior.")[2]
+    check("the node says the scene paragraph became a shot",
+          "is being spent as shot 1" in info, info[:300])
+    check("...and quotes it back so it can be recognised",
+          "A white van parked facing away down the lane" in info, info[:300])
+    check("...and says what that costs",
+          "not carried into any other shot" in info, info[:300])
+
+    # NOT when the first paragraph stages an action -- that IS a beat, and telling
+    # somebody to move it into the anchor would be wrong.
+    P2 = ("Dan opens the rear doors.\n\nDan lifts her into the back.")
+    q = run_node(P2, plan_only=True, character_memory=MEM,
+                 anchor="Handheld, night exterior.")[2]
+    check("an opening ACTION is not reported as lost scene text",
+          "is being spent as shot 1" not in q, q[:300])
+    # ...and never without an anchor, where the first paragraph IS the scene.
+    r = run_node(P, plan_only=True, character_memory=MEM)[2]
+    check("with no anchor there is nothing to report",
+          "is being spent as shot 1" not in r, r[:300])
+    check("...because the scene is carried instead",
+          all("facing away down the lane" in b for b in
+              [x for x in re.split(r"(?=\[Shot )",
+                                   run_node(P, plan_only=True,
+                                            character_memory=MEM)[3]) if x.strip()]))
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5409,6 +5456,7 @@ def main():
     test_a_face_under_duress_is_not_a_portrait()
     test_her_whimper_does_not_free_his_mouth()
     test_her_look_does_not_land_on_him()
+    test_an_anchor_says_when_it_has_taken_the_scenes_place()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()

@@ -8049,6 +8049,42 @@ class H3LongVideos:
                      f"shots" + (f", {_sheets} folded in as character sheet(s)"
                                  if _sheets else "")
                      + ("" if (anchor or "").strip() else ", 1 kept as the scene"))
+        # THE SCENE PARAGRAPH THAT QUIETLY BECAME A SHOT.
+        #
+        # Reported as a van changing direction between shots. Filling in `anchor`
+        # makes every paragraph a beat -- the anchor is then the scene -- and that is
+        # deliberate, and the widget's tooltip says so. What it MEANS is that a
+        # prompt whose first paragraph is scene text loses that text after shot 1:
+        #
+        #     no anchor    4 shots   van direction carried: yes yes yes yes
+        #     with anchor  5 shots   van direction carried: yes NO  NO  NO  NO
+        #
+        # The heading of a vehicle, the location, the time of night -- stated once,
+        # spent on a shot of their own, and never said again. Nothing reported it at
+        # runtime, so what the author sees is the van turning round between takes,
+        # with no way to connect that to a widget they filled in for the camera.
+        #
+        # Read as "this paragraph puts nobody on screen", which is this file's own
+        # test for whether there is a person in a beat. An opening ACTION is a real
+        # beat and is left alone: telling somebody to move it into the anchor would
+        # be wrong, and the anchor branch exists precisely because the no-anchor path
+        # was making scenes out of actions.
+        _first_para = beats[0] if beats else ""
+        if ((anchor or "").strip() and len(beats) > 1 and _first_para
+                and not beat_puts_somebody_on_screen(_first_para, sheet)):
+            _quoted = " ".join(_first_para.split())
+            notes.append(
+                f"the prompt's first paragraph describes a PLACE rather than staging "
+                f"anything, and with `anchor` filled in every paragraph is a beat -- so "
+                f"it is being spent as shot 1 and is not carried into any other shot: "
+                f"\"{_quoted[:100]}{'...' if len(_quoted) > 100 else ''}\". Whatever it "
+                f"establishes -- which way a vehicle faces, the room, the time of night "
+                f"-- is said once and then gone, and the shots after it are free to put "
+                f"it back differently. That is what a van changing direction between "
+                f"shots looks like from the outside. Move it into `anchor`, which is "
+                f"carried at the front of EVERY shot, or clear `anchor` and let the "
+                f"first paragraph be the scene as it is without one. Use one or the "
+                f"other: with both, all of the standing description belongs in `anchor`")
         # Paragraphs are separated by a BLANK line. Lines joined by a single newline
         # are ONE beat, so three actions written on three lines become one shot with
         # three actions in it, and two of them look like they were absorbed.
