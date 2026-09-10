@@ -10167,8 +10167,10 @@ class H3LongVideos:
         fresh = []
         t_start = time.perf_counter()
         aud_out, sr = [], 44100
-        frames = FrameAccumulator(sum(shot.frame_count for shot in plan.shots), _image_out_dtype(),
-                                  cleanup_between_shots)
+        frame_capacity = sum(shot.frame_count for shot in plan.shots)
+        if trim_seam:
+            frame_capacity -= max(0, len(plan) - 1)
+        frames = FrameAccumulator(frame_capacity, _image_out_dtype(), cleanup_between_shots)
         av_fix = 0                  # samples of A/V drift corrected across the chain
         _captured = {}              # name -> a frame from the last shot they were in
         _captured_from = {}         # name -> which shot that frame came from
@@ -10309,7 +10311,8 @@ class H3LongVideos:
                 ref_noise_aug=ref_noise_aug, silent=silent,
                 handoff_as_ref=_handoff_ref,
                 speech_lead_seconds=(_audio.lead_frames / AUDIO_LATENT_FPS))
-            if demoted and not _aug_warned:
+            if (demoted and not _aug_warned and ref_noise_aug is not None
+                    and float(ref_noise_aug) < KEYFRAME_SAFE_AUG):
                 _aug_warned = True
                 notes.append(
                     f"ref_noise_aug is {float(ref_noise_aug):g}, below {KEYFRAME_SAFE_AUG:g} -- "

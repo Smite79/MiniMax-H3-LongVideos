@@ -14,6 +14,7 @@ import io
 import os
 import sys
 import types
+import weakref
 
 import torch
 
@@ -511,6 +512,13 @@ def test_extracted_planning_policies():
     actual = frames.finish()[:, 0, 0, 0]
     check("overflow keeps later shots in order without reducing precision",
           torch.equal(actual, torch.tensor([1., 1., 1., 2.0001, 2.0001, 3.])))
+    frames = S.FrameAccumulator(3, torch.float32, True)
+    frames.add(torch.ones((3, 1, 1, 3)))
+    finished = frames.finish()
+    finished_ref = weakref.ref(finished)
+    del finished
+    check("finishing lets downstream code release the video buffer",
+          finished_ref() is None)
 
 
 def test_layers_from_prose():

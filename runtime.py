@@ -47,7 +47,9 @@ class FrameAccumulator:
         if not self.overflow:
             if self.tensor is None:
                 return torch.cat(self.overflow, dim=0)
-            return self.tensor if self.used == self.tensor.shape[0] else self.tensor[:self.used]
+            out = self.tensor if self.used == self.tensor.shape[0] else self.tensor[:self.used]
+            self.tensor = None
+            return out
 
         extra = sum(int(piece.shape[0]) for piece in self.overflow)
         reference = self.tensor if self.tensor is not None else self.overflow[0]

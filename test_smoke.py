@@ -3032,6 +3032,8 @@ def test_introducing_somebody_already_in_position():
     check("...and the run says so", "introduces Dan in position" in info)
     check("...naming what the room brings", "the room, the light and Nora come" in info)
     check("...and how to keep it as the anchor", "Write the entrance" in info)
+    check("intentional room carry does not report a low-strength reference",
+          "anchor would be noised" not in info)
     # CLAIMED, and claimed differently. The standing handoff claim says the shot is
     # "carried forward rather than joined by anybody new" -- exactly wrong in the one
     # case where somebody new is the reason the frame was demoted. Unclaimed, a
@@ -3688,27 +3690,15 @@ def test_an_exclusive_sound_clause_never_denies_the_beat():
 
 def test_the_chain_is_never_held_twice():
     print("\n=== the chain is one allocation from first shot to return ===")
-    # The per-shot list existed because the total length was not known until the loop
-    # ended -- and it IS known: plan_lengths fixes `lens` before the first shot
-    # samples, every entry is on H3's 17k+5 grid, and trim_seam only ever REMOVES a
-    # frame, so sum(lens) is a hard upper bound. Writing each shot into a destination
-    # allocated up front deletes the last double-hold in the node: even after the
-    # join was rewritten to drain the list, both were fully live at the moment it
-    # started -- 9.26GB of destination beside 9.26GB of pieces, on top of 44.64GB of
-    # staged weights, which is where the render was being killed.
-    #
-    # Checked structurally rather than by RSS: if the chain came from a preallocated
-    # destination, the returned tensor is a VIEW onto storage larger than itself, by
-    # exactly the frames trim_seam took out of the seams.
+    # The planned capacity accounts for the frame removed at each seam.
+    # The returned tensor should not retain storage for those discarded frames.
     for _n in (2, 4, 8):
         _P = "A room.\n\n" + "\n\n".join(f"Beat {_i}." for _i in range(_n))
         _out = run_node(_P)
-        _v, _shots = _out[0], _out[6]
-        _per_frame = _v.shape[1] * _v.shape[2] * 3 * _v.element_size()
+        _v = _out[0]
         _slack = _v.untyped_storage().nbytes() - _v.numel() * _v.element_size()
-        check(f"{_n} beats: the chain is a view of one destination",
-              _slack == (_shots - 1) * _per_frame,
-              f"slack {_slack} vs {(_shots - 1) * _per_frame}")
+        check(f"{_n} beats: no storage retained for trimmed seam frames",
+              _slack == 0, f"unused storage: {_slack} bytes")
     # ...and it is still the right pixels, in range, in the output dtype.
     _out = run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
     _v = _out[0]
