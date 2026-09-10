@@ -4325,6 +4325,35 @@ def test_the_silent_latent_looks_like_silence():
     S._SILENT_UNIT["lat"] = None
 
 
+def test_silence_pins_the_generated_audio():
+    print("\n=== silence pins the generated audio target ===")
+    video = torch.randn((1, 24, 4, 3, 5))
+    audio = torch.randn((1, 32, 2, 40))
+    silence = torch.zeros_like(audio) + 0.125
+
+    latent = {"samples": FakeNested((video, audio))}
+    check("a full-shot silence mask is installed",
+          S._pin_audio_silence(latent, silence, None))
+    got_video, got_audio = latent["samples"].unbind()
+    video_mask, audio_mask = latent["noise_mask"].unbind()
+    check("the target audio is encoded silence", torch.equal(got_audio, silence))
+    check("video remains free to denoise", bool(torch.all(video_mask == 1)))
+    check("the whole silent shot is locked", bool(torch.all(audio_mask == 0)))
+    check("the video target is untouched", torch.equal(got_video, video))
+
+    latent = {"samples": FakeNested((video, audio))}
+    check("a dialogue lead-in mask is installed",
+          S._pin_audio_silence(latent, silence, 20))
+    _, audio_mask = latent["noise_mask"].unbind()
+    check("the first half-second is locked", bool(torch.all(audio_mask[..., :20] == 0)))
+    check("speech can denoise after the lead-in", bool(torch.all(audio_mask[..., 20:] == 1)))
+
+    bad = {"samples": FakeNested((video, audio))}
+    check("a mismatched silent latent is rejected",
+          not S._pin_audio_silence(bad, silence[..., :-1], None))
+    check("a rejected mask does not partially mutate the latent", "noise_mask" not in bad)
+
+
 def test_a_softened_handoff_is_not_a_keyframe():
     """The removing shot keeps describing the garment when nothing anchors it.
 
@@ -5960,6 +5989,7 @@ def main():
     test_one_line_is_one_voice()
     test_the_plan_says_whether_silence_can_be_applied()
     test_the_silent_latent_looks_like_silence()
+    test_silence_pins_the_generated_audio()
     test_a_softened_handoff_is_not_a_keyframe()
     test_a_journey_reaches_the_shot()
     test_the_scene_does_not_reset()

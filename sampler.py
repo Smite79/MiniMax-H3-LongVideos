@@ -3260,6 +3260,29 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         return None                         # never fail a render for a nicety
 
 
+def _pin_audio_silence(latent, silence, lead_frames=None):
+    """Start target audio at encoded silence and preserve the requested span."""
+    try:
+        video, audio = latent["samples"].unbind()
+        silence = silence.to(device=audio.device, dtype=audio.dtype)
+        if silence.shape != audio.shape:
+            return False
+        audio_mask = torch.ones_like(audio[:, :1])
+        if lead_frames is None:
+            audio_mask.zero_()
+        else:
+            n = min(audio.shape[-1], max(0, int(lead_frames)))
+            if n <= 0:
+                return False
+            audio_mask[..., :n] = 0
+        latent["samples"] = comfy.nested_tensor.NestedTensor((video, silence))
+        latent["noise_mask"] = comfy.nested_tensor.NestedTensor(
+            (torch.ones_like(video[:, :1]), audio_mask))
+        return True
+    except Exception:
+        return False
+
+
 _POSTURE = re.compile(
     r"\b(?:lying|laying|lies|lays|kneel(?:s|ing)?|knelt|sit(?:s|ting)?|sat|"
     r"crouch(?:es|ing|ed)?|curled|sprawled|slumped|face[- ]?down|face[- ]?up|"
@@ -7661,7 +7684,7 @@ def latent_upscaler_node():
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                        handoff=None, refs=None,
                        ref_noise_aug=0.999, silent=False, ref_image_size="match",
-                       handoff_as_ref=False):
+                       handoff_as_ref=False, speech_lead_seconds=0.0):
     """Text + references + keyframe for a single shot.
 
     THE ONE RULE from H3's layout: a shot's conditioning rows are packed in the
@@ -7741,12 +7764,9 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     if hand_img is not None and not carry_as_ref:
         kfs.append({"resolved_frame_index": 0,
                     "latent": _keyframe_latent(vae, hand_img)})
-    # Silence on the audio branch for a shot with no scripted line. H3 is joint:
-    # an unconditioned audio stream invents a voice and the picture lip-syncs to it,
-    # and no sentence in the prompt outvotes a stream that has already decided
-    # someone is talking. PackedLayout emits a video segment only when a keyframe
-    # carries a `latent`, so an audio-only keyframe is legal and costs no frame.
-    if silent:
+    # Audio keyframes are extra conditioning rows in H3's PackedLayout. Pin the
+    # generated target stream instead, so the joint model also sees a quiet mouth.
+    if silent or float(speech_lead_seconds or 0.0) > 0.0:
         _SILENCE_STATUS["asked"] += 1
         if audio_vae is None:
             _SILENCE_STATUS["why"] = "no audio VAE is wired to the node"
@@ -7757,8 +7777,12 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                                           "second -- the wrong VAE is on the "
                                           "audio_vae input")
             else:
-                kfs.append({"resolved_frame_index": 0, "audio_latent": sil})
-                _SILENCE_STATUS["applied"] += 1
+                lead = None if silent else round(float(speech_lead_seconds) *
+                                                 AUDIO_LATENT_FPS)
+                if _pin_audio_silence(latent, sil, lead):
+                    _SILENCE_STATUS["applied"] += 1
+                else:
+                    _SILENCE_STATUS["why"] = "the silent latent did not match the shot"
     if kfs:
         vals["minimax_keyframes"] = kfs
     if vals:
@@ -7828,6 +7852,7 @@ _WIDGET_RANGE = {
     "pace": (1.0, 0.25, 2.0, float),
     "ambient_level": (0.25, 0.0, 1.0, float),
     "foley_level": (0.35, 0.0, 1.0, float),
+    "speech_lead_seconds": (0.5, 0.0, 2.0, float),
 }
 
 
@@ -8362,6 +8387,13 @@ class H3LongVideos:
                                "It is synthesis, not a recording: a click, a rattle, "
                                "a rustle, in the right place. Nothing vocal is ever "
                                "built. 0 turns it off; needs auto_sound on."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "speech_lead_seconds": ("FLOAT", {"default": 0.5, "min": 0.0,
+                    "max": 2.0, "step": 0.1,
+                    "tooltip": "Pin generated audio to encoded silence at the start of each "
+                               "dialogue shot. This stops pre-babble and keeps the joint "
+                               "model's mouth still during that span. 0 disables it; a long "
+                               "lead can trim the first word."}),
             },
         }
 
@@ -8388,6 +8420,7 @@ class H3LongVideos:
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
+            speech_lead_seconds=0.5,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -8412,7 +8445,9 @@ class H3LongVideos:
             shift_video=shift_video, shift_audio=shift_audio,
             ref_noise_aug=ref_noise_aug, latent_upscale_scale=latent_upscale_scale,
             upscale_target_short_edge=upscale_target_short_edge,
-            upscale_batch=upscale_batch, pace=pace))
+            upscale_batch=upscale_batch, pace=pace,
+            ambient_level=ambient_level, foley_level=foley_level,
+            speech_lead_seconds=speech_lead_seconds))
         megapixels, shot_seconds = _fixed["megapixels"], _fixed["shot_seconds"]
         steps, cfg = _fixed["steps"], _fixed["cfg"]
         shift_video, shift_audio = _fixed["shift_video"], _fixed["shift_audio"]
@@ -8420,6 +8455,8 @@ class H3LongVideos:
         latent_upscale_scale = _fixed["latent_upscale_scale"]
         upscale_target_short_edge = _fixed["upscale_target_short_edge"]
         upscale_batch, pace = _fixed["upscale_batch"], _fixed["pace"]
+        ambient_level, foley_level = _fixed["ambient_level"], _fixed["foley_level"]
+        speech_lead_seconds = _fixed["speech_lead_seconds"]
         notes.extend(_fixnotes)
         # <Picture N> means ref_image_N, the socket. Everything downstream works on
         # the packed roster instead, so translate once, here, before anything has
@@ -11272,7 +11309,7 @@ class H3LongVideos:
         # Probed whenever silencing is ON, not only when a shot is silent today:
         # an ambient bed can cover every shot, and the answer still matters for
         # the moment one is not covered -- and for knowing the wiring is sound.
-        if silence_nonspeech:
+        if silence_nonspeech or speech_lead_seconds > 0:
             if audio_vae is None:
                 notes.append(
                     "SILENCE CANNOT BE APPLIED: no audio VAE is wired to the node's "
@@ -11296,8 +11333,10 @@ class H3LongVideos:
             else:
                 notes.append(
                     f"silence can be applied: the audio VAE encodes silence, so the "
-                    f"{n_silent} shot(s) above are pinned to it rather than merely "
-                    f"told to be quiet")
+                    f"{n_silent} line-free shot(s) above can be pinned to it rather "
+                    f"than merely told to be quiet"
+                    + (f", and dialogue gets a {speech_lead_seconds:g}s silent lead-in"
+                       if speech_lead_seconds > 0 else ""))
         sent_text = list(shots)
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
         info = " | ".join(notes)
@@ -11462,7 +11501,8 @@ class H3LongVideos:
                 clip, vae, audio_vae, shot_prompt, w, h, lens[i],
                 handoff=shot_handoff, refs=list(shot_refs_all[i]) + _extra,
                 ref_noise_aug=ref_noise_aug, silent=silent,
-                handoff_as_ref=_handoff_ref)
+                handoff_as_ref=_handoff_ref,
+                speech_lead_seconds=(speech_lead_seconds if speech[i] else 0.0))
             if demoted and not _aug_warned:
                 _aug_warned = True
                 notes.append(
@@ -11943,13 +11983,13 @@ class H3LongVideos:
         # on real silence" -- and a shot with no scripted line babbled with nothing
         # in the report saying why. This is the one note that has to come after the
         # loop, because before it there is no result to report.
-        if silence_nonspeech and _SILENCE_STATUS["asked"]:
+        if _SILENCE_STATUS["asked"]:
             _missed = _SILENCE_STATUS["asked"] - _SILENCE_STATUS["applied"]
             if _missed > 0:
                 notes.append(
                     f"SILENCE WAS ASKED FOR ON {_SILENCE_STATUS['asked']} shot(s) AND "
                     f"WENT ON {_SILENCE_STATUS['applied']}: {_missed} shot(s) have no "
-                    f"line and an audio branch that is NOT pinned, because "
+                    f"working audio lock, because "
                     f"{_SILENCE_STATUS['why'] or 'the silent latent could not be built'}"
                     f". H3 is joint, so an unconditioned branch invents a voice and the "
                     f"picture lip-syncs to it -- a shot babbling with nothing scripted "
@@ -11958,8 +11998,8 @@ class H3LongVideos:
             else:
                 notes.append(
                     f"silence went on all {_SILENCE_STATUS['applied']} shot(s) that "
-                    f"asked for it -- their audio branch is pinned to encoded silence, "
-                    f"not merely told to be quiet")
+                    f"asked for it -- the requested full shot or dialogue lead-in is "
+                    f"pinned to encoded silence, not merely told to be quiet")
         return (video, {"waveform": audio, "sample_rate": sr}, " | ".join(notes), script,
                 lens[0], total, len(shots), round(total / H3_FPS, 2))
 

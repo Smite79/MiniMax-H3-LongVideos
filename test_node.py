@@ -4388,9 +4388,9 @@ def test_schema():
     # 17 core + 6 upscale + shot_length, hold_restraints, restart_after_removal,
     # auto_remove + anchor, character_memory, character_guard, pace, auto_sound,
     # hold_scene_state.
-    # A ceiling, not a target: the old node had 38 and nobody could find anything.
+    # A ceiling, not a target: every control must justify its place here.
     # Every one added since the rebuild answers a reported failure.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 37)
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 38)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4398,10 +4398,11 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-11:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-12:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
-                              "ambient_audio", "ambient_level", "foley_level"])
+                              "ambient_audio", "ambient_level", "foley_level",
+                              "speech_lead_seconds"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",
