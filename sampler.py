@@ -3619,14 +3619,51 @@ def scheduler_that_finishes_audio(steps, shift_audio, shift_video=None,
                                   current="simple", target=0.10):
     """The shipped scheduler that leaves the LEAST audio noise on the last step.
 
-    Returns (name, sigma) when a different one would get under `target` and beat
-    what is selected, else None. Named rather than silently switched: the schedule
-    shape changes the picture too, and that is the reader's call to make."""
+    ONLY ONE THAT HONOURS shift_video, and that restriction is the whole of what
+    this function got wrong. Reported: switching to kl_optimal put watery waves on
+    the picture.
+
+    comfy/samplers.py grades its schedulers by `use_ms`. A handler with use_ms True
+    is called as handler(model_sampling, steps) and sees the shift; one with use_ms
+    False is called as handler(n, sigma_min, sigma_max) and NEVER SEES IT. kl_optimal
+    exponential and karras are all in the second group, so recommending them threw
+    shift_video away silently. At 5 steps and shift 12 the difference is the whole
+    schedule:
+
+        simple      1.0  0.9796  0.9474  0.8889  0.7500   <- stays high, as shift 12 asks
+        kl_optimal  1.0  0.6725  0.4212  0.2082  0.0119   <- shift discarded
+
+    The video branch gets almost no time at high sigma, so structure never resolves
+    and the remaining steps polish detail with nothing underneath it. That is what
+    watery looks like. The audio tail WAS better; it was better because the schedule
+    had stopped being the one that was asked for.
+
+    Returns (name, sigma) when a shift-honouring scheduler would get under `target`
+    and beat what is selected, else None. Named rather than silently switched: the
+    schedule shape changes the picture too, and that is the reader's call."""
     try:
         import comfy.samplers as _cs
-        names = list(getattr(_cs.KSampler, "SCHEDULERS", []) or [])
+        names = [n for n in (getattr(_cs.KSampler, "SCHEDULERS", []) or [])
+                 if getattr(_cs.SCHEDULER_HANDLERS.get(n, None), "use_ms", False)]
     except Exception:
         return None
+    # ...AND THE VIDEO SCHEDULE HAS TO SURVIVE IT. Honouring the shift is necessary
+    # and not sufficient: ddim_uniform honours it and still starts at 0.98 rather
+    # than 1.0, so the first step does not begin from full noise. Checking only the
+    # audio number is the mistake that recommended kl_optimal, so the candidate's
+    # own video schedule is read and has to start from noise and keep its high-sigma
+    # steps -- all but two of them above 0.5, which is what shift 12 is buying.
+    def _video_ok(nm):
+        try:
+            import comfy.model_sampling as _cms
+            _ms = _cms.ModelSamplingDiscreteFlow()
+            _ms.set_parameters(shift=float(shift_video or 12.0))
+            sig = [float(x) for x in _cs.calculate_sigmas(_ms, nm, int(steps))]
+        except Exception:
+            return False
+        return (len(sig) >= 3 and sig[0] >= 0.999
+                and sum(1 for x in sig if x > 0.5) >= max(1, int(steps) - 1))
+
     now = last_audio_sigma(steps, shift_audio, current, shift_video)
     best, best_s = None, now
     for nm in names:
@@ -3636,7 +3673,7 @@ def scheduler_that_finishes_audio(steps, shift_audio, shift_video=None,
             sg = last_audio_sigma(steps, shift_audio, nm, shift_video)
         except Exception:
             continue
-        if sg > 0.0 and sg < best_s:
+        if sg > 0.0 and sg < best_s and _video_ok(nm):
             best, best_s = nm, sg
     return (best, best_s) if (best is not None and best_s <= target) else None
 
@@ -11261,11 +11298,15 @@ class H3LongVideos:
                 f"voice. It is the step where babble appears. shift_VIDEO does not "
                 f"change this: time_shift_sigma inverts the video shift and re-applies "
                 f"the audio one. "
-                + (f"The SCHEDULER is the biggest dial here and '{scheduler}' is not "
-                   f"using it: '{_alt_sched[0]}' at these same {int(steps)} steps and "
-                   f"the same shift_audio leaves {_alt_sched[1]:.3f} instead of "
-                   f"{_last_a:.2f}, because it spends steps in the low-sigma tail "
-                   f"where the fine detail of speech is resolved. Try that first. "
+                + (f"'{_alt_sched[0]}' at these same {int(steps)} steps and the same "
+                   f"shift_audio leaves {_alt_sched[1]:.3f} instead of {_last_a:.2f}, "
+                   f"and it honours shift_video, so the picture keeps the schedule "
+                   f"shape you asked for. DO NOT reach for kl_optimal, exponential or "
+                   f"karras for this: comfy grades schedulers by use_ms, those three "
+                   f"are called with sigma_min and sigma_max ONLY and never see the "
+                   f"shift at all, so the video schedule collapses off its high-sigma "
+                   f"steps and the picture comes out watery. Reported exactly that "
+                   f"way. "
                    if _alt_sched else "")
                 + f"Otherwise LOWER shift_audio or raise steps -- sigma rises with "
                 f"shift_audio, so raising it makes this worse. shift_audio "
