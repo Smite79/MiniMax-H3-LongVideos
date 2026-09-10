@@ -5302,19 +5302,34 @@ def look_target(beat):
 
 # Going somewhere ends a look. Held across it, "the eyes are on the TV" follows
 # somebody out of the room and into the next scene.
-_MOVES_OFF = re.compile(
-    r"\b(?:walks?|walked|runs?|ran|steps?|stepped|moves?|moved|crosses|crossed|"
-    r"leaves?|left|exits?|exited|goes|went|heads?|headed|climbs?|climbed|"
-    r"follows?|followed)\b", re.I)
+_MOVES_OFF_SRC = (r"walks?|walked|runs?|ran|steps?|stepped|moves?|moved|crosses|"
+                  r"crossed|leaves?|left|exits?|exited|goes|went|heads?|headed|"
+                  r"climbs?|climbed|follows?|followed")
+_MOVES_OFF = re.compile(r"\b(?:" + _MOVES_OFF_SRC + r")\b", re.I)
 
 
 # The look VERBS on their own, with no target required. _LOOK_AT needs a nameable
 # object, so "looks at her" reads as no look at all -- and the latch then held a
 # television she had just turned away from.
-_LOOK_VERB = re.compile(
-    r"\b(?:look(?:s|ed|ing)?|star(?:e|es|ed|ing)|gaz(?:e|es|ed|ing)|"
-    r"glanc(?:e|es|ed|ing)|peer(?:s|ed|ing)?|watch(?:es|ed|ing)?|"
-    r"stud(?:y|ies|ied|ying))\b", re.I)
+_LOOK_VERB_SRC = (r"look(?:s|ed|ing)?|star(?:e|es|ed|ing)|gaz(?:e|es|ed|ing)|"
+                  r"glanc(?:e|es|ed|ing)|peer(?:s|ed|ing)?|watch(?:es|ed|ing)?|"
+                  r"stud(?:y|ies|ied|ying)")
+_LOOK_VERB = re.compile(r"\b(?:" + _LOOK_VERB_SRC + r")\b", re.I)
+
+
+def subjects_for(beat, sheet, verbs):
+    """Which people on the sheet this beat puts in front of one of these verbs.
+
+    The shared shape behind speakers_in and vocal_sources_in, including the
+    conjunction guard: "Dan holds the door and McKenna looks away" must not credit
+    Dan, because `and` opens a new predicate with its own subject."""
+    b, out = beat or "", []
+    for n, _ in sheet_lines(sheet):
+        if n and re.search(r"\b" + re.escape(n) + r"\b"
+                           r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?"
+                           r"\s+(?:" + verbs + r")\b", b, re.I):
+            out.append(n)
+    return out
 
 
 def looks_somewhere(beat):
@@ -5326,8 +5341,15 @@ def looks_somewhere(beat):
     return bool(_LOOK_VERB.search(beat or ""))
 
 
-def gaze_hold(target):
+def gaze_hold(target, who=""):
     """One sentence putting the eyes and the head on the thing the beat named.
+
+    NAMED when the caller says to, which it does once a second person is in the
+    shot. Reported: "the girl is stuck gazing at a camera while the other character
+    does his part" -- a look staged by one person went on being said impersonally in
+    shots she was not in, so it landed on whoever was. Impersonal is still right with
+    one person in frame: naming somebody is a second mention of them, and a described
+    person is a person the model draws.
 
     Impersonal, like the hardware placement clause: naming the person again is one
     more mention of a person, and that has its own cost. Says nothing about where the
@@ -5338,6 +5360,8 @@ def gaze_hold(target):
     # SHORT. Nineteen words restating a nine-word beat is most of the shot spent
     # agreeing with it, and the guards crowding out the action is what "the
     # character did not do what I told it" looks like from the outside.
+    if who:
+        return f" {who}'s eyes and head are turned to the {target}."
     return f" The eyes and the head are turned to the {target}."
 
 
@@ -8124,7 +8148,7 @@ class H3LongVideos:
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
-        looking_at = ""           # the target, held until it changes
+        looking_at = {}           # {name: target}, each held until it changes
         fall_shots = []           # shots told what takes the landing
         device_shots = []         # shots whose line belongs to a machine
         applied_shots = []        # shots that put the hardware on
@@ -8976,27 +9000,6 @@ class H3LongVideos:
             # them SHUT and says nothing about position, so the only thing carrying
             # it was the picture -- and a close shot crops the anchor point straight
             # out of frame, which is the reported failure exactly.
-            # Where the beat says somebody is looking, said once more as a fact
-            # about the eyes and the head. One mention in the beat loses to a
-            # near-clean reference asking for the portrait's pose, and the
-            # portrait looks at the lens because photographs of people do.
-            # LATCHED, like every other state here. A look was stated once and then
-            # dropped, so somebody watching a screen across four shots was told
-            # where their eyes were in the first one only -- and the portrait pull
-            # that made this necessary does not stop after one shot.
-            #
-            # Cleared by a beat that moves the look somewhere else, or one that
-            # moves the person: walking away ends it, and holding a stale target
-            # across that would be worse than saying nothing.
-            _look_now = look_target(body) if hold_gaze else ""
-            if _look_now:
-                looking_at = _look_now
-            elif (looks_somewhere(body) or arrives_in(body) or falls_in(body)
-                  or turns_in(body, cast) or _MOVES_OFF.search(body or "")):
-                looking_at = ""
-            _gaze = gaze_hold(looking_at) if (hold_gaze and looking_at) else ""
-            if _gaze:
-                gaze_shots.append(len(shots) + 1)
             # POSTURE, latched the way the gaze is. A beat that sits somebody down
             # ends its shot with them seated; the next beat says nothing about it,
             # so the shot was free to stand them back up -- reported as the end of
@@ -9307,6 +9310,54 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
+
+            # Where the beat says somebody is looking, said once more as a fact
+            # about the eyes and the head. One mention in the beat loses to a
+            # near-clean reference asking for the portrait's pose, and the
+            # portrait looks at the lens because photographs of people do.
+            # LATCHED, like every other state here. A look was stated once and then
+            # dropped, so somebody watching a screen across four shots was told
+            # where their eyes were in the first one only -- and the portrait pull
+            # that made this necessary does not stop after one shot.
+            #
+            # Cleared by a beat that moves the look somewhere else, or one that
+            # moves the person: walking away ends it, and holding a stale target
+            # across that would be worse than saying nothing.
+            #
+            # PER PERSON, because a look is one. It was a single string with no
+            # owner, held across shots and said impersonally, so a look staged by
+            # one character went on being said in shots she was not in -- and
+            # landed on whoever was: "McKenna looks at the lane" in shot 3, and
+            # shot 4, describing only Dan, was told "the eyes and the head are
+            # turned to the lane behind them." That is his head on her sightline,
+            # and it is the same defect as the vocal flag -- a per-person fact kept
+            # in a shot-level variable.
+            _look_now = look_target(body) if hold_gaze else ""
+            _lookers = (subjects_for(body, shot_sheet, _LOOK_VERB_SRC)
+                        if hold_gaze else [])
+            if _look_now:
+                # Whoever the beat says is looking. If it names nobody, everybody it
+                # describes -- which is what the single string did for everyone.
+                for _n in (_lookers or (_described or [])):
+                    looking_at[_n] = _look_now
+            elif (looks_somewhere(body) or arrives_in(body) or falls_in(body)
+                  or turns_in(body, cast) or _MOVES_OFF.search(body or "")):
+                # Clear only the people this beat actually moved or turned. When it
+                # cannot be pinned on anybody, clear all of it: a stale target is
+                # worse than none, which is why this branch exists at all.
+                _ends = (_lookers
+                         or subjects_for(body, shot_sheet, _MOVES_OFF_SRC))
+                for _n in (_ends or list(looking_at)):
+                    looking_at.pop(_n, None)
+            # ...and said only for people this shot DESCRIBES. That is the whole
+            # fix: a look belongs to somebody, and somebody who is not in the shot
+            # cannot be looking anywhere in it.
+            _gazers = [n for n in (_described or []) if looking_at.get(n)]
+            _gaze = (gaze_hold(looking_at[_gazers[0]],
+                               _gazers[0] if len(_described or []) >= 2 else "")
+                     if (hold_gaze and _gazers) else "")
+            if _gaze:
+                gaze_shots.append(len(shots) + 1)
             # ONE sentence for the hardware. The hold, the name of the thing and
             # where it holds were three separate clauses written for three separate
             # reports, each naming the same object again -- 53 words about one pair
@@ -9617,10 +9668,16 @@ class H3LongVideos:
                 # beside posture because that is what it is: an arm position, not
                 # a fact about metal. See pose_clause.
                 (3, "pose", _pose),
+                (11, "gaze", _gaze),
                 # Beside the gaze, because they answer the same pull: with nothing
                 # said about the eyes or the face, both come from the portrait prior.
-                (11, "duress", _duress),
-                (11, "gaze", _gaze),
+                #
+                # RANKED BELOW IT, though, and measured. At 11 it tied the gaze and
+                # won on list position, and on a short beat the budget then dropped
+                # the gaze clause from the very shot that staged the look while a
+                # stale copy survived on the shot after. Where the two compete, the
+                # spatial fact the beat itself stated goes first.
+                (12, "duress", _duress),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language
                 (6, "told", _told),          # a listener given an order to ignore
@@ -10034,7 +10091,13 @@ class H3LongVideos:
                 f"frame faces the camera unless something says otherwise, and a "
                 f"near-clean reference asks for the portrait's pose -- which looks at "
                 f"the lens, because photographs of people do. Nothing is said about "
-                f"where the camera is. Off with hold_gaze")
+                f"where the camera is. It is HELD until something moves it, and a "
+                f"look belongs to whoever is doing the looking -- so it is said only "
+                f"in shots that describe that person, and named once a second person "
+                f"is in frame with them. Reported as one character stuck gazing at the "
+                f"camera while the other does his part: the target was one string with "
+                f"no owner, said impersonally, so a look she staged went on being said "
+                f"in shots she was not in and landed on whoever was. Off with hold_gaze")
         if anchored_shots:
             notes.append(
                 f"fastened limbs held in place on shot(s) {', '.join(str(n) for n in anchored_shots)}"

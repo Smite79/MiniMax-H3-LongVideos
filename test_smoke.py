@@ -2098,6 +2098,56 @@ def test_her_whimper_does_not_free_his_mouth():
           not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", cl, re.I), cl)
 
 
+def test_her_look_does_not_land_on_him():
+    print("\n=== a held look belongs to whoever is doing the looking ===")
+    # Reported: "Girl is stuck gazing at a camera while the other character does his
+    # part." The gaze latch has no owner. `looking_at` is ONE string held across
+    # shots, and gaze_hold is impersonal by design, so a look staged by one person
+    # goes on being said in shots that person is not even in -- landing on whoever
+    # IS there.
+    #
+    # Measured: McKenna looks at the lane in shot 3; shot 4 describes only Dan and
+    # was still told "The eyes and the head are turned to the lane behind them."
+    # That is his head being turned to her sightline. Same class of defect as the
+    # vocal flag: a per-person fact kept in a shot-level variable.
+    MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
+           "Dan: he, 40, a work coat.")
+    P = ("A white van parked facing away down the lane, rear doors open, night.\n\n"
+         "Dan lifts McKenna into the back of the van.\n\n"
+         "McKenna looks at the lane behind them.\n\n"
+         "Dan closes one of the rear doors.")
+    sh = [" ".join(x.split()) for x in
+          re.split(r"(?=\[Shot )", run_node(P, plan_only=True,
+                                            character_memory=MEM)[3]) if x.strip()]
+    check("the beat that stages the look gets the clause",
+          "turned to the lane" in sh[1], sh[1][-160:])
+    check("...and the shot she is not in does not",
+          "turned to the lane" not in sh[2], sh[2][-160:])
+
+    # ...and where she IS still in the shot, the look is hers by name, because a
+    # second person in frame is a second pair of eyes the impersonal wording could
+    # land on. One person in the shot keeps the impersonal wording: naming somebody
+    # is a second mention of them, and that has its own cost.
+    P2 = ("A lane, night.\n\n"
+          "McKenna looks at the treeline.\n\n"
+          "Dan checks the wheel while McKenna waits.")
+    sh2 = [" ".join(x.split()) for x in
+           re.split(r"(?=\[Shot )", run_node(P2, plan_only=True,
+                                             character_memory=MEM)[3]) if x.strip()]
+    check("the held look is attributed once two people are in the shot",
+          "McKenna's eyes and head are turned to the treeline" in sh2[1], sh2[1][-200:])
+
+    # The clause itself, both ways.
+    check("impersonal with nobody named",
+          S.gaze_hold("TV") == " The eyes and the head are turned to the TV.")
+    check("...and named when it has to be",
+          S.gaze_hold("TV", "Mara") == " Mara's eyes and head are turned to the TV.")
+    check("nothing named, nothing said", S.gaze_hold("", "Mara") == "")
+    check("info says the look was attributed",
+          "a look belongs to whoever" in run_node(P, plan_only=True,
+                                                  character_memory=MEM)[2])
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5358,6 +5408,7 @@ def main():
     test_nothing_tells_the_cast_to_hold_still()
     test_a_face_under_duress_is_not_a_portrait()
     test_her_whimper_does_not_free_his_mouth()
+    test_her_look_does_not_land_on_him()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()
