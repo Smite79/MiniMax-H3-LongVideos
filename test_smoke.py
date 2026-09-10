@@ -2517,6 +2517,48 @@ def test_camera_framing_is_read_from_the_anchor():
     check("...and does not fire on a wide film",
           "frame tight enough to crop the anchor point out" not in wide)
 
+def test_a_tight_frame_drops_wardrobe_it_cannot_contain():
+    print("\n=== a close-up stops describing what is outside it ===")
+    # Reported: camera types written in the anchor did not take. The anchor text
+    # was reaching the model verbatim -- it is 11-13% of a shot -- but the other
+    # 87% asserted denim shorts, wrists at the small of the back and the weight on
+    # shoulder and hip, none of which a close-up on a face can contain. The camera
+    # was not ignored, it was outvoted.
+    #
+    # So a frame that names its SUBJECT drops the wardrobe that subject's frame
+    # cannot hold. Only wardrobe: the limb and restraint prose STAYS, because on a
+    # tight shot it is the only thing that still knows where the limbs are
+    # fastened -- the node's own warning says so, and the picture the next shot
+    # inherits has already lost it.
+    mem = "McKenna: she, 26, dark hair, a red jacket, denim shorts, black boots."
+    P = "McKenna lies on the bed, wrists cuffed behind her back.\n\nShe turns her head."
+    tight = run_node(P, plan_only=True, character_memory=mem,
+                     anchor="Close-up on her face. 85mm lens.")[3]
+    check("legs are out of a face frame", "denim shorts" not in tight.lower(), tight[:200])
+    check("...and so are the feet", "black boots" not in tight.lower(), tight[:200])
+    check("...but head-and-shoulders keeps the jacket",
+          "red jacket" in tight.lower(), tight[:200])
+    check("...and she is still herself", "McKenna" in tight)
+    check("...and the restraint is STILL said",
+          "cuff" in tight.lower(), tight[:260])
+    check("...and where the limbs are held is still said",
+          "small of the back" in tight.lower(), tight[:260])
+
+    # A frame naming the HANDS keeps the gloves and drops the rest.
+    hands = run_node(P, plan_only=True,
+                     character_memory="McKenna: she, 26, gloves, denim shorts.",
+                     anchor="Macro lens on her hands.")[3]
+    check("a hand frame keeps the gloves", "gloves" in hands.lower(), hands[:200])
+    check("...and drops the shorts", "denim shorts" not in hands.lower(), hands[:200])
+
+    # THE NARROW HALVES. A wide film changes nothing, and a close-up that names no
+    # subject changes nothing either -- there is no way to know what it is close ON.
+    wide = run_node(P, plan_only=True, character_memory=mem, anchor="Wide shot, night.")[3]
+    check("a wide film keeps everything", "denim shorts" in wide.lower(), wide[:200])
+    bare = run_node(P, plan_only=True, character_memory=mem, anchor="Close-up. 85mm.")[3]
+    check("a subjectless close-up changes nothing",
+          "denim shorts" in bare.lower(), bare[:200])
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -5073,6 +5115,7 @@ def main():
     test_an_instruction_is_not_the_action()
     test_a_breath_does_not_hold_the_branch_open()
     test_camera_framing_is_read_from_the_anchor()
+    test_a_tight_frame_drops_wardrobe_it_cannot_contain()
     test_a_hidden_garments_lettering_goes_with_it()
     test_audio_sigma_reads_the_scheduler()
     test_audio_sigma_falls_back_to_the_closed_form()

@@ -4921,6 +4921,69 @@ def tight_framing(text):
     return bool(_TIGHT_FRAME.search(text or ""))
 
 
+# WHAT THE CLOSE FRAME IS CLOSE **ON**, and therefore what it can hold.
+#
+# Reported: camera types written in the anchor did not take. They were reaching
+# the model verbatim -- the anchor is 11-13% of a shot's conditioning -- but the
+# other 87% asserted denim shorts, wrists at the small of the back and the weight
+# on shoulder and hip. A close-up on a face contains none of those. The camera was
+# not being ignored, it was being outvoted by the node's own continuity prose.
+#
+# Only WARDROBE is scoped away. The limb and restraint sentences STAY on a tight
+# shot, and deliberately: the framing crops the anchor point out of the frame the
+# next shot inherits, so the text is the only thing left that knows where the limbs
+# are fastened. Dropping that is the exact drift the tight-frame warning exists to
+# report.
+_FRAME_ON = re.compile(
+    r"\b(?:close[-\s]?up|close\s+shot|tight\s+shot|macro(?:\s+lens)?)\b[^.;]{0,24}?"
+    r"\bon\s+(?:her|his|their|its|the)\s+([\w][\w\- ]{1,20})"
+    r"|\b(?:close|tight)\s+on\s+(?:her|his|their|its|the)\s+([\w][\w\- ]{1,20})", re.I)
+# Subject word -> the garment REGIONS that frame can still show. A face is read as
+# head-and-shoulders, which is what a close-up on a face conventionally is, so a
+# collar or neckline survives and the trousers do not.
+_FRAME_HOLDS = (
+    (r"face|eyes?|mouth|lips|head|hair|jaw|cheeks?|ears?|nose|expression",
+     frozenset(("torso",))),
+    (r"hands?|fingers?|wrists?|palms?|knuckles?", frozenset(("hands",))),
+    (r"feet|foot|ankles?|toes?", frozenset(("feet",))),
+    (r"chest|breasts?|torso|shoulders?|stomach|belly|waist|back",
+     frozenset(("torso",))),
+    (r"legs?|thighs?|hips?|knees?|calves|calf", frozenset(("legs", "feet"))),
+)
+
+
+def frame_holds(text):
+    """The garment regions a named close frame can still contain.
+
+    None when the text names no close frame, or names one without saying what it
+    is close ON -- a bare "close-up" gives no way to know what is in it, and
+    guessing would be the node cropping the author's wardrobe on a coin toss."""
+    m = _FRAME_ON.search(text or "")
+    if not m:
+        return None
+    subject = (m.group(1) or m.group(2) or "").strip().lower()
+    for pat, regions in _FRAME_HOLDS:
+        if re.search(r"\b(?:" + pat + r")\b", subject, re.I):
+            return regions
+    return None
+
+
+def out_of_frame_garments(scene, holds):
+    """Garments in `scene` whose region the frame cannot show.
+
+    A garment that cannot be placed at all is KEPT: an unplaceable item is one this
+    file does not recognise, and cropping what it does not understand is how a
+    wardrobe quietly loses things the author wrote."""
+    if not holds:
+        return []
+    out = []
+    for g in garments_in(scene or ""):
+        r = region_of(g)
+        if r and r not in holds:
+            out.append(g)
+    return out
+
+
 # WHERE SOMEBODY IS LOOKING.
 #
 # Reported: "she is looking at the TV" rendered her looking off to the side, posing
@@ -6180,6 +6243,10 @@ def infer_removals(beat, scene):
 # other: garment_words gives head words for tracking, garments_in keeps the
 # adjectives for the text.
 garments_in = engine.garment_words
+# Which body region a garment covers -- read from the engine's own table so
+# frame scoping and the bare/undress logic can never disagree about where a
+# garment sits.
+region_of = engine.region_of
 
 
 # A beat that undresses somebody completely without naming one garment. Every other
@@ -7770,6 +7837,7 @@ class H3LongVideos:
         applied_shots = []        # shots that put the hardware on
         early_hardware = []       # ...where the sheet already claimed it
         tight_shots = []          # ...where the framing also crops it
+        cropped_wardrobe = []     # garments a named close frame stopped describing
         # FILM-WIDE FRAMING LIVES IN THE ANCHOR, which is where the tooltip sends
         # it: "Framing that belongs to the whole film -- look, camera, lighting,
         # location." tight_framing was only ever handed the BEAT, so a film shot
@@ -8327,6 +8395,20 @@ class H3LongVideos:
             shot_scene = scrub_removed(
                 "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
                 visible + _hidden)
+            # A NAMED CLOSE FRAME STOPS DESCRIBING WHAT IT CANNOT HOLD.
+            #
+            # Applied HERE, last, on the finished text: the layer, removal and
+            # restore logic has already run and its bookkeeping is untouched, so
+            # this only changes what is SAID on this shot and can never be mistaken
+            # by anything downstream for a garment coming off. The next shot builds
+            # from the sheet again, so nothing accumulates.
+            _holds = frame_holds(anchor) or frame_holds(body)
+            _cropped = out_of_frame_garments(shot_scene, _holds)
+            if _cropped:
+                shot_scene = hide_item(shot_scene, _cropped)
+                for _c in _cropped:
+                    if _c not in cropped_wardrobe:
+                        cropped_wardrobe.append(_c)
             # THE REFERENCE STAYS. It was taken off for one commit, on the
             # reasoning that a near-clean reference reproduces its picture and so
             # draws the belt over the jeans -- which is true as far as it goes,
@@ -9633,6 +9715,20 @@ class H3LongVideos:
                 f"says nothing about where it is. Position was being carried by the "
                 f"picture alone, and the picture is the previous shot's last frame. "
                 f"Cleared by a `remove:` naming the hardware, like the hold itself")
+        if cropped_wardrobe:
+            notes.append(
+                "the anchor names a close frame and says what it is close ON, so the "
+                "wardrobe that frame cannot hold stopped being described: "
+                + ", ".join(cropped_wardrobe)
+                + ". The camera was always reaching the model -- it is a tenth of a "
+                  "shot's text -- and the rest of the shot was asserting clothes the "
+                  "frame has no room for, which is a wider frame said at length. "
+                  "ONLY WARDROBE GOES. Where the limbs are held and what is fastened "
+                  "to them are still said, because a close frame crops the anchor "
+                  "point out of the picture the NEXT shot inherits and the text is "
+                  "then the only thing that knows. Write the frame without naming a "
+                  "subject -- \"close-up\" and no more -- and nothing is cropped, "
+                  "because there is no way to know what it is close on")
         if tight_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in tight_shots)} frame tight enough to "
