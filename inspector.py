@@ -164,18 +164,3 @@ class H3ModelInspector:
 NODE_CLASS_MAPPINGS = {"H3ModelInspector": H3ModelInspector}
 NODE_DISPLAY_NAME_MAPPINGS = {"H3ModelInspector": "H3 Model Inspector"}
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
-
-
-if __name__ == "__main__":
-    # exercise the pure aggregation logic with mocked layer tallies
-    cases = {
-        "NVFP4 file (200 main + bf16 rest)": {"nvfp4": 200, "bf16": 132},
-        "INT8 convrot": {"int8_tensorwise+convrot": 170, "bf16": 30},
-        "plain bf16": {"bf16": 340},
-        "FP8": {"float8_e4m3fn": 200, "bf16": 140},
-        "MXFP8 (future file)": {"mxfp8": 200, "bf16": 132},
-        "some unknown new tag": {"fp6_e3m2": 200, "bf16": 132},
-    }
-    for name, counts in cases.items():
-        label, lines = summarize(counts)
-        print(f"{name:38s} -> {label}")

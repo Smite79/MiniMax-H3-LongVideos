@@ -323,26 +323,7 @@ class H3Overlay:
             watermark_size=4.0, watermark_opacity=0.75, watermark_margin=3.0,
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0):
-        # apply_overlays composites IN PLACE. Inside the sampler that was its own
-        # tensor; here `images` is another node's cached output, and writing into it
-        # would put the watermark onto the upstream result -- so a second run with a
-        # different text composites over the first, and the sampler's own `images`
-        # output carries text it never drew. Work on a copy.
-        #
-        # ONLY WHEN THERE IS SOMETHING TO DRAW. The clone was unconditional and the
-        # "no overlay text given" note was decided six lines BELOW it, so wiring this
-        # node with both fields empty -- which is how it sits in a workflow while you
-        # are still writing the script -- copied the entire finished chain to say it
-        # had changed nothing. That is 9.3GB at 2580 frames, held beside the
-        # sampler's own output, which ComfyUI is still holding in its RAM cache: the
-        # same double-hold the sampler's own join was rebuilt to stop, recreated one
-        # node later, while the weights are still staged.
-        #
-        # blend_layer is the only writer in apply_overlays and it is reached only
-        # inside `if (watermark or "").strip():` / `if (intro or "").strip():`, so
-        # with neither set nothing writes and the upstream tensor is safe to pass
-        # through untouched. .cpu() without .clone() is a no-op on a tensor that is
-        # already there, which after the sampler it always is.
+        # Compositing is in-place, so copy only when there is something to draw.
         wanted = bool((watermark_text or "").strip() or (intro_text or "").strip())
         if not wanted:
             return (images.detach().cpu(),

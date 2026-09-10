@@ -66,21 +66,8 @@ HARDWARE = (
     (r"cuffs?|cuffed", "cuffs", "wrists"),
     (r"tape", "tape", "wrists"),
 )
-# Material and colour survive because they decide what the thing looks like:
-# "steel collar" must not come back as "collar" two shots later.
-# WHAT THE AUTHOR CALLED IT. This decides how much of the wording survives into
-# the guard clauses, and the guard is what every shot after the first repeats --
-# so a word missing here is a word the model stops hearing.
-#
-# It was twenty-odd words, and "a mirrored steel collar" came back as "steel
-# collar" while "a brushed nickel collar" came back as "collar". A bare "collar"
-# repeated once a shot is a bare collar, and the prior for that is a black
-# leather one -- which is exactly what was reported.
-#
-# Hyphenated compounds pass whole ("mirror-finish", "chrome-plated"), so an
-# unusual finish survives without being listed. Bare participles are NOT
-# accepted: "-ed" is a verb far more often than a modifier, and capturing one
-# would put an action into the name of the thing.
+# Preserve visual modifiers in continuity text. Hyphenated compounds pass whole;
+# arbitrary participles do not, because they are more often verbs than modifiers.
 _ADJ = (r"(?:[A-Za-z]+-[A-Za-z]+|"
         # materials
         r"steel|stainless|iron|metal|metallic|nickel|chrome|chromed|brass|"
@@ -734,6 +721,17 @@ def garments_in(text):
             seen.add(key)
             out.append(phrase)
     return out
+
+
+_CLAUSE_BOUNDARY = re.compile(r"[,;]|\b(?:and|while)\b", re.I)
+
+
+def _clause_at(text, at):
+    """Return the clause containing character offset `at` and its start offset."""
+    boundaries = list(_CLAUSE_BOUNDARY.finditer(text or ""))
+    lo = max((m.end() for m in boundaries if m.end() <= at), default=0)
+    hi = min((m.start() for m in boundaries if m.start() > at), default=len(text))
+    return text[lo:hi], lo
 
 
 
@@ -1421,9 +1419,8 @@ class SceneState:
         subject = who[0] if who else next(iter(list(self.people) or list(cast)
                                                or [""]))
 
-        hw = hardware_in(beat)
         spans = hardware_spans(beat)
-        applying = bool(hw) and bool(_APPLY.search(beat))
+        applying = bool(spans) and bool(_APPLY.search(beat))
         releasing = bool(_RELEASE.search(beat))
 
         if applying or releasing:
@@ -1433,11 +1430,7 @@ class SceneState:
             # to both items produced handcuffs chained to a wall they were never
             # near, and a collar held behind a back.
             for canon, part, written, at in spans:
-                boundaries = list(re.finditer(r"[,;]|\b(?:and|while)\b", beat, re.I))
-                lo = max((m.end() for m in boundaries if m.end() <= at), default=0)
-                hi = min((m.start() for m in boundaries if m.start() > at),
-                         default=len(beat))
-                clause = beat[lo:hi]
+                clause, lo = _clause_at(beat, at)
                 item_at = at - lo
                 apply_at = max((m.start() for m in _APPLY.finditer(clause)
                                 if m.start() <= item_at), default=-1)
@@ -1470,7 +1463,7 @@ class SceneState:
             # Its anchor needs no transferring either: with the tether gone from
             # the spans, the anchor binds to the nearest remaining item, which
             # is the one it was always describing.
-        if releasing and not hw:
+        if releasing and not spans:
             # Whoever is actually wearing it. "The guard unlocks the handcuffs"
             # names only the agent, and taking the subject there tried to
             # release hardware from the man holding the key.
@@ -1495,11 +1488,7 @@ class SceneState:
             for m in _GARMENT_ONE.finditer(beat):
                 g = f"{(m.group(1) or '').strip()} {m.group(2)}".strip().lower()
                 key = _garment_key(g)
-                boundaries = list(re.finditer(r"[,;]|\b(?:and|while)\b", beat, re.I))
-                lo = max((x.end() for x in boundaries if x.end() <= m.start()), default=0)
-                hi = min((x.start() for x in boundaries if x.start() > m.start()),
-                         default=len(beat))
-                clause = beat[lo:hi]
+                clause, lo = _clause_at(beat, m.start())
                 item_at = m.start() - lo
                 actions = [(x.start(), "off") for x in _TAKES_OFF.finditer(clause)
                            if x.start() <= item_at]

@@ -28,7 +28,6 @@ Everything about what the video should CONTAIN is yours to write.
 """
 
 import gc
-import json
 import math
 import os
 import re
@@ -897,33 +896,6 @@ def reveal_clause(items):
     plural = len(items) > 1 or items[0].endswith("s")
     return (f" {said[0].upper()}{said[1:]} underneath {'are' if plural else 'is'} what "
             f"shows there now, on and unchanged.")
-
-
-_TAGGED_FRAGMENT = re.compile(r"<\s*Picture\s*\d+\s*>", re.I)
-
-
-def tagged_items(sheet):
-    """Head nouns of sheet entries that carry a <Picture N> of their own.
-
-    An item the author has attached a reference to is one they have said, as
-    plainly as this node allows, that they want drawn. It is also identity
-    wiring: the tag is how ref_image_N reaches the shot, and a reference no text
-    claims is read as an extra subject -- the worst failure this node has.
-
-    So a tagged item is never held back as merely HIDDEN. Reported as a chastity
-    belt with a picture reference disappearing out of the character memory: it
-    was inferred to be under the jeans, went into `covered` with the ordinary
-    under-layers, and scrub_removed dropped the fragment -- taking <Picture 2>
-    with it, so the image was loaded, counted in the report as going "where
-    tagged", and tagged nowhere."""
-    out = set()
-    for _n, line in sheet_lines(sheet or ""):
-        for frag in str(line).split(","):
-            if not _TAGGED_FRAGMENT.search(frag):
-                continue
-            for head in entry_heads(frag):
-                out.add(head)
-    return out
 
 
 def merge_sheets(*sources):
@@ -4909,12 +4881,7 @@ def restraint_going_on(beat):
     return bool(_APPLY_NOW.search(b) or _APPLY_PHRASE.search(b))
 
 
-# COMPRESSED, 2026-09-05. This said "whole and closed", "fastened exactly as it was
-# put on" and "still fastened at the last frame" -- three ways of saying closed --
-# and then the material clause on top. 32 words. Measured on a real scene the
-# guards had reached 65% of the shot against a 12% beat, which is the number this
-# node was rebuilt to escape and the number RESTRAINT_HOLD's own comment warns
-# about. Every guarantee is still here; each is stated once.
+# Keep this compact: it is repeated in every shot while restraints remain present.
 RESTRAINT_HOLD = (" Every restraint stays closed and fastened as it was put on") + FORM_HOLD
 
 
@@ -4926,51 +4893,8 @@ def restraint_wearers(sheet):
     return [n for n, ln in sheet_lines(sheet) if n and restraint_present(ln)]
 
 
-# A ceiling on continuity text, in words, relative to the beat it is standing next to.
-#
-# This node was rebuilt once because the guards had buried the action: the author's
-# beat was under 4% of a 434-word prompt. It happened again by the ordinary route --
-# a clause per bug report, each one justified on its own, none of them counting the
-# others. Measured on a real scene the guards were 65% against a 12% beat, and the
-# symptom is not subtle: the shot stops doing what the beat says. Somebody does not
-# sit in the chair they were told to sit in.
-#
-# So the clauses are ranked and the low-priority end is dropped when there is no room,
-# rather than every clause being emitted because each was a good idea in isolation.
-# The floor exists so a very short beat still gets its single most important guard.
-# Set to catch RUNAWAY, not to trim routinely. Measured against the same scene before
-# this session's clause work, a shot carried 71 words of prompt; merging the three
-# hardware clauses into one and shortening the gaze and mouth lines brought the worst
-# shot from 124 words back to 59, which is already under that baseline. A tight budget
-# on top of that was dropping guards that exist because of real reports -- the mouth
-# holds, the revealed layer, the limb anchor -- and trading one set of bugs for
-# another. The ceiling is here so the next clause added without counting the others
-# cannot quietly rebuild the pile; it is not the thing doing the work.
-# TIGHTENING THIS WAS TRIED, MEASURED, AND REJECTED. Recorded here so it is not
-# proposed again from the balance report alone -- the report says the guards
-# outweigh the beat, which is true, and reads like slack, which it is not.
-#
-# Swept against the suites, which are the record of what was actually reported:
-#
-#   90/5 (this)  worst shot 116 words   beat 14%   0 suite failures
-#   80/5                                           2 -- the fall/landing guard, the
-#                                                       bound-fall wording
-#   75/4                                           3 -- ...and the forced position
-#   65/4                                           3
-#   60/4                                           6 -- ...and the rigid-metal hold
-#   55/3         worst shot  87 words   beat 16%   8 -- ...and both ends of applying
-#
-# Every clause the budget reaches is answering a report. There is no fat: two
-# points of beat share cost the fall guard, the restraint holds and the posture
-# hold, which is trading one set of bugs for another. With the sound clause ranked
-# last (see _guards) a tighter floor drops THAT first instead, and on a shot whose
-# audio branch is open the sound clause is the text half of the babble defence --
-# the failure reported more often than any other here, and one no test asserts,
-# so the suites would have gone green on it.
-#
-# So the floor stays a runaway catcher and is not the thing doing the work. What
-# changed is that the sound clause now SPENDS from it, so the next clause added
-# without counting the others cannot rebuild the pile the way sound quietly did.
+# Bound continuity text so it cannot overwhelm the authored beat. Clauses are
+# ranked by the caller; the floor preserves essential guards for very short beats.
 GUARD_FLOOR_WORDS = 90
 GUARD_WORDS_PER_BEAT_WORD = 5
 
@@ -10241,44 +10165,9 @@ class H3LongVideos:
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
             _sound = sound_clause(heard, only=not _speaks)
-            # RANKED, and cut to fit. Each of these was a good idea on its own and
-            # none of them counted the others; together they had reached 65% of the
-            # shot against a 12% beat, which is the state this node was rebuilt to
-            # escape. What the beat itself stages ranks above what merely persists.
-            # THE ENGINE DECIDES THE FACTS; THESE SENTENCES SAY THEM.
-            #
-            # The rewrite kept the half that was wrong and kept the half that was
-            # right. What was wrong was the DERIVATION: sixty readers each
-            # searching the beat alone, so nothing could notice that "neck" and
-            # "behind the back" contradicted, or that a beat naming two items had
-            # recorded one. That is now engine.SceneState -- one state, read once
-            # per beat, and the source of truth for what is on whom, where it
-            # holds, what it is anchored to and which room this is.
-            #
-            # What was RIGHT was the prose. Every clause below is worded the way
-            # it is because a specific render came back wrong: "both ends" exists
-            # because a garment came off a beat early, "dropped out of frame"
-            # because it reappeared, "the same object in the same material"
-            # because tape drifted into the nearest commoner object. Throwing that
-            # away would have cost more than the derivations ever did, so the
-            # builders stay and the engine feeds them.
-            # THE GAZE CLAUSE IS DECIDED HERE, where every other clause is known,
-            # because whether it may name anybody depends on what they already say.
-            #
-            # A person is named ONCE in a shot's guard text. That is not a style
-            # rule: two clauses naming the same person is what put a second girl in
-            # frame at the moment of cuffing, and there is a test on it. So:
-            #
-            #   - A PERSON target needs no looker's name at all. Nobody turns their
-            #     eyes to themselves, so "the eyes and the head are turned to Dan"
-            #     can only be the other person's eyes -- unambiguous, and it spends
-            #     no naming on her. It is skipped only if the TARGET is already
-            #     named, which is the case where it would be her second mention.
-            #   - An OBJECT target names the looker once two people are in frame,
-            #     and is skipped rather than repeat a name.
-            #
-            # Skipping is not a loss: it leaves the shot exactly where it was before
-            # any of this, while the shots that CAN carry it now do.
+            # Gaze is resolved after the other guards so a character is never named
+            # twice. Person targets need no looker's name; object targets do when
+            # several people are present.
             if hold_gaze and _gazers:
                 _g = _gazers[0]
                 _target, _is_person = looking_at[_g]
@@ -11732,51 +11621,9 @@ class H3LongVideos:
                     shot_detail.append(frame_detail(imgs[-1]))
             except Exception:
                 pass
-            # HALF PRECISION IN RAM. The finished shots are the largest thing this node
-            # holds, and they compete with the weights for system memory -- ComfyUI
-            # offloads models to RAM rather than discarding them, so a shot boundary is
-            # a PCIe copy only while that RAM is there. Once the frames crowd the
-            # weights out, the "reload" becomes a disk read, and on a chain that is
-            # once per shot per model.
-            #
-            # A 107s chain at 1056x608 is ~2580 frames, 18.5GB as float32 and 9.3GB as
-            # float16, against ~39GB of weights on a 64GB machine. That 9GB is the
-            # difference between the weights staying resident and not.
-            #
-            # Free, not a trade: fp16 carries ~3 decimal digits over 0..1, and the
-            # output is 8-bit. Converted back at the join, so nothing downstream sees
-            # a different dtype.
-            # STRAIGHT INTO THE FINISHED CHAIN, not into a list to be joined later.
-            #
-            # The per-shot list existed because the total length was not known until
-            # the loop ended -- and it IS known: plan_lengths fixed `lens` before the
-            # first shot sampled, every entry is on H3's 17k+5 grid, and trim_seam
-            # only ever REMOVES a frame, so sum(lens) is a hard upper bound. With the
-            # destination allocated up front each shot is written where it belongs
-            # and the join has nothing left to do.
-            #
-            # That deletes the last double-hold in the node. Even after the join was
-            # rewritten to drain the list, both were still fully live at the moment
-            # it started: 9.26GB of destination beside 9.26GB of pieces, 18.51GB of
-            # chain on top of 44.64GB of staged weights, which is where the render
-            # was being killed. Now the chain is one copy from first shot to return.
-            #
-            # It also drops the copy=True. That was duplicating a whole shot (1.30GB)
-            # purely to detach it from the decode buffer; copy_ into the destination
-            # detaches it just the same, and converts device and dtype on the way, so
-            # one copy does what two did.
-            #
-            # ON AN fp32 INSTALL THIS TRADES SUSTAINED FOR PEAK, deliberately. The
-            # list was fp16 while the render ran and widened only at the join, so a
-            # 107s chain sat at 9.26GB and spiked to 27.77GB; the destination is the
-            # OUTPUT dtype throughout, so it sits at 18.51GB and never spikes. Peak
-            # is what the OOM killer reads, and on an --fp16-intermediates install --
-            # where the output dtype is fp16 anyway -- both numbers improve.
-            #
-            # The overflow branch is not reachable on the real VAE, which decodes a
-            # shot to exactly the length it was planned at. It exists because "not
-            # reachable" is a claim about somebody else's code, and a wrong frame
-            # count should cost a slower path, not a crash.
+            # Write directly into the final allocation. sum(lens) is an upper bound
+            # because seam trimming only removes frames. Unexpected decoder overflow
+            # uses vid_out and is assembled after the loop.
             _k = int(imgs.shape[0])
             if _dst is None and _k:
                 _dst = torch.empty(
