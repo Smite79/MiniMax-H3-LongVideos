@@ -1979,8 +1979,93 @@ def told_hold(listeners):
     return f" {said} listen, wearing what the sheet already lists."
 
 
-MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays "
-                     "closed, those expressions moving.")
+# The tail both voice guards end on, defined once so they cannot drift apart.
+MOUTH_HOLD_REST = "every other mouth in the shot stays closed, those expressions moving"
+MOUTH_HOLD_OTHERS = " Only {who} speaks; " + MOUTH_HOLD_REST + "."
+
+
+# A VOCAL BELONGS TO SOMEBODY.
+#
+# Reported: "her whimpering is opening up his ability to babble. Dialogue is not
+# being localized to the characters."
+#
+# _voiced is exertion_in(body) -- a SHOT-LEVEL flag with no owner -- and both mouth
+# guards stand down on it, for everybody in the shot. The comment says exactly why
+# they stand down: "straining is vocal and that mouth should be open." THAT mouth.
+# Not every mouth. So "McKenna sobs while Dan watches" left Dan's mouth as free as
+# hers, on a shot whose audio branch her sob had just opened -- which is precisely
+# the machinery the speech guard exists to stop, switched off by the one kind of
+# beat that opens the branch without giving anybody words.
+#
+# Measured on a six-shot scene of a woman gagged in a van: not one shot carried any
+# mouth guard at all.
+#
+# Attribution table of its own, NOT _VOCAL_FROM. That one feeds the sound clause and
+# is the six vocals the node will name as a sound; this is about whose face moves,
+# which is a wider list and must not change what the shot is heard as.
+_VOCAL_SOURCE = (
+    (r"whimper(?:s|ing|ed)?", "whimpering"), (r"sob(?:s|bing|bed)?", "sobbing"),
+    (r"moan(?:s|ing|ed)?", "moaning"),       (r"groan(?:s|ing|ed)?", "groaning"),
+    (r"scream(?:s|ing|ed)?", "screaming"),   (r"whin(?:e|es|ing|ed)", "whining"),
+    (r"gasp(?:s|ing|ed)?", "gasping"),       (r"pant(?:s|ing|ed)?", "panting"),
+    (r"cr(?:y|ies|ying|ied)", "crying"),     (r"sigh(?:s|ing|ed)?", "sighing"),
+    (r"shriek(?:s|ing|ed)?", "shrieking"),   (r"yelp(?:s|ing|ed)?", "yelping"),
+    (r"grunt(?:s|ing|ed)?", "grunting"),     (r"weep(?:s|ing)?", "weeping"),
+    (r"wail(?:s|ing|ed)?", "wailing"),       (r"laugh(?:s|ing|ed)?", "laughing"),
+)
+
+
+def vocal_sources_in(beat, sheet=""):
+    """Who this beat says is making a non-speech vocal, and what it is.
+
+    [(name, phrase)], in sheet order. Same shape as speakers_in, including its
+    conjunction guard: "Dan holds the door and McKenna sobs" must not credit Dan,
+    because `and` starts a new predicate with its own subject -- and crediting the
+    wrong person here is worse than crediting nobody, since the shot would then hold
+    the mouth of whoever is actually making the noise."""
+    b, out = beat or "", []
+    for n, _ in sheet_lines(sheet):
+        if not n:
+            continue
+        for pat, phrase in _VOCAL_SOURCE:
+            if re.search(r"\b" + re.escape(n) + r"\b"
+                         r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?\s+"
+                         r"(?:" + pat + r")\b", b, re.I):
+                out.append((n, phrase))
+                break
+    return out
+
+
+def _joined(names):
+    """'Dan', 'Dan and Sam', 'Dan, Sam and Mara'."""
+    ns = [n for n in (names or []) if n]
+    if len(ns) < 2:
+        return ns[0] if ns else ""
+    return ", ".join(ns[:-1]) + " and " + ns[-1]
+
+
+def voice_sources(talkers, vocal, vocalisers, silent):
+    """Say whose voice is whose, and close the mouths that are neither.
+
+    Two jobs, and the second is the reported one. Closing the rest stops the
+    listener babbling on a branch somebody else's sob opened. NAMING THE SOURCES
+    stops the model swapping them -- two voices in one shot with nothing saying
+    which is which is a shot where he can be given her whimper and she his line.
+
+    So the sentence is emitted for two DIFFERENT sources even when nobody is left to
+    hold: with one source and nobody silent there is nothing to disambiguate and
+    nothing to close, and the shot is left alone."""
+    parts = []
+    if talkers:
+        parts.append(f"only {_joined(talkers)} speaks")
+    if vocalisers and vocal:
+        parts.append(f"the {vocal} is {_joined(vocalisers)}'s")
+    if not parts or (len(parts) == 1 and not silent):
+        return ""
+    if silent:
+        parts.append(MOUTH_HOLD_REST)
+    said = "; ".join(parts)
+    return f" {said[0].upper()}{said[1:]}."
 
 # ...and when the line has no name on it. Two people, one line, nobody named: the
 # speaker cannot be identified, so neither mouth could be held and BOTH were free
@@ -8065,6 +8150,7 @@ class H3LongVideos:
         mouth_shut = []             # shots told every mouth is closed
         mouth_acting = []           # ...and the ones whose beat works the mouth
         duress_shots = []           # shots told what the face is doing
+        vocal_shots = []            # shots where a vocal was given an owner
         muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
         restarted = []              # shots started fresh after a removal
@@ -9375,15 +9461,29 @@ class H3LongVideos:
             # then cannot tell a silenced shot from one where the speaker is named,
             # which are opposite situations.
             _mouth_from_silence = bool(_mouth)
-            if (not _mouth and mouths_shut_when_no_line and _speaks and not _voiced
-                    and not _mouth_busy and not _device_line):
-                _talkers = speakers_in(body, shot_sheet)
-                _silent = [n for n in (_described or []) if n not in _talkers]
-                if _talkers and _silent:
-                    _mouth = MOUTH_HOLD_OTHERS.format(
-                        who=_talkers[0] if len(_talkers) == 1
-                        else ", ".join(_talkers[:-1]) + " and " + _talkers[-1])
-                elif not _talkers and len(_described or []) > 1:
+            # WHOSE VOICE IS WHOSE. A vocal used to switch this whole block off --
+            # _voiced is a shot-level flag and both guards stood down on it, for
+            # everybody -- so her sob opened the branch and freed his mouth with it.
+            # The vocal gets an owner instead, and only the mouths that own neither a
+            # line nor a sound are closed. See voice_sources.
+            _vocal_src = vocal_sources_in(body, shot_sheet) if _voiced else []
+            _voicers = [n for n, _ in _vocal_src]
+            _vocal_word = _vocal_src[0][1] if _vocal_src else ""
+            # A vocal this file cannot pin on anybody leaves every mouth alone, the
+            # way an unattributed line does: closing mouths on a guess could close
+            # the mouth of whoever is making the noise, and muting a real sound is
+            # worse than a mouth moving.
+            if (not _mouth and mouths_shut_when_no_line and (_speaks or _voicers)
+                    and not _mouth_busy and not _device_line
+                    and not (_voiced and not _voicers)):
+                _talkers = speakers_in(body, shot_sheet) if _speaks else []
+                _open = set(_talkers) | set(_voicers)
+                _silent = [n for n in (_described or []) if n not in _open]
+                _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent)
+                if _mouth and _voicers:
+                    vocal_shots.append(len(shots) + 1)
+                if (not _mouth and _speaks and not _talkers and not _voicers
+                        and len(_described or []) > 1):
                     # A line with no name on it, and more than one person who could
                     # be saying it. Whose mouth to hold is unknowable, but how many
                     # voices there are is not -- and leaving it unsaid is what let
@@ -10120,6 +10220,23 @@ class H3LongVideos:
                 f"lips-closed line loses to a stream that has decided somebody is "
                 f"talking. Shots staging effort are left out on purpose -- straining is "
                 f"vocal and that mouth should be open. Off with mouths_shut_when_no_line")
+        if vocal_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in vocal_shots)} have a vocal that "
+                f"belongs to somebody -- a whimper, a sob, a moan -- so the shot is "
+                f"told whose it is, and the mouths owning neither a line nor a sound "
+                f"are closed. Reported as one character's whimpering opening up "
+                f"another's ability to babble. A vocal opens the audio branch, which "
+                f"is right -- it is meant to be heard -- but the flag saying so was "
+                f"shot-level with no owner, and BOTH mouth guards stood down on it "
+                f"for everybody in the shot. The person straining should have an open "
+                f"mouth; the person watching them should not, and theirs was the face "
+                f"an invented voice landed on. Two sources in one shot are named "
+                f"separately for the same reason, so the line and the vocal cannot be "
+                f"swapped between them. A vocal the beat does not pin on anybody "
+                f"holds nobody: closing mouths on a guess could close the mouth "
+                f"making the noise. This changes which faces move and never what the "
+                f"audio is conditioned on. Off with mouths_shut_when_no_line")
         if duress_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in duress_shots)} are told what the "

@@ -2030,6 +2030,74 @@ def test_a_face_under_duress_is_not_a_portrait():
           "shows the strain" not in off, "")
 
 
+def test_her_whimper_does_not_free_his_mouth():
+    print("\n=== a vocal belongs to somebody ===")
+    # Reported: "her whimpering is opening up his ability to babble. Dialogue is
+    # not being localized to the characters."
+    #
+    # _voiced is a SHOT-LEVEL flag with no owner. exertion_in(body) says this beat
+    # stages a vocal, and both mouth guards then stand down -- for EVERYBODY in the
+    # shot. The comment says why they stand down: "straining is vocal and that mouth
+    # should be open." That mouth. Not every mouth.
+    #
+    # So "McKenna sobs while Dan watches" left Dan's mouth as free as hers on a shot
+    # whose audio branch her sob had just opened, which is the exact machinery the
+    # speech guard exists to stop -- and it fires for a spoken line while a vocal
+    # switched it off entirely. Measured on a six-shot scene: not one shot had any
+    # mouth guard at all.
+    MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
+           "Dan: he, 40, a work coat.")
+
+    def shot(beat):
+        return " ".join(run_node("A van interior, night.\n\n" + beat, plan_only=True,
+                                 character_memory=MEM)[3].split())
+
+    a = shot("McKenna sobs while Dan watches.")
+    check("the vocal is given an owner", "The sobbing is McKenna's" in a, a[-200:])
+    check("...and the other mouth is closed",
+          "every other mouth in the shot stays closed" in a, a[-200:])
+
+    # LOCALIZATION. Two sound sources in one shot and nothing saying which is which:
+    # the model is free to give her the words and him the whimper.
+    b = shot('McKenna whimpers, and Dan says: "Nearly there."')
+    check("the line is localized to the speaker", "Only Dan speaks" in b, b[-220:])
+    check("...and the vocal to the other character",
+          "the whimpering is McKenna's" in b, b[-220:])
+    check("...and neither of their mouths is held shut",
+          "Mouths in the shot stay closed" not in b, b[-220:])
+
+    # The person MAKING the sound is never muted -- that was the whole reason the
+    # guard stood down, and it is still right for her.
+    c = shot("McKenna whimpers behind the gag.")
+    check("a lone vocaliser is not told to close her mouth",
+          "Mouths in the shot stay closed" not in c, c[-200:])
+    check("...and with nobody else in the beat, nothing is claimed",
+          "every other mouth" not in c, c[-200:])
+
+    # UNATTRIBUTABLE STAYS UNGUARDED. If the beat does not say whose the sound is,
+    # closing mouths could close the mouth of whoever is making it -- and muting a
+    # real sound is worse than a mouth moving, which is this file's standing rule.
+    d = shot("Somebody sobs in the dark while Dan waits.")
+    check("an unattributed vocal holds nobody",
+          "every other mouth in the shot stays closed" not in d, d[-200:])
+
+    # THE BRANCH IS UNTOUCHED. Her sob is still heard: this changes which faces move,
+    # never what the audio is conditioned on.
+    info = run_node("A van interior, night.\n\nMcKenna sobs while Dan watches.",
+                    plan_only=True, character_memory=MEM, auto_sound=False)[2]
+    check("the vocal still keeps its audio",
+          re.search(r"shot\(s\) [^|]*\b1\b[^|]*stage EFFORT", info) is not None,
+          info[:300])
+    check("info names the shots whose vocal was attributed",
+          "belongs to somebody" in info, info[:300])
+
+    cl = S.voice_sources(["Dan"], "whimpering", ["McKenna"], ["Sam"])
+    check("the clause is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I), cl)
+    check("...and orders no stillness",
+          not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", cl, re.I), cl)
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5289,6 +5357,7 @@ def main():
     test_a_grin_is_not_a_closed_mouth()
     test_nothing_tells_the_cast_to_hold_still()
     test_a_face_under_duress_is_not_a_portrait()
+    test_her_whimper_does_not_free_his_mouth()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()
