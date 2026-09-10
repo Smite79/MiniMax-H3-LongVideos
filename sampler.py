@@ -11324,7 +11324,11 @@ class H3LongVideos:
         # `sigmas` input is the author's own schedule and is never touched.
         _soft_landing = bool(apply_model_sampling
                              and not (sigmas is not None and len(sigmas)))
-        if _soft_landing and _last_a > 0.10:
+        # WHETHER THE LANDING ACTUALLY FIRES. Used twice: to describe it, and to stop
+        # the older warning sending the reader off to do by hand the thing that has
+        # already been done for them.
+        _landing_on = bool(_soft_landing and _last_a > 0.10)
+        if _landing_on:
             notes.append(
                 f"the audio branch was landing from sigma {_last_a:.3f} on its final "
                 f"step, so ONE extra step is spliced into the end of the schedule to "
@@ -11342,9 +11346,18 @@ class H3LongVideos:
                 + (f" -- '{_alt_sched[0]}' leaves {_alt_sched[1]:.3f}" if _alt_sched
                    else "")
                 + f" is still the better fix and costs no step; this one fires only "
-                f"while the tail is steep. Off by wiring your own `sigmas`, or with "
-                f"apply_model_sampling")
-        if _last_a > 0.4:
+                f"while the tail is steep. It lands at 0.030 whatever shift_audio is "
+                f"set to -- 1, 3 and 5 all end up there -- so shift_audio does NOT "
+                f"need tuning by hand for this any more, and the older advice to "
+                f"lower it does not apply while this is on. Off by wiring your own "
+                f"`sigmas`, or with apply_model_sampling")
+        # ...and NOT where the landing has already dealt with it. Both notes fired
+        # together at the shipped defaults and the second was false the moment the
+        # first was true: it said the branch "still has sigma 0.43 to clear on its
+        # FINAL step" when that final step had just been replaced, and then sent the
+        # reader off to lower shift_audio by hand. Asked directly whether the manual
+        # shift was still needed, which is the confusion this caused.
+        if _last_a > 0.4 and not _landing_on:
             notes.append(
                 f"the audio branch still has sigma {_last_a:.2f} to clear on its FINAL "
                 f"step at {int(steps)} steps with shift_audio {float(shift_audio):g} -- "
