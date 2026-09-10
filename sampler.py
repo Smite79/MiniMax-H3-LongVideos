@@ -896,7 +896,7 @@ def reveal_clause(items):
     said = " and ".join(f"the {i}" for i in items[:2])
     plural = len(items) > 1 or items[0].endswith("s")
     return (f" {said[0].upper()}{said[1:]} underneath {'are' if plural else 'is'} what "
-            f"shows there now, still on and unchanged.")
+            f"shows there now, on and unchanged.")
 
 
 _TAGGED_FRAGMENT = re.compile(r"<\s*Picture\s*\d+\s*>", re.I)
@@ -1116,7 +1116,7 @@ def pace_clause(need, have):
     if need <= 0 or (have - need) < 2.5 or have <= need * 1.25:
         return ""
     return (" What the beat stages runs at an even pace across the whole shot, "
-            "beginning at the first frame and still finishing on the last.")
+            "beginning at the first frame and finishing on the last.")
 
 
 def thin_beats(beats, seconds):
@@ -1735,8 +1735,11 @@ def device_voice_clause(beat):
     # As the author spelled it. Lowercasing turned "TV" into "tv", and a set is not
     # improved by the node correcting its capitalisation.
     thing = re.sub(r"\s+", " ", m.group(0))
+    # "hold still" was a freeze on everybody in the room, and a television scene is
+    # mostly people watching one. What this clause has to buy is that no face in the
+    # room is given the machine's line -- that is a closed mouth, not a still body.
     return (f" The voice in this shot is the {thing}'s, coming out of it across the "
-            f"room, and the people listening hold still and let it play.")
+            f"room, and the people listening let it play, their own mouths closed.")
 
 
 def speakers_in(beat, sheet=""):
@@ -1966,9 +1969,14 @@ def told_hold(listeners):
     # ONE naming each. A described person is a person the model draws, and naming
     # somebody twice in one shot is what put a second copy of them in frame.
     if len(who) == 1:
-        return f" {who[0]} listens, still, wearing what the sheet already lists."
+    # NOT "listens, still". This clause exists to give the listener something to BE
+    # DOING -- its own docstring says so -- and what it gave them was an instruction
+    # to be motionless, set off in commas so it could only be read as the adjective.
+    # It lands on the reaction shot, which is where acting happens. `listens` is the
+    # activity; the comma was doing the opposite of the clause's whole purpose.
+        return f" {who[0]} listens, wearing what the sheet already lists."
     said = ", ".join(who[:-1]) + " and " + who[-1]
-    return f" {said} listen, still, wearing what the sheet already lists."
+    return f" {said} listen, wearing what the sheet already lists."
 
 
 MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays "
@@ -1978,8 +1986,13 @@ MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays "
 # speaker cannot be identified, so neither mouth could be held and BOTH were free
 # to move -- which on a joint model is two voices in the stream and the second one
 # is the babble. Saying how many voices there are does not require knowing whose.
-ONE_VOICE = (" Only the person speaking has their mouth moving; every other jaw "
-             "in the shot stays still.")
+# A JAW THAT "STAYS STILL" IS A FROZEN FACE. The guarantee here is one voice, and a
+# closed mouth delivers it -- lip-sync needs lips to part. "Stays still" asked for
+# something stronger than the guarantee needs and put it on the listener, which is
+# the face the audience is watching. Same wording as MOUTH_HOLD_OTHERS now, because
+# they are the same situation with and without a name to put on it.
+ONE_VOICE = (" Only the person speaking has their mouth moving; every other mouth "
+             "in the shot stays closed, those expressions moving.")
 
 
 # H3'S OWN DIALOGUE MARKER. <d> and </d> are special tokens the model was trained
@@ -3874,7 +3887,7 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
     # thing it forbids. It also names no garment, so it summons none.
     # About what is WORN, not about the body. "Everything else on the body stays
     # exactly as it is for the whole shot" reads as an instruction to hold still.
-    bound = "Everything else worn stays exactly as it is, untouched and still fastened."
+    bound = "Everything else worn stays exactly as it is, untouched and fastened."
     return " " + sentence[0].upper() + sentence[1:] + " " + bound
 
 
@@ -5529,9 +5542,14 @@ def posture_hold(poses, described):
            if n in set(described or []) and p != "standing"]
     if not who:
         return ""
+    # "is still lying down" -- the adverb meaning "as before", which is not how a
+    # video model reads the token. This clause is LATCHED: it lands in every shot
+    # after the one that stages the pose, so a scene where somebody sat down once
+    # carried the word `still` beside their name for the rest of the film. Naming
+    # the pose is the entire guarantee; "as before" was never part of it.
     if len(who) == 1:
-        return f" {who[0][0]} is still {who[0][1]}."
-    said = "; ".join(f"{n} is still {p}" for n, p in who[:2])
+        return f" {who[0][0]} is {who[0][1]}."
+    said = "; ".join(f"{n} is {p}" for n, p in who[:2])
     return f" {said}."
 
 
@@ -6174,7 +6192,9 @@ def displaced_hold(items):
     if not items:
         return ""
     said = ", ".join(f"the {thing} {how}" for thing, how in items[:2])
-    return f" Still on the body and {said}, left exactly where the beat put them."
+    # Sentence-initial "Still" meaning "nevertheless". Nothing else in the prompt
+    # opens on that word, and "On the body" carries the fact by itself.
+    return f" On the body and {said}, left exactly where the beat put them."
 
 
 # A REQUEST is not the thing happening. "McKenna asks Dan to take the chastity belt

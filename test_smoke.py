@@ -1139,16 +1139,16 @@ def test_a_squat_survives_speech_and_undressing():
     # got[0] stages the squat and has the author's own words for it; the hold
     # starts on the shot after.
     check("the author's word is kept, not swapped for a crouch",
-          "still squatting" in got[1], " ".join(got[1].split())[-120:])
+          "is squatting" in got[1], " ".join(got[1].split())[-120:])
     check("a spoken travel word does not stand her up",
-          "still squatting" in got[2], " ".join(got[2].split())[-120:])
+          "is squatting" in got[2], " ".join(got[2].split())[-120:])
     check("...nor does taking a garment off",
-          "still squatting" in got[3], " ".join(got[3].split())[-120:])
+          "is squatting" in got[3], " ".join(got[3].split())[-120:])
     # Real travel still clears it: a hold that survives walking away is a hold
     # arguing with its own shot.
     walk = _shots("A bare room.\n\nKate squats down beside the crate.\n\n"
                   "Kate walks to the door.\n\nKate listens.", character_memory=mem)
-    check("walking away does clear it", "still squatting" not in walk[2],
+    check("walking away does clear it", "is squatting" not in walk[2],
           " ".join(walk[2].split())[-120:])
 
 
@@ -1358,7 +1358,7 @@ def test_the_removal_shot_says_what_is_under():
     check("the removing shot is told what shows there",
           "what shows there now" in sh[1], sh[1][-90:])
     check("...naming the layer", "panties underneath" in sh[1].lower(), "")
-    check("...and saying it stays on", "still on" in sh[1], "")
+    check("...and saying it stays on", "on and unchanged" in sh[1], "")
     check("said only on the shot that uncovers it",
           "what shows there now" not in sh[0] and "what shows there now" not in sh[2], "")
     check("info names the shot", "take off a garment that was covering" in info, "")
@@ -1634,16 +1634,16 @@ def test_a_garment_moved_is_not_a_garment_gone():
     check("...and are not scrubbed from the scene",
           all("shorts" in s.lower() for s in sh), "")
     check("the later shots say where they now sit",
-          all("Still on the body" in s for s in sh[1:]), "")
+          all("On the body and" in s for s in sh[1:]), "")
     check("...and the staging shot is not told it twice",
-          "Still on the body" not in sh[0], "")
+          "On the body and" not in sh[0], "")
     check("info names the shots", "MOVED rather than taken off" in info, "")
     # Put back up: the latch lets go, by name or by pronoun.
     for _put in ("Mara pulls her shorts back up.", "Mara pulls them back up."):
         back = run_node("A room.\n\nMara pulls down her shorts.\n\nMara waits.\n\n"
                         + _put + "\n\nMara walks out.",
                         plan_only=True, character_memory=mem)[3]
-        got = ["yes" if "Still on the body" in s else "no"
+        got = ["yes" if "On the body and" in s else "no"
                for s in back.split("---") if s.strip()]
         check(f"restored by {_put[:28]!r}", got == ["no", "yes", "no", "no"], str(got))
     # A real removal still empties the wardrobe and says so.
@@ -1863,6 +1863,82 @@ def test_a_grin_is_not_a_closed_mouth():
               not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", _c, re.I), _c)
         check("...and the mouth is still shut", "clos" in _c)
     check("the face is given something to do", "expressions moving" in S.MOUTH_HOLD)
+
+
+def test_nothing_tells_the_cast_to_hold_still():
+    print("\n=== the guards stopped ordering stillness ===")
+    # Reported: characters look lifeless. This file already knows why, in
+    # RESTRAINT_HOLD's own comment -- an earlier wording let the body "reach only as
+    # far as the metal allows before it stops", and "read plainly, that is an
+    # instruction to hold still ... The performance died under its own continuity
+    # guards." It was fixed there and left standing everywhere else. Eight clauses
+    # were still carrying it, three of them freezing PEOPLE by name:
+    #
+    #     Mara listens, still, wearing what the sheet already lists.
+    #     ...and the people listening hold still and let it play.
+    #     ...every other jaw in the shot stays still.
+    #     McKenna is still lying down.
+    #     Still on the body and the shorts pulled down...
+    #     ...beginning at the first frame and still finishing on the last.
+    #     ...untouched and still fastened.
+    #     The thong underneath is what shows there now, still on and unchanged.
+    #
+    # Five of those meant "as before" and one meant "nevertheless". The model does
+    # not get the distinction -- `still` is one token and it damps motion wherever
+    # it is pointed. The first two are the worst of them, because they land on the
+    # LISTENER: the reaction shot, which is where acting actually happens.
+    STILL = re.compile(r"\bstill\b|\bmotionless\b|\bfrozen\b|\bunmoving\b|"
+                       r"\brigid\b|\bstatic\b", re.I)
+    _tv = 'The TV says: "x"'
+    built = [
+        ("told_hold", S.told_hold(["Mara"])),
+        ("told_hold, two", S.told_hold(["Mara", "Dan"])),
+        ("posture_hold", S.posture_hold({"Mara": "lying down"}, ["Mara"])),
+        ("posture_hold, two", S.posture_hold(
+            {"Mara": "lying down", "Dan": "kneeling"}, ["Mara", "Dan"])),
+        ("device_voice_clause", S.device_voice_clause(_tv)),
+        ("displaced_hold", S.displaced_hold([("shorts", "pulled down")])),
+        ("pace_clause", S.pace_clause(4.0, 12.0)),
+        ("reveal_clause", S.reveal_clause(["thong"])),
+        ("off_by_last_frame", S.off_by_last_frame(["shorts"], "McKenna", "A van.", "")),
+    ]
+    for _n, _c in built:
+        check(f"no stillness ordered by {_n}", not STILL.search(_c), _c)
+    # ...and every clause CONSTANT in the file, so the next one added cannot quietly
+    # bring it back. The filter is the clause idiom: an upper-case name holding real
+    # prose rather than a regex source.
+    for _n in sorted(dir(S)):
+        _v = getattr(S, _n, None)
+        if (isinstance(_v, str) and _n.isupper() and len(_v.split()) >= 4
+                and not re.search(r"\(\?|\\b|\|", _v)):
+            check(f"no stillness ordered by {_n}", not STILL.search(_v), _v)
+
+    # EVERY GUARANTEE SURVIVES. This is a vocabulary change, not a retreat: each of
+    # these clauses exists because of a report, and none of them stops saying what
+    # it was added to say.
+    check("the listener is still given something to do",
+          "listens" in S.told_hold(["Mara"]))
+    check("...and is still held to the sheet's wardrobe",
+          "sheet already lists" in S.told_hold(["Mara"]))
+    check("the latched pose is still named",
+          "lying down" in S.posture_hold({"Mara": "lying down"}, ["Mara"]))
+    check("the machine still owns the voice", "TV's" in S.device_voice_clause(_tv))
+    check("...and the room's own mouths are still closed",
+          "mouths closed" in S.device_voice_clause(_tv))
+    check("...and it is still positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", S.device_voice_clause(_tv), re.I))
+    check("one voice is still asserted",
+          "Only the person speaking" in S.ONE_VOICE and "closed" in S.ONE_VOICE)
+    check("the moved garment is still on the body",
+          "On the body" in S.displaced_hold([("shorts", "pulled down")]))
+    check("...and still where the beat left it",
+          "where the beat put them" in S.displaced_hold([("shorts", "pulled down")]))
+    check("the layer underneath is still unchanged",
+          "unchanged" in S.reveal_clause(["thong"]))
+    check("the rest of the wardrobe is still bound",
+          "untouched" in S.off_by_last_frame(["shorts"], "McKenna", "A van.", ""))
+    check("the beat still runs to the last frame",
+          "last" in S.pace_clause(4.0, 12.0))
 
 
 def test_mouths_stay_shut_with_no_line():
@@ -3731,8 +3807,8 @@ def test_a_working_character_is_not_still_lying_down():
                               run_node(P, plan_only=True, character_memory=mem)[3])
           if x.strip()]
     check("the working shot does not say she is lying down",
-          "Dana is still lying down" not in sh[1])
-    check("...nor the shot after it", "Dana is still lying down" not in sh[2])
+          "Dana is lying down" not in sh[1])
+    check("...nor the shot after it", "Dana is lying down" not in sh[2])
     # And a pose that is NOT contradicted is still held.
     P2 = ("A nursery.\n\nDana and McKenna sit down on the sofa.\n\n"
           "Dana and McKenna look at the window.\n\nDana and McKenna wait.")
@@ -3740,7 +3816,7 @@ def test_a_working_character_is_not_still_lying_down():
                                run_node(P2, plan_only=True, character_memory=mem)[3])
            if x.strip()]
     check("a pose nothing contradicts is still held",
-          "still sitting" in sh2[1])
+          "is sitting" in sh2[1])
 
 
 def test_pacing_reaches_the_thin_shots():
@@ -3792,7 +3868,7 @@ def test_an_instruction_is_not_the_action():
     # The beat that actually does it.
     check("the next beat takes them off", "off during this shot" in sh[1])
     # ...and the pose it sets is held afterwards, for her only.
-    check("the pose is held after that", "McKenna is still lying down" in sh[2])
+    check("the pose is held after that", "McKenna is lying down" in sh[2])
     check("...and the speaker is not lying down", "Dana is still lying" not in sh[2])
     # ...and with NOTHING happening after the instruction, so a wrongly latched
     # pose has nothing to clear it. Without the guard both of them are laid down
@@ -5122,6 +5198,7 @@ def main():
     test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()
     test_a_grin_is_not_a_closed_mouth()
+    test_nothing_tells_the_cast_to_hold_still()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()

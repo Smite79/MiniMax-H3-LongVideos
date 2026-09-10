@@ -2081,15 +2081,15 @@ def test_a_posture_carries_to_the_next_shot():
     check("a pose for somebody not in the shot is not said",
           S.posture_hold({"Kate": "sitting"}, ["Sam"]) == "")
     check("...and is said for somebody who is",
-          "Kate is still sitting" in S.posture_hold({"Kate": "sitting"}, ["Kate"]))
+          "Kate is sitting" in S.posture_hold({"Kate": "sitting"}, ["Kate"]))
     # STANDING is the default pose. Holding it costs a naming of the person and
     # buys nothing, and naming somebody twice in one shot is what put a second
     # copy of them in frame.
     check("standing is never held",
           S.posture_hold({"Kate": "standing"}, ["Kate"]) == "")
-    check("...while sitting still is",
+    check("...while a sat pose is held, and named once",
           S.posture_hold({"Kate": "sitting", "Sam": "standing"},
-                         ["Kate", "Sam"]).count("still") == 1)
+                         ["Kate", "Sam"]) == " Kate is sitting.")
 
 
 def test_the_wearer_is_in_the_shot():
@@ -2414,7 +2414,7 @@ def test_removal_completes():
     # next one, or on the body under it.
     _b = S.off_by_last_frame(["scarf"])
     check("the action is bounded", "Everything else worn stays exactly as it is" in _b)
-    check("...covering hardware as well", "still fastened" in _b)
+    check("...covering hardware as well", "untouched and fastened" in _b)
     # It bounds what is WORN, not the body. "Everything else on the body stays exactly
     # as it is for the whole shot" reads as an instruction to hold still, and enough
     # of those render a shot where nothing happens.
@@ -3060,7 +3060,13 @@ def test_a_machines_line_is_not_the_actors_line():
     check("the machine is named", "the TV's" in cl)
     check("...as the author spelled it", "tv's" not in cl)
     check("...and the listeners are given something to do",
-          "hold still" in cl and "listening" in cl)
+          "let it play" in cl and "listening" in cl)
+    # ...which is NOT holding still. Reported as lifeless characters: a television
+    # scene is mostly people watching one, and this froze every one of them. The
+    # guarantee is that no face in the room is handed the machine's line, and that
+    # is a closed mouth.
+    check("...without being frozen to do it",
+          "still" not in cl and "mouths closed" in cl)
     check("...and it is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
     check("no machine, no clause", S.device_voice_clause("Mara says: 'Hello.'") == "")
@@ -3123,7 +3129,7 @@ def test_what_is_exposed_is_not_also_removed():
     cl = S.reveal_clause(["panties"])
     check("the under layer is named", "The panties underneath" in cl)
     check("...as what is seen there", "what shows there now" in cl)
-    check("...and as still on", "still on" in cl)
+    check("...and as unchanged on the body", "on and unchanged" in cl)
     check("...in one sentence", cl.count(".") == 1)
     check("...positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b", cl, re.I))
