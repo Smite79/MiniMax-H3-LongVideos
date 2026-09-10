@@ -4940,6 +4940,14 @@ def fit_guards(clauses, beat_words):
     return kept, dropped
 
 
+def cast_hold(names):
+    """A positive body-count constraint for an exact two-person composition."""
+    people = list(dict.fromkeys(n for n in (names or []) if n))
+    if len(people) != 2:
+        return ""
+    return " There are two people in the shot, with one body for each person."
+
+
 def restrained_by_beat(beat, cast):
     """Who this beat puts in the hardware. The agent is not the one wearing it.
 
@@ -9866,6 +9874,7 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
+            _cast_hold = cast_hold(_described)
 
             # Where the beat says somebody is looking, said once more as a fact
             # about the eyes and the head. One mention in the beat loses to a
@@ -10303,7 +10312,10 @@ class H3LongVideos:
             _kept, _dropped = fit_guards(_guards, len(body.split()))
             if _dropped:
                 crowded.append((len(shots) + 1, _dropped))
-            shot_text = (line + _kept).strip()
+            # Body count is a composition invariant, not a continuity detail. It
+            # must not evict speaker, gaze, or ownership clauses from the bounded
+            # guard budget; doing so fixed the extra body by breaking who spoke.
+            shot_text = (line + _cast_hold + _kept).strip()
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.

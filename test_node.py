@@ -466,6 +466,16 @@ def test_character_guard():
     check("an unlabelled line is kept for everyone", "The room is cold." in keep)
 
 
+def test_two_person_cast_has_one_body_each():
+    print("\n=== two named people have one body each ===")
+    check("an exact pair gets a composition constraint",
+          S.cast_hold(["Dan", "Crystal"]) ==
+          " There are two people in the shot, with one body for each person.")
+    check("duplicate names do not manufacture a pair", S.cast_hold(["Dan", "Dan"]) == "")
+    check("a solo shot is untouched", S.cast_hold(["Dan"]) == "")
+    check("a crowd shot is untouched", S.cast_hold(["Dan", "Crystal", "Mara"]) == "")
+
+
 def test_layers_from_prose():
     print("\n=== a layer stays out of the text until it is uncovered ===")
     # Reported: the under layer showing through the top one. A sheet lists every
@@ -4443,6 +4453,7 @@ def main():
     test_no_one_is_described_twice()
     test_sheet_lines_are_terminated()
     test_character_guard()
+    test_two_person_cast_has_one_body_each()
     test_layers_from_prose()
     test_opening_pose()
     test_removal_needs_a_particle()

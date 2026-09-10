@@ -1034,6 +1034,21 @@ def test_a_two_word_sheet_name_does_not_duplicate_her():
           one[0].count("she, 38") == 1, " ".join(one[0].split())[:200])
 
 
+def test_dan_is_not_instantiated_twice():
+    print("\n=== an exact pair gets one body each ===")
+    mem = ("Dan: He, 35, black t-shirt, blue jeans, black shoes.\n\n"
+           "Crystal: She, 35, white t-shirt, blue jeans, white shoes.")
+    shot = _shots("In a home, Dan and Crystal are in the kitchen.",
+                  character_memory=mem)[0]
+    check("the exact cast is constrained",
+          "There are two people in the shot" in shot, shot)
+    check("the constraint asks for one body each",
+          "one body for each person" in shot, shot)
+    solo = _shots("In a home, Dan is in the kitchen.", character_memory=mem)[0]
+    check("the constraint does not invent Crystal in a solo shot",
+          "two people in the shot" not in solo, solo)
+
+
 def test_a_carried_room_is_not_a_second_picture_of_somebody():
     """REPORTED: a duplicate Mistress.
 
@@ -6031,6 +6046,7 @@ def main():
     test_appearing_is_not_arriving()
     test_a_line_is_marked_however_it_is_punctuated()
     test_a_two_word_sheet_name_does_not_duplicate_her()
+    test_dan_is_not_instantiated_twice()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
     test_a_squat_survives_speech_and_undressing()
