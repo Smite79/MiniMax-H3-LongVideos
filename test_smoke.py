@@ -2487,6 +2487,36 @@ def test_a_hidden_garments_lettering_goes_with_it():
     check("a fragment naming another garment keeps it",
           "denim shorts" in got3.lower(), got3)
 
+def test_camera_framing_is_read_from_the_anchor():
+    print("\n=== a close frame written in the ANCHOR is still a close frame ===")
+    # The anchor is the documented home for camera -- "Framing that belongs to the
+    # whole film -- look, camera, lighting, location" -- and it is carried at the
+    # front of every shot. But tight_framing() was only ever handed the BEAT, so a
+    # film shot entirely in close-up, declared once in the anchor the way the
+    # tooltip asks for, registered as no close framing anywhere.
+    #
+    # What that cost: the note warning that a tight frame crops the anchor point
+    # out of the frame the NEXT shot inherits -- the one thing that still knows
+    # where the limbs are fastened -- never fired for anybody who put their camera
+    # where they were told to put it. It fired only for people who wrote "close-up"
+    # into a beat, which the tooltip does not ask them to do.
+    check("the anchor's framing is seen", S.tight_framing("Close-up on her face."))
+    check("...and a beat's still is", S.tight_framing("She leans in, tight on her eyes."))
+    check("...and a wide anchor is not", not S.tight_framing("Wide shot, night."))
+
+    mem = "McKenna: she, 26, denim shorts."
+    P = ("McKenna lies on the bed, wrists cuffed behind her back.\n\n"
+         "She turns her head.")
+    info = run_node(P, plan_only=True, character_memory=mem,
+                    anchor="Close-up on her face. 85mm lens.")[2]
+    check("the tight-frame warning fires from the anchor alone",
+          "frame tight enough to crop the anchor point out" in info,
+          info[:200])
+    wide = run_node(P, plan_only=True, character_memory=mem,
+                    anchor="Wide shot, night.")[2]
+    check("...and does not fire on a wide film",
+          "frame tight enough to crop the anchor point out" not in wide)
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -5042,6 +5072,7 @@ def main():
     test_a_working_character_is_not_still_lying_down()
     test_an_instruction_is_not_the_action()
     test_a_breath_does_not_hold_the_branch_open()
+    test_camera_framing_is_read_from_the_anchor()
     test_a_hidden_garments_lettering_goes_with_it()
     test_audio_sigma_reads_the_scheduler()
     test_audio_sigma_falls_back_to_the_closed_form()

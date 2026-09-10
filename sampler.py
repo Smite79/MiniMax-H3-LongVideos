@@ -7770,6 +7770,15 @@ class H3LongVideos:
         applied_shots = []        # shots that put the hardware on
         early_hardware = []       # ...where the sheet already claimed it
         tight_shots = []          # ...where the framing also crops it
+        # FILM-WIDE FRAMING LIVES IN THE ANCHOR, which is where the tooltip sends
+        # it: "Framing that belongs to the whole film -- look, camera, lighting,
+        # location." tight_framing was only ever handed the BEAT, so a film shot
+        # entirely in close-up -- declared once, in the documented place -- read as
+        # no close framing at all, and the warning below never fired for anybody who
+        # put their camera where they were told to. It fired only for people who
+        # wrote "close-up" into a beat, which the tooltip does not ask them to do.
+        # Computed once: the anchor is the same on every shot by definition.
+        _anchor_tight = tight_framing(anchor)
         # Scenery whose state a beat has CHANGED. After that the node stops asserting
         # the state it was written with, because it is no longer the state: a van
         # opened in shot 2 must not be told it is shut in shot 3, and the scene
@@ -8695,7 +8704,7 @@ class H3LongVideos:
             _holding = bool(restrained and anchored and not _anchor_now)
             if _holding:
                 anchored_shots.append(len(shots) + 1)
-            if _holding and tight_framing(body):
+            if _holding and (_anchor_tight or tight_framing(body)):
                 tight_shots.append(len(shots) + 1)
             # A turn shows a surface the keyframe never pinned, and the model fills
             # it from a clothed prior. Only on shots that turn, and only once there
