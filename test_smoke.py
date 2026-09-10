@@ -201,6 +201,35 @@ def run_node(prompt, **kw):
     return node.run(**args)
 
 
+def test_independent_adult_arm_actions():
+    print("\n=== separate adult arm actions stay separate across shots ===")
+    memory = ("Maya: she, 38, green sweater, grey trousers.\n"
+              "Owen: he, 42, blue shirt, brown trousers.")
+    first = ("Maya raises her right hand to point at a painting. "
+             "Owen keeps his hands at his sides.")
+    second = ("Maya lowers her right hand to her side. "
+              "Owen folds his arms across his chest.")
+    clip = FakeCLIP()
+    result = run_node("Maya and Owen stand in an art studio.\n\n"
+                      + first + "\n\n" + second,
+                      character_memory=memory, clip=clip)
+    shots = result[3].split("\n---\n")
+    check("both action beats reach rendering", len(shots) == 2)
+    check("each character is described once in each shot",
+          all(s.count("Maya:") == 1 and s.count("Owen:") == 1 for s in shots))
+    check("raising and lowering stay in their own shots",
+          first in shots[0] and second not in shots[0]
+          and second in shots[1] and first not in shots[1])
+    check("no restraint-derived arm pose is invented",
+          all("Both arms are" not in s and "wrists together" not in s for s in shots))
+    visual_inputs = [items for prompt, items in clip.seen if prompt.strip()]
+    check("no first-shot picture and only one continuity picture on shot two",
+          [len(items) for items in visual_inputs] == [0, 1])
+    check("the reported script matches the text actually encoded",
+          [s.split("] ", 1)[1] for s in shots]
+          == [prompt for prompt, _ in clip.seen if prompt.strip()])
+
+
 def test_plan():
     print("\n=== plan_only ===")
     imgs, audio, info, script, fps_shot, total, shots, secs = run_node(
@@ -5909,6 +5938,7 @@ def test_upscale_paths():
 
 
 def main():
+    test_independent_adult_arm_actions()
     test_plan()
     test_render()
     test_keyframe_handoff()
