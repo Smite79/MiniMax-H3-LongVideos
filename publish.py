@@ -7,11 +7,9 @@
     python test_node.py && python test_smoke.py && python test_readme.py
     python publish.py "commit message"
 
-GitHub and the Hugging Face mirror share no merge base, so HF is not a git push
--- it is a file upload per file. That made it easy to push a subset by accident
-and leave the mirror half-updated, so the file list lives HERE rather than in
-whatever script was to hand, and every upload is verified by downloading the file
-back and comparing SHA-256.
+GitHub and the Hugging Face mirror are both published here. The explicit file list
+also drives verification, preventing a new runtime module from being omitted from
+the downloadable mirror.
 
 config.json is in the list for a reason that is not obvious: the Hub counts a
 download as an HTTP request for a QUERY FILE, and with no library declared it
@@ -36,6 +34,10 @@ FILES = [
     "LICENSE",              # the terms. Shipping the node without them is the bug.
     "__init__.py",
     "sampler.py",
+    "audio.py",
+    "conditioning.py",
+    "runtime.py",
+    "shot_plan.py",
     # sampler.py IMPORTS this. Leaving it off the list published a mirror whose
     # sampler could not load at all -- the verify step passed, because it only
     # checks that the files it knows about match.

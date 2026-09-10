@@ -2,29 +2,10 @@
 # Copyright (c) 2026 Smite79. All rights reserved.
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
-"""
-H3 Long Videos -- chain MiniMax-H3 shots into one continuous video with audio.
+"""Plan MiniMax-H3 shots, render their audio/video, and preserve continuity.
 
-Rebuilt from scratch. The previous version grew a large prompt-engineering layer
-that wrote continuity guards into every shot; measured, the user's own beat was
-under 4% of the conditioning and the rest was boilerplate arguing with it. None of
-that is here. What a shot is told is: your scene text, then your beat, verbatim.
-
-What this node does is the part a prompt cannot do -- the mechanics of chaining:
-
-  * splits the prompt into beats on blank lines, one beat per shot;
-  * gives every shot the SAME length, so one seed is one noise field across the
-    chain (noise is drawn to the latent's shape, so unequal lengths mean unrelated
-    noise from the same seed, and detail resets at every cut);
-  * hands each shot the previous shot's last frame as its keyframe, encoded the
-    way H3 expects a keyframe to be encoded (one frame -> the 5f grid point);
-  * keeps identity references on every shot, which is the only fixed anchor a long
-    chain has against drift;
-  * anchors the audio branch to real silence on shots with no quoted line, because
-    H3 is a joint model and an unconditioned audio stream invents a voice that the
-    picture then lip-syncs to.
-
-Everything about what the video should CONTAIN is yours to write.
+The node interface and prompt planning live here. Audio policy and synthesis,
+conditioning assembly, and tensor/runtime operations have separate owner modules.
 """
 
 import math
@@ -41,26 +22,90 @@ import comfy.sample
 import comfy.samplers
 import comfy.nested_tensor
 import comfy.model_management as mm
-import latent_preview
-import node_helpers
 
 # The prompt engine: scene state, read beat by beat, rendered once per shot.
 # Imported by file path rather than by name so it resolves the same whether
 # ComfyUI loads this package as `custom_nodes.H3-LongVideos-V1` or bare.
 import importlib.util as _ilu
-_eng_spec = _ilu.spec_from_file_location(
-    "h3_engine", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "engine.py"))
-engine = _ilu.module_from_spec(_eng_spec)
-_eng_spec.loader.exec_module(engine)
 
 
-H3_FPS = 24                    # H3 renders 24 fps, always
-AUDIO_LATENT_FPS = 40          # audio latent frames per second
+def _load_local(name, filename):
+    spec = _ilu.spec_from_file_location(
+        name, os.path.join(os.path.dirname(os.path.abspath(__file__)), filename))
+    module = _ilu.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+engine = _load_local("h3_engine", "engine.py")
+_plan_module = _load_local("h3_shot_plan", "shot_plan.py")
+_runtime_module = _load_local("h3_runtime", "runtime.py")
+_audio_module = _load_local("h3_audio", "audio.py")
+_cond_module = _load_local("h3_conditioning", "conditioning.py")
+ShotPlan = _plan_module.ShotPlan
+PreparedVideo = _plan_module.PreparedVideo
+
+# Internal helper exports retained for existing callers.
+ShotAudio = _audio_module.ShotAudio
+FrameAccumulator = _runtime_module.FrameAccumulator
+H3_FPS = _runtime_module.H3_FPS
+AUDIO_LATENT_FPS = _runtime_module.AUDIO_LATENT_FPS
+KEYFRAME_SAFE_AUG = _cond_module.KEYFRAME_SAFE_AUG
+AUTO_TILE_T = _runtime_module.AUTO_TILE_T
+MAX_FRAMES = _runtime_module.MAX_FRAMES
+CANVAS_MULTIPLE = _runtime_module.CANVAS_MULTIPLE
+REF_IMAGE_SHORT_EDGE = _runtime_module.REF_IMAGE_SHORT_EDGE
+_SILENT_UNIT = _audio_module._SILENT_UNIT
+align_frame_count = _runtime_module.align_frame_count
+video_latent_t = _runtime_module.video_latent_t
+temporal_shape = _runtime_module.temporal_shape
+ref_image_canvas = _runtime_module.ref_image_canvas
+_resize = _runtime_module._resize
+_empty_av_latent = _runtime_module._empty_av_latent
+_auto_tile_t = _runtime_module._auto_tile_t
+_decode_video = _runtime_module._decode_video
+_decode_audio = _runtime_module._decode_audio
+_BED_EVENTFUL = _audio_module._BED_EVENTFUL
+_BED_RMS = _audio_module._BED_RMS
+_BED_RECIPE = _audio_module._BED_RECIPE
+bed_recipe = _audio_module.bed_recipe
+synth_ambient = _audio_module.synth_ambient
+_MODES = _audio_module._MODES
+_band = _audio_module._band
+_hits = _audio_module._hits
+_room = _audio_module._room
+_even = _audio_module._even
+_FOLEY = _audio_module._FOLEY
+foley_for = _audio_module.foley_for
+plain_bed = _audio_module.plain_bed
+_seamless_loop = _audio_module._seamless_loop
+mix_ambient = _audio_module.mix_ambient
+_is_oom = _runtime_module._is_oom
+_deep_cleanup = _runtime_module._deep_cleanup
+DECODE_HEADROOM = _runtime_module.DECODE_HEADROOM
+SAMPLE_HEADROOM = _runtime_module.SAMPLE_HEADROOM
+_decode_headroom = _runtime_module._decode_headroom
+_resident = _runtime_module._resident
+_image_out_dtype = _runtime_module._image_out_dtype
+_evict_all_but = _runtime_module._evict_all_but
+_SILENCE_STATUS = _audio_module._SILENCE_STATUS
+_SILENT_SECONDS = _audio_module._SILENT_SECONDS
+_SILENT_EDGE = _audio_module._SILENT_EDGE
+_silent_audio_latent = _audio_module._silent_audio_latent
+_pin_audio_silence = _audio_module._pin_audio_silence
+_keyframe_latent = _cond_module._keyframe_latent
+_build_ref_images = _cond_module._build_ref_images
+_sample_on_sigmas = _runtime_module._sample_on_sigmas
+RESIZE_CHUNK = _runtime_module.RESIZE_CHUNK
+_stream_chunks = _runtime_module._stream_chunks
+_resize_short_edge = _runtime_module._resize_short_edge
+_upscale_frames = _runtime_module._upscale_frames
+_find_node = _runtime_module._find_node
+_invoke_node = _runtime_module._invoke_node
+build_conditioning = _cond_module.build_conditioning
+
 RES_MULTIPLE = 32
-KEYFRAME_SAFE_AUG = 0.99       # below this, a ref aug would soften the keyframe too
-AUTO_TILE_T = 8                # temporal chunk for a tiled decode
-MAX_FRAMES = 362               # H3's own ceiling (~15s)
 # Latent frames decoded from the PRE-upscale latent to source the handoff. Enough
 # for the VAE's temporal context to produce a clean last frame, and cheap.
 HANDOFF_LATENT_TAIL = 8
@@ -78,16 +123,7 @@ NATIVE_RES = {
 }
 
 
-CANVAS_MULTIPLE = 32
-
-
-REF_IMAGE_SHORT_EDGE = 2048
-
-
 _LAST_MODEL_FP = {"fp": None}
-
-
-_SILENT_UNIT = {"lat": None, "key": None}
 
 
 def _call_node(cls, model, shift_video, shift_audio):
@@ -141,16 +177,6 @@ def _is_audio_vae(v):
     return None
 
 
-# --- sizing -----------------------------------------------------------------
-
-def align_frame_count(n):
-    """Up to the next valid H3 frame count. The grid is 17k+5."""
-    n = max(5, int(n))
-    while n % 17 != 5:
-        n += 1
-    return min(n, MAX_FRAMES)
-
-
 def align_frame_count_nearest(n):
     """The NEAREST 17k+5 grid point, not the next one up.
 
@@ -162,19 +188,6 @@ def align_frame_count_nearest(n):
     lo = n - ((n - 5) % 17)
     hi = lo + 17
     return min(MAX_FRAMES, lo if (n - lo) <= (hi - n) else hi)
-
-
-def video_latent_t(fc):
-    return 2 if fc <= 5 else ((fc - 5) // 17) * 5 + 2
-
-
-def temporal_shape(length, fps=H3_FPS):
-    """(frame count, video latent frames, audio latent frames) for a shot.
-
-    `fps` is accepted but deliberately IGNORED: the audio latent has to line up
-    with 24 fps video or the shot's sound is stretched against its picture."""
-    fc = align_frame_count(length)
-    return fc, video_latent_t(fc), round(fc / H3_FPS * AUDIO_LATENT_FPS)
 
 
 def parse_resolution(choice):
@@ -2250,23 +2263,6 @@ def check_audio_vae_loaded(audio_vae):
             "the Comfy-Org release; rendering with this one produces noise, not speech.")
 
 
-def ref_image_canvas(w, h, gen_w, gen_h, mode="match"):
-    """Pure: the (width, height) a reference image is encoded at.
-
-    'match' scales it (DOWN only, aspect kept) to the generation's pixel area, so a
-    reference costs about as much as one frame of the shot. 'max' goes to the
-    reference pipeline's 2048 short edge for the best identity fidelity, which on a
-    long chain is several times slower because the rows are re-attended every step
-    of every shot. Never upscales: a small reference stays small."""
-    w, h = max(1, int(w)), max(1, int(h))
-    if mode == "max":
-        scale = min(1.0, REF_IMAGE_SHORT_EDGE / min(w, h))
-    else:
-        scale = min(1.0, math.sqrt((int(gen_w) * int(gen_h)) / float(w * h)))
-    snap = lambda v: max(CANVAS_MULTIPLE, round(v * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
-    return snap(w), snap(h)
-
-
 def shot_latent_cells(w, h, frames, fps):
     """Latent cells in one shot: what sampling VRAM actually scales with.
 
@@ -2302,806 +2298,6 @@ def model_fingerprint(model):
         return (top, n, size, cls)
     except Exception:
         return None
-
-
-
-# --- H3 plumbing, carried over unchanged: these were arrived at against the real
-# model and the real VAEs, and none of it is prompt logic.
-
-def _resize(image, width, height, crop):
-    s = image[..., :3].movedim(-1, 1)
-    s = comfy.utils.common_upscale(s, width, height, "lanczos", crop)
-    return s.movedim(1, -1)
-
-
-def _empty_av_latent(width, height, length, fps, batch_size=1):
-    fc, lt, at = temporal_shape(length, fps)
-    video = torch.zeros([batch_size, 24, lt, height // 16, width // 16], device=mm.intermediate_device())
-    audio = torch.zeros([batch_size, 32, 2, at], device=mm.intermediate_device())
-    return {"samples": comfy.nested_tensor.NestedTensor((video, audio))}, fc
-
-
-def _auto_tile_t(n_latent_frames, requested=None):
-    """Temporal tile for a tiled decode. An explicit value wins.
-
-    The decode_tile_frames widget is gone, so this is where the value comes from
-    now. It has to come from somewhere: ComfyUI's decode_tiled_3d defaults tile_t
-    to 999, i.e. SPATIAL tiles only, and expanding the whole clip's time axis at
-    once is the single largest allocation in a run. A "tiled" decode that keeps the
-    full temporal extent barely lowers the peak, so the OOM retry that switches
-    tiling on was, without this, retrying with almost the same footprint."""
-    if requested:
-        return int(requested)
-    n = int(n_latent_frames or 0)
-    return AUTO_TILE_T if n > AUTO_TILE_T else None
-
-
-def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=None,
-                  keep=()):
-    """Decode the video latent.
-
-    `free_first` is the diffusion model: sampling is finished, and the video VAE
-    needs the room for THIS decode -- the free runs immediately before it, not to
-    make room for the next shot. On a card where the DiT is most of the VRAM, the
-    decode does not fit until it goes.
-
-    `keep` is what must NOT be evicted on the way. It was `keep_loaded=[]`, which
-    unloaded every resident model -- including the video VAE, which ComfyUI then
-    reloaded three lines later to run the decode. An evict-and-reload of the thing
-    about to be used, once per shot, on every card. Peak VRAM is identical either
-    way, since the VAE has to be resident to decode; the round trip was pure cost.
-
-    memory_required is ASKED FOR HONESTLY, which it was not. It was 1e30, and
-    free_memory computes `memory_to_free = memory_required - get_free_memory(device)`
-    (model_management.py:887), so 1e30 means "unload everything not in keep_loaded",
-    every shot, in full -- skipping partially_unload entirely.
-
-    What that evicts is the DiT, three lines before the next shot needs it again. On
-    a machine whose RAM is already full of finished frames there is nowhere for it to
-    go but disk, so the reload is a read from the drive, once per shot. Reported as
-    thrashing that slows the preload, and it is exactly that: the same weights being
-    read back at every boundary.
-
-    The VAE knows what its own decode costs -- ComfyUI sizes it with
-    memory_used_decode and uses that number everywhere else. Asked for that instead,
-    a card with headroom frees NOTHING and the DiT simply stays. A card without
-    headroom frees what it needs and no more, which is what partially_unload is for.
-    1e30 remains the fallback for a VAE that cannot estimate itself."""
-    latent = out_latent["samples"]
-    if latent.is_nested:
-        latent = latent.unbind()[0]
-    if free_first is not None:
-        try:
-            mm.free_memory(_decode_headroom(vae, latent), mm.get_torch_device(),
-                           keep_loaded=_resident(keep or (vae,)))
-        except Exception:
-            pass
-    # A VAE THAT ALREADY TILES DOES NOT NEED TO BE ASKED TO, AND ASKING COSTS 3x.
-    #
-    # MiniMaxH3VideoVAE.decode_tiled is, in full:
-    #
-    #     def decode_tiled(self, z, **kwargs):
-    #         return self.decode(z)
-    #
-    # Every tile_t/overlap_t/tile_x/tile_y this function computes is discarded, so
-    # the tiling the widget promises is not happening here -- the model tiles
-    # internally either way (256px spatial, 17-frame temporal), which is why
-    # comfy/sd.py sets handles_tiling on it.
-    #
-    # What the detour costs is the OUTPUT BUFFER. comfy's VAE.decode preallocates
-    # ONE result at vae_output_dtype and hands it to the model as output_buffer=,
-    # and MiniMaxH3VideoVAE.decode_temporal writes finalized chunks straight into
-    # it. Going through decode_tiled instead reaches _decode_tiled_owned, which
-    # calls the model with output_buffer=None -- so decode_temporal allocates its
-    # own at torch.float32 -- and then makes an fp16 `copy=True` of that. Two
-    # buffers, the larger of them at double width:
-    #
-    #     tiled : fp32 2.60GB + fp16 copy 1.30GB = 3.90GB per shot
-    #     decode: one preallocated fp16          = 1.30GB per shot
-    #
-    # at 362 frames of 1056x608. Every shot, on the node's own default.
-    #
-    # So: when the VAE owns its tiling AND can be written into, the un-tiled call IS
-    # the tiled one, minus the copies. Anything else keeps the old path -- this is a
-    # detour around a detour, not a claim that tiling is useless.
-    _owns_tiling = bool(getattr(vae, "handles_tiling", False) and getattr(
-        getattr(vae, "first_stage_model", None), "comfy_has_chunked_io", False))
-    if tiled and _owns_tiling:
-        imgs = vae.decode(latent)
-    elif tiled:
-        # Temporal + spatial tiling. Without tile_t the VAE expands the WHOLE latent
-        # clip at once, which on a 243-frame 1344x768 shot is the single largest
-        # allocation in the run -- and on an unpruned checkpoint that is already
-        # streaming, it is what tips the card over. Decoding in temporal chunks
-        # trades a little speed for a much lower peak; None keeps ComfyUI's defaults.
-        args = {}
-        tile_t = _auto_tile_t(latent.shape[2] if latent.ndim >= 5 else 0, tile_t)
-        if tile_t:
-            args["tile_t"] = int(tile_t)
-            args["overlap_t"] = max(1, int(tile_t) // 8)
-        if tile_xy:
-            args["tile_x"] = int(tile_xy)
-            args["tile_y"] = int(tile_xy)
-        try:
-            imgs = vae.decode_tiled(latent, **args) if args else vae.decode_tiled(latent)
-        except TypeError:
-            imgs = vae.decode_tiled(latent)      # older signature without tile_t
-    else:
-        imgs = vae.decode(latent)
-    if len(imgs.shape) == 5:
-        imgs = imgs.reshape(-1, imgs.shape[-3], imgs.shape[-2], imgs.shape[-1])
-    return imgs
-
-
-def _decode_audio(audio_vae, out_latent):
-    latent = out_latent["samples"]
-    if latent.is_nested:
-        latent = latent.unbind()[-1]
-    audio = audio_vae.decode(latent).movedim(-1, 1)
-    std = torch.std(audio, dim=[1, 2], keepdim=True) * 5.0
-    std[std < 1.0] = 1.0
-    audio = audio / std
-    sr = getattr(audio_vae, "audio_sample_rate_output", getattr(audio_vae, "audio_sample_rate", 44100))
-    return {"waveform": audio, "sample_rate": sr}
-
-
-# SYNTHESISING THE BED, from the description the node already read off the scene.
-#
-# No file to wire and no second model pass. Room tone is physically shaped noise --
-# air, rumble, plant, a mains hum -- so it can be built rather than fetched, and
-# built noise cannot speak, which is the whole problem with getting ambience out of
-# a joint model.
-#
-# Each recipe is: spectral tilt (0 white, 1 pink, 2 brown), a low-pass corner, an
-# optional high-pass, an optional tonal hum with its harmonic, and an optional slow
-# amplitude movement. Ordered, first match wins, most specific first.
-#
-# HONEST LIMIT: this makes TONE, not events. "birdsong", "cutlery and moving chairs"
-# and "a monitor somewhere down the corridor" get the ROOM those things are in, not
-# the things -- synthesising a convincing bird is not something a noise shaper does,
-# and a bad one is worse than the room alone. `info` says when that has happened.
-_BED_EVENTFUL = ("birdsong", "cutlery", "monitor somewhere", "corridor beyond")
-# Target level for a built bed, before ambient_level scales it. -22 dBFS RMS, so
-# the default 0.25 lands near -34 dBFS: present, and well under a spoken line.
-_BED_RMS = 0.08
-_BED_RECIPE = (
-    (r"\brain\b",            dict(tilt=0.8, cut=9000, hp=250, mod=(0.30, 0.18))),
-    (r"\bstorm\b|\bthunder", dict(tilt=1.7, cut=700,          mod=(0.13, 0.40))),
-    (r"\bwind\b|\btrees\b",  dict(tilt=1.2, cut=2600,         mod=(0.18, 0.42))),
-    (r"\bsea\b|\bocean\b",   dict(tilt=1.3, cut=1700,         mod=(0.11, 0.50))),
-    (r"\btraffic\b",         dict(tilt=1.7, cut=900,          mod=(0.07, 0.22))),
-    (r"\bengine\b",          dict(tilt=1.5, cut=520, hum=(60.0, 0.30),
-                                  mod=(0.09, 0.12))),
-    (r"\bpipes\b|\bwater\b", dict(tilt=1.3, cut=1250,         mod=(0.55, 0.45))),
-    (r"\bclock\b|\bticking", dict(tilt=1.6, cut=800, tick=(1.0, 0.22))),
-    # The hum family: a fridge, a fan, a strip light, a monitor. Tonal, not noise.
-    (r"\bhum(?:ming|s)?\b|\bfan\b|\bfridge\b|\bstrip light\b|\bmonitor\b",
-                             dict(tilt=1.4, cut=1500, hum=(100.0, 0.22))),
-    (r"\btiled\b|\bringing\b", dict(tilt=0.9, cut=6000, hp=180)),
-    (r"\bhard walls\b|\bgiving the sound back\b", dict(tilt=1.6, cut=950)),
-    (r"\bopen air\b|\bno walls close\b|\bbirdsong\b", dict(tilt=1.0, cut=7000)),
-    (r"\bhollow quiet\b|\bhallway\b|\bcorridor\b|\blarge empty room\b|\blong tail\b",
-                             dict(tilt=1.6, cut=700)),
-    (r"\bcutlery\b|\bchairs\b", dict(tilt=1.1, cut=4500)),
-    (r"\bsoft room\b|\blittle echo\b", dict(tilt=1.8, cut=520)),
-    (r"\bnight\b|\bbedroom\b|\bhouse\b|\bquiet\b", dict(tilt=1.9, cut=380)),
-)
-
-
-def bed_recipe(phrase):
-    """How to build the bed this phrase describes. The neutral room if none match."""
-    p = str(phrase or "").lower()
-    for pat, rec in _BED_RECIPE:
-        if re.search(pat, p):
-            return dict(rec)
-    return dict(tilt=1.8, cut=420)
-
-
-def synth_ambient(phrase, n, sr, seed=0, channels=2):
-    """Build `n` samples of the ambience `phrase` describes. [C, n], or None.
-
-    Shaped in the FREQUENCY domain -- white noise, an envelope, back again -- which
-    gives exact spectral control in one pass and, unlike a per-sample filter, does
-    not walk a million-sample loop in Python.
-
-    Generated at the FULL length of the film, so unlike a wired file there is no
-    loop and therefore no join to hide.
-
-    Defensive like everything else on this path: any failure returns None and the
-    soundtrack goes out as the model made it."""
-    try:
-        n, sr = int(n), int(sr)
-        if n < 64 or sr <= 0:
-            return None
-        rec = bed_recipe(phrase)
-        g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
-        w = torch.randn((int(channels), n), generator=g)
-        f = torch.fft.rfftfreq(n, d=1.0 / sr).clamp(min=1.0)
-        # Amplitude goes as f^(-tilt/2), so POWER goes as f^-tilt: tilt 1 is pink,
-        # 2 is brown. Then a gentle low-pass, and a high-pass where the recipe wants
-        # the bottom out of it.
-        env = f.pow(-float(rec.get("tilt", 1.8)) / 2.0)
-        env = env / (1.0 + (f / float(rec.get("cut", 420))) ** 2)
-        if rec.get("hp"):
-            env = env * (f / (f + float(rec["hp"])))
-        y = torch.fft.irfft(torch.fft.rfft(w, dim=-1) * env, n=n, dim=-1)
-        t = torch.arange(n, dtype=torch.float32) / sr
-        # Slow movement, so a bed does not sit perfectly still and read as a hiss.
-        if rec.get("mod"):
-            rate, depth = rec["mod"]
-            y = y * (1.0 + float(depth) * torch.sin(2 * math.pi * float(rate) * t))
-        # A tonal hum is a TONE, not noise: a fridge and a strip light are pitched.
-        if rec.get("hum"):
-            hz, amp = rec["hum"]
-            hum = (torch.sin(2 * math.pi * float(hz) * t)
-                   + 0.35 * torch.sin(2 * math.pi * float(hz) * 2 * t))
-            y = y + float(amp) * hum.unsqueeze(0)
-        if rec.get("tick"):
-            rate, amp = rec["tick"]
-            step = max(1, int(sr / max(float(rate), 0.01)))
-            click = torch.zeros(n)
-            idx = torch.arange(0, n, step)
-            click[idx] = 1.0
-            decay = torch.exp(-torch.arange(min(step, int(sr * 0.05)),
-                                            dtype=torch.float32) / (sr * 0.004))
-            click = torch.nn.functional.conv1d(
-                click.view(1, 1, -1), decay.flip(0).view(1, 1, -1),
-                padding=decay.numel() - 1)[0, 0, :n]
-            y = y + float(amp) * (click * torch.randn(n, generator=g)).unsqueeze(0)
-        # NORMALISE BY RMS, NOT PEAK. Peak-normalising made the loudness depend on
-        # the recipe's crest factor rather than on the setting: measured across the
-        # beds, a strip-light hum came out at -8.2 dBFS and a ticking clock at
-        # -34.1, a 26 dB spread from one ambient_level. RMS puts them all at the
-        # same subjective level, so the widget means the same thing in every room.
-        rms = float(y.pow(2).mean().sqrt())
-        if not (rms > 0.0) or not torch.isfinite(y).all():
-            return None
-        y = y * (_BED_RMS / rms)
-        # ...then hold the peak down, because a peaky recipe (the clock) would
-        # otherwise reach 2.8 at that RMS and clip before the mix even sees it.
-        peak = float(y.abs().max())
-        if peak > 0.95:
-            y = y * (0.95 / peak)
-        return y
-    except Exception:
-        return None                        # a bed is a nicety, a render is not
-
-
-# FOLEY: the sounds an action MAKES, built and mixed rather than asked of the model.
-#
-# auto_sound already reads these out of the beat, but only as TEXT in the prompt --
-# and text can never open a shot's audio branch, because an open branch on a joint
-# model invents a voice. So a wordless shot staging cuffs going on was pinned to
-# silence and the cue was dropped: the one shot whose whole point is a sound made
-# none, and the only way to get it was to write the sound into the beat by hand.
-#
-# Mixing solves that the same way the ambient bed does. A built sound asks nothing
-# of the model, so it cannot babble, and it goes into THAT SHOT'S span of the
-# soundtrack rather than under the whole film.
-#
-# HONEST LIMIT, and it is worth stating rather than discovering: this is synthesis,
-# not a recording. It reads as a click, a rattle, a rustle -- serviceable and in the
-# right place, not a foley stage. Wire a recording to ambient_audio, or write the
-# sound into the beat and let the model make it, where that is not enough.
-#
-# NOTHING VOCAL IS EVER BUILT. Breathing and effort are in the sound table too, and
-# they are a VOICE: the one thing this file must not manufacture. They are absent
-# from the recipes below on purpose, and a phrase with no recipe is simply skipped.
-# A struck object rings at SEVERAL frequencies at once, and they are not a
-# harmonic series -- a bar or a shell has inharmonic modes, which is exactly why a
-# cuff reads as metal and not as a note. One resonator is one tone colour, and one
-# tone colour over a whole train of hits is the sound of a filter rather than the
-# sound of a thing.
-#
-# Ratios are deliberately irrational-ish. Integer multiples would make a pitched
-# tone, which is a different and worse kind of fake. Higher modes get less gain and
-# a lower Q, because in a real object they are both weaker and more damped.
-#
-# The upper-mode gains are a MEASURED TRADE, not a guess. Swept against modal
-# density (count of spectral peaks) and against how far the cluster drags the
-# centroid off what each recipe was tuned to as a single resonator:
-#
-#     gain scale   1.00   0.75   0.60   0.50   0.40   0.30
-#     modes        478    381    326    284    238    208     (was 200)
-#     centroid     1.61x  1.52x  1.45x  1.40x  1.35x  1.28x
-#
-# 0.60 keeps about 1.6x the spectral density of the single resonator while moving
-# the centre 1.45x rather than 1.61x. Density is the realism; the centroid shift is
-# a change to a character that was already tuned, so it is spent, not maximised.
-_MODES = ((1.00, 1.000, 1.00), (1.48, 0.270, 0.75),
-          (2.13, 0.132, 0.55), (3.31, 0.060, 0.40))
-
-
-def _band(x, sr, f0, q=4.0, order=3):
-    """Resonant filter by spectral envelope: a mode cluster around f0, one pass.
-
-    ORDER 3, which was measured. A single resonator's skirt falls off as 1/f, and
-    against noise -- equal energy per Hz, spread over 20 kHz -- enough survives above
-    the centre that the result is bright whatever f0 says: footsteps aimed at 130 Hz
-    came back with a spectral centroid of 3.6 kHz, and every recipe sounded like the
-    same hiss. Cubing the response is what makes f0 mean something.
-
-    The f0/q interface is unchanged, so every recipe gets the mode cluster without
-    being rewritten -- this is the one place all 21 of them pass through."""
-    n = int(x.shape[-1])
-    X = torch.fft.rfft(x)
-    f = torch.fft.rfftfreq(n, d=1.0 / sr).clamp(min=1.0)
-    resp = torch.zeros_like(f)
-    for ratio, gain, qs in _MODES:
-        fc = float(f0) * ratio
-        if fc >= sr * 0.45:            # past Nyquist is not a mode, it is aliasing
-            continue
-        qq = max(0.7, float(q) * qs)
-        # BANDWIDTH COMPENSATION, and it is not optional. A resonator's absolute
-        # bandwidth is fc/Q, so a mode an octave up passes twice the noise for the
-        # same gain -- and these are excited by noise, which has equal energy per
-        # Hz. Uncompensated, the cluster came out about 2x brighter across every
-        # recipe and put a footstep at 428 Hz against the 130 it is aimed at, which
-        # is the "a footstep is a hiss" failure the order-3 skirt was fixed for.
-        # Energy through a mode goes as gain^2 * fc / Q, so scaling the gain by
-        # sqrt(Q/fc) makes the numbers above mean the loudness they look like.
-        g_i = float(gain) * math.sqrt(float(qs) / float(ratio))
-        # ...and the cluster itself scales with Q, because Q IS how much the thing
-        # rings. Metal at q 5-8 has strong upper modes; a footstep at q 1.6 is a
-        # broadband thud on a floor and has almost none. Applied only above the
-        # fundamental, so a low-Q recipe collapses back to the single resonator it
-        # was tuned as -- which is what keeps a footstep at 130 Hz a footstep.
-        if ratio > 1.0:
-            g_i *= min(1.0, float(q) / 4.0)
-        resp = resp + g_i * (1.0 / torch.sqrt(
-            1.0 + (qq * (f / fc - fc / f)) ** 2)) ** int(order)
-    return torch.fft.irfft(X * resp, n=n)
-
-
-def _hits(n, sr, g, times, decay, amp=1.0):
-    """Decaying noise bursts at the given times (seconds). The excitation for a
-    click, a rattle, a footfall -- everything percussive here is this plus a band.
-
-    EVERY HIT DIFFERS. They used to be identical -- same level, same decay, same
-    everything -- and thirty-three identical clicks is not a chain, it is a machine.
-    Nothing gives a synthetic sound away faster: the ear is far better at spotting a
-    repeat than at judging a timbre, so a rattle whose links are all the same reads
-    as fake even when each single link sounds right.
-
-    Level varies about +/-5 dB and decay by about a third, which is the spread a
-    real repeated contact has from hitting at a different point and angle."""
-    x = torch.zeros(n)
-    for t in times:
-        i = int(t * sr)
-        if i < 0 or i >= n:
-            continue
-        a = float(amp) * float(torch.exp((torch.rand(1, generator=g) - 0.5) * 1.1))
-        d = float(decay) * float(1.0 + (torch.rand(1, generator=g) - 0.5) * 0.7)
-        L = max(4, int(d * sr))
-        m = min(L, n - i)
-        env = torch.exp(-torch.arange(m, dtype=torch.float32)
-                        / max(d * sr / 4.0, 1.0))
-        x[i:i + m] += torch.randn(m, generator=g) * env * a
-    return x
-
-
-def _room(x, sr, secs=0.11, wet=0.16, seed=0):
-    """A small room around the sound. Convolution with a decaying noise tail plus
-    three early reflections.
-
-    The dryness was the loudest tell. Every one of these was rendered anechoic --
-    no reflections, no tail -- and nothing in the physical world sounds like that;
-    the ear reads a bone-dry impact as "not in a place" before it judges anything
-    else about it. The tail is rolled off above 2.2 kHz because a real room absorbs
-    highs faster than lows, and a bright tail is its own kind of wrong.
-
-    Linear convolution, not circular: the transform is padded past n + L so a tail
-    cannot wrap round and appear before the hit that caused it."""
-    n = int(x.shape[-1])
-    L = max(8, int(float(secs) * sr))
-    if n < 8 or not (float(wet) > 0.0):
-        return x
-    g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
-    t = torch.arange(L, dtype=torch.float32)
-    ir = torch.randn(L, generator=g) * torch.exp(-t / max(L / 5.0, 1.0))
-    ir[0] = 0.0
-    for d, a in ((0.0071, 0.50), (0.0133, 0.34), (0.0211, 0.23)):
-        i = int(d * sr)
-        if i < L:
-            ir[i] += a
-    m = 1
-    while m < n + L:
-        m <<= 1
-    F = torch.fft.rfftfreq(m, d=1.0 / sr).clamp(min=1.0)
-    IR = torch.fft.rfft(ir, n=m) / (1.0 + F / 2200.0)
-    wet_sig = torch.fft.irfft(torch.fft.rfft(x, n=m) * IR, n=m)[:n]
-    p, q = float(wet_sig.abs().max()), float(x.abs().max())
-    if not (p > 0.0) or not torch.isfinite(wet_sig).all():
-        return x
-    wet_sig = wet_sig * (q / p)
-    return x * (1.0 - float(wet)) + wet_sig * float(wet)
-
-
-def _even(start, count, gap, jitter, g):
-    """Click times, with a little jitter so a rattle is not a drum machine."""
-    j = (torch.rand(int(count), generator=g) - 0.5) * 2.0 * float(jitter)
-    return [float(start + i * gap + j[i]) for i in range(int(count))]
-
-
-# phrase -> how to build it. `secs` is the shot length, so a rattle runs the shot
-# while a ratchet is one event placed a third of the way in.
-_FOLEY = {
-    "cuffs ratcheting closed":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.33, 9, 0.030, 0.004, g),
-                                           0.020), sr, 3200, 6.0),
-    "cuffs knocking":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.25, 4, 0.22, 0.06, g),
-                                           0.035), sr, 2600, 5.0),
-    "chain links dragging":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g,
-                                           _even(0.05, max(4, int(secs * 11)), 0.09, 0.035, g),
-                                           0.028), sr, 4200, 7.0),
-    "restraints pulling taut":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 3, 0.35, 0.10, g),
-                                           0.30), sr, 700, 2.5),
-    "rope creaking as it goes tight":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 4, 0.28, 0.09, g),
-                                           0.28), sr, 620, 2.5),
-    "a lock snapping shut":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.5], 0.045), sr, 2100, 5.0),
-    "a metal bolt sliding":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.4, 6, 0.035, 0.010, g),
-                                           0.030), sr, 1800, 4.0),
-    "keys on a ring":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 7, 0.055, 0.025, g),
-                                           0.030), sr, 5200, 8.0),
-    "a zip running":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.35, 70, 0.0065, 0.0012, g),
-                                           0.006), sr, 4800, 5.0),
-    "velcro tearing open":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.35, 120, 0.004, 0.0015, g),
-                                           0.005), sr, 3000, 1.6),
-    "tape pulling off":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 90, 0.007, 0.002, g),
-                                           0.008), sr, 2400, 2.0),
-    "fabric rustling":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.1, max(3, int(secs * 3)), 0.30,
-                                                           0.12, g), 0.10), sr, 2800, 1.8),
-    "blades through fabric":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 5, 0.18, 0.05, g),
-                                           0.09), sr, 3600, 2.2),
-    # A slow rhythm of frame creaks. Low and wooden, and the rate is deliberately
-    # unhurried: the point is that the room is not silent, not that the shot has a
-    # metronome in it.
-    "a bed frame working":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g,
-                                           _even(0.15, max(3, int(secs * 1.6)), 0.62,
-                                                 0.05, g), 0.16), sr, 240, 3.0),
-    "a buckle and leather creaking":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 4, 0.20, 0.07, g),
-                                           0.12), sr, 1200, 3.0),
-    "footsteps":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.25, max(2, int(secs / 0.55)),
-                                                           0.55, 0.05, g), 0.10), sr, 130, 1.6),
-    "something dragging on the floor":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.2, max(6, int(secs * 8)),
-                                                           0.12, 0.05, g), 0.14), sr, 420, 1.4),
-    "something landing":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.5], 0.14), sr, 110, 1.5),
-    "a sharp impact":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.45], 0.07), sr, 900, 1.5),
-    "a door on its hinges":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 8, 0.09, 0.03, g),
-                                           0.13), sr, 780, 6.0),
-    "water":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.05, max(8, int(secs * 14)), 0.07,
-                                                           0.03, g), 0.06), sr, 1400, 1.5),
-}
-
-
-def foley_for(phrase, n, sr, seed=0):
-    """Build the sound `phrase` names, `n` samples long. None when there is no
-    recipe -- which includes every vocal phrase, deliberately."""
-    try:
-        n, sr = int(n), int(sr)
-        make = _FOLEY.get(str(phrase or ""))
-        if make is None or n < 64 or sr <= 0:
-            return None
-        g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
-        y = make(n, sr, g, n / float(sr))
-        # The room goes on LAST and on everything, which is what a room does: it is
-        # a property of the place, not of the prop. Applied here rather than in the
-        # recipes so all 21 get it and none can forget it.
-        y = _room(y, sr, seed=int(seed) + 977)
-        peak = float(y.abs().max())
-        if not (peak > 0.0) or not torch.isfinite(y).all():
-            return None
-        return y * (0.7 / peak)
-    except Exception:
-        return None
-
-
-def plain_bed(n, sr, seed=0, channels=2):
-    """The last-resort bed: noise and a moving average, and nothing else.
-
-    synth_ambient is defensive, so it can return None -- and a built bed that comes
-    back empty leaves the output with no ambience at all. Wiring a file is NOT the
-    remedy for that: the built bed is the feature, and a file is only ever an
-    override for a real location. So there is a floor under it.
-
-    Deliberately primitive. No FFT, no envelope, no recipe -- a cumulative-sum box
-    filter over white noise, which is a rumble, and which cannot fail on any input
-    the caller can hand it. It is not as good as the shaped bed and does not try to
-    be; it is the difference between a quiet room and nothing at all."""
-    try:
-        n, sr, channels = int(n), int(sr), max(1, int(channels))
-        if n < 8 or sr <= 0:
-            return None
-        g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
-        y = torch.randn((channels, n), generator=g)
-        # Box filter by cumulative sum: out[i] = mean(w[i-k:i]). k sets the corner.
-        #
-        # CASCADED THREE TIMES, which was measured rather than assumed. One pass is
-        # a sinc, whose first sidelobe is only -13 dB -- against white noise, which
-        # has equal energy per Hz, enough leaks through the whole top of the band to
-        # put the spectral centroid at 3.3 kHz. That is a hiss, not the rumble this
-        # is meant to be. Three passes is sinc^3, and the centroid lands where the
-        # description says.
-        k = max(2, min(n // 4, int(sr / 200)))          # ~200 Hz
-        for _ in range(3):
-            c = torch.cumsum(torch.nn.functional.pad(y, (k, 0)), dim=-1)
-            y = (c[..., k:] - c[..., :-k])[..., :n] / float(k)
-        rms = float(y.pow(2).mean().sqrt())
-        if not (rms > 0.0) or not torch.isfinite(y).all():
-            return None
-        y = y * (_BED_RMS / rms)
-        peak = float(y.abs().max())
-        return y * (0.95 / peak) if peak > 0.95 else y
-    except Exception:
-        return None
-
-
-def _seamless_loop(x, n, sr):
-    """[C, M] -> [C, n], looped with a crossfade so the join does not click.
-
-    Plain tiling puts a discontinuity at every repeat, once per loop length. In a
-    bed that is meant to sit under everything unnoticed, a regular click is the one
-    thing that gets noticed -- the same objection that made the silence latent
-    ping-pong its interior rather than tile it. Here the material is real audio
-    being PLAYED rather than a latent being conditioned on, so it cannot be
-    reversed: a room tone read backwards is fine, but footsteps are not. Crossfade
-    instead, which works on both."""
-    m = int(x.shape[-1])
-    if m <= 0:
-        return None
-    if m >= n:
-        return x[..., :n]
-    fade = min(int(0.25 * sr), m // 4)
-    if fade < 1:
-        reps = -(-n // m)
-        return x.repeat(1, reps)[..., :n]
-    # OVERLAP-ADD the tail onto the head, and shorten the unit by the overlap. The
-    # unit then runs x[m-fade] .. x[m-fade-1], so tiling it steps between samples
-    # that were adjacent in the source and there is no discontinuity anywhere.
-    #
-    # Measured, because the obvious construction is wrong: appending the crossfade
-    # to the END of a full-length unit leaves it finishing on x[fade-1] while the
-    # next repeat starts on x[0], which are not adjacent -- a 2s tone that does not
-    # divide evenly gave a 64x jump at the join, worse than plain tiling's 41x.
-    t = torch.linspace(0.0, 1.0, fade, dtype=x.dtype, device=x.device)
-    head = x[..., :fade] * t + x[..., m - fade:] * (1.0 - t)
-    unit = torch.cat([head, x[..., fade:m - fade]], dim=-1)
-    if int(unit.shape[-1]) < 1:
-        reps = -(-n // m)
-        return x.repeat(1, reps)[..., :n]
-    reps = -(-n // int(unit.shape[-1]))
-    return unit.repeat(1, reps)[..., :n]
-
-
-def mix_ambient(audio, sr, bed, level):
-    """Lay an ambient bed UNDER a finished soundtrack. -> (waveform, note).
-
-    The bed is PLAYED, not conditioned on: it is the file, at the level asked for,
-    under whatever the model generated. That is the whole reason to do it here
-    rather than in the sampler -- ambience needs no cooperation from a joint model,
-    has nothing to lip-sync to, and so cannot put a voice in a wordless shot. The
-    conditioning path can only steer the branch toward something bed-LIKE, and on a
-    shot with a line it competes with the line.
-
-    Defensive throughout, like the silence latent: any failure returns the audio
-    untouched with a note saying so, because a bed is a nicety and a render is not.
-    """
-    try:
-        if audio is None or bed is None or float(level or 0.0) <= 0.0:
-            return audio, ""
-        w = bed.get("waveform") if isinstance(bed, dict) else None
-        if w is None or not int(getattr(w, "ndim", 0)):
-            return audio, ("ambient_audio is wired but carries no waveform, so nothing "
-                           "was laid under the soundtrack")
-        w = w[0] if w.dim() == 3 else w              # [B, C, M] -> [C, M]
-        if w.dim() != 2 or w.shape[-1] < 2:
-            return audio, ("ambient_audio is too short to loop, so nothing was laid "
-                           "under the soundtrack")
-        w = w.detach().to(dtype=audio.dtype, device=audio.device)
-        b_sr = int((bed.get("sample_rate") if isinstance(bed, dict) else 0) or 0)
-        # RESAMPLE, or the bed plays at the wrong speed and pitch. Linear is coarse
-        # for music and inaudible on a room tone, which is what this input is for.
-        resampled = ""
-        if b_sr > 0 and b_sr != int(sr):
-            want = max(2, int(round(w.shape[-1] * float(sr) / float(b_sr))))
-            w = torch.nn.functional.interpolate(
-                w.unsqueeze(0), size=want, mode="linear", align_corners=False)[0]
-            resampled = f", resampled from {b_sr} Hz"
-        ch = int(audio.shape[1])
-        if int(w.shape[0]) != ch:
-            w = (w.mean(dim=0, keepdim=True).repeat(ch, 1) if int(w.shape[0]) > ch
-                 else w[:1].repeat(ch, 1))
-        n = int(audio.shape[-1])
-        loop = _seamless_loop(w, n, int(sr))
-        if loop is None:
-            return audio, ""
-        out = audio + loop.unsqueeze(0) * float(level)
-        # NORMALISE rather than clip. Clipping a bed that pushed a loud line over
-        # the top distorts the LINE, which is the thing worth keeping.
-        peak = float(out.abs().max())
-        gain = ""
-        if peak > 1.0:
-            out = out / peak
-            gain = f", and the mix was scaled by {1.0 / peak:.2f} to stop it clipping"
-        secs = w.shape[-1] / float(sr)
-        return out, (f"an ambient bed was laid under the whole soundtrack at level "
-                     f"{float(level):.2f} -- {secs:.1f}s of audio{resampled}, looped "
-                     f"with a crossfade so the join does not click{gain}. It is your "
-                     f"file, played under what the model generated: it conditions "
-                     f"nothing, so it cannot put a voice in a wordless shot the way "
-                     f"an inferred bed did. Shots pinned to silence keep their silent "
-                     f"conditioning and get the bed on top, which is what makes a "
-                     f"wordless shot sound like a room instead of a mute")
-    except Exception as exc:
-        return audio, (f"the ambient bed could not be mixed ({type(exc).__name__}), so "
-                       f"the soundtrack is unchanged")
-
-
-def _is_oom(e):
-    return isinstance(e, torch.cuda.OutOfMemoryError) or "out of memory" in str(e).lower()
-
-
-def _deep_cleanup():
-    """Release cached VRAM between shots so a long chain does not accumulate and OOM.
-
-    It unloads NOTHING. soft_empty_cache(force) ignores `force` in current ComfyUI
-    (model_management.py:2050) -- the body only reaches empty_cache() and
-    ipc_collect() -- so this drops cached blocks, not models. The `True` is kept
-    only for older builds that read it; the older comment here claimed this took an
-    unload_all_models path, and it does not."""
-    try:
-        mm.soft_empty_cache(True)
-    except TypeError:
-        mm.soft_empty_cache()
-    try:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-    except Exception:
-        pass
-
-
-DECODE_HEADROOM = 1.25          # over ComfyUI's own estimate, for working allocations
-SAMPLE_HEADROOM = 1.35          # likewise for sampling, which is the longer stretch
-
-
-def _decode_headroom(vae, latent):
-    """VRAM this decode actually needs, by the VAE's own estimate. 1e30 if unknown.
-
-    ComfyUI sizes every VAE with memory_used_decode and uses that number itself, so
-    it is the honest figure to hand free_memory. The alternative -- and what was here
-    -- is 1e30, which means "unload everything" and evicts the DiT before every
-    decode, three lines before the next shot reloads it.
-
-    1e30 on failure rather than 0: a bad estimate that frees too little turns a slow
-    render into an OOM, and a wrong guess should fall back to the behaviour that has
-    been running, not to no freeing at all."""
-    try:
-        dtype = getattr(vae, "vae_dtype", None) or latent.dtype
-        need = float(vae.memory_used_decode(tuple(latent.shape), dtype))
-        if need > 0:
-            return need * DECODE_HEADROOM
-    except Exception:
-        pass
-    return 1e30
-
-
-def _resident(models):
-    """The LoadedModel entries ComfyUI currently holds for `models`.
-
-    That is the form free_memory's keep_loaded wants: it compares against the
-    entries in current_loaded_models, not against the ModelPatcher objects a node
-    is holding. Anything not matched is simply not kept, so a model that is not
-    resident costs nothing here."""
-    out = []
-    for lm in list(getattr(mm, "current_loaded_models", [])):
-        for m in models or ():
-            if m is None:
-                continue
-            try:
-                if lm.model is m or getattr(lm, "model", None) is getattr(m, "model", None):
-                    if lm not in out:
-                        out.append(lm)
-            except Exception:
-                pass
-    return out
-
-
-def _image_out_dtype():
-    """The dtype ComfyUI itself hands between nodes on THIS install.
-
-    The join used to end in a hard-coded .float(), commented "back to what every
-    downstream node expects". That was true when it was written and is not a
-    constant: ComfyUI has --fp16-intermediates, and on an install running it the
-    VAE's own decode already returns fp16 -- VAE.vae_output_dtype() IS
-    model_management.intermediate_dtype() (comfy/sd.py) -- as do EmptyLatentImage
-    and the rest of nodes.py. So on that install the node was taking frames the
-    VAE handed it in fp16, widening them to fp32 nothing had asked for, and
-    handing them to nodes whose own convention is fp16.
-
-    It is the largest thing this node holds, so the widening is not free: the
-    2580-frame chain costed at the join is 9.3GB as fp16 and 18.5GB as fp32,
-    against 44.6GB of staged weights on a 62GB machine -- which is the difference
-    between the render finishing and the OOM killer taking the server. Reported as
-    exactly that, twice.
-
-    Asked, not assumed, and never widened: whatever ComfyUI says it wants between
-    nodes is what the chain is built in. An install with the flag off is told
-    float32 and gets float32, byte for byte what it got before. Older builds have
-    no intermediate_dtype at all, so the fallback is the old constant."""
-    try:
-        return mm.intermediate_dtype()
-    except Exception:
-        return torch.float32
-
-
-def _evict_all_but(keep_model, latent=None):
-    """Unload every model EXCEPT the diffusion model from the GPU.
-
-    This is the fix for VRAM ratcheting across a long chain. soft_empty_cache()
-    only drops the CUDA allocator's cached blocks -- it does NOT unload models, so
-    ComfyUI keeps the Qwen3-VL text encoder (~14.6GB) and both VAEs resident in
-    current_loaded_models alongside the DiT. Each shot re-encodes the prompt
-    (text encoder), encodes the handoff keyframe (video VAE), then samples (DiT),
-    so all three compete for the card.
-
-    ComfyUI does free ahead of each load -- load_models_gpu() calls free_memory()
-    for what it is about to need (model_management.py:975), so the weight path is
-    not purely reactive. What it cannot size for is a long chain's ACTIVATIONS on
-    a card where the DiT is most of the VRAM. Freeing explicitly, right after
-    conditioning is built and before sampling, keeps only what the sampler needs.
-
-    ASKED FOR HONESTLY, and this is the expensive one. free_memory computes
-    `memory_to_free = memory_required - get_free_memory(device)`, so 1e30 meant
-    "unload everything but the DiT" on every shot, unconditionally -- on a 48GB card
-    with room for all of it as readily as on a 16GB one. What it unloads is the
-    ~14.6GB text encoder and both VAEs, and the next shot re-encodes the prompt and
-    the handoff keyframe, so all three come straight back. On a machine whose RAM is
-    already full of finished frames they come back from DISK, once per shot, which is
-    the thrashing this was reported as.
-
-    The DiT can size its own activations -- memory_required(shape) is what ComfyUI
-    itself calls before a load -- so ask for that. A card with room frees nothing and
-    keeps the encoder resident; a card without frees exactly as much as it must.
-    1e30 stays the fallback, because a bad estimate that frees too little turns a
-    slow render into an OOM."""
-    need = 1e30
-    try:
-        if latent is not None:
-            shape = latent["samples"].shape if isinstance(latent, dict) else latent.shape
-            need = float(keep_model.model.memory_required(tuple(shape))) * SAMPLE_HEADROOM
-            if not (need > 0):
-                need = 1e30
-    except Exception:
-        need = 1e30
-    try:
-        mm.free_memory(need, mm.get_torch_device(),
-                       keep_loaded=_resident([keep_model]))
-    except Exception:
-        try:
-            mm.soft_empty_cache(True)
-        except Exception:
-            pass
 
 
 def check_vae_wiring(vae, audio_vae):
@@ -3155,132 +2351,6 @@ def flush_for_model_change(model):
     new_fmt = fp[0]
     return (f"model changed since last run ({old_fmt} ~{old_sz / GB:.1f}GB -> {new_fmt} "
             f"~{fp[2] / GB:.1f}GB): flushed all resident models and VRAM caches")
-
-
-# Whether the silence conditioning ACTUALLY went on, per run. _silent_audio_latent
-# is defensive by design -- every failure returns None so a render never dies for a
-# nicety -- but the info note reported the silence_nonspeech FLAG, not the result.
-# A shot whose latent could not be built was described as "conditioned on real
-# silence" while its audio branch was wide open, which is a shot that babbles with
-# no scripted line and nothing in the report saying why. Counted here so the note
-# can say what happened instead of what was asked for.
-_SILENCE_STATUS = {"asked": 0, "applied": 0, "why": ""}
-
-
-# How much silence to encode, and how much of each end to throw away. The encoder
-# pads at the edges, so the first and last few latent frames carry an artifact that
-# is not silence: measured on the H3 audio VAE, the frame-to-frame delta runs 0.224
-# at the first join and 0.172 at the last against 0.002 in the interior. Four
-# frames off each end clears it with room to spare.
-_SILENT_SECONDS = 2
-_SILENT_EDGE = 4
-
-
-def _silent_audio_latent(audio_vae, frame_count, fps):
-    """A keyframe audio latent of actual SILENCE, or None if it cannot be made.
-
-    H3 is a JOINT model: the mouth follows the audio branch. On a shot with no
-    scripted line the branch is otherwise unconditioned, and an unconditioned audio
-    branch invents a voice -- which the picture then lip-syncs to. The lips-closed
-    sentence is arguing with a stream that has already decided someone is talking.
-
-    REBUILT 2026-09-05, from measurements against the real VAE rather than from
-    reasoning. The previous version encoded one second, kept a SINGLE interior
-    frame and repeated it, on the argument that silence is homogeneous. It is not,
-    in latent space: encoded silence has genuine frame-to-frame variation (delta
-    mean 0.002-0.004, max 0.021), and a repeated frame has a delta of exactly
-    0.000000. That is a flat signal no encoder produces, and a model handed
-    conditioning outside its own distribution has every reason to disregard it --
-    which is an audio branch back to inventing a voice, with the report saying
-    silence went on.
-
-    The fix that version was avoiding is real too: tiling the whole encoded second
-    end to end leaves a 25x spike at each join (0.554 against 0.022), once per
-    second, which is a metronome in the conditioning of a joint model.
-
-    So: encode two seconds, drop the padded ends, and PING-PONG the interior --
-    forward, reversed, forward. Every join repeats a frame, so there is no seam,
-    and the interior statistics are the encoder's own. Measured over a 9s shot:
-
-        one frame repeated   peak 0.000686   delta mean 0.000000   max 0.000000
-        whole 2s tiled       peak 0.000314   delta mean 0.017451   max 0.554715
-        interior ping-pong   peak 0.000566   delta mean 0.002039   max 0.021159
-
-    where the encoder's own interior is mean 0.0021, max 0.0212. Decoded peak
-    0.000566 on a +/-1.0 scale is about -65 dBFS: silence.
-
-    Everything here stays defensive. Shapes are CHECKED against what the layout
-    expects rather than assumed, and any failure returns None so the shot falls
-    back to an unconditioned branch instead of breaking the render -- the caller
-    reports when that happens, so it is no longer a silent failure.
-    """
-    try:
-        sr = int(getattr(audio_vae, "audio_sample_rate", 0) or 0)
-        if sr <= 0:
-            return None
-        _, _, want_t = temporal_shape(frame_count, fps)
-        if want_t <= 0:
-            return None
-        key = (id(audio_vae), sr)
-        block = _SILENT_UNIT.get("lat") if _SILENT_UNIT.get("key") == key else None
-        if block is None:
-            # CHANNELS LAST. comfy.sd.VAE.encode() does `pixel_samples.movedim(-1, 1)`
-            # before handing off, so the audio VAE -- which wants [B, 2, L] -- must be
-            # given [B, L, 2]. Passing [B, 2, L] raises inside the encoder, and an
-            # early version did exactly that: swallowed by the guard below, so the
-            # whole layer silently did nothing.
-            #
-            # Two seconds, encoded ONCE and cached. Encoding a full 15s shot instead
-            # cost a VAE pass big enough to OOM mid-render on a 16GB card, where the
-            # failure again degraded silently to no conditioning at all.
-            enc = audio_vae.encode(torch.zeros((1, sr * _SILENT_SECONDS, 2)))
-            if enc is None or enc.dim() != 4 or enc.shape[1] != 32:
-                return None
-            if enc.shape[-1] <= 2 * _SILENT_EDGE + 1:
-                return None
-            block = enc[..., _SILENT_EDGE:-_SILENT_EDGE].detach().to("cpu").clone()
-            _SILENT_UNIT["lat"] = block
-            _SILENT_UNIT["key"] = key
-        n = block.shape[-1]
-        if n < 1:
-            return None
-        # Forward, reversed, forward... Each join repeats a frame, so the seam that
-        # plain tiling leaves is gone while the interior variation is the encoder's.
-        pieces, have, i = [], 0, 0
-        while have < want_t:
-            piece = block if i % 2 == 0 else torch.flip(block, dims=[-1])
-            pieces.append(piece)
-            have += n
-            i += 1
-        out = torch.cat(pieces, dim=-1)[..., :want_t].clone()
-        if out.shape[-1] != want_t:
-            return None
-        return out
-    except Exception:
-        return None                         # never fail a render for a nicety
-
-
-def _pin_audio_silence(latent, silence, lead_frames=None):
-    """Start target audio at encoded silence and preserve the requested span."""
-    try:
-        video, audio = latent["samples"].unbind()
-        silence = silence.to(device=audio.device, dtype=audio.dtype)
-        if silence.shape != audio.shape:
-            return False
-        audio_mask = torch.ones_like(audio[:, :1])
-        if lead_frames is None:
-            audio_mask.zero_()
-        else:
-            n = min(audio.shape[-1], max(0, int(lead_frames)))
-            if n <= 0:
-                return False
-            audio_mask[..., :n] = 0
-        latent["samples"] = comfy.nested_tensor.NestedTensor((video, silence))
-        latent["noise_mask"] = comfy.nested_tensor.NestedTensor(
-            (torch.ones_like(video[:, :1]), audio_mask))
-        return True
-    except Exception:
-        return False
 
 
 _POSTURE = re.compile(
@@ -3396,76 +2466,6 @@ def detail_report(per_shot):
     else:
         line += f" -- flat within {abs(drop):.0f}%"
     return line
-
-
-def _keyframe_latent(vae, hand_img):
-    """The keyframe latent for this shot: an ENCODE of the previous shot's last frame.
-
-    This was briefly an optimisation -- pass the previous shot's own latent straight
-    through and skip a VAE round trip per boundary. It was wrong, and it degraded
-    every shot after the first.
-
-    A keyframe is ONE pixel frame, and H3's grid puts that at 5f -> TWO latent
-    frames. Slicing [:, :, -1:] off a finished shot hands over one. Worse, the video
-    VAE is causal: the last latent of a 72-frame sequence encodes its temporal
-    context, not a standalone opening frame, so even at the right count it does not
-    mean what a keyframe means. The spatial-size guard could not see either problem.
-
-    The round trip is real but it is one lossy step on a correctly formed anchor,
-    which beats a cheap malformed one."""
-    return vae.encode(hand_img)
-
-
-def _build_ref_images(vae, images, gen_w, gen_h, mode="match"):
-    """(tokenizer items, DiT blocks) for a list of reference IMAGE tensors.
-
-    The tokenizer labels each one `<Picture N>:` itself, in the order given here --
-    so the roster the prompt refers to is decided by input order, not by anything
-    written in the prompt."""
-    items, blocks = [], []
-    for img in images:
-        if img is None:
-            continue
-        h, w = int(img.shape[1]), int(img.shape[2])
-        tw, th = ref_image_canvas(w, h, gen_w, gen_h, mode)
-        resized = _resize(img[:1], tw, th, "disabled")
-        items.append({"type": "image", "data": resized})
-        blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16,
-                       "latent": vae.encode(resized)})
-    return items, blocks
-
-
-def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent, sigmas):
-    """common_ksampler, driven by an EXTERNAL sigma schedule.
-
-    common_ksampler derives its sigmas from (sampler_name, scheduler, steps, denoise)
-    and takes no schedule argument, so a schedule computed anywhere else cannot
-    reach it. Under PDD that is fatal rather than merely inconvenient: the heads
-    accept only their nine trained boundaries, and re-deriving the grid from
-    widgets means hitting it by coincidence and losing it again the moment a step
-    count changes.
-
-    Mirrors nodes.common_ksampler's noise / mask / callback handling exactly -- the
-    only substitution is comfy.sample.sample_custom for comfy.sample.sample."""
-    latent_image = latent["samples"]
-    latent_image = comfy.sample.fix_empty_latent_channels(
-        model, latent_image,
-        latent.get("downscale_ratio_spacial", None),
-        latent.get("downscale_ratio_temporal", None))
-    noise = comfy.sample.prepare_noise(latent_image, seed, latent.get("batch_index"))
-    # `steps` here only sizes the progress bar -- the schedule is `sigmas`, whose
-    # step count is one less than its length (the trailing 0.0 is an endpoint).
-    callback = latent_preview.prepare_callback(model, max(len(sigmas) - 1, 1))
-    samples = comfy.sample.sample_custom(
-        model, noise, cfg, comfy.samplers.sampler_object(sampler_name), sigmas,
-        positive, negative, latent_image,
-        noise_mask=latent.get("noise_mask"), callback=callback,
-        disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=seed)
-    out = latent.copy()
-    out.pop("downscale_ratio_spacial", None)
-    out.pop("downscale_ratio_temporal", None)
-    out["samples"] = samples
-    return out
 
 
 def _find_h3_sampling_node():
@@ -7407,181 +6407,6 @@ def scrub_removed(text, tokens):
     return " ".join(kept).strip()
 
 
-# --- upscaling ---------------------------------------------------------------
-
-# How many frames go through one resize call. The whole chain used to go in one,
-# which is what made this the largest allocation in the node -- see below.
-RESIZE_CHUNK = 32
-
-
-def _stream_chunks(total):
-    """A collector that writes upscaled chunks into ONE destination as they land.
-
-    Both chunk loops in _upscale_frames used `out.append(...)` then
-    `frames = torch.cat(out, dim=0)`. That is the shape the finished-chain join was
-    rebuilt to stop, at a LARGER size: the list holds the whole upscaled chain and
-    the cat allocates a second one, both live at the cat, and `out` is a local that
-    is never cleared -- so it survives the cat, survives the trailing resize, and is
-    still bound at the return. Meanwhile the CALLER's pre-upscale chain cannot be
-    dropped either, because `part = frames[s:s+batch]` is a view into it.
-
-    At 2580 frames of 1056x608 that is 9.26GB per copy per doubling: 37GB x2 at 2x,
-    and 148GB x2 with the RealESRGAN_x4plus that is sitting in models/upscale_models.
-    Preallocating from the first chunk and copying into it removes exactly one of
-    those two, and drops the list at the same time.
-
-    The destination is sized from the FIRST chunk, so the model's scale factor does
-    not have to be known in advance, and the frame count is the caller's own -- an
-    upscaler changes width and height, never the number of frames."""
-    state = {"dst": None, "at": 0}
-
-    def put(piece):
-        if state["dst"] is None:
-            state["dst"] = torch.empty((int(total),) + tuple(piece.shape[1:]),
-                                       dtype=piece.dtype, device=piece.device)
-        k = int(piece.shape[0])
-        end = min(state["at"] + k, state["dst"].shape[0])
-        if end > state["at"]:
-            state["dst"][state["at"]:end].copy_(piece[:end - state["at"]])
-        state["at"] = end
-
-    def done():
-        d, at = state["dst"], state["at"]
-        if d is None:
-            return None
-        return d if at == d.shape[0] else d[:at]
-
-    return put, done
-
-
-def _resize_short_edge(frames, target, method="lanczos", chunk=0):
-    """Resize a [B,H,W,C] frame batch so its short edge == target (keeping aspect,
-    snapped to /32). Plain high-quality resize -- enlarges, doesn't add detail.
-
-    IN CHUNKS, BECAUSE LANCZOS IS FOUR FULL-LENGTH COPIES. The whole chain went
-    into one common_upscale call, and comfy.utils.lanczos is three successive list
-    comprehensions over every frame at once:
-
-        images = [Image.fromarray(...) for image in samples]        # N at source size
-        images = [image.resize(...) for image in images]            # N at target size
-        images = [torch.from_numpy(np.array(im).astype(np.float32)/255.) ...]
-        result = torch.stack(images)
-        return result.to(samples.device, samples.dtype)
-
-    A comprehension builds the new list completely before rebinding the name, so at
-    each rebind BOTH are live; then torch.stack allocates a full copy while its list
-    still exists, and .to() allocates the result while the stack still exists. Note
-    the astype(np.float32): the input is fp16 but the two largest transients are at
-    DOUBLE its width. At 2580 frames to a 1080 short edge that peaked around 147GB
-    to produce a 29GB result, and it fires on a DOWNSCALE too.
-
-    Chunked, the peak is the result plus one chunk's worth of that machinery. It is
-    bit-identical: PIL resizes each frame independently, so per-chunk and per-chain
-    give the same pixels. The early return for an already-correct size is kept, so
-    the common no-op case still allocates nothing."""
-    b, h, w, c = frames.shape
-    if min(h, w) == target:
-        return frames
-    if h <= w:
-        nh = target; nw = max(32, int(round(target * w / h / 32) * 32))
-    else:
-        nw = target; nh = max(32, int(round(target * h / w / 32) * 32))
-    step = max(1, int(chunk) or RESIZE_CHUNK)
-    out = torch.empty((b, nh, nw, c), dtype=frames.dtype, device=frames.device)
-    for i in range(0, b, step):
-        part = comfy.utils.common_upscale(
-            frames[i:i + step].movedim(-1, 1), nw, nh, method, "disabled")
-        out[i:i + step].copy_(part.movedim(1, -1))
-        del part
-    return out
-
-
-def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
-    """Optional post-pass upscale of the finished frames (on CPU).
-      mode 'model'   : run a ComfyUI upscale model (Real-ESRGAN/UltraSharp class)
-                       via the registered loader+apply nodes, chunked with cleanup
-                       so 2000+ frames don't OOM; then fit to target short edge.
-      mode 'rtx'     : NVIDIA RTX Video Super Resolution (Tensor Cores; fastest,
-                       best quality for video -- needs Nvidia_RTX_Nodes_ComfyUI).
-      mode 'lanczos' : plain high-quality resize to the target short edge.
-    Any failure falls back to lanczos (or the raw frames), so it never breaks a
-    render. Returns (frames, note). NOTE: this SHARPENS/ENLARGES; it does not
-    reconstruct video detail the way a second-model (LTX 2.3) pass does."""
-    if mode == "off" or frames is None or getattr(frames, "shape", [0])[0] == 0:
-        return frames, ""
-    note = ""
-    if mode == "rtx":
-        # NVIDIA RTX Video Super Resolution (Comfy-Org/Nvidia_RTX_Nodes_ComfyUI).
-        # Runs on RTX Tensor Cores -- far faster than ESRGAN-class models and
-        # generally cleaner on video, though like them it enhances/enlarges rather
-        # than reconstructing detail (an LTX 2.3 re-generation does that).
-        try:
-            rtx = (_find_node(["rtx", "video", "super"]) or _find_node(["rtxvideosuperresolution"])
-                   or _find_node(["rtx", "upscale"]))
-            if rtx is None:
-                raise RuntimeError("RTX node not installed (Nvidia_RTX_Nodes_ComfyUI)")
-            scale = 2
-            if target_short_edge and int(target_short_edge) > 0:
-                cur = min(frames.shape[1], frames.shape[2])
-                if cur > 0:
-                    scale = max(1, min(4, int(round(int(target_short_edge) / cur))))
-            _put, _done = _stream_chunks(frames.shape[0])
-            n = frames.shape[0]
-            step = max(1, int(batch))
-            for st in range(0, n, step):
-                part = frames[st:st + step]
-                res = None
-                for kw in ({"image": part, "scale": scale}, {"images": part, "scale": scale},
-                           {"image": part, "scale_factor": scale}, {"image": part}):
-                    try:
-                        res = _invoke_node(rtx, **kw); break
-                    except TypeError:
-                        continue
-                if res is None:
-                    raise RuntimeError("RTX node signature not recognized")
-                _put(res.detach().to("cpu"))
-                del res, part
-                _deep_cleanup()
-            frames = _done()
-            note = f"RTX Video Super Resolution x{scale}"
-            if target_short_edge and int(target_short_edge) > 0:
-                frames = _resize_short_edge(frames, int(target_short_edge))
-                note += f"; fit to {int(target_short_edge)}px short edge"
-            return frames, note
-        except Exception as e:
-            mode = "model"
-            note = f"RTX upscale unavailable ({e}); fell back to model/lanczos"
-    if mode == "model" and model_name and model_name != "none":
-        try:
-            loader = _find_node(["upscale", "model", "load"]) or _find_node(["loadupscalemodel"])
-            applier = _find_node(["imageupscale", "model"]) or _find_node(["upscaleimageusingmodel"])
-            if loader is None or applier is None:
-                raise RuntimeError("upscale-model nodes not found")
-            up_model = _invoke_node(loader, model_name=model_name)
-            _put, _done = _stream_chunks(frames.shape[0])
-            n = frames.shape[0]
-            for s in range(0, n, max(1, int(batch))):
-                part = frames[s:s + max(1, int(batch))]
-                res = _invoke_node(applier, upscale_model=up_model, image=part)
-                _put(res.detach().to("cpu"))
-                del res, part
-                _deep_cleanup()
-            frames = _done()
-            note = f"upscaled with {model_name}"
-        except Exception as e:
-            mode = "lanczos"
-            note = f"model upscale unavailable ({e}); used lanczos"
-    if target_short_edge and int(target_short_edge) > 0:
-        try:
-            frames = _resize_short_edge(frames, int(target_short_edge))
-            note = (note + "; " if note else "") + f"fit to {int(target_short_edge)}px short edge"
-        except Exception as e:
-            note = (note + "; " if note else "") + f"resize failed ({e})"
-    elif mode == "lanczos" and not note:
-        note = "lanczos selected but no target set -> unchanged"
-    return frames, note
-
-
 def _upscale_model_list():
     """Filenames in models/upscale_models, plus 'none'. Read fresh at INPUT_TYPES
     time so newly-added models show up on a graph reload."""
@@ -7654,148 +6479,8 @@ def _latent_upscale_model_list():
     return ["off"] + names
 
 
-def _find_node(substrings):
-    """Find a registered node whose key contains all of `substrings` (lowercased)."""
-    maps = getattr(nodes, "NODE_CLASS_MAPPINGS", {}) or {}
-    for k, v in maps.items():
-        kl = k.lower()
-        if all(s in kl for s in substrings):
-            return v
-    return None
-
-
-def _invoke_node(cls, **kwargs):
-    """Call a registered ComfyUI node (V1 FUNCTION or V3 execute) with kwargs and
-    return its first output. Used to reuse ComfyUI's own upscale-model loader/apply
-    so we don't reimplement spandrel loading or tiled scaling."""
-    inst = cls()
-    fn = None
-    if getattr(cls, "FUNCTION", None) and hasattr(inst, cls.FUNCTION):
-        fn = getattr(inst, cls.FUNCTION)
-    else:
-        for cand in ("execute", "upscale", "load_model", "load"):
-            if hasattr(inst, cand):
-                fn = getattr(inst, cand); break
-    if fn is None:
-        raise RuntimeError("no callable entrypoint")
-    out = fn(**kwargs)
-    out = getattr(out, "result", out)
-    return out[0] if isinstance(out, (tuple, list)) else out
-
-
 def latent_upscaler_node():
     return _find_node(["minimaxh3latentupscaler", "3d"]) or _find_node(["minimaxh3latentupscaler"])
-
-
-# --- one shot's conditioning ------------------------------------------------
-
-def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
-                       handoff=None, refs=None,
-                       ref_noise_aug=0.999, silent=False, ref_image_size="match",
-                       handoff_as_ref=False, speech_lead_seconds=0.0):
-    """Text + references + keyframe for a single shot.
-
-    THE ONE RULE from H3's layout: a shot's conditioning rows are packed in the
-    order the tokenizer is given them, and tokenize_with_weights is either/or --
-    passing minimax_ref_items makes it ignore `images` outright. So a reference and
-    a keyframe cannot be handed over separately; whatever the encoder is to see goes
-    in one list, numbered by position.
-
-    So one roster, and it has to be readable under ONE format. A shot with a keyframe
-    is fl2va -- the keyframe is <Picture 1> -- and reference images are dropped for
-    that shot, because on fl2va slot 2 means the LAST frame rather than a second
-    subject. See the comments below.
-    """
-    latent, fc = _empty_av_latent(width, height, length, H3_FPS)
-    refs = [r for r in (refs or []) if r is not None]
-
-    hand_img = None
-    if handoff is not None:
-        hand_img = _resize(handoff[:1], width, height, "disabled")
-
-    # REFERENCES AND THE KEYFRAME RIDE TOGETHER. This is the arrangement the node
-    # had before I broke it, and the reason is in ComfyUI's own layout:
-    #
-    #   model_base.py:2183-2191  cond_video_latents = keyframe latents THEN ref latents
-    #   model.py PackedLayout    emits keyframe "cond" segments THEN ref "ref_img" ones
-    #
-    # The two orders agree, so both channels coexist. A shot takes its references AND
-    # a real keyframe: the keyframe ANCHORS the first frame, which is what continuity
-    # needs, while a reference only supplies identity. They are not alternatives.
-    #
-    # I had read "<Picture 1>" as MEANING the first frame on fl2va, and rearranged the
-    # roster around that. It does not. Which image is the first frame is decided by
-    # resolved_frame_index in minimax_keyframes, not by a label's number -- the labels
-    # are only how the images are shown to the VLM, and what they have to line up with
-    # is the <Picture N> tags in the prompt.
-    #
-    # So references come FIRST and keep slots 1..N, which is what a sheet line's
-    # `Name: <Picture 1>, ...` points at, and the handoff is appended AFTER them where
-    # it disturbs no numbering. It has to be in the list at all because
-    # tokenize_with_weights is either/or: passing minimax_ref_items makes it ignore
-    # `images` outright, so leaving the handoff out means the VLM is never shown where
-    # the shot left off and re-imagines the scenery -- same place, new room.
-    keyframe_ok = ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG
-    # One aug covers every visual condition row, references AND the keyframe. Below
-    # KEYFRAME_SAFE_AUG the keyframe latent would be noised and labelled at the wrong
-    # timestep, so the handoff stops being an anchor and rides as an extra reference
-    # instead: weaker continuity, but nothing pretending to anchor while carrying noise.
-    # ...or because the caller asked for it. A shot that introduces somebody already
-    # in position wants the room this picture carries and NOT the first frame it
-    # would force, and that is a demotion the aug knows nothing about.
-    carry_as_ref = bool(hand_img is not None
-                        and (handoff_as_ref or (refs and not keyframe_ok)))
-
-    enc_refs = refs + ([hand_img] if carry_as_ref else [])
-    items, blocks = ([], [])
-    if enc_refs:
-        items, blocks = _build_ref_images(vae, enc_refs, width, height, ref_image_size)
-    if hand_img is not None and not carry_as_ref:
-        items = items + [{"type": "image", "data": hand_img}]
-
-    if items:
-        tokens = clip.tokenize(prompt, minimax_ref_items=items)
-    else:
-        tokens = clip.tokenize(prompt)
-    cond = clip.encode_from_tokens_scheduled(tokens)
-
-    vals = {}
-    if blocks:
-        vals["minimax_refs"] = blocks
-        # How CLEAN the references are shown. One aug covers every conditioning
-        # latent, keyframe included -- which is why softening references below
-        # KEYFRAME_SAFE_AUG would soften the anchor too.
-        if ref_noise_aug is not None:
-            vals["minimax_visual_cond_noise_aug"] = float(ref_noise_aug)
-
-    kfs = []
-    if hand_img is not None and not carry_as_ref:
-        kfs.append({"resolved_frame_index": 0,
-                    "latent": _keyframe_latent(vae, hand_img)})
-    # Audio keyframes are extra conditioning rows in H3's PackedLayout. Pin the
-    # generated target stream instead, so the joint model also sees a quiet mouth.
-    if silent or float(speech_lead_seconds or 0.0) > 0.0:
-        _SILENCE_STATUS["asked"] += 1
-        if audio_vae is None:
-            _SILENCE_STATUS["why"] = "no audio VAE is wired to the node"
-        else:
-            sil = _silent_audio_latent(audio_vae, fc, H3_FPS)
-            if sil is None:
-                _SILENCE_STATUS["why"] = ("the audio VAE would not encode a silent "
-                                          "second -- the wrong VAE is on the "
-                                          "audio_vae input")
-            else:
-                lead = None if silent else round(float(speech_lead_seconds) *
-                                                 AUDIO_LATENT_FPS)
-                if _pin_audio_silence(latent, sil, lead):
-                    _SILENCE_STATUS["applied"] += 1
-                else:
-                    _SILENCE_STATUS["why"] = "the silent latent did not match the shot"
-    if kfs:
-        vals["minimax_keyframes"] = kfs
-    if vals:
-        cond = node_helpers.conditioning_set_values(cond, vals)
-    return cond, latent, fc, carry_as_ref
 
 
 def landing_schedule(model, scheduler, steps, shift_video, shift_audio):
@@ -8433,6 +7118,48 @@ class H3LongVideos:
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
+        prepared = self._prepare(
+            model=model, clip=clip, vae=vae,
+            audio_vae=audio_vae, prompt=prompt, resolution=resolution,
+            megapixels=megapixels, shot_seconds=shot_seconds, steps=steps,
+            cfg=cfg, sampler_name=sampler_name, scheduler=scheduler,
+            seed=seed, first_frame=first_frame, ref_image_1=ref_image_1,
+            ref_image_2=ref_image_2, ref_image_3=ref_image_3, ref_image_4=ref_image_4,
+            negative=negative, sigmas=sigmas, shift_video=shift_video,
+            shift_audio=shift_audio, apply_model_sampling=apply_model_sampling, silence_nonspeech=silence_nonspeech,
+            trim_seam=trim_seam, ref_noise_aug=ref_noise_aug, tiled_decode=tiled_decode,
+            cleanup_between_shots=cleanup_between_shots, plan_only=plan_only, latent_upscale=latent_upscale,
+            latent_upscale_scale=latent_upscale_scale, upscale=upscale, upscale_model=upscale_model,
+            upscale_target_short_edge=upscale_target_short_edge, upscale_batch=upscale_batch, shot_length=shot_length,
+            hold_restraints=hold_restraints, restart_after_removal=restart_after_removal, auto_remove=auto_remove,
+            anchor=anchor, character_memory=character_memory, character_guard=character_guard,
+            pace=pace, auto_sound=auto_sound, hold_scene_state=hold_scene_state,
+            mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
+            ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
+            **_removed)
+        if isinstance(prepared, PreparedVideo):
+            return self._render(prepared)
+        return prepared
+
+    def _prepare(self, model, clip, vae, audio_vae, prompt, resolution, megapixels, shot_seconds,
+            steps, cfg, sampler_name, scheduler, seed,
+            first_frame=None, ref_image_1=None, ref_image_2=None, ref_image_3=None,
+            ref_image_4=None, negative=None, sigmas=None,
+            shift_video=12.0, shift_audio=3.0, apply_model_sampling=True,
+            silence_nonspeech=True, trim_seam=True, ref_noise_aug=0.999,
+            tiled_decode=True, cleanup_between_shots=True, plan_only=False,
+            latent_upscale="off", latent_upscale_scale=2.0,
+            upscale="off", upscale_model="none", upscale_target_short_edge=0,
+            upscale_batch=4, shot_length="from the beat", hold_restraints=True,
+            restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
+            character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
+            mouths_shut_when_no_line=True, hold_gaze=True,
+            ambient_audio=None, ambient_level=0.25, foley_level=0.35,
+            speech_lead_seconds=0.5,
+            **_removed):
+        # **_removed: a workflow saved with the old `save_defaults` widget still sends
+        # it. Swallowed rather than raising, so an existing workflow keeps loading.
+
         notes = []
         # BEFORE the numbers are repaired, because the numbers are the symptom and
         # this is the cause. A combo holding something that is not one of its own
@@ -8620,13 +7347,11 @@ class H3LongVideos:
         # the scene stops describing a garment a beat has taken off. It applies to
         # the removing shot too: the keyframe already shows the garment on at the
         # start, and a description saying it is still worn is what puts it back.
-        shots, speech, gone, shown = [], [], [], []
-        shot_events = []          # per shot: the sounds its action makes
-        sounded = []                # beats that ask for a sound of their own
+        plan = ShotPlan()
+        gone, shown = [], []
         # Of those, the ones open ONLY because the beat stages effort. The branch
         # is open on both, but for opposite reasons, and built sound has to tell
         # them apart -- see the foley mix.
-        voiced_only = []
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
         # Has any BEAT stated a posture yet? The scene fallback for the weight
@@ -8821,13 +7546,12 @@ class H3LongVideos:
                          f"conditioning says is not there. That is what stops the mouth "
                          f"moving. H3 is joint, so a free branch fills itself with a "
                          f"voice and the face lip-syncs to the babble, and no wording "
-                         f"suppresses that -- only the silent keyframe does, and it pins "
+                         f"suppresses that -- only the audio denoise mask does, and it pins "
                          f"the whole shot rather than just its opening")
         active = []                 # the people the previous beat involved
         _seen_before = set()        # everyone a shot has described so far
         _returns = []               # (shot, names back after a shot away)
         _placed_shots = {}          # 0-based shot -> who it introduces in position
-        shot_cast = []              # the names each shot describes
         guard_words = beat_words = total_words = sound_words = 0
         # THE PROMPT ENGINE. One state, read beat by beat, rendered once per shot.
         # It replaces the continuity guards that used to be derived independently
@@ -8855,7 +7579,7 @@ class H3LongVideos:
             # the quotation marks are exchanged. Reported below.
             _marked = mark_dialogue(body)
             if _marked != body:
-                dialogue_marked.append(len(shots) + 1)
+                dialogue_marked.append(len(plan) + 1)
                 body = _marked
             # THE ENGINE READS FIRST, before anything downstream asks it what is
             # true. It was reading further down at one point, after the hardware
@@ -8868,12 +7592,12 @@ class H3LongVideos:
             # cuffs on her from shot 1 -- reported as a handcuff on her arm
             # before she is handcuffed.
             _later_for_state = {c for c, at in _staged_at.items()
-                                if at > len(shots) + 1}
+                                if at > len(plan) + 1}
             for _n, _line in sheet_lines(sheet):
                 if _n:
                     _state.declare(_n, _line, staged_later=_later_for_state)
             _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
-                              shot=len(shots) + 1)
+                              shot=len(plan) + 1)
             # Who this beat involves, decided BEFORE the removals: a beat that
             # undresses somebody names no garment, so the wardrobe to clear is read
             # off their sheet entries -- and only theirs. Undressing one person must
@@ -8885,7 +7609,7 @@ class H3LongVideos:
             if character_guard:
                 shot_sheet, active = sheet_for_beat(sheet, body, active)
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
-                    notes.append(f"shot {len(shots) + 1} describes only "
+                    notes.append(f"shot {len(plan) + 1} describes only "
                                  f"{', '.join(active) or 'the scene'} -- the rest of the "
                                  f"sheet is held back, because a person the text "
                                  f"describes is a person the model draws")
@@ -8897,7 +7621,7 @@ class H3LongVideos:
                 # different" is.
                 for _grp, _who_all in unresolved_pronouns(sheet, body, _was):
                     notes.append(
-                        f"shot {len(shots) + 1} says '{_grp}' and "
+                        f"shot {len(plan) + 1} says '{_grp}' and "
                         f"{' and '.join(_who_all)} all answer to it, so the guard could "
                         f"not tell which -- and it describes NEITHER rather than both, "
                         f"because naming somebody the beat did not is how an extra "
@@ -8906,10 +7630,10 @@ class H3LongVideos:
                 # First appearance, with the beat saying where they ARE rather than
                 # staging them arriving. See the handoff decision in the render loop.
                 _new = [n for n in active if n not in _seen_before]
-                if _new and not arrives_in(body) and shots:
-                    _placed_shots[len(shots)] = list(_new)
+                if _new and not arrives_in(body) and plan:
+                    _placed_shots[len(plan)] = list(_new)
                     notes.append(
-                        f"shot {len(shots) + 1} introduces {', '.join(_new)} in "
+                        f"shot {len(plan) + 1} introduces {', '.join(_new)} in "
                         f"position rather than arriving, so the previous shot's last "
                         f"frame stops being this shot's FIRST frame -- that frame does "
                         f"not have them in it, and a keyframe is a picture, so they "
@@ -8920,7 +7644,7 @@ class H3LongVideos:
                         f"arrive on screen and keep the frame as the anchor")
                 _back = [n for n in active if n not in _was and n in _seen_before]
                 if _back:
-                    _returns.append((len(shots) + 1, list(_back)))
+                    _returns.append((len(plan) + 1, list(_back)))
                 _seen_before.update(active)
             else:
                 shot_sheet = sheet
@@ -8954,7 +7678,7 @@ class H3LongVideos:
                                 inferred.append(_hw)
                 if inferred:
                     toks = list(toks) + inferred
-                    notes.append(f"shot {len(shots) + 1}: read '{', '.join(inferred)}' as "
+                    notes.append(f"shot {len(plan) + 1}: read '{', '.join(inferred)}' as "
                                  f"coming off, from the beat's own wording")
             # "...strip out of their clothes, becoming naked" names nothing, so every
             # other path had nothing to take off and the scene went on listing the
@@ -8975,7 +7699,7 @@ class H3LongVideos:
                 if stripped:
                     toks = list(toks) + stripped
                     notes.append(
-                        f"shot {len(shots) + 1} reads as undressing "
+                        f"shot {len(plan) + 1} reads as undressing "
                         f"{', '.join(active) if character_guard and active else 'the cast'}"
                         f" completely, and the beat names no garment -- so the wardrobe was "
                         f"read off the character sheet and all of it taken off: "
@@ -8983,7 +7707,7 @@ class H3LongVideos:
                         f"still described as on; name it in a 'remove:' line if so")
                 elif not gone:
                     notes.append(
-                        f"shot {len(shots) + 1} reads as undressing completely, but no "
+                        f"shot {len(plan) + 1} reads as undressing completely, but no "
                         f"garment was recognised in the character sheet, so nothing was "
                         f"taken off and every later shot still describes the clothes. Add "
                         f"a 'remove:' line naming them")
@@ -8994,12 +7718,12 @@ class H3LongVideos:
             revived = [t for t in gone if names_any(body, [t])]
             if revived:
                 notes.append(
-                    f"shot {len(shots) + 1} names {', '.join(revived)} in its own text, and "
+                    f"shot {len(plan) + 1} names {', '.join(revived)} in its own text, and "
                     f"that came off earlier. Beats are sent to the model word for word, so "
                     f"naming it puts it back on -- the scene no longer mentions it, but this "
                     f"beat does. Reword the beat if it should stay off")
             if toks:
-                stripped_shots.add(len(shots))
+                stripped_shots.add(len(plan))
                 gone.extend(t for t in toks if t not in gone)
                 # An added layer is subject to removal too: once the shirt comes off,
                 # the phrase that introduced it goes with it, or the scene keeps
@@ -9009,7 +7733,7 @@ class H3LongVideos:
                 _retired = [a for a in shown if names_any(a, toks)]
                 if _retired:
                     shown = [a for a in shown if a not in _retired]
-                    notes.append(f"shot {len(shots) + 1} takes off something an earlier "
+                    notes.append(f"shot {len(plan) + 1} takes off something an earlier "
                                  f"'add:' had put on, so that line retires with it: "
                                  + "; ".join(_retired))
                 # Reported with the SHEET's words, not the head-noun keys. The
@@ -9017,11 +7741,11 @@ class H3LongVideos:
                 # bare "shorts" here for a sheet saying "blue jeans shorts" reads
                 # as the node having lost the description -- which is exactly the
                 # bug it had, so the report has to be able to show it is gone.
-                notes.append(f"removed from the scene from shot {len(shots) + 1} on: "
+                notes.append(f"removed from the scene from shot {len(plan) + 1} on: "
                              + ", ".join(scene_name_for(t, scene) or t for t in toks))
             maybe = missing_removals(body, scene, gone) if not auto_remove else []
             if maybe:
-                notes.append(f"shot {len(shots) + 1} reads as taking something off, but the "
+                notes.append(f"shot {len(plan) + 1} reads as taking something off, but the "
                              f"scene still describes {', '.join(maybe)} and there is no "
                              f"'remove:' line for it -- so every shot keeps saying it is worn. "
                              f"Add 'remove: {maybe[0]}' to that beat")
@@ -9047,7 +7771,7 @@ class H3LongVideos:
                 if _back:
                     restored.extend(_back)
                     notes.append(
-                        f"shot {len(shots) + 1} puts " + ", ".join(_back)
+                        f"shot {len(plan) + 1} puts " + ", ".join(_back)
                         + " back on, so anything it covers is hidden again from "
                           "here. A garment coming back has to un-cover as well as "
                           "re-cover, or the layer under it stays described for the "
@@ -9068,8 +7792,8 @@ class H3LongVideos:
                     if _worn_now:
                         _wearing = wearing_clause(_worn_now)
                         _staged_add = list(_worn_now)
-                        wearing_shots.append(len(shots) + 1)
-                notes.append(f"added to the scene from shot {len(shots) + 1} on: "
+                        wearing_shots.append(len(plan) + 1)
+                notes.append(f"added to the scene from shot {len(plan) + 1} on: "
                              + "; ".join(adds))
             # The scrub applies to the removing shot too -- but only because that
             # shot's KEYFRAME already shows the garment on at the start, so the text
@@ -9088,7 +7812,7 @@ class H3LongVideos:
             # text of the very shot that removes it, so the shot said it is not
             # worn AND to take it off, and it was gone a beat early with nothing
             # anchoring it on. Reported exactly that way.
-            i_shot = len(shots)
+            i_shot = len(plan)
             _anchoring = (ref_noise_aug is None
                           or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG)
             has_keyframe = ((i_shot > 0 or first_frame is not None)
@@ -9152,7 +7876,7 @@ class H3LongVideos:
             _said = [g for g in covered
                      if re.search(r"\b" + re.escape(g) + r"\b", body or "", re.I)]
             if _said:
-                exposed_by_beat.append((len(shots) + 1, _said))
+                exposed_by_beat.append((len(plan) + 1, _said))
             # The shot that UNCOVERS one says so. Reported: the shorts come off and
             # the render goes straight to bare skin, past the underwear the sheet
             # named. The removal clause is emphatic and specific -- off the body,
@@ -9167,7 +7891,7 @@ class H3LongVideos:
             _revealed = reveal_clause([u for u in revealed_by(covers, toks)
                                        if u not in visible and not names_any(u, toks)])
             if _revealed:
-                revealed_shots.append(len(shots) + 1)
+                revealed_shots.append(len(plan) + 1)
             # ...and when the sheet names NOTHING underneath, say the region is bare.
             # Otherwise the shot says a garment is gone and leaves the space it left
             # unspecified, which is where the model's own prior fills in -- legwear
@@ -9234,9 +7958,9 @@ class H3LongVideos:
                     bare_hold(_rg, covers, _on, whose=(_n if _name_it else ""))
                     for _n, _rg, _on in _rows)
                 if _bare:
-                    bare_held.append(len(shots) + 1)
+                    bare_held.append(len(plan) + 1)
             if _bare:
-                bared_shots.append(len(shots) + 1)
+                bared_shots.append(len(plan) + 1)
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
             # Maya lies still" -- and a name fused to the end of an attribute list is
             # read as one more item in it.
@@ -9327,7 +8051,7 @@ class H3LongVideos:
             shot_scene = defer_tag_for(shot_scene, _worn_under)
             shot_scene = hide_item(shot_scene, _worn_under)
             if _deferred and len(shot_scene) >= 0:
-                deferred_shots.append((len(shots) + 1, list(_worn_under)))
+                deferred_shots.append((len(plan) + 1, list(_worn_under)))
             _under = under_clause(
                 [(u, covers.get(u, ""),
                   cover_owner.get(u, "") if len(_here) > 1 else "")
@@ -9341,7 +8065,7 @@ class H3LongVideos:
             # assertion that had to stop, as against the author's description,
             # which did not.
             _sheet_says_early = [c for c, at in _staged_at.items()
-                                 if c in _sheet_hw and at > len(shots) + 1]
+                                 if c in _sheet_hw and at > len(plan) + 1]
             _scene_for_state = (scrub_removed(shot_scene, _sheet_says_early)
                                 if _sheet_says_early else shot_scene)
             # "ALREADY ON" MEANS BEFORE THIS SHOT. The applying test asks whether
@@ -9351,7 +8075,7 @@ class H3LongVideos:
             # shot that stages the fastening, and it gets the standing hold: a lie
             # about its first frame.
             _sheet_says_now_or_later = [c for c, at in _staged_at.items()
-                                        if c in _sheet_hw and at >= len(shots) + 1]
+                                        if c in _sheet_hw and at >= len(plan) + 1]
             _scene_before_now = (
                 scrub_removed(shot_scene, _sheet_says_now_or_later)
                 if _sheet_says_now_or_later else shot_scene)
@@ -9528,7 +8252,7 @@ class H3LongVideos:
             # genuinely already on, the sheet check is doing its job, and
             # overriding it there cost the cuffs their standing hold. The veto is
             # lifted only where this node created the conflict.
-            _stages_now = any(at == len(shots) + 1 and canon in _sheet_hw
+            _stages_now = any(at == len(plan) + 1 and canon in _sheet_hw
                               for canon, at in _staged_at.items())
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(_scene_before_now)
@@ -9544,7 +8268,7 @@ class H3LongVideos:
             # once -- it is one authoring decision, not one per shot.
             if (not early_hardware and restraint_going_on(body)
                     and restraint_present(_scene_for_state)):
-                early_hardware.append(len(shots) + 1)
+                early_hardware.append(len(plan) + 1)
             # Rigidity latches like the hardware itself. Steel locked on in shot 1 is
             # still steel in shot 5, and a beat that does not happen to say "chain"
             # does not mean the chain became rope -- but tested per shot, that is
@@ -9589,11 +8313,11 @@ class H3LongVideos:
                                  shot_length == "from the beat", pace)[0][0] / H3_FPS
             _pace = pace_clause(beat_seconds(body), _have)
             if _pace:
-                paced_shots.append(len(shots) + 1)
+                paced_shots.append(len(plan) + 1)
             _frm, _via, _to = travel_in(body)
             _travel = travel_anchor(_frm, _via, _to, here)
             if _travel:
-                travel_shots.append(len(shots) + 1)
+                travel_shots.append(len(plan) + 1)
             # The room the next beat starts from: where this one ended, or where it
             # simply says everyone is.
             here = _to or _frm or place_named(body) or here
@@ -9601,7 +8325,7 @@ class H3LongVideos:
             # names the room they started in and is stamped into every shot.
             _where = where_hold(here, scene) if not _travel else ""
             if _where:
-                where_shots.append(len(shots) + 1)
+                where_shots.append(len(plan) + 1)
             # ...and the ACOUSTIC follows them. Both were read ONCE, before the
             # loop, out of the scene -- so a film that walks into a tiled bathroom
             # went on being told it sounds like the carpeted living room it left.
@@ -9617,7 +8341,7 @@ class H3LongVideos:
             _bed_now = ((scene_ambient(here) or ambient_bed)
                         if (auto_sound and _where) else ambient_bed)
             if _where and auto_sound and (_room_now != _room or _bed_now != ambient_bed):
-                acoustic_shots.append((len(shots) + 1, here))
+                acoustic_shots.append((len(plan) + 1, here))
             _pose_now = posture_in(body, active if character_guard and active
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
             # ...and let go of any the beat contradicts. A pose that survives an
@@ -9634,7 +8358,7 @@ class H3LongVideos:
                                           active if character_guard else
                                           [n for n, _ in sheet_lines(_who_sheet) if n]))
             if _posture:
-                posture_shots.append(len(shots) + 1)
+                posture_shots.append(len(plan) + 1)
             poses.update(_pose_now)
             _anchor_now = limb_anchor(body) if restrained else ""
             if _anchor_now:
@@ -9648,9 +8372,9 @@ class H3LongVideos:
             # on -- so those key off the latch rather than off a clause.
             _holding = bool(restrained and anchored and not _anchor_now)
             if _holding:
-                anchored_shots.append(len(shots) + 1)
+                anchored_shots.append(len(plan) + 1)
             if _holding and (_anchor_tight or tight_framing(body)):
-                tight_shots.append(len(shots) + 1)
+                tight_shots.append(len(plan) + 1)
             # A turn shows a surface the keyframe never pinned, and the model fills
             # it from a clothed prior. Only on shots that turn, and only once there
             # is something to hold -- a removal already made, or hardware on.
@@ -9669,7 +8393,7 @@ class H3LongVideos:
             fall = (FALL_HOLD if (restrained and _falls)
                     else FALL_HOLD_FREE if _falls else "")
             if fall:
-                fall_shots.append(len(shots) + 1)
+                fall_shots.append(len(plan) + 1)
             # Steel is not rope. Without being told, the model draws a chain slack --
             # sagging, stretching to wherever a limb is going, allowing movement the
             # hardware does not allow. Only where such hardware is actually named.
@@ -9705,9 +8429,9 @@ class H3LongVideos:
             # continuity, and four such sentences is a shot about its own continuity.
             _state_clause = state_hold(_pairs[:max(0, 2 - _turn.count("first frame"))]) + _turn
             if _pairs:
-                stated_shots.append(len(shots) + 1)
+                stated_shots.append(len(plan) + 1)
             if _turn:
-                turned_shots.append(len(shots) + 1)
+                turned_shots.append(len(plan) + 1)
             # The beat and the hold asking for opposite things. Reported three times
             # running as "the doors keep opening", and every time the node text was
             # by then correct -- it was the beat staging an exit the doors have to
@@ -9715,7 +8439,7 @@ class H3LongVideos:
             if _pairs and exits_vehicle(body) and any(
                     _state_key(t) in ("door",) for t, _ in _pairs):
                 notes.append(
-                    f"shot {len(shots) + 1} says somebody gets OUT of a vehicle and also "
+                    f"shot {len(plan) + 1} says somebody gets OUT of a vehicle and also "
                     f"says the doors are closed. Those are opposite instructions and the "
                     f"beat wins: a person leaving a van opens a door to do it, so the "
                     f"doors open however firmly the text says they are shut. If they are "
@@ -9813,7 +8537,7 @@ class H3LongVideos:
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
             if _applying:
-                applied_shots.append(len(shots) + 1)
+                applied_shots.append(len(plan) + 1)
             # Name the thing on shots that do not. The hold says a restraint stays
             # fastened and never says WHAT, so a shot after the applying one is told
             # a restraint exists with no object to draw -- which renders as the
@@ -9829,7 +8553,7 @@ class H3LongVideos:
                 # The shot that STAGES a displacement -- the garment is being moved
                 # on screen in it. Recorded because the render loop must not capture
                 # a subject reference from it: moved_shots starts the shot AFTER.
-                staging_shots.add(len(shots) + 1)
+                staging_shots.add(len(plan) + 1)
             for _g, _how in _staged_here:
                 _was = displaced.get(_g, "")
                 # Put back up again is a restore, not a new displacement.
@@ -9864,7 +8588,7 @@ class H3LongVideos:
                                      if not re.search(r"\b" + re.escape(g.split()[-1])
                                                       + r"\b", _body_low)])
             if _moved:
-                moved_shots.append(len(shots) + 1)
+                moved_shots.append(len(plan) + 1)
 
             # ...and say WHOSE. Unattributed, "every restraint stays fastened" is an
             # instruction about whoever is on screen, so hardware locked onto one
@@ -9948,7 +8672,7 @@ class H3LongVideos:
                 # draws the person that sentence implies -- which is the duplicate.
                 # It latches, so the shot they come back in has it again.
                 hold = ""
-                absent_hold.append(len(shots) + 1)
+                absent_hold.append(len(plan) + 1)
             elif not _applying and restrained:
                 hold = restraint_sentence(
                     worn_item if not _named_item else "",
@@ -9959,7 +8683,7 @@ class H3LongVideos:
                     rigid=bool(rigid), posed=bool(posed),
                     part=held_part(worn_items or ([worn_item] if worn_item else [])))
                 if worn_item and not _named_item:
-                    named_shots.append(len(shots) + 1)
+                    named_shots.append(len(plan) + 1)
             else:
                 hold = own_hold(hold, _wearers, _described)
             # What you wrote wins: a beat that already describes its own sound is left
@@ -9985,7 +8709,7 @@ class H3LongVideos:
             # what was written, and finding that out from the render is worse than
             # reading it here.
             if not _own and not _speaks and _BREATH_PREP.search(body):
-                _breath_shots.append(len(shots) + 1)
+                _breath_shots.append(len(plan) + 1)
             # A beat staging EFFORT or vocal reaction is asking for a voice, and that
             # is read from the author's own verbs -- "thrashes", "writhes", "moans" --
             # so it belongs with a quoted line and a written sound, not with the things
@@ -10025,7 +8749,7 @@ class H3LongVideos:
             # wordless shots, THIS is the first thing to turn off: auto_sound.
             _bed = _bed_now if auto_sound and _bed_now else ""
             if _bed:
-                ambient_shots.append(len(shots) + 1)
+                ambient_shots.append(len(plan) + 1)
             _mute_written = bool(mouths_shut_when_no_line and _own and not _speaks
                                  and not _voiced)
             # The bed no longer defeats this. It is the one thing this file infers
@@ -10034,7 +8758,7 @@ class H3LongVideos:
             _will_silence = bool(silence_nonspeech and not _speaks and not _voiced
                                  and (not _own or _mute_written))
             if _mute_written and _will_silence:
-                muted_sound.append(len(shots) + 1)
+                muted_sound.append(len(plan) + 1)
             # The picture side -- and ONLY where the shot actually describes somebody.
             # A mouth sentence on a scenery beat describes a person who is not there,
             # and the one way to satisfy it is to draw a face in an empty frame. That
@@ -10067,7 +8791,7 @@ class H3LongVideos:
                 [(n, ln) for n, ln in sheet_lines(shot_sheet) if n in set(_wearers)],
                 _described, _film_duress) if hold_gaze else "")
             if _duress:
-                duress_shots.append(len(shots) + 1)
+                duress_shots.append(len(plan) + 1)
             _mouth_busy = mouth_performs(body)
             _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
                                     and (not _speaks or _device_line)
@@ -10113,7 +8837,7 @@ class H3LongVideos:
                            if n not in _open]
                 _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent)
                 if _mouth and _voicers:
-                    vocal_shots.append(len(shots) + 1)
+                    vocal_shots.append(len(plan) + 1)
                 if (not _mouth and _speaks and not _talkers and not _voicers
                         and len(_described or []) > 1):
                     # A line with no name on it, and more than one person who could
@@ -10121,12 +8845,12 @@ class H3LongVideos:
                     # voices there are is not -- and leaving it unsaid is what let
                     # the listener talk too.
                     _mouth = ONE_VOICE
-                    unattributed.append(len(shots) + 1)
+                    unattributed.append(len(plan) + 1)
             if _mouth:
                 (mouth_shut if _mouth_from_silence
-                 else mouth_named).append(len(shots) + 1)
+                 else mouth_named).append(len(plan) + 1)
             elif _mouth_busy and mouths_shut_when_no_line and _has_people:
-                mouth_acting.append(len(shots) + 1)
+                mouth_acting.append(len(plan) + 1)
             # A shot with a line is told what language it is in. Every shot with a
             # line, not only the ones with a listener to hold: a single speaker can
             # deliver the line in whatever language the model picks.
@@ -10152,19 +8876,19 @@ class H3LongVideos:
                 _described if character_guard else
                 [n for n, _ in sheet_lines(_who_sheet) if n])) if _speaks else ""
             if _told:
-                told_shots.append(len(shots) + 1)
+                told_shots.append(len(plan) + 1)
             if _lang:
-                language_shots.append(len(shots) + 1)
+                language_shots.append(len(plan) + 1)
             # How much of this shot the line actually fills. A short line in a long
             # shot leaves the audio branch with time and nothing to put in it, and
             # what it puts there is more speech -- the line again. Counted here
             # where the beat is; judged against the shot length further down.
             _said_words = len(engine.spoken_text(body).split())
             if _said_words:
-                _spoken_words[len(shots) + 1] = _said_words
+                _spoken_words[len(plan) + 1] = _said_words
             _device = device_voice_clause(body) if (_device_line and _has_people) else ""
             if _device:
-                device_shots.append(len(shots) + 1)
+                device_shots.append(len(plan) + 1)
             # The held scenery goes in, so the shot is not asked to keep the doors
             # shut and to sound like a door swinging in the same breath.
             heard = ([] if (not auto_sound or _own)
@@ -10201,7 +8925,7 @@ class H3LongVideos:
             elif auto_sound and _room_now:
                 heard = heard + [_room_now]
             if heard:
-                inferred_sound.append(len(shots) + 1)
+                inferred_sound.append(len(plan) + 1)
             # The branch is free on this shot, so SOMETHING fills it. Naming the sound
             # as the only thing heard leaves nothing for a voice to be -- it is not
             # the guard, the silence is, but it is what shapes a branch that is
@@ -10250,7 +8974,7 @@ class H3LongVideos:
                 else:
                     _gaze = gaze_hold(_target)
             if _gaze:
-                gaze_shots.append(len(shots) + 1)
+                gaze_shots.append(len(plan) + 1)
             _guards = [
                 (1, "removal", tail),        # the beat's own action, completing
                 (1, "wearing", _wearing),    # ...and its mirror, a garment going on
@@ -10311,7 +9035,7 @@ class H3LongVideos:
             ]
             _kept, _dropped = fit_guards(_guards, len(body.split()))
             if _dropped:
-                crowded.append((len(shots) + 1, _dropped))
+                crowded.append((len(plan) + 1, _dropped))
             # Body count is a composition invariant, not a continuity detail. It
             # must not evict speaker, gaze, or ownership clauses from the bounded
             # guard budget; doing so fixed the extra body by breaking who spoke.
@@ -10325,16 +9049,13 @@ class H3LongVideos:
                             - len(f"{shot_scene} {body}".split()))
             beat_words += len(body.split())
             total_words += len(shot_text.split())
-            shots.append(shot_text)
-            shot_cast.append(list(active) if character_guard else [])
-            speech.append(_speaks)
             # The event sounds this beat implies, kept per shot so they can be
             # BUILT and mixed into that shot's span later. `heard` is not it:
             # that one has the bed and the room tone folded in and is emptied
             # on a silenced shot, which is precisely the shot this is for.
-            shot_events.append(list(sounds_for(body, held=[_state_key(t)
-                                                           for t, _ in _pairs]))
-                               if auto_sound else [])
+            _events = (list(sounds_for(body, held=[_state_key(t)
+                                                   for t, _ in _pairs]))
+                       if auto_sound else [])
             # What the AUTHOR wrote, and nothing this file worked out. See above --
             # effort counts, because the verb staging it is theirs.
             #
@@ -10346,8 +9067,9 @@ class H3LongVideos:
             # in one jump, so what it fills with is a voice. Ambience everywhere and
             # silence are mutually exclusive by construction: the silence latent IS
             # the audio, and there is no room in it for a room tone.
-            sounded.append(_own or _voiced)
-            voiced_only.append(bool(_voiced and not _own))
+            plan.add(shot_text,
+                     list(active) if character_guard else [],
+                     _speaks, _own or _voiced, _voiced and not _own, _events)
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -10407,6 +9129,8 @@ class H3LongVideos:
                   "thing is actually visible")
 
         lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat", pace)
+        plan.set_frame_counts(lens)
+        plan.validate()
         # How much of a SPEAKING shot the line does not cover. The branch is free for
         # the whole shot, so whatever the line does not fill is unconditioned audio in
         # a shot the model knows somebody is talking in -- which is where invented
@@ -10447,10 +9171,10 @@ class H3LongVideos:
                    "longer than its action is filled by performing it more slowly. Lower "
                    "pace for brisker movement" if _per > 3.5 else ""))
         if len(set(lens)) == 1:
-            notes.append(f"{len(shots)} shot(s) x {lens[0]}f (~{lens[0] / H3_FPS:.1f}s) "
+            notes.append(f"{len(plan)} shot(s) x {lens[0]}f (~{lens[0] / H3_FPS:.1f}s) "
                          f"at {w}x{h} = ~{sum(lens) / H3_FPS:.1f}s total")
         else:
-            notes.append(f"{len(shots)} shot(s) at {w}x{h}, sized per beat: "
+            notes.append(f"{len(plan)} shot(s) at {w}x{h}, sized per beat: "
                          + ", ".join(f"{n}f/{n / H3_FPS:.1f}s" for n in lens)
                          + f" = ~{sum(lens) / H3_FPS:.1f}s total")
         if len_note:
@@ -11009,9 +9733,9 @@ class H3LongVideos:
         # that two of eleven can babble and gave them no way to find out which two
         # -- and the whole point of the note is that the beat's own sound wording is
         # what opened it, which cannot be acted on without knowing the beat.
-        _open_br = [i + 1 for i, (s_, snd) in enumerate(zip(speech, sounded))
+        _open_br = [i + 1 for i, (s_, snd) in enumerate((shot.speech, shot.sounded) for shot in plan.shots)
                     if not s_ and snd]
-        _pinned = [i + 1 for i, (s_, snd) in enumerate(zip(speech, sounded))
+        _pinned = [i + 1 for i, (s_, snd) in enumerate((shot.speech, shot.sounded) for shot in plan.shots)
                    if not s_ and not snd]
         n_silent, n_kept = len(_pinned), len(_open_br)
         if silence_nonspeech and n_kept:
@@ -11048,7 +9772,7 @@ class H3LongVideos:
         # presence cue. So: point at the words, and leave the decision to the author.
         # H3 has a caption channel of its own. A prompt carrying those tokens is
         # ASKING for text on the picture.
-        if any(_CAPTION_TOKEN.search(s) for s in shots):
+        if any(_CAPTION_TOKEN.search(s) for s in plan.prompts):
             notes.append("the prompt contains H3's caption/lyrics tokens "
                          "(<|caption_start|> and friends) -- those request text ON the "
                          "picture. Remove them unless you want subtitles burned in")
@@ -11071,7 +9795,7 @@ class H3LongVideos:
                          f"one of them IS a line, end it with punctuation or mark it "
                          f"yourself with <d>...</d> and it will be spoken rather than "
                          f"drawn")
-        cued = sorted({m.group(0).lower() for s in shots for m in _TEXT_CUE.finditer(s)})
+        cued = sorted({m.group(0).lower() for s in plan.prompts for m in _TEXT_CUE.finditer(s)})
         if cued:
             notes.append(f"the prompt names on-screen text ({', '.join(cued)}) -- H3 draws "
                          f"letterforms when asked, and at cfg 1 no negative prompt can take "
@@ -11112,7 +9836,7 @@ class H3LongVideos:
         # a reason to start placing pictures everywhere.
         _written = "\n".join([scene or ""] + list(beats))
         _tagged = bool(picture_tags(_written)
-                       or any(picture_tags(s) for s in shots))
+                       or any(picture_tags(s) for s in plan.prompts))
         _tagged_names = {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}
         if refs_all and not _tagged:
             notes.append(
@@ -11121,8 +9845,7 @@ class H3LongVideos:
                 f"nowhere. To aim them, write the tag on the person they depict: 'Nora: "
                 f"<Picture 1>, 34, she, ...'. Each then travels with that person into "
                 f"the shots she is in, and only those")
-        shot_refs_all = []
-        for _i, _s in enumerate(shots):
+        for _i, _s in enumerate(plan.prompts):
             # The tag is the BINDING between a picture and the subject the prompt
             # describes, and it stays IN the text -- comfy_extras/nodes_minimax_h3.py:
             # "the prompt refers to them as <Picture i>", "Use the same tags when
@@ -11130,11 +9853,11 @@ class H3LongVideos:
             # order it receives images and a shot carrying only slot 2 receives that
             # image as <Picture 1>.
             if not _tagged:
-                shot_refs_all.append(list(refs_all))
+                plan.shots[_i].refs = list(refs_all)
                 continue
             _s, _r, _missing = resolve_tags(_s, refs_all)
-            shots[_i] = _s
-            shot_refs_all.append(_r)
+            plan.shots[_i].prompt = _s
+            plan.shots[_i].refs = _r
             for _n in _missing:
                 _msg = f"<Picture {_n}> names a slot with no image connected"
                 if _msg not in notes:
@@ -11152,10 +9875,10 @@ class H3LongVideos:
         # of the fix -- a second reference, tagged onto the other person.
         _twinned = []
         if refs_all and _tagged_names:
-            for _i, _s in enumerate(shots):
+            for _i, _s in enumerate(plan.prompts):
                 if not picture_tags(_s):
                     continue
-                _cast_here = shot_cast[_i] if _i < len(shot_cast) else []
+                _cast_here = plan.shots[_i].cast
                 _cast_here = [n for n in _cast_here if n] or [
                     n for n, _ in sheet_lines(sheet) if n]
                 _bare = [n for n in _cast_here if n not in _tagged_names]
@@ -11179,7 +9902,7 @@ class H3LongVideos:
                 f"carries both faces. No wording fixes this: nothing in the text "
                 f"outranks a photograph")
         if refs_all:
-            _named = sum(1 for s in shots if picture_tags(s))
+            _named = sum(1 for s in plan.prompts if picture_tags(s))
             notes.append(
                 f"{len(refs_all)} reference image(s) supply IDENTITY, and they go WHERE "
                 f"TAGGED: every shot whose text names <Picture N> carries the image on "
@@ -11212,9 +9935,9 @@ class H3LongVideos:
                     f"holding. A hybrid fl2va/ref2va checkpoint is trained for reference "
                     f"conditioning and does not make this trade; on a plain fl2va one, "
                     f"lowering ref_noise_aug is the dial")
-            if _named < len(shots):
+            if _named < len(plan):
                 notes.append(
-                    f"{len(shots) - _named} shot(s) name no <Picture N> at all, so they "
+                    f"{len(plan) - _named} shot(s) name no <Picture N> at all, so they "
                     f"carry no reference. Claim it on the person it depicts -- 'Nora: "
                     f"<Picture 1>, 34, she, ...' -- and it travels with her into the shots "
                     f"she is in, and only those. A picture the prompt never refers to is "
@@ -11349,14 +10072,84 @@ class H3LongVideos:
                     f"than merely told to be quiet"
                     + (f", and dialogue gets a {speech_lead_seconds:g}s silent lead-in"
                        if speech_lead_seconds > 0 else ""))
-        sent_text = list(shots)
-        script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(shots, 1))
+        script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(plan.prompts, 1))
         info = " | ".join(notes)
         if plan_only:
             empty = torch.zeros((1, h, w, 3))
             return (empty, {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100},
                     "PLAN ONLY -- nothing rendered. " + info, script,
-                    lens[0], 0, len(shots), 0.0)
+                    lens[0], 0, len(plan), 0.0)
+
+        return PreparedVideo(
+            _mix_bed=_mix_bed, _mix_room=_mix_room, _placed_shots=_placed_shots,
+            _returns=_returns, _soft_landing=_soft_landing, _tagged_names=_tagged_names,
+            ambient_audio=ambient_audio, ambient_level=ambient_level, apply_model_sampling=apply_model_sampling,
+            audio_vae=audio_vae, auto_sound=auto_sound, bared_shots=bared_shots,
+            cfg=cfg, cleanup_between_shots=cleanup_between_shots, clip=clip,
+            first_frame=first_frame, foley_level=foley_level, h=h,
+            latent_upscale=latent_upscale, latent_upscale_scale=latent_upscale_scale,
+            megapixels=megapixels, model=model, moved_shots=moved_shots,
+            negative=negative, notes=notes, plan=plan,
+            ref_noise_aug=ref_noise_aug, restart_after_removal=restart_after_removal, revealed_shots=revealed_shots,
+            sampler_name=sampler_name, scheduler=scheduler, seed=seed,
+            shift_audio=shift_audio, shift_video=shift_video,
+            sigmas=sigmas, silence_nonspeech=silence_nonspeech,
+            speech_lead_seconds=speech_lead_seconds, staging_shots=staging_shots, steps=steps,
+            stripped_shots=stripped_shots, tiled_decode=tiled_decode, trim_seam=trim_seam,
+            upscale=upscale, upscale_batch=upscale_batch, upscale_model=upscale_model,
+            upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
+        )
+
+    def _render(self, prepared):
+        """Execute the prepared shots and assemble the video and soundtrack."""
+        _mix_bed = prepared._mix_bed
+        _mix_room = prepared._mix_room
+        _placed_shots = prepared._placed_shots
+        _returns = prepared._returns
+        _soft_landing = prepared._soft_landing
+        _tagged_names = prepared._tagged_names
+        ambient_audio = prepared.ambient_audio
+        ambient_level = prepared.ambient_level
+        apply_model_sampling = prepared.apply_model_sampling
+        audio_vae = prepared.audio_vae
+        auto_sound = prepared.auto_sound
+        bared_shots = prepared.bared_shots
+        cfg = prepared.cfg
+        cleanup_between_shots = prepared.cleanup_between_shots
+        clip = prepared.clip
+        first_frame = prepared.first_frame
+        foley_level = prepared.foley_level
+        h = prepared.h
+        latent_upscale = prepared.latent_upscale
+        latent_upscale_scale = prepared.latent_upscale_scale
+        megapixels = prepared.megapixels
+        model = prepared.model
+        moved_shots = prepared.moved_shots
+        negative = prepared.negative
+        notes = prepared.notes
+        plan = prepared.plan
+        ref_noise_aug = prepared.ref_noise_aug
+        restart_after_removal = prepared.restart_after_removal
+        revealed_shots = prepared.revealed_shots
+        sampler_name = prepared.sampler_name
+        scheduler = prepared.scheduler
+        seed = prepared.seed
+        shift_audio = prepared.shift_audio
+        shift_video = prepared.shift_video
+        sigmas = prepared.sigmas
+        silence_nonspeech = prepared.silence_nonspeech
+        speech_lead_seconds = prepared.speech_lead_seconds
+        staging_shots = prepared.staging_shots
+        steps = prepared.steps
+        stripped_shots = prepared.stripped_shots
+        tiled_decode = prepared.tiled_decode
+        trim_seam = prepared.trim_seam
+        upscale = prepared.upscale
+        upscale_batch = prepared.upscale_batch
+        upscale_model = prepared.upscale_model
+        upscale_target_short_edge = prepared.upscale_target_short_edge
+        vae = prepared.vae
+        w = prepared.w
 
         if apply_model_sampling:
             model, ms_note = apply_h3_model_sampling(model, shift_video, shift_audio)
@@ -11373,10 +10166,9 @@ class H3LongVideos:
         _aug_warned = False
         fresh = []
         t_start = time.perf_counter()
-        vid_out, aud_out, sr = [], [], 44100
-        # THE FINISHED CHAIN, ALLOCATED ONCE, BEFORE THE FIRST SHOT LANDS IN IT.
-        # vid_out survives only as the overflow path -- see the shot write below.
-        _dst, _at = None, 0
+        aud_out, sr = [], 44100
+        frames = FrameAccumulator(sum(shot.frame_count for shot in plan.shots), _image_out_dtype(),
+                                  cleanup_between_shots)
         av_fix = 0                  # samples of A/V drift corrected across the chain
         _captured = {}              # name -> a frame from the last shot they were in
         _captured_from = {}         # name -> which shot that frame came from
@@ -11387,8 +10179,12 @@ class H3LongVideos:
         _SILENCE_STATUS.update(asked=0, applied=0, why="")
         _deep_cleanup()
 
-        for i, shot_prompt in enumerate(shots):
-            silent = bool(silence_nonspeech and not speech[i] and not sounded[i])
+        for i, shot in enumerate(plan.shots):
+            shot_prompt = shot.prompt
+            _audio = ShotAudio(plan.shots[i].speech, plan.shots[i].sounded, plan.shots[i].voiced_only,
+                               bool(silence_nonspeech), speech_lead_seconds,
+                               AUDIO_LATENT_FPS)
+            silent = _audio.pinned
 
             # A shot that follows a removal starts FRESH. Every shot is anchored to
             # the previous one's last frame, so if the model did not finish taking
@@ -11429,9 +10225,8 @@ class H3LongVideos:
             # cannot account for is the node's oldest bug: a picture nobody claims is
             # another person. When it cannot be claimed, the old fresh start stands.
             elif i in _placed_shots:
-                _was_here = [n for n in (shot_cast[i - 1] if i - 1 < len(shot_cast)
-                                         else []) if n]
-                _here_now = shot_cast[i] if i < len(shot_cast) else []
+                _was_here = [n for n in (plan.shots[i - 1].cast) if n]
+                _here_now = plan.shots[i].cast
                 # ...and NOT when somebody in that frame already has a portrait of
                 # their own in this shot. Their identity is carried by that
                 # picture; the carried frame would be a SECOND picture of the same
@@ -11443,8 +10238,7 @@ class H3LongVideos:
                 #
                 # The room is lost on those shots, back to the fresh start it was
                 # before. A re-imagined set is a smaller bug than a second person.
-                if _was_here and all(n in _here_now for n in _was_here) \
-                        and not any(n in _tagged_names for n in _was_here):
+                if _cond_module.may_carry_room(_was_here, _here_now, _tagged_names):
                     _handoff_ref = True
                     _carried.append((i + 1, list(_was_here),
                                      list(_placed_shots[i])))
@@ -11468,13 +10262,13 @@ class H3LongVideos:
             # travels into every shot they are named in, and a second picture of the
             # same person is just a second picture.
             _extra = []
-            _cast = shot_cast[i] if i < len(shot_cast) else []
-            if len(_cast) == 1 and _cast[0] not in _tagged_names:
-                _who = _cast[0]
-                if any(n == i + 1 and _who in ws for n, ws in _returns) \
-                        and _captured.get(_who) is not None:
-                    _extra = [_captured[_who]]
-                    _recovered.append((i + 1, _who, _captured_from.get(_who, 0)))
+            _cast = plan.shots[i].cast
+            _returning = {w for n, ws in _returns if n == i + 1 for w in ws}
+            _who = _cond_module.recoverable_subject(
+                _cast, _tagged_names, _returning, _captured)
+            if _who:
+                _extra = [_captured[_who]]
+                _recovered.append((i + 1, _who, _captured_from.get(_who, 0)))
                     # CLAIM IT IN THE PROSE. A picture the prompt refers to is that
                     # subject; one it never mentions is ANOTHER subject. Sent
                     # unclaimed, a recovered frame of somebody is read as a second
@@ -11484,18 +10278,18 @@ class H3LongVideos:
                     # Its number is its place in the roster: the shot's own references
                     # first, this after them. The handoff follows and stays unclaimed,
                     # which is H3's own first-frame shape.
-                    _n = len(shot_refs_all[i]) + 1
-                    _tag = f"<Picture {_n}>"
-                    if f"{_who}:" in shot_prompt:
-                        shot_prompt = shot_prompt.replace(
-                            f"{_who}:", f"{_who}: {_tag},", 1)
-                    else:
-                        shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
+                _n = len(shot.refs) + 1
+                _tag = f"<Picture {_n}>"
+                if f"{_who}:" in shot_prompt:
+                    shot_prompt = shot_prompt.replace(
+                        f"{_who}:", f"{_who}: {_tag},", 1)
+                else:
+                    shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
             # The handoff, when it is demoted to a reference, is a picture like any
             # other and has to be claimed or it reads as a second person. Decided
             # here rather than inside build_conditioning because the claim is text,
             # and the text is assembled up here.
-            _shot_refs = list(shot_refs_all[i]) + _extra
+            _shot_refs = list(shot.refs) + _extra
             if _handoff_ref:
                 # Carried for the ROOM, with somebody new in the shot -- so the
                 # standing claim is exactly wrong here ("joined by anybody new") and
@@ -11508,13 +10302,13 @@ class H3LongVideos:
                 shot_prompt = shot_prompt + handoff_claim(len(_shot_refs) + 1)
                 _handoff_claimed.append(i + 1)
             # Whatever this shot ends up being, that is what `script` reports.
-            sent_text[i] = shot_prompt
+            shot.prompt = shot_prompt
             cond, latent, fc, demoted = build_conditioning(
-                clip, vae, audio_vae, shot_prompt, w, h, lens[i],
-                handoff=shot_handoff, refs=list(shot_refs_all[i]) + _extra,
+                clip, vae, audio_vae, shot_prompt, w, h, shot.frame_count,
+                handoff=shot_handoff, refs=list(shot.refs) + _extra,
                 ref_noise_aug=ref_noise_aug, silent=silent,
                 handoff_as_ref=_handoff_ref,
-                speech_lead_seconds=(speech_lead_seconds if speech[i] else 0.0))
+                speech_lead_seconds=(_audio.lead_frames / AUDIO_LATENT_FPS))
             if demoted and not _aug_warned:
                 _aug_warned = True
                 notes.append(
@@ -11535,7 +10329,7 @@ class H3LongVideos:
                 if not _is_oom(e):
                     raise
                 raise RuntimeError(
-                    f"H3 Long Videos: shot {i + 1} of {len(shots)} ran out of VRAM while "
+                    f"H3 Long Videos: shot {i + 1} of {len(plan)} ran out of VRAM while "
                     f"sampling. " + sampling_oom_help(w, h, fc, H3_FPS, megapixels)) from e
 
             # The video latent, for the latent upscale below. NOT used as the next
@@ -11627,12 +10421,11 @@ class H3LongVideos:
                                     or _n in bared_shots
                                     or _n in staging_shots)
             try:
-                if (hand_src.shape[0] and shot_cast and i < len(shot_cast)
-                        and len(shot_cast[i]) == 1 and _wardrobe_normal):
+                if (hand_src.shape[0] and len(plan.shots[i].cast) == 1 and _wardrobe_normal):
                     _mid = hand_src.shape[0] // 2
                     _keep = hand_src[_mid:_mid + 1].detach().clamp(0.0, 1.0).to(
                         "cpu", copy=True)
-                    for _who in shot_cast[i]:
+                    for _who in plan.shots[i].cast:
                         _captured[_who] = _keep
                         _captured_from[_who] = i + 1
             except Exception:
@@ -11670,22 +10463,7 @@ class H3LongVideos:
                     shot_detail.append(frame_detail(imgs[-1]))
             except Exception:
                 pass
-            # Write directly into the final allocation. sum(lens) is an upper bound
-            # because seam trimming only removes frames. Unexpected decoder overflow
-            # uses vid_out and is assembled after the loop.
-            _k = int(imgs.shape[0])
-            if _dst is None and _k:
-                _dst = torch.empty(
-                    (max(_k, int(sum(lens))),) + tuple(imgs.shape[1:]),
-                    dtype=_image_out_dtype(),
-                    device=(torch.device("cpu") if cleanup_between_shots
-                            else imgs.device))
-            if _dst is not None and _at + _k <= _dst.shape[0]:
-                _dst[_at:_at + _k].copy_(imgs)
-                _at += _k
-            else:
-                vid_out.append(imgs.to("cpu", torch.float16, copy=True)
-                               if cleanup_between_shots else imgs)
+            frames.add(imgs)
             aud_out.append(wav["waveform"].to("cpu", copy=True) if cleanup_between_shots
                            else wav["waveform"])
             del imgs, wav
@@ -11723,51 +10501,10 @@ class H3LongVideos:
                   "prompt never refers to is read as another subject, so an "
                   "unclaimed one would arrive as a second person with the same "
                   "face and the same clothes. `script` is written before the render, so it does not show that tag")
-        # JOIN WITHOUT HOLDING THE CHAIN TWICE. torch.cat allocates the whole chain
-        # a second time and .float() a third -- at fp32, so double again -- while the
-        # per-shot fp16 pieces the loop spent a copy each to make are still sitting in
-        # vid_out. On the 107s chain costed above that peaks at 9.3 + 9.3 + 18.5 =
-        # 37GB, and vid_out was never dropped afterwards, so 27.8GB stayed held for
-        # the rest of the run. The fp16 saving above was being spent here twice over.
-        #
-        # Allocate the fp32 output once and fill it shot by shot, releasing each piece
-        # as it lands: the peak is the output plus whatever is left of vid_out, and
-        # the pieces are gone by the end. Same tensor, same dtype, same device, same
-        # contract downstream. Measured on an 8-shot chain: 20.47GB peak -> 11.11GB,
-        # and at the 2580-frame size costed above, 37.9GB -> 20.6GB. That is 17GB off
-        # the peak (three copies became one) and 9.3GB no longer held afterwards.
-        # device= matters: with cleanup_between_shots off the pieces are still on the
-        # GPU and cat/float would have returned a GPU tensor, so this must too.
-        # THERE IS NO JOIN LEFT. Every shot was written into _dst as it was decoded,
-        # so the chain is already assembled and this is a view onto it -- zero new
-        # bytes at the moment that used to be the peak of the whole render.
-        #
-        # _at is short of the capacity by exactly one frame per seam that trim_seam
-        # removed, so the slice keeps a few frames of slack allocated rather than
-        # copying the chain to reclaim them: shots-1 frames against a copy of the
-        # whole thing is not a trade worth making.
-        if vid_out:
-            # OVERFLOW ONLY -- a VAE that decoded a shot longer than it was planned
-            # at. Assemble both halves the old way, which costs the extra copy this
-            # rewrite exists to remove, on a path the real VAE never takes.
-            _extra = sum(int(_t.shape[0]) for _t in vid_out)
-            _ref = _dst if _dst is not None else vid_out[0]
-            video = torch.empty((_at + _extra,) + tuple(_ref.shape[1:]),
-                                dtype=_image_out_dtype(), device=_ref.device)
-            if _dst is not None and _at:
-                video[:_at].copy_(_dst[:_at])
-            _dst = None
-            _w = _at
-            while vid_out:
-                _piece = vid_out.pop(0)
-                _k2 = int(_piece.shape[0])
-                video[_w:_w + _k2].copy_(_piece)
-                _w += _k2
-                del _piece
-        elif _dst is not None:
-            video = _dst if _at == _dst.shape[0] else _dst[:_at]
-        else:
-            video = torch.cat(vid_out, dim=0)       # empty: fail exactly as before
+        # FrameAccumulator writes each decoded shot directly into the finished chain.
+        # Its overflow path covers malformed VAE output without making the normal
+        # path allocate and concatenate a second full copy.
+        video = frames.finish()
         # PIXEL upscale, once, on the finished chain. After the latent pass and after
         # the join, so a model-based upscaler sees whole frames and the seam is not
         # upscaled twice.
@@ -11846,15 +10583,17 @@ class H3LongVideos:
         # nothing -- a wordless beat staging cuffs going on, silent because opening
         # its branch is what babbles.
         _foley_on = []
-        if auto_sound and float(foley_level or 0.0) > 0.0 and shot_events:
+        if auto_sound and float(foley_level or 0.0) > 0.0 and plan:
             _at = 0
             for _i, _w in enumerate(aud_out):
                 _len = int(_w.shape[-1])
                 _lo, _hi, _at = _at, _at + _len, _at + _len
-                if _i >= len(shot_events) or _i >= len(speech):
+                if _i >= len(plan):
                     continue
-                _pinned = bool(silence_nonspeech and not speech[_i]
-                               and not (sounded[_i] if _i < len(sounded) else False))
+                _audio = ShotAudio(
+                    plan.shots[_i].speech, plan.shots[_i].sounded,
+                    plan.shots[_i].voiced_only,
+                    bool(silence_nonspeech), speech_lead_seconds, AUDIO_LATENT_FPS)
                 # ...OR open only because the beat stages EFFORT. The skip above
                 # exists so built sound does not double what an open branch is
                 # already making out of the same prose. That is true when the
@@ -11877,12 +10616,10 @@ class H3LongVideos:
                 # anything is built here. Without this the effort shots kept their
                 # built layer while the model was also sounding them from the same
                 # prose, which is the doubling this whole gate exists to avoid.
-                _voice_open = bool(silence_nonspeech and _i < len(voiced_only)
-                                   and voiced_only[_i])
-                if not (_pinned or _voice_open) or _len < 64:
+                if not _audio.accepts_built_foley or _len < 64:
                     continue
                 _made = []
-                for _ph in shot_events[_i]:
+                for _ph in plan.shots[_i].events:
                     _fx = foley_for(_ph, _len, int(sr), seed=int(seed) + _i)
                     if _fx is None:
                         continue
@@ -11891,7 +10628,7 @@ class H3LongVideos:
                                            * float(foley_level))
                     _made.append(_ph)
                 if _made:
-                    _foley_on.append((_i + 1, _made, _voice_open))
+                    _foley_on.append((_i + 1, _made, _audio.voiced_only))
         if _foley_on:
             _eff = [n for n, _, v in _foley_on if v]
             notes.append(
@@ -11958,7 +10695,7 @@ class H3LongVideos:
                 + " -- a keyframe is frame one and a reference is not, which is what "
                   "lets a shot introduce somebody without re-imagining the room")
         wall = time.perf_counter() - t_start
-        n = max(1, len(shots))
+        n = max(1, len(plan))
         other = max(0.0, wall - t_sample - t_decode)
         notes.append(
             f"rendered {total} frames (~{total / H3_FPS:.1f}s) in {wall:.0f}s -- "
@@ -11967,10 +10704,10 @@ class H3LongVideos:
             f"other {other:.0f}s ({100 * other / wall:.0f}%); "
             f"per shot {t_sample / n:.1f}s + {t_decode / n:.1f}s")
         if av_fix:
-            per_shot = abs(av_fix) / sr * 1000 / max(1, len(shots))
+            per_shot = abs(av_fix) / sr * 1000 / max(1, len(plan))
             notes.append(
                 f"audio realigned to the picture by ~{abs(av_fix) / sr * 1000:.0f} ms "
-                f"across {len(shots)} shot(s), {per_shot:.1f} ms each. H3's audio latent "
+                f"across {len(plan)} shot(s), {per_shot:.1f} ms each. H3's audio latent "
                 f"runs at {AUDIO_LATENT_FPS}/s against {H3_FPS} fps video, so a shot's "
                 f"sound lands exactly only when its frame count divides by 3 -- otherwise "
                 f"it is up to 8.3 ms out, with the same sign every time when the shots "
@@ -11987,7 +10724,7 @@ class H3LongVideos:
                          "trades cheaper sampling for a 4x more expensive decode, so it "
                          "is the wrong way round at this step count. megapixels is the "
                          "lever that lowers both")
-        script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(sent_text, 1))
+        script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(plan.prompts, 1))
         # Whether the silence conditioning ACTUALLY went on. Reported from the
         # result, not from the flag: every failure inside _silent_audio_latent
         # returns None on purpose so a render never dies for a nicety, but that
@@ -12013,7 +10750,7 @@ class H3LongVideos:
                     f"asked for it -- the requested full shot or dialogue lead-in is "
                     f"pinned to encoded silence, not merely told to be quiet")
         return (video, {"waveform": audio, "sample_rate": sr}, " | ".join(notes), script,
-                lens[0], total, len(shots), round(total / H3_FPS, 2))
+                plan.shots[0].frame_count, total, len(plan), round(total / H3_FPS, 2))
 
 
 _NODE_IDS = ("H3LongVideos", "H3LongVideosFL2VA", "H3LongVideosV1",

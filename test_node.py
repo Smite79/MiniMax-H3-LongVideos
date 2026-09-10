@@ -476,6 +476,43 @@ def test_two_person_cast_has_one_body_each():
     check("a crowd shot is untouched", S.cast_hold(["Dan", "Crystal", "Mara"]) == "")
 
 
+def test_extracted_planning_policies():
+    print("\n=== extracted planning policies stay aligned ===")
+    quiet = S.ShotAudio(False, False, False, True, 0.5, S.AUDIO_LATENT_FPS)
+    check("a quiet shot is pinned", quiet.pinned and quiet.needs_silence_latent)
+    line = S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS)
+    check("dialogue gets a 20-frame lead", line.lead_frames == 20)
+    effort = S.ShotAudio(False, True, True, True, 0.5, S.AUDIO_LATENT_FPS)
+    check("effort accepts non-vocal foley", effort.accepts_built_foley)
+    check("a carried room cannot duplicate a tagged subject",
+          not S._cond_module.may_carry_room(["Dan"], ["Dan", "Crystal"], {"Dan"}))
+    check("an untagged room carry is safe when its cast remains",
+          S._cond_module.may_carry_room(["Dan"], ["Dan", "Crystal"], set()))
+    plan = S.ShotPlan()
+    plan.add("one", ["Dan"], False, False, False, [])
+    plan.set_frame_counts([73])
+    check("one add keeps every field aligned", plan.validate() is plan)
+    plan.add("two", ["Crystal"], True, True, False, [])
+    try:
+        plan.set_frame_counts([90])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("mismatched shot lengths accepted")
+    check("an invalid update leaves shot lengths unchanged",
+          [shot.frame_count for shot in plan.shots] == [73, 0])
+    plan.set_frame_counts([73, 90])
+    check("each shot owns its duration", plan.shots[1].frame_count == 90)
+
+    frames = S.FrameAccumulator(4, torch.float32, True)
+    frames.add(torch.full((3, 1, 1, 3), 1.0))
+    frames.add(torch.full((2, 1, 1, 3), 2.0001))
+    frames.add(torch.full((1, 1, 1, 3), 3.0))
+    actual = frames.finish()[:, 0, 0, 0]
+    check("overflow keeps later shots in order without reducing precision",
+          torch.equal(actual, torch.tensor([1., 1., 1., 2.0001, 2.0001, 3.])))
+
+
 def test_layers_from_prose():
     print("\n=== a layer stays out of the text until it is uncovered ===")
     # Reported: the under layer showing through the top one. A sheet lists every
@@ -2912,8 +2949,8 @@ def test_memory_is_asked_for_honestly():
             import math
             return 2.0 * math.prod(shape) * 4
     class _Model: model = _Inner()
-    _orig = S.mm
-    S.mm = _MM()
+    _orig = S._runtime_module.mm
+    S._runtime_module.mm = _MM()
     try:
         S._evict_all_but(_Model(), {"samples": lat})
         check(f"sampling asks for a real number ({calls[-1]:.0f} bytes)",
@@ -2924,7 +2961,7 @@ def test_memory_is_asked_for_honestly():
         S._evict_all_but(_Broken(), {"samples": lat})
         check("a model that cannot size itself falls back", calls[-1] == 1e30)
     finally:
-        S.mm = _orig
+        S._runtime_module.mm = _orig
 
 
 def test_the_hold_needs_its_wearer_on_screen():
@@ -4454,6 +4491,7 @@ def main():
     test_sheet_lines_are_terminated()
     test_character_guard()
     test_two_person_cast_has_one_body_each()
+    test_extracted_planning_policies()
     test_layers_from_prose()
     test_opening_pose()
     test_removal_needs_a_particle()

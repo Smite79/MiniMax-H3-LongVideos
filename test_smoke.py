@@ -2797,7 +2797,7 @@ def _encoded_refs(P, **kw):
     The demotion happens inside build_conditioning, so counting the refs handed TO
     it misses the handoff being added. This counts what reaches the encoder."""
     rows, box = [], {}
-    ob, orr = S.build_conditioning, S._build_ref_images
+    ob, orr = S.build_conditioning, S._cond_module._build_ref_images
     def spy_r(vae, imgs, w, h, size):
         box["n"] = len(imgs); return orr(vae, imgs, w, h, size)
     def spy_b(clip, vae, audio_vae, prompt, *a, **k):
@@ -2805,11 +2805,11 @@ def _encoded_refs(P, **kw):
         out = ob(clip, vae, audio_vae, prompt, *a, **k)
         rows.append((prompt, box["n"]))
         return out
-    S._build_ref_images, S.build_conditioning = spy_r, spy_b
+    S._cond_module._build_ref_images, S.build_conditioning = spy_r, spy_b
     try:
         run_node(P, **kw)
     finally:
-        S._build_ref_images, S.build_conditioning = orr, ob
+        S._cond_module._build_ref_images, S.build_conditioning = orr, ob
     return rows
 
 
