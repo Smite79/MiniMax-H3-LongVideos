@@ -1742,6 +1742,34 @@ def device_voice_clause(beat):
             f"room, and the people listening let it play, their own mouths closed.")
 
 
+# SAYING NOTHING IS NOT SAYING SOMETHING.
+#
+# "Mara says nothing" matched Name-then-speech-verb and credited her with a line.
+# That is bad on its own and worse in context: with both people counted as
+# speakers, nobody was left silent, so the lock clause -- which is only emitted
+# when there IS somebody to hold -- was cancelled outright. A negation switching
+# the guard off is the worst available reading of it.
+_SAYS_NOTHING = re.compile(
+    r"\b(?:says?|said|speaks?|spoke)\s+(?:absolutely\s+|almost\s+)?"
+    r"(?:nothing|not\s+a\s+word|no\s+more|none)\b"
+    r"|\b(?:does|do|did|would|will|could)\s*n[o']?t\s+(?:say|speak|answer|reply)\b"
+    r"|\bnever\s+(?:says?|said|speaks?|spoke)\b"
+    r"|\b(?:stays?|stayed|remains?|remained|keeps?|kept)\s+(?:quiet|silent)\b"
+    r"|\bin\s+silence\b|\bwithout\s+(?:a\s+word|speaking|answering)\b", re.I)
+
+
+def _in_beat_order(names, beat):
+    """The names sorted by where the BEAT first mentions them.
+
+    speakers_in walks the sheet, so it returned sheet order -- and the lock clause
+    now says "Dan speaks first, then Mara", which is a claim about the beat."""
+    b = beat or ""
+    def at(n):
+        m = re.search(r"\b" + re.escape(n) + r"\b", b, re.I)
+        return m.start() if m else len(b)
+    return sorted([n for n in names if n], key=at)
+
+
 def speakers_in(beat, sheet=""):
     """Who this beat gives a line to. [] when it names nobody.
 
@@ -1750,6 +1778,14 @@ def speakers_in(beat, sheet=""):
     speaker's. That is the commonest scene there is, and the lip-sync problem the
     guard exists for lands squarely on the person saying nothing."""
     b, out = beat or "", []
+    # A DENIAL OF SPEECH CANCELS THE CLAUSE IT SITS IN, not the whole beat: "Dan
+    # says: 'Wait.' Mara says nothing." has one speaker and one person who
+    # explicitly does not speak, and both halves have to survive. So the beat is
+    # split on sentence boundaries and only the denying halves are dropped.
+    # The terminator is usually INSIDE the quote -- `says: "Wait here."` ends on a
+    # quote mark, not a full stop -- so the closing quote counts as a boundary too.
+    b = " ".join(part for part in re.split(r"(?<=[.!?\"\u201d>])\s+", b)
+                 if not _SAYS_NOTHING.search(part))
     for n, _ in sheet_lines(sheet):
         if not n:
             continue
@@ -1815,7 +1851,7 @@ def speakers_in(beat, sheet=""):
                 at[n] = pm.start()
         if at:
             out.append(min(at, key=at.get))
-    return out
+    return _in_beat_order(out, beat)
 
 
 # The mouth half AND the voice half. This said only that the other mouths stay
@@ -2056,11 +2092,19 @@ def voice_sources(talkers, vocal, vocalisers, silent):
     hold: with one source and nobody silent there is nothing to disambiguate and
     nothing to close, and the shot is left alone."""
     parts = []
-    if talkers:
-        parts.append(f"only {_joined(talkers)} speaks")
+    if len(talkers or []) == 1:
+        parts.append(f"only {talkers[0]} speaks")
+    elif talkers:
+        # TWO LINES, TWO MOUTHS, AND NOTHING SAYING WHICH IS WHICH. A beat with two
+        # speakers left the shot free to put either line on either face. Said in the
+        # order the BEAT gives them, which is the only ordering there is.
+        parts.append(f"{talkers[0]} speaks first, then "
+                     + ", then ".join(talkers[1:]))
     if vocalisers and vocal:
         parts.append(f"the {vocal} is {_joined(vocalisers)}'s")
-    if not parts or (len(parts) == 1 and not silent):
+    # Emitted for two DIFFERENT sources even when nobody is left to hold, and for
+    # two speakers for the same reason: the ordering is the whole point of it.
+    if not parts or (len(parts) == 1 and not silent and len(talkers or []) < 2):
         return ""
     if silent:
         parts.append(MOUTH_HOLD_REST)
@@ -10087,7 +10131,18 @@ class H3LongVideos:
                     and not (_voiced and not _voicers)):
                 _talkers = speakers_in(body, shot_sheet) if _speaks else []
                 _open = set(_talkers) | set(_voicers)
-                _silent = [n for n in (_described or []) if n not in _open]
+                # WHOSE MOUTH THERE IS TO HOLD. Not only the people this beat
+                # names: a beat naming just the speaker does not empty the room,
+                # and the person it leaves out is standing in the picture this
+                # shot starts from. That is the mouth an invented voice lands on,
+                # and "Dan says: ..." on its own is the commonest beat there is.
+                # One shot of memory, and not for anybody the beat walks off.
+                _here_too = [n for n in _was
+                             if n not in set(_described or [])
+                             and n not in set(subjects_for(body, sheet,
+                                                           _MOVES_OFF_SRC))]
+                _silent = [n for n in list(_described or []) + _here_too
+                           if n not in _open]
                 _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent)
                 if _mouth and _voicers:
                     vocal_shots.append(len(shots) + 1)

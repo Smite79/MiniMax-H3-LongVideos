@@ -2592,6 +2592,71 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
                                    "Kate: she, 30.\nSam: he, 33."))
 
 
+def test_a_line_is_locked_to_the_person_who_says_it():
+    print("\n=== the line belongs to one mouth and the others are shut ===")
+    # Asked for: "an algorithm that keeps dialogue locked to who says it and nobody
+    # else talks." Attribution was not the problem -- speakers_in reads 19 of 20
+    # phrasings, including inverted ('"Wait," says Dan'), interrupted and
+    # addressee forms. What was missing is that the LOCK was only emitted when
+    # somebody else was described in the same beat:
+    #
+    #     Dan says: "Wait here."                        -> no lock at all
+    #     Dan says: "Wait." Mara says: "No."            -> no lock at all
+    #     Dan says: "Wait here." Mara says nothing.     -> no lock at all
+    #
+    # The first is the commonest beat in any script. Mara is standing there from
+    # the previous shot -- the picture this shot starts from has her in it -- and
+    # nothing told the shot she is not the one talking.
+    MEM = "Dan: he, 40, a work coat.\nMara: she, 33, a green scarf."
+
+    def shot(second, first="Dan and Mara stand by the door."):
+        sc = re.split(r"(?=\[Shot )",
+                      run_node("A hallway.\n\n" + first + "\n\n" + second,
+                               plan_only=True, character_memory=MEM,
+                               anchor="Wide, day.")[3])
+        return " ".join([x for x in sc if x.strip()][-1].split())
+
+    # 1. THE CARRIED CAST IS STILL IN THE ROOM. A beat naming only the speaker does
+    # not empty the frame, and the person it does not name is exactly the mouth an
+    # invented voice lands on.
+    a = shot('Dan says: "Wait here."')
+    check("a lone speaking beat still locks the line",
+          "Only Dan speaks" in a, a[-190:])
+    check("...and closes the mouth of whoever else is in the room",
+          "every other mouth in the shot stays closed" in a, a[-190:])
+
+    # 2. TWO SPEAKERS, TWO LINES. Nothing said which was whose, so they could be
+    # swapped between the two faces.
+    b = shot('Dan says: "Wait." Mara says: "No."')
+    check("two speakers are put in order",
+          "Dan speaks first, then Mara" in b, b[-190:])
+
+    # 3. "SAYS NOTHING" IS NOT SPEAKING. It read as a second speaker, which left
+    # nobody silent and so cancelled the lock entirely -- a negation turning the
+    # guard off is the worst possible reading of it.
+    check("saying nothing is not saying something",
+          S.speakers_in('Dan says: "Wait here." Mara says nothing.', MEM) == ["Dan"],
+          str(S.speakers_in('Dan says: "Wait here." Mara says nothing.', MEM)))
+    for _b in ('Mara says nothing.', 'Mara said nothing at all.',
+               'Mara does not say a word.', 'Mara never says a word.'):
+        check(f"...{_b!r}", S.speakers_in(_b, MEM) == [], str(S.speakers_in(_b, MEM)))
+    c = shot('Dan says: "Wait here." Mara says nothing.')
+    check("...so the lock is not cancelled by it", "Only Dan speaks" in c, c[-190:])
+
+    # NOT INVENTED. With nobody else anywhere in the film there is no second mouth
+    # to close, and the shot is left alone rather than told about absent people.
+    solo = " ".join([x for x in re.split(r"(?=\[Shot )",
+                     run_node('A hallway.\n\nDan says: "Wait here."', plan_only=True,
+                              character_memory="Dan: he, 40, a work coat.",
+                              anchor="Wide, day.")[3]) if x.strip()][-1].split())
+    check("one person in the whole film gets no lock clause",
+          "every other mouth" not in solo, solo[-160:])
+    # ...and an unattributable line still falls back to counting the voices.
+    amb = shot('"Wait here."')
+    check("an unattributed line still says how many voices there are",
+          "Only the person speaking" in amb, amb[-190:])
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5852,6 +5917,7 @@ def main():
     test_nothing_tells_the_cast_to_hold_still()
     test_a_face_under_duress_is_not_a_portrait()
     test_her_whimper_does_not_free_his_mouth()
+    test_a_line_is_locked_to_the_person_who_says_it()
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()
     test_the_bed_survives_an_anchor()
