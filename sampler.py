@@ -1972,7 +1972,7 @@ def told_hold(listeners):
 
 
 MOUTH_HOLD_OTHERS = (" Only {who} speaks; every other mouth in the shot stays "
-                     "closed, jaws still.")
+                     "closed, those expressions moving.")
 
 # ...and when the line has no name on it. Two people, one line, nobody named: the
 # speaker cannot be identified, so neither mouth could be held and BOTH were free
@@ -3988,7 +3988,75 @@ RESTRAINT_HOLD_KEY = ("handcuffs cuffs chains rope ropes tape gag collar restrai
 # only way to satisfy it is to put a face in an empty frame. The AUDIO half has no
 # such limit -- an empty room still babbles -- so the two are separate conditions and
 # are gated separately below.
-MOUTH_HOLD = " Mouths in the shot stay closed, jaws still."
+# AND IT DOES NOT FREEZE THE FACE. "Mouths stay closed" is the whole of the
+# lip-sync guarantee -- lip-sync needs lips to part, and a closed mouth cannot do
+# it. "jaws still" was a stillness instruction riding along on that guarantee,
+# landing on every quiet shot in the film, and `still` is not a quiet word to a
+# video model: it damps motion wherever it is pointed. Reported as bad acting.
+#
+# So the second half now says what the face IS doing rather than what it is not,
+# which is the same rule every other clause here follows -- at cfg 1 there is no
+# negative prompt, and an unreacting face is exactly what you get by asking for
+# nothing. It costs one word against a guard block already measured at 47% of the
+# shot, and it is the only sentence in that block with anything to say about
+# performance.
+MOUTH_HOLD = " Mouths in the shot stay closed, the expressions moving."
+
+
+# A MOUTH THE BEAT ITSELF PUTS TO WORK.
+#
+# The guard above is right for a face doing nothing. It was also landing on the
+# beats that ARE the performance -- and contradicting them, in one case word for
+# word:
+#
+#     Dana grins, wide and mean.   -> Mouths in the shot stay closed, jaws still.
+#     Dana's mouth falls open.     -> Mouths in the shot stay closed, jaws still.
+#     Dana yawns.                  -> Mouths in the shot stay closed, jaws still.
+#
+# Only the VOCAL reactions stood down, because exertion_in covers laughing and
+# sobbing. Every SILENT facial performance -- the ordinary currency of acting --
+# was answered with an instruction to freeze it, and the beat is the only
+# performance direction a shot has.
+#
+# ONLY THE MOUTH. A stare, a frown, a wince is a face acting with its mouth shut,
+# and the guard costs it nothing; standing down for those would free a mouth for no
+# gain, and a free mouth on an open branch is where invented lip-sync lands.
+#
+# SEPARATE FROM _voiced, which is the same stand-down for EFFORT and also unpins
+# the audio branch. A smile is silent. This frees the picture and leaves the branch
+# exactly where it was -- no beat that was silent before this becomes audible --
+# because a silent expression is the most common beat in any script, and letting
+# one open an audio branch would be the babble hole rebuilt at the widest point.
+_MOUTH_WORKS = re.compile(
+    r"\b(?:smil(?:e|es|ed|ing)|grin(?:s|ned|ning)?|smirk(?:s|ed|ing)?|"
+    r"sneer(?:s|ed|ing)?|grimac(?:e|es|ed|ing)|pout(?:s|ed|ing)?|"
+    r"yawn(?:s|ed|ing)?|gape(?:s|d|ing)?|chew(?:s|ed|ing)?|"
+    r"kiss(?:es|ed|ing)?)\b"
+    # Spitting needs somewhere to spit. Bare `spits` is what an engine does.
+    r"|\bspits?\s+(?:it\s+)?(?:on|at|out|into|onto)\b"
+    # The rest need their object, because the bare verb is ordinary English:
+    # she bites her lip, not the dog bites; she licks her lips, not licks a stamp.
+    r"|\b(?:bite|bites|biting|bit)\s+(?:down\s+on\s+)?(?:her|his|their|the)\s+lips?\b"
+    r"|\blick(?:s|ed|ing)?\s+(?:her|his|their|the)\s+lips\b"
+    r"|\bpurs(?:e|es|ed|ing)\s+(?:her|his|their|the)\s+lips\b"
+    r"|\bbar(?:e|es|ed|ing)\s+(?:her|his|their|the)\s+teeth\b"
+    r"|\bmouth(?:s|ed|ing)?\s+(?:the\s+)?words?\b"
+    # "Dana's mouth falls open" is the same sentence as "her mouth falls open" and
+    # was the one this file contradicted word for word, so the possessive NAME has
+    # to be a determiner here too.
+    r"|\b(?:her|his|their|the|[\w-]+['\u2019]s)\s+(?:mouth|jaw)\s+"
+    r"(?:falls?|fell|drops?|dropped|hangs?|hung|opens?|opened)\b"
+    r"|\b(?:her|his|their|the|[\w-]+['\u2019]s)\s+lips?\s+(?:parts?|parted)\b", re.I)
+
+
+def mouth_performs(beat):
+    """Does the beat itself put the MOUTH to work?
+
+    The beat has already said what the mouth does, so the guard has nothing to add
+    over the top -- and what it was adding contradicted it. Same shape as the LONE
+    vocal that sounds_for leaves alone: where the author wrote it, the node is
+    quiet."""
+    return bool(_MOUTH_WORKS.search(beat or ""))
 
 _PERSON_WORD = re.compile(
     r"\b(?:he|she|they|him|her|hers|them|his|their|theirs|himself|herself|themselves|"
@@ -7883,6 +7951,7 @@ class H3LongVideos:
         stated_shots = []           # shots given a state put at the first frame
         turned_shots = []           # shots given both ends of a staged change
         mouth_shut = []             # shots told every mouth is closed
+        mouth_acting = []           # ...and the ones whose beat works the mouth
         muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
         restarted = []              # shots started fresh after a removal
@@ -9167,9 +9236,13 @@ class H3LongVideos:
             # the voice is given back to the thing it came out of.
             _device_line = (mouths_shut_when_no_line
                             and speech_is_a_devices(body, sheet))
+            # The beat's own mouth. Read here, used ONLY on the picture guard
+            # below -- never on the audio decision, which is what keeps a smile
+            # silent. See mouth_performs.
+            _mouth_busy = mouth_performs(body)
             _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
                                     and (not _speaks or _device_line)
-                                    and not _voiced) else ""
+                                    and not _voiced and not _mouth_busy) else ""
             # One of two people speaking still leaves the OTHER one's mouth free. The
             # shot is a speaking shot, so the guard stood down for everybody in it --
             # and the listener is exactly who the invented lip-sync lands on. Name the
@@ -9181,7 +9254,7 @@ class H3LongVideos:
             # which are opposite situations.
             _mouth_from_silence = bool(_mouth)
             if (not _mouth and mouths_shut_when_no_line and _speaks and not _voiced
-                    and not _device_line):
+                    and not _mouth_busy and not _device_line):
                 _talkers = speakers_in(body, shot_sheet)
                 _silent = [n for n in (_described or []) if n not in _talkers]
                 if _talkers and _silent:
@@ -9198,6 +9271,8 @@ class H3LongVideos:
             if _mouth:
                 (mouth_shut if _mouth_from_silence
                  else mouth_named).append(len(shots) + 1)
+            elif _mouth_busy and mouths_shut_when_no_line and _has_people:
+                mouth_acting.append(len(shots) + 1)
             # A shot with a line is told what language it is in. Every shot with a
             # line, not only the ones with a listener to hold: a single speaker can
             # deliver the line in whatever language the model picks.
@@ -9920,6 +9995,20 @@ class H3LongVideos:
                 f"lips-closed line loses to a stream that has decided somebody is "
                 f"talking. Shots staging effort are left out on purpose -- straining is "
                 f"vocal and that mouth should be open. Off with mouths_shut_when_no_line")
+        if mouth_acting:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in mouth_acting)} kept their mouths "
+                f"because the beat itself puts the mouth to work -- a grin, a yawn, a "
+                f"bitten lip, a jaw dropping. The guard holds mouths closed on every "
+                f"shot with nobody speaking, and against a face doing nothing that is "
+                f"right; against these it was countermanding the only performance "
+                f"direction the shot has, in one case word for word. The beat has said "
+                f"what the mouth does, so nothing is added over the top. This frees the "
+                f"PICTURE only: a smile is silent, and the audio branch is left exactly "
+                f"where it was, because a silent expression is the commonest beat there "
+                f"is and letting one open a branch would be the invented voice back at "
+                f"its widest point. A stare or a wince is a face acting with its mouth "
+                f"shut and is still held")
         if muted_sound:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in muted_sound)} gave up the sound you "

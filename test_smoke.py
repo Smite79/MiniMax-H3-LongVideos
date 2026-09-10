@@ -1797,6 +1797,74 @@ def test_the_anchor_survives_a_close_shot():
     check("an unrestrained scene is untouched", "the wrists" not in plain, "")
 
 
+def test_a_grin_is_not_a_closed_mouth():
+    print("\n=== the guard stops countermanding the beat ===")
+    # Reported as bad acting. The mouth guard lands on every shot with a person and
+    # no line, and for a face doing nothing that is right. But it was landing on the
+    # beats that ARE the performance:
+    #
+    #     Dana grins, wide and mean.   -> Mouths in the shot stay closed, jaws still.
+    #     Dana's mouth falls open.     -> Mouths in the shot stay closed, jaws still.
+    #     Dana yawns.                  -> Mouths in the shot stay closed, jaws still.
+    #
+    # The second one is contradicted word for word. Only the VOCAL reactions stood
+    # down -- laughs, sobs -- because exertion_in covers those; every silent facial
+    # performance was answered with an instruction to freeze it.
+    MEM = "Dana: she, 34, red coat."
+
+    def held(beat):
+        sc = run_node("A kitchen.\n\n" + beat, plan_only=True,
+                      character_memory=MEM)[3]
+        return "Mouths in the shot stay closed" in sc
+
+    for _b in ("Dana smiles at him.",
+               "Dana grins, wide and mean.",
+               "Dana bites her lip.",
+               "Dana yawns.",
+               "Dana's mouth falls open.",
+               "Dana sneers at the badge.",
+               "Dana licks her lips.",
+               "Dana mouths the words."):
+        check(f"the beat keeps its mouth: {_b!r}", not held(_b), "")
+    # ONLY the mouth. A stare or a wince is a face acting with its mouth shut, and
+    # the guard costs it nothing -- standing down for those would free a mouth for
+    # no gain, and a free mouth on an open branch is where lip-sync lands.
+    for _b in ("Dana stares at the door.",
+               "Dana walks to the window.",
+               "Dana finds her sister's body."):
+        check(f"a shut mouth is still held: {_b!r}", held(_b), "")
+
+    # ...and ordinary English that happens to use these verbs is left alone. Every
+    # one of these was in the first draft of the pattern: a dog bites, a mill
+    # grinds, a tongue licks an envelope, an engine spits.
+    for _b in ("The dog bites the postman.", "She grinds the coffee.",
+               "He licks the envelope.", "The engine spits and dies.",
+               "She mouths off at the guard.", "The jaw of the vice opens."):
+        check(f"ordinary English is quiet: {_b!r}", not S.mouth_performs(_b), "")
+    check("...and a person spitting is not", S.mouth_performs("He spits on the floor."))
+
+    # THE BRANCH MUST NOT MOVE. exertion_in stands the guard down AND unpins the
+    # audio; a smile is silent, so this frees the picture only. If a silent
+    # expression started opening branches it would be the babble hole all over
+    # again, on the most common beat in any script.
+    info = run_node("A kitchen.\n\nDana grins, wide and mean.", plan_only=True,
+                    character_memory=MEM, auto_sound=False)[2]
+    check("...and a silent expression opens no audio branch",
+          re.search(r"shot\(s\) [^|]*\b1\b[^|]*conditioned on real silence", info)
+          is not None, info[:300])
+    check("info says which shots kept their mouths",
+          "the beat itself puts the mouth to work" in info, info[:300])
+
+    # The guard no longer orders the lower face to hold still. "Mouths stay closed"
+    # is the whole of the lip-sync guarantee; "jaws still" was a stillness
+    # instruction riding along on it, on every quiet shot in the film.
+    for _c in (S.MOUTH_HOLD, S.MOUTH_HOLD_OTHERS):
+        check(f"no stillness ordered: {_c[:34]!r}",
+              not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", _c, re.I), _c)
+        check("...and the mouth is still shut", "clos" in _c)
+    check("the face is given something to do", "expressions moving" in S.MOUTH_HOLD)
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5053,6 +5121,7 @@ def main():
     test_a_covered_object_does_not_send_its_picture()
     test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()
+    test_a_grin_is_not_a_closed_mouth()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()
