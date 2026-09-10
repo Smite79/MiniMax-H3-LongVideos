@@ -1836,7 +1836,27 @@ def speakers_in(beat, sheet=""):
 # the language is read off the line, and this is only what stands in when the line
 # is too short to tell.
 SPOKEN_LANGUAGE = "English"
-LANGUAGE_HOLD = " The line is spoken in {lang}."
+# THE LANGUAGE, AND NOT THE FACT THAT IT IS SPOKEN. ea58d3c took the speech
+# vocabulary back out of the speech guard on the evidence of a render, and wrote
+# the finding down: "Every word I added is speech vocabulary -- speaks, voice,
+# line, said -- and on a joint model the prose conditions the AUDIO branch as much
+# as the picture. A clause meant to suppress a second voice was itself priming
+# speech." What it kept is "who has the line and holds the other mouths, which is
+# what it said before this session and what was not babbling".
+#
+# 6943916 put `line` and `spoken` back, on EVERY speaking shot, twelve and a half
+# hours later (2026-09-05 23:16 -> 2026-09-06 11:53). Nothing was wrong with its
+# purpose -- a branch told a line is spoken but never told in WHAT picks a language,
+# and that was a real report -- but it carried two of the four words the render had
+# just convicted, into the one clause that lands on exactly the shots with a voice
+# in them.
+#
+# The dropped half was redundant anyway, which is why this costs nothing. <d> and
+# </d> (151669/151670) are real tokens the model was trained with, and they are
+# what marks a span as spoken; the language is the one thing they cannot carry,
+# and it is all this sentence needs to say. Verified across English, Spanish,
+# French, German, Russian and Japanese.
+LANGUAGE_HOLD = " The language is {lang}."
 
 # Characters that are not plain Latin text. A stray CJK, Cyrillic or Arabic glyph in
 # a prompt is a strong signal to a multilingual model about what language to speak,

@@ -76,7 +76,16 @@ def test_verbatim():
                  # never be said where no person is. MOUTH_HOLD is the scoped
                  # replacement -- appended, and only where the beat itself puts
                  # somebody on screen. These spellings stay banned.
-                 "Everyone in this shot is silent"):
+                 "Everyone in this shot is silent",
+                 # ea58d3c took the speech vocabulary out of the speech guard on
+                 # the evidence of a RENDER, and named the four words it convicted:
+                 # speaks, voice, line, said. 6943916 put `line` and `spoken` back
+                 # twelve and a half hours later, on every speaking shot, inside
+                 # " The line is spoken in {lang}.". The purpose was real -- a
+                 # branch told a line is spoken but not in WHAT picks a language --
+                 # but <d>/</d> already mark the span as spoken, so the language is
+                 # the only part that had to be said. This spelling stays banned.
+                 "The line is spoken in"):
         check(f"no guard text remains: {gone!r}", gone not in src)
 
 

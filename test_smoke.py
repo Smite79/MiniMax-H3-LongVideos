@@ -3379,9 +3379,9 @@ def test_a_line_is_spoken_in_one_language():
     info, script = out[2], out[3]
     sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     check("the speaking shot is told its language",
-          "spoken in English" in sh[1])
+          "The language is English" in sh[1])
     check("...and the silent ones are not",
-          "spoken in" not in sh[0] and "spoken in" not in sh[2])
+          "The language is" not in sh[0] and "The language is" not in sh[2])
     check("info names the shots", "told which language it is spoken in" in info)
     # Positively phrased: naming the unwanted language would ask for it.
     check("no language is named but the wanted one",
@@ -3392,7 +3392,7 @@ def test_a_line_is_spoken_in_one_language():
     def said_in(script_text, which=1):
         s = [x for x in re.split(r"(?=\[Shot )",
                                  run_node(script_text, plan_only=True)[3]) if x.strip()]
-        m = re.search(r"The line is spoken in ([^.]*)\.", " ".join(s[which].split()))
+        m = re.search(r"The language is ([^.]*)\.", " ".join(s[which].split()))
         return m.group(1) if m else ""
 
     for _lang, _line in (
