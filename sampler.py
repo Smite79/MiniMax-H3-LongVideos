@@ -3485,6 +3485,78 @@ def _direct_model_sampling(model, shift_video, shift_audio):
     return m
 
 
+# WHERE THE AUDIO BRANCH LANDS FROM, AND HOW TO SHORTEN THE FALL.
+#
+# Reported over and over as babble at the OPENING of a beat, and none of the prose
+# in this file could touch it. Every clause here changes what the branch is TOLD.
+# None of them changes how much noise it still has to clear when it stops.
+#
+# Computed from ComfyUI's own scheduler code at shift 12/3 -- the last AUDIO sigma
+# before zero, which the final step has to clear in a single jump:
+#
+#     scheduler     5 steps   8 steps
+#     simple         0.4286    0.3000
+#     beta           0.2981    0.1559
+#     normal         0.0348    0.0348
+#     kl_optimal     0.0030    0.0030
+#     exponential    0.0030    0.0030
+#
+# 43% in one step against 0.3%. A branch resolving that much at once invents
+# whatever is easiest to invent, and on a branch conditioned on "somebody speaks"
+# that is a voice. It surfaces at the OPENING because that is where the branch has
+# least conditioning to anchor it -- the line has not started. That is also why the
+# prose fixes helped and did not solve it: they reduce the empty space the invention
+# lands in; this reduces the capacity to invent.
+#
+# THE AUDIO BRANCH HAS NO SCHEDULE OF ITS OWN. comfy/ldm/minimax/model.py derives it
+# per step -- sigma_a = time_shift_sigma(sigma_v, shift_v, shift_a) -- so the audio
+# tail is decided by the VIDEO schedule, and choosing a scheduler for the audio
+# means giving up the one chosen for the picture. Inserting ONE step does not: it
+# splits the final jump and leaves every earlier sigma exactly where it was.
+#
+# The formula is comfy's, restated here rather than imported, for the same reason
+# last_audio_sigma restates it: this has to work when comfy is not importable.
+def audio_sigma_of(video_sigma, shift_video, shift_audio):
+    """The audio branch's sigma at a given video sigma. comfy's time_shift_sigma."""
+    v, a, s = float(shift_video), float(shift_audio), float(video_sigma)
+    base = s / (v + s * (1.0 - v))
+    return a * base / (1.0 + (a - 1.0) * base)
+
+
+def video_sigma_for_audio(target_audio, shift_video, shift_audio):
+    """The video sigma that puts the audio branch on `target_audio`. The inverse."""
+    v, a, t = float(shift_video), float(shift_audio), float(target_audio)
+    base = t / (a - t * (a - 1.0))
+    return base * v / (1.0 - base + base * v)
+
+
+def insert_audio_landing(sigmas, shift_video, shift_audio,
+                         target=0.03, coarse=0.10):
+    """One extra step so the audio branch does not land from a great height.
+
+    Returns a new list, or the input unchanged when there is nothing to do. This
+    runs inside the render path, so anything unexpected -- an empty schedule, no
+    trailing zero, a tail that is already soft -- returns the input rather than
+    raising. It never inserts twice: after one pass the tail is below `coarse`.
+
+    `target` is 0.03 because that is roughly what `normal` achieves on its own, and
+    it is comfortably above the 0.003 kl_optimal leaves -- close enough to free, far
+    enough from zero that the extra step is doing work rather than nothing."""
+    try:
+        out = [float(x) for x in (sigmas or [])]
+    except (TypeError, ValueError):
+        return sigmas
+    if len(out) < 3 or out[-1] != 0.0 or out[-2] <= 0.0:
+        return sigmas
+    if audio_sigma_of(out[-2], shift_video, shift_audio) <= coarse:
+        return sigmas
+    land = video_sigma_for_audio(target, shift_video, shift_audio)
+    # Strictly inside the final jump, or the schedule stops being monotonic.
+    if not (0.0 < land < out[-2]):
+        return sigmas
+    return out[:-1] + [land, 0.0]
+
+
 def last_audio_sigma(steps, shift_audio, scheduler="simple", shift_video=None):
     """How much audio noise is still left going into the FINAL sampling step.
 
@@ -7437,13 +7509,44 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     return cond, latent, fc, carry_as_ref
 
 
+def landing_schedule(model, scheduler, steps, shift_video, shift_audio):
+    """The sigmas this shot will run on, with the audio landing added. None if not.
+
+    None means "take the ordinary path and change nothing", and it is returned for
+    every reason there is: comfy not reachable, a schedule that already lands
+    softly, anything unexpected. The schedule is built the way KSampler builds it --
+    calculate_sigmas(model_sampling, scheduler, steps) at denoise 1.0 -- so what is
+    handed back is the shot's own schedule with one step spliced into the end,
+    never a different one."""
+    try:
+        import comfy.samplers as _cs
+        _ms = model.get_model_object("model_sampling")
+        base = [float(x) for x in _cs.calculate_sigmas(_ms, str(scheduler), int(steps))]
+        landed = insert_audio_landing(base, shift_video, shift_audio)
+        if len(landed) == len(base):
+            return None
+        return torch.tensor(landed, dtype=torch.float32)
+    except Exception:
+        return None
+
+
 def sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
-                scheduler, sigmas=None):
+                scheduler, sigmas=None, shift_video=None, shift_audio=None,
+                soft_landing=False):
     """One sampling pass. denoise is fixed at 1.0: partial denoise desyncs the
     joint audio/video schedule."""
     if sigmas is not None and len(sigmas):
         return _sample_on_sigmas(model, seed, cfg, sampler_name, cond, negative,
                                  latent, sigmas)
+    # THE AUDIO BRANCH'S LANDING. Only where the caller has established that this
+    # schedule drops the audio from a height, and only when the node is the one
+    # setting the shift -- with apply_model_sampling off, the shifts this is
+    # computed from are not the shifts the model is using. See insert_audio_landing.
+    if soft_landing:
+        _own = landing_schedule(model, scheduler, steps, shift_video, shift_audio)
+        if _own is not None:
+            return _sample_on_sigmas(model, seed, cfg, sampler_name, cond, negative,
+                                     latent, _own)
     (out,) = nodes.common_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
                                    cond, negative, latent, denoise=1.0)
     return out
@@ -10828,6 +10931,38 @@ class H3LongVideos:
         # Never advise RAISING it: the target is a ceiling on the last step, not a
         # setting to move towards from below.
         _fix_a = min(shift_audio_for(steps), float(shift_audio or 0.0) or 1.0)
+        # ...AND THE NODE CAN SHORTEN THE FALL ITSELF, without taking the scheduler
+        # away from the picture. The audio branch has no schedule of its own -- it is
+        # derived from the video sigma at every step -- so choosing a scheduler for
+        # the audio means giving up the one chosen for the video. One extra step does
+        # not: it splits the final jump and leaves every earlier sigma alone.
+        #
+        # Only when the node is the one setting the shift. With apply_model_sampling
+        # off, the shifts this is computed from are not the shifts the model uses,
+        # and a schedule built on the wrong ones would be worse than none. A wired
+        # `sigmas` input is the author's own schedule and is never touched.
+        _soft_landing = bool(apply_model_sampling
+                             and not (sigmas is not None and len(sigmas)))
+        if _soft_landing and _last_a > 0.10:
+            notes.append(
+                f"the audio branch was landing from sigma {_last_a:.3f} on its final "
+                f"step, so ONE extra step is spliced into the end of the schedule to "
+                f"put it down at about 0.030 instead. That step costs one model "
+                f"evaluation per shot and nothing else: every earlier sigma is exactly "
+                f"where '{scheduler}' put it, so the picture keeps the schedule you "
+                f"chose. This is the one lever prose cannot reach -- every clause in "
+                f"this node changes what the branch is TOLD, and none of them changes "
+                f"how much noise it still has to clear when it stops. A branch "
+                f"resolving 43% of its denoising in one jump invents whatever is "
+                f"easiest, which on a branch told somebody speaks is a voice, and it "
+                f"lands at the OPENING of the shot because that is where there is "
+                f"least conditioning to anchor it. Choosing a scheduler that already "
+                f"finishes the audio"
+                + (f" -- '{_alt_sched[0]}' leaves {_alt_sched[1]:.3f}" if _alt_sched
+                   else "")
+                + f" is still the better fix and costs no step; this one fires only "
+                f"while the tail is steep. Off by wiring your own `sigmas`, or with "
+                f"apply_model_sampling")
         if _last_a > 0.4:
             notes.append(
                 f"the audio branch still has sigma {_last_a:.2f} to clear on its FINAL "
@@ -11056,7 +11191,8 @@ class H3LongVideos:
             try:
                 _t0 = time.perf_counter()
                 out = sample_shot(model, cond, negative, latent, seed, steps, cfg,
-                                  sampler_name, scheduler, sigmas)
+                                  sampler_name, scheduler, sigmas,
+                                  shift_video, shift_audio, _soft_landing)
                 t_sample += time.perf_counter() - _t0
             except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                 if not _is_oom(e):

@@ -2405,6 +2405,75 @@ def test_the_bed_survives_an_anchor():
                                                    anchor="Handheld, tight interior.")[2])
 
 
+def test_the_audio_branch_gets_a_soft_landing():
+    print("\n=== the audio branch stops landing from a great height ===")
+    # Reported repeatedly: babble at the opening of the beat, and prose was not
+    # fixing it. It cannot. Every clause in this file changes what the branch is
+    # TOLD; none of them changes how much noise it still has to clear when it
+    # stops. Computed from ComfyUI's own scheduler code at shift 12/3:
+    #
+    #     scheduler     5 steps   8 steps      <- last AUDIO sigma before zero
+    #     simple         0.4286    0.3000
+    #     beta           0.2981    0.1559
+    #     normal         0.0348    0.0348
+    #     kl_optimal     0.0030    0.0030
+    #     exponential    0.0030    0.0030
+    #
+    # On `simple` at 5 steps the audio branch resolves 43% of its denoising in ONE
+    # final jump -- 140x what kl_optimal leaves. A branch resolving that much at
+    # once invents whatever is easiest to invent, and for a branch conditioned on
+    # "somebody speaks" that is a voice. It surfaces at the OPENING because that is
+    # where the branch has the least conditioning to anchor it: the line has not
+    # started yet.
+    #
+    # The audio branch has no schedule of its own -- comfy/ldm/minimax/model.py
+    # derives it per step, sigma_a = time_shift_sigma(sigma_v, shift_v, shift_a) --
+    # so the audio tail is decided by the VIDEO schedule, and picking a scheduler
+    # for the audio means giving up the one chosen for the picture. Inserting one
+    # step does not: it splits the final jump and leaves every earlier sigma alone.
+    #
+    # Pure arithmetic, deliberately. comfy is not importable in this suite, which
+    # is why last_audio_sigma silently falls back here -- so the schedule build
+    # lives apart from the maths, and the maths is what gets tested.
+    f = S.audio_sigma_of
+    g = S.video_sigma_for_audio
+    for want in (0.20, 0.10, 0.05, 0.03, 0.01):
+        got = f(g(want, 12.0, 3.0), 12.0, 3.0)
+        check(f"audio {want} round-trips through the video grid",
+              abs(got - want) < 1e-9, f"{got}")
+    check("the formula matches comfy's own for the known tail",
+          abs(f(0.75, 12.0, 3.0) - 0.42857142857) < 1e-9, str(f(0.75, 12.0, 3.0)))
+
+    # simple @ 5 steps, shift 12 -- the schedule this actually happens on.
+    SIMPLE = [1.0, 0.9796, 0.9474, 0.8889, 0.75, 0.0]
+    out = S.insert_audio_landing(SIMPLE, 12.0, 3.0)
+    check("a coarse tail gets exactly one step inserted",
+          len(out) == len(SIMPLE) + 1, str(out))
+    check("...inserted before the zero, not after",
+          out[-1] == 0.0 and out[-2] > 0.0, str(out))
+    check("...and the schedule stays strictly decreasing",
+          all(a > b for a, b in zip(out, out[1:])), str(out))
+    check("...leaving every earlier sigma untouched",
+          out[:len(SIMPLE) - 1] == SIMPLE[:-1], str(out))
+    check("the audio's last jump drops from 43% to about 3%",
+          abs(f(out[-2], 12.0, 3.0) - 0.03) < 1e-6, str(f(out[-2], 12.0, 3.0)))
+
+    # A schedule that already lands softly is left completely alone -- picking
+    # kl_optimal or exponential is the better fix and must not be taxed a step.
+    FINE = [1.0, 0.5, 0.154, 0.062, 0.0109, 0.0]
+    check("a soft tail is not touched", S.insert_audio_landing(FINE, 12.0, 3.0) == FINE)
+    # ...and neither is anything malformed. This runs inside the render path, so it
+    # returns the input unchanged rather than raising on anything unexpected.
+    for _bad in ([], [0.0], [1.0], [1.0, 0.5], None):
+        check(f"malformed input is returned as-is: {_bad!r}",
+              S.insert_audio_landing(_bad, 12.0, 3.0) == (_bad if _bad else _bad))
+    check("a schedule with no trailing zero is left alone",
+          S.insert_audio_landing([1.0, 0.75, 0.5], 12.0, 3.0) == [1.0, 0.75, 0.5])
+    # Never twice, however coarse.
+    once = S.insert_audio_landing(S.insert_audio_landing(SIMPLE, 12.0, 3.0), 12.0, 3.0)
+    check("it is never inserted twice", len(once) == len(SIMPLE) + 1, str(once))
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5668,6 +5737,7 @@ def main():
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()
     test_the_bed_survives_an_anchor()
+    test_the_audio_branch_gets_a_soft_landing()
     test_an_anchor_says_when_it_has_taken_the_scenes_place()
     test_a_grim_film_is_grim_in_every_shot()
     test_script_is_what_was_sent()
