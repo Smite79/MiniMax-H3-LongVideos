@@ -1941,6 +1941,95 @@ def test_nothing_tells_the_cast_to_hold_still():
           "last" in S.pace_clause(4.0, 12.0))
 
 
+def test_a_face_under_duress_is_not_a_portrait():
+    print("\n=== the face stops being left to the model's prior ===")
+    # Reported: she smiles at the camera in a situation of duress. Dumped, a
+    # four-shot scene of a woman handcuffed in the back of a van -- pulling at the
+    # cuffs, struggling, going limp -- contained NOT ONE WORD about anybody's face.
+    # Every clause in it was hardware, limbs, or mouths-closed.
+    #
+    # SILENCE IS NOT NEUTRAL. An attribute the prompt does not state is filled from
+    # the model's prior, and the prior for a named, described person is a PORTRAIT:
+    # facing the lens, pleasantly. This file already knows the half of that about
+    # the eyes -- it is the whole reason gaze_hold exists -- but gaze_hold only
+    # fires when the beat NAMES something to look at, which most beats do not, and
+    # nothing has ever spoken for the expression at all.
+    MEM = "McKenna: she, 26, dark hair, a red jacket, handcuffs behind her back."
+    PLAIN = "Kate: she, 30, a grey coat."
+
+    def face(beat, mem=MEM, **kw):
+        return run_node("A van interior, night.\n\n" + beat, plan_only=True,
+                        character_memory=mem, **kw)[3]
+
+    check("a restrained shot says what the face is doing",
+          "shows the strain" in face("McKenna lies against the wheel arch."), "")
+    check("...and so does a beat staging distress",
+          "shows the strain" in face("Kate struggles and twists away.", mem=PLAIN), "")
+    # NOT INVENTED. Only what the scene already establishes -- hardware the sheet
+    # lists, or the author's own distress verbs. A shot staging neither gets
+    # nothing: a node that decides how everybody feels is a node writing the film.
+    check("an ordinary scene is left alone",
+          "shows the strain" not in face("Kate makes the coffee.", mem=PLAIN), "")
+    check("...and so is an ordinary beat about a calm person",
+          "shows the strain" not in face("Kate reads the letter.", mem=PLAIN), "")
+    # A COLLAR ALONE IS NOT DURESS. restraint_present is right for the continuity
+    # holds -- a collar must stay fastened and stay the object it was -- but it is
+    # worn in scenes that are not distressing, and stamping strain on one of those
+    # faces is the mouth guard's bug in a new place.
+    check("a collar alone does not stage duress",
+          "shows the strain" not in face("McKenna sits on the bed.",
+                                         mem="McKenna: she, 26, a leather collar."), "")
+    check("...but cuffs do",
+          "shows the strain" in face("McKenna sits on the bed.",
+                                     mem="McKenna: she, 26, cuffs on her wrists."), "")
+    check("...and so does rope",
+          "shows the strain" in face("McKenna sits on the bed.",
+                                     mem="McKenna: she, 26, rope around her wrists."), "")
+    # The author's own face beat wins, exactly as it does against the mouth guard:
+    # where the beat says what the face does, the node has nothing to add over it.
+    check("a written smile is not argued with",
+          "shows the strain" not in face("McKenna smiles at him."), "")
+
+    # IMPERSONAL, even with two people in the shot. Naming her here is a SECOND
+    # naming -- the hardware hold has already said "Every restraint on McKenna" --
+    # and a named person is a person the model draws: that is what put a second girl
+    # in frame at the moment of cuffing. gaze_hold made the same call.
+    two = run_node("A van interior, night.\n\nMcKenna pulls at the cuffs while Dan "
+                   "watches.", plan_only=True,
+                   character_memory=MEM + "\nDan: he, 40, a work coat.")[3]
+    check("two in the shot, and the clause still names nobody",
+          "The face shows the strain" in two and "McKenna's face" not in two,
+          two[-200:])
+
+    # PICTURE ONLY. The audio branch must not move: a face is not a sound, and a
+    # wordless duress shot is still pinned to silence.
+    info = run_node("A van interior, night.\n\nMcKenna lies against the wheel arch.",
+                    plan_only=True, character_memory=MEM, auto_sound=False)[2]
+    check("...and it opens no audio branch",
+          "conditioned on real silence" in info, info[:200])
+    check("info names the shots it spoke for",
+          "left to the model's prior" in info, info[:200])
+
+    # Positively phrased: at cfg 1 there is no negative prompt, so "not smiling"
+    # would name the smile. A set mouth is a thing that can be drawn.
+    cl = S.DURESS_FACE
+    check("the clause is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b|\bun\w+ing\b", cl, re.I), cl)
+    check("...and orders no stillness",
+          not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", cl, re.I), cl)
+    check("...and names no camera", not re.search(r"camera|lens", cl, re.I), cl)
+    check("...in one sentence", cl.count(".") == 1, cl)
+
+    # THE SWITCH IS hold_gaze, not one of its own. Every inference in this file has
+    # an off switch, but the widget count is capped at 37 by a test whose comment
+    # says the old node had 38 and nobody could find anything -- so this rides the
+    # switch that already exists for the same prior. hold_gaze is the portrait's
+    # POSE; this is the portrait's EXPRESSION.
+    off = face("McKenna lies against the wheel arch.", hold_gaze=False)
+    check("off with hold_gaze, the face is left alone again",
+          "shows the strain" not in off, "")
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     # H3 is joint: the face follows the audio branch. A shot with no line but a sound
@@ -5199,6 +5288,7 @@ def main():
     test_mouths_stay_shut_with_no_line()
     test_a_grin_is_not_a_closed_mouth()
     test_nothing_tells_the_cast_to_hold_still()
+    test_a_face_under_duress_is_not_a_portrait()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()

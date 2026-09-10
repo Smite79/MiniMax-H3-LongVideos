@@ -4062,6 +4062,83 @@ _MOUTH_WORKS = re.compile(
     r"|\b(?:her|his|their|the|[\w-]+['\u2019]s)\s+lips?\s+(?:parts?|parted)\b", re.I)
 
 
+# WHAT SILENCE IN THE PROMPT ACTUALLY ASKS FOR.
+#
+# Reported: she smiles at the camera in a situation of duress. Dumped, a four-shot
+# scene of a woman handcuffed in the back of a van -- pulling at the cuffs,
+# struggling, going limp -- carried NOT ONE WORD about anybody's face. Every clause
+# in it was hardware, limbs, or mouths-closed.
+#
+# An unstated attribute is not a neutral one. The model fills it from its prior, and
+# the prior for a named, described person is a PORTRAIT: facing the lens, pleasantly,
+# because that is what photographs of people are. This file already knows that half
+# of it about the EYES -- it is the entire reason gaze_hold exists -- but gaze_hold
+# only fires where the beat NAMES something to look at, which most beats do not, and
+# nothing in this node has ever spoken for the expression at all.
+#
+# So the shot says the one thing the scene has already established. NOT an invented
+# emotion: hardware the sheet lists, or the author's own distress verbs. A shot
+# staging neither gets nothing, because a node deciding how everybody feels is a node
+# writing the film -- which is why this also has a switch.
+#
+# The distress list is _EXERTION's, minus the ones that are not distress. `laughs` is
+# in that list because it is VOCAL, which is all _EXERTION is for; stamping strain on
+# a face that was written laughing would be the mouth guard's bug again in a new
+# place. `wakes up` is not duress either.
+_DISTRESS = re.compile(
+    r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
+    r"strain(?:s|ing|ed)?|squirm(?:s|ing|ed)?|kick(?:s|ing|ed)?|jerk(?:s|ing|ed)?|"
+    r"sob(?:s|bing|bed)?|cr(?:y|ies|ying|ied)|weep(?:s|ing)?|"
+    r"scream(?:s|ing|ed)?|shriek(?:s|ing|ed)?|whimper(?:s|ing|ed)?|"
+    r"beg(?:s|ging|ged)?|plead(?:s|ing|ed)?|"
+    r"flinch(?:es|ing|ed)?|winc(?:e|es|ing|ed)|recoil(?:s|ing|ed)?|"
+    r"trembl(?:e|es|ing|ed)|shiver(?:s|ing|ed)?|panic(?:s|king|ked)?|"
+    r"freak(?:s|ing)?\s+out)\b"
+    r"|\b(?:goes|went|going)\s+limp\b", re.I)
+
+# POSITIVELY PHRASED, like everything else here. At cfg 1 there is no negative
+# prompt, so "not smiling" would name the smile -- and "unsmiling" is the same word
+# with a prefix on it. A mouth that is SET is a thing the model can draw, and it is
+# what the shot needs drawn.
+#
+# It names no camera. Naming one is asking for one, and the lens is exactly what
+# this sentence is trying to get her to stop looking at.
+DURESS_FACE = " The face shows the strain of it, the mouth set."
+
+
+# BINDING hardware, which is narrower than restraint hardware. restraint_present is
+# right for the continuity holds -- a collar is a thing that must stay fastened and
+# stay the object it was -- but it is not evidence of DURESS. A collar is worn in
+# scenes that are not distressing at all, and stamping strain on a face in one of
+# those is the same error as stamping a closed mouth on a grin. Cuffs, rope, chain,
+# tape and a gag are not ambiguous that way.
+_BOUND_HARDWARE = re.compile(
+    r"\b(?:handcuffs?|cuffs?|shackles?|manacles?|irons|"
+    r"ropes?|cords?|twine|zip\s*ties?|cable\s*ties?|"
+    r"chains?|chained|tape|taped|gag|gagged|bound|tied|bindings?)\b", re.I)
+
+
+def duress_face(beat, wearers, described):
+    """One short sentence about the face, on a shot whose scene already stages duress.
+
+    IMPERSONAL, the choice gaze_hold already made and for the same reason: a named
+    person is a person the model draws, and naming somebody twice in one shot is what
+    put a second girl in frame at the moment of cuffing. On the shot where that could
+    be ambiguous -- two people, one of them restrained -- the hardware hold has
+    already said "Every restraint on Nora", so the shot is not short of an
+    attribution. It is short of a sentence about her face."""
+    # The author's own face beat wins, exactly as it does against the mouth guard.
+    # Where the beat says what the face is doing, the node has nothing to add.
+    if mouth_performs(beat):
+        return ""
+    who = [n for n, ln in (wearers or []) if n and _BOUND_HARDWARE.search(ln or "")]
+    if not who and _DISTRESS.search(beat or ""):
+        who = [n for n in (described or []) if n]
+    if not who:
+        return ""
+    return DURESS_FACE
+
+
 def mouth_performs(beat):
     """Does the beat itself put the MOUTH to work?
 
@@ -7622,7 +7699,22 @@ class H3LongVideos:
                                "'watching', 'studies'. It says nothing about where the "
                                "camera is, so a shot looking straight down the line of "
                                "sight is unaffected. Looking at a PERSON is left alone: "
-                               "restating a pronoun says nothing the beat did not."}),
+                               "restating a pronoun says nothing the beat did not.\n\n"
+                               "IT ALSO SPEAKS FOR THE EXPRESSION, because that is the "
+                               "same pull. Reported: she smiles at the camera in a "
+                               "scene of duress. A four-shot scene of a woman "
+                               "handcuffed in a van -- pulling at the cuffs, "
+                               "struggling, going limp -- had not one word in it about "
+                               "anybody's face, and an attribute the prompt leaves out "
+                               "is not left to the model, it is left to the model's "
+                               "prior: a portrait, facing the lens, pleasantly. So a "
+                               "shot whose sheet lists BINDING hardware on somebody in "
+                               "it, or whose beat uses your own distress verbs, gets "
+                               "one sentence -- the face shows the strain of it, the "
+                               "mouth set. A collar alone does not trigger it, a shot "
+                               "staging neither gets nothing, and a beat that already "
+                               "says what the face does is never argued with. Picture "
+                               "only: it can never open the audio branch."}),
                 # APPENDED, like every widget before it. Saved workflows restore
                 # widget values by POSITION with no names stored.
                 "ambient_audio": ("AUDIO", {"tooltip":
@@ -7972,6 +8064,7 @@ class H3LongVideos:
         turned_shots = []           # shots given both ends of a staged change
         mouth_shut = []             # shots told every mouth is closed
         mouth_acting = []           # ...and the ones whose beat works the mouth
+        duress_shots = []           # shots told what the face is doing
         muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
         restarted = []              # shots started fresh after a removal
@@ -9259,6 +9352,15 @@ class H3LongVideos:
             # The beat's own mouth. Read here, used ONLY on the picture guard
             # below -- never on the audio decision, which is what keeps a smile
             # silent. See mouth_performs.
+            # THE FACE. Built here because _wearers and _described are what say who
+            # is under duress and who else is in the frame; used only on the picture
+            # side, like the mouth guard beside it. See duress_face.
+            _duress = (duress_face(
+                body,
+                [(n, ln) for n, ln in sheet_lines(shot_sheet) if n in set(_wearers)],
+                _described) if hold_gaze else "")
+            if _duress:
+                duress_shots.append(len(shots) + 1)
             _mouth_busy = mouth_performs(body)
             _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
                                     and (not _speaks or _device_line)
@@ -9415,6 +9517,9 @@ class H3LongVideos:
                 # beside posture because that is what it is: an arm position, not
                 # a fact about metal. See pose_clause.
                 (3, "pose", _pose),
+                # Beside the gaze, because they answer the same pull: with nothing
+                # said about the eyes or the face, both come from the portrait prior.
+                (11, "duress", _duress),
                 (11, "gaze", _gaze),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language
@@ -10015,6 +10120,23 @@ class H3LongVideos:
                 f"lips-closed line loses to a stream that has decided somebody is "
                 f"talking. Shots staging effort are left out on purpose -- straining is "
                 f"vocal and that mouth should be open. Off with mouths_shut_when_no_line")
+        if duress_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in duress_shots)} are told what the "
+                f"face is doing, because the scene already stages duress -- restraint "
+                f"hardware the sheet lists on somebody in the shot, or your own "
+                f"distress verbs in the beat. Reported as somebody smiling at the "
+                f"camera in a scene of duress: a four-shot scene of a woman handcuffed "
+                f"in a van had not one word in it about anybody's face, and an "
+                f"attribute a prompt does not state is not LEFT to the model, it is "
+                f"left to the model's prior -- which for a named, described person is "
+                f"a portrait, facing the lens, pleasantly, because that is what "
+                f"photographs of people are. The eyes have had a clause since "
+                f"hold_gaze; the expression never had one. It is one sentence, it "
+                f"names no camera, and it reads the staging rather than inventing a "
+                f"feeling -- a shot staging neither gets nothing, and a beat that "
+                f"already says what the face does is never argued with. Picture only: "
+                f"it can never open the audio branch. Off with face_under_duress")
         if mouth_acting:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in mouth_acting)} kept their mouths "
