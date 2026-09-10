@@ -4188,7 +4188,43 @@ _DISTRESS = re.compile(
 #
 # It names no camera. Naming one is asking for one, and the lens is exactly what
 # this sentence is trying to get her to stop looking at.
-DURESS_FACE = " The face shows the strain of it, the mouth set."
+# A FILM HAS A MOOD, AND IT DOES NOT BELONG TO ONE CHARACTER'S FACE.
+#
+# 8418805 gave the restrained person a face and stopped there. Reported back: "the
+# last run had them smiling and thinking this was a happy scene, when indeed it was
+# not." THEM -- plural. Measured on a five-shot kidnapping:
+#
+#     shot 1  cast=          -- NOTHING --
+#     shot 2  cast=McKenna   strain
+#     shot 3  cast=McKenna Dan   strain     <- impersonal, so Dan gets nothing
+#     shot 4  cast=Dan       -- NOTHING --
+#     shot 5  cast=Dan       -- NOTHING --
+#
+# Every shot the captor is alone in had no tone in it at all, and an unstated tone
+# is filled from the prior the same way an unstated expression is: the prior for a
+# man in a work coat is a pleasant one. The face clause could never reach him --
+# he is not the one under duress and should not look strained. What is wrong with
+# those shots is not his expression, it is the whole frame.
+#
+# So the mood is read from the FILM and said in every shot, and the face clause
+# rides on top of it where the person it describes is actually present. One word of
+# tone conditions light, faces and framing together, which no per-face sentence can.
+DURESS_MOOD = " The mood is grim."
+DURESS_FACE = " The mood is grim; the face shows the strain of it, the mouth set."
+
+
+def film_stages_duress(beats, sheet=""):
+    """Does this FILM stage duress anywhere -- binding hardware, or a distress verb?
+
+    Read once, over the whole script, because a shot of the captor alone is grim on
+    account of what is on her wrists three beats ago. The same two signals the face
+    clause uses, and the same refusals: a collar alone is not duress, and a film
+    that stages neither is left alone in every shot. The node does not get to decide
+    that somebody's film is bleak."""
+    for _, ln in sheet_lines(sheet or ""):
+        if _BOUND_HARDWARE.search(ln or ""):
+            return True
+    return any(_DISTRESS.search(b or "") for b in (beats or []))
 
 
 # BINDING hardware, which is narrower than restraint hardware. restraint_present is
@@ -4203,7 +4239,7 @@ _BOUND_HARDWARE = re.compile(
     r"chains?|chained|tape|taped|gag|gagged|bound|tied|bindings?)\b", re.I)
 
 
-def duress_face(beat, wearers, described):
+def duress_face(beat, wearers, described, film_duress=False):
     """One short sentence about the face, on a shot whose scene already stages duress.
 
     IMPERSONAL, the choice gaze_hold already made and for the same reason: a named
@@ -4216,12 +4252,16 @@ def duress_face(beat, wearers, described):
     # Where the beat says what the face is doing, the node has nothing to add.
     if mouth_performs(beat):
         return ""
+    if not described:
+        return ""
     who = [n for n, ln in (wearers or []) if n and _BOUND_HARDWARE.search(ln or "")]
     if not who and _DISTRESS.search(beat or ""):
         who = [n for n in (described or []) if n]
-    if not who:
-        return ""
-    return DURESS_FACE
+    if who:
+        return DURESS_FACE
+    # Nobody under duress IN THIS SHOT, but the film is. The frame still is not a
+    # happy one, and saying nothing is what let the captor smile through it.
+    return DURESS_MOOD if film_duress else ""
 
 
 def mouth_performs(beat):
@@ -8011,6 +8051,11 @@ class H3LongVideos:
         # varies per shot, because only the people a beat involves should be
         # described in it. Everything else is stamped on every shot unchanged.
         sheet, _dupes = merge_sheets((character_memory or "").strip(), sheet)
+        # Read ONCE, over the whole script, and AFTER character_memory is merged in
+        # -- that is where the wrists usually are. A shot of the captor alone is grim
+        # on account of what the sheet says three beats ago, so this cannot be a
+        # per-shot question. See film_stages_duress.
+        _film_duress = film_stages_duress(beats, sheet)
         if _dupes:
             notes.append(
                 f"{', '.join(_dupes)} described more than once -- character_memory and a "
@@ -9531,7 +9576,7 @@ class H3LongVideos:
             _duress = (duress_face(
                 body,
                 [(n, ln) for n, ln in sheet_lines(shot_sheet) if n in set(_wearers)],
-                _described) if hold_gaze else "")
+                _described, _film_duress) if hold_gaze else "")
             if _duress:
                 duress_shots.append(len(shots) + 1)
             _mouth_busy = mouth_performs(body)

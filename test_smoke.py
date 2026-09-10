@@ -1998,7 +1998,7 @@ def test_a_face_under_duress_is_not_a_portrait():
                    "watches.", plan_only=True,
                    character_memory=MEM + "\nDan: he, 40, a work coat.")[3]
     check("two in the shot, and the clause still names nobody",
-          "The face shows the strain" in two and "McKenna's face" not in two,
+          "the face shows the strain" in two and "McKenna's face" not in two,
           two[-200:])
 
     # PICTURE ONLY. The audio branch must not move: a face is not a sound, and a
@@ -2193,6 +2193,71 @@ def test_an_anchor_says_when_it_has_taken_the_scenes_place():
               [x for x in re.split(r"(?=\[Shot )",
                                    run_node(P, plan_only=True,
                                             character_memory=MEM)[3]) if x.strip()]))
+
+
+def test_a_grim_film_is_grim_in_every_shot():
+    print("\n=== the scene stops reading as a happy one ===")
+    # Reported: "the last run had them smiling and thinking this was a happy scene,
+    # when indeed it was not." THEM -- plural. 8418805 gave the restrained person a
+    # face and stopped there, and measured on a five-shot kidnapping it shows:
+    #
+    #     shot 1  cast=          -- NOTHING --
+    #     shot 2  cast=McKenna   strain
+    #     shot 3  cast=McKenna Dan   strain      <- impersonal; Dan gets nothing
+    #     shot 4  cast=Dan       -- NOTHING --
+    #     shot 5  cast=Dan       -- NOTHING --
+    #
+    # Every shot the captor is alone in had no tone at all, so it was filled from
+    # the prior, and the prior for a man in a work coat is a pleasant one. A film
+    # has a MOOD and it does not belong to one character's face.
+    MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
+           "Dan: he, 40, a work coat.")
+    P = ("A van interior, night.\n\nMcKenna pulls at the cuffs.\n\n"
+         "Dan watches her.\n\nDan closes the hatch.\n\nDan starts the engine.")
+    sh = [" ".join(x.split()) for x in
+          re.split(r"(?=\[Shot )", run_node(P, plan_only=True, character_memory=MEM,
+                                            anchor="Handheld, tight interior.")[3])
+          if x.strip()]
+    for _i in (1, 2, 3, 4):
+        check(f"shot {_i + 1} carries the film's mood",
+              "The mood is grim" in sh[_i], sh[_i][-140:])
+    check("the shot with the restrained person still gets her face",
+          "shows the strain" in sh[1], sh[1][-140:])
+    check("...and the shot with only the captor gets the mood alone",
+          "The mood is grim" in sh[3] and "shows the strain" not in sh[3], sh[3][-140:])
+
+    # NOT INVENTED, and not everywhere. A film that stages no duress is left alone
+    # in every shot -- the node does not get to decide that your film is bleak.
+    PLAIN = "Kate: she, 30, a grey coat.\nSam: he, 33."
+    Q = ("A kitchen, morning.\n\nKate makes the coffee.\n\n"
+         "Sam reads the paper.\n\nKate sits down.")
+    qs = [" ".join(x.split()) for x in
+          re.split(r"(?=\[Shot )", run_node(Q, plan_only=True, character_memory=PLAIN,
+                                            anchor="Wide, morning light.")[3])
+          if x.strip()]
+    check("an ordinary film gets no mood anywhere",
+          not any("mood is grim" in x for x in qs), qs[0][-140:])
+
+    # It reads the FILM, not just this beat: a shot of the captor alone is grim
+    # because of what the sheet says is on her wrists, three beats ago.
+    check("the mood is read from the sheet's hardware",
+          S.film_stages_duress(["Dan closes the hatch."],
+                               "McKenna: she, 26, cuffs on her wrists."))
+    check("...or from your own distress verbs in any beat",
+          S.film_stages_duress(["Kate makes the coffee.", "Kate sobs."], PLAIN))
+    check("...and a collar alone is still not duress",
+          not S.film_stages_duress(["Kate makes the coffee."],
+                                   "Kate: she, 30, a leather collar."))
+    check("...and an ordinary film is not", not S.film_stages_duress(
+        ["Kate makes the coffee.", "Sam reads the paper."], PLAIN))
+
+    check("the mood clause is positively phrased",
+          not re.search(r"\bno\b|\bnot\b|\bnever\b", S.DURESS_MOOD, re.I), S.DURESS_MOOD)
+    check("...and orders no stillness",
+          not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", S.DURESS_MOOD, re.I))
+    check("off with hold_gaze, like the face it belongs to",
+          "mood is grim" not in run_node(P, plan_only=True, character_memory=MEM,
+                                         hold_gaze=False)[3])
 
 
 def test_mouths_stay_shut_with_no_line():
@@ -5457,6 +5522,7 @@ def main():
     test_her_whimper_does_not_free_his_mouth()
     test_her_look_does_not_land_on_him()
     test_an_anchor_says_when_it_has_taken_the_scenes_place()
+    test_a_grim_film_is_grim_in_every_shot()
     test_script_is_what_was_sent()
     test_every_reference_is_claimed()
     test_the_demoted_handoff_is_claimed()
