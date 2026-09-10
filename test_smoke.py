@@ -4292,6 +4292,13 @@ def test_the_silent_latent_looks_like_silence():
     check("a longer shot has no seam either", float(dl.max()) < 0.05)
     check("...and is still the right length",
           long.shape[-1] == S.temporal_shape(462, S.H3_FPS)[2])
+    class OtherVae(EdgyVae):
+        def encode(self, x):
+            return super().encode(x) + 1.0
+
+    other = S._silent_audio_latent(OtherVae(), 226, S.H3_FPS)
+    check("changing audio VAE rebuilds the cached silence",
+          float(other.mean()) > float(lat.mean()) + 0.5)
     # Still defensive: anything unexpected returns None rather than raising.
     S._SILENT_UNIT["lat"] = None
 

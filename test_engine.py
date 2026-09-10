@@ -568,6 +568,36 @@ def test_pulled_aside_is_not_taken_off():
     check("it is displaced", st.person("Ana").displaced)
 
 
+def test_each_clause_owns_its_change():
+    print("\n=== each clause owns its change ===")
+    st = E.SceneState("studio")
+    st.declare("Ana", "coat and hat")
+    st.declare("Bea", "coat")
+    st.read("Ana removes her coat and puts on her hat.", ("Ana", "Bea"), 1)
+    check("a later wearing verb does not turn into a second removal",
+          st.person("Ana").removed == ["coat"] and st.person("Ana").worn == ["hat"])
+
+    st = E.SceneState()
+    st.read("Bea is handcuffed.", ("Bea",), 0)
+    changed = st.read("Ana unlocks Bea's handcuffs and fastens a collar around her neck.",
+                      ("Ana", "Bea"), 1)
+    check("one beat can release one item and apply another",
+          not st.person("Bea").hw("handcuffs") and bool(st.person("Bea").hw("collar")),
+          str(changed))
+
+
+def test_descriptions_and_places_have_owners():
+    print("\n=== descriptions and places have owners ===")
+    st = E.SceneState("studio")
+    st.declare("Ana", "coat")
+    st.declare("Bea", "coat")
+    st.read("Ana looks at topless Bea.", ("Ana", "Bea"), 1)
+    check("topless applies only to the person it describes",
+          not st.person("Ana").bare and st.person("Bea").bare == ["torso"])
+    st.read("Ana points to the kitchen.", ("Ana", "Bea"), 2)
+    check("pointing at a room does not move the scene", st.place == "studio", st.place)
+
+
 def main():
     test_two_things_in_one_beat()
     test_a_neck_is_not_behind_a_back()
@@ -590,6 +620,8 @@ def main():
     test_nothing_is_said_twice()
     test_a_garment_change_says_both_ends()
     test_pulled_aside_is_not_taken_off()
+    test_each_clause_owns_its_change()
+    test_descriptions_and_places_have_owners()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

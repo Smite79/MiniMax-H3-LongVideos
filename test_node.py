@@ -4424,7 +4424,11 @@ def test_schema():
           opt["upscale"][1]["default"] == "off" and opt["latent_upscale"][1]["default"] == "off")
     check("outputs include info and script",
           "info" in S.H3LongVideos.RETURN_NAMES and "script" in S.H3LongVideos.RETURN_NAMES)
-    check("it registers under one id", set(S.NODE_CLASS_MAPPINGS) == {"H3LongVideos"})
+    aliases = {"H3LongVideos", "H3LongVideosFL2VA", "H3LongVideosV1",
+               "H3LongVideosREF2VA"}
+    check("all saved-workflow ids resolve to the sampler",
+          set(S.NODE_CLASS_MAPPINGS) == aliases
+          and all(v is S.H3LongVideos for v in S.NODE_CLASS_MAPPINGS.values()))
 
 
 def main():

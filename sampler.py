@@ -89,7 +89,7 @@ REF_IMAGE_SHORT_EDGE = 2048
 _LAST_MODEL_FP = {"fp": None}
 
 
-_SILENT_UNIT = {"lat": None}
+_SILENT_UNIT = {"lat": None, "key": None}
 
 
 def _call_node(cls, model, shift_video, shift_audio):
@@ -3255,7 +3255,8 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         _, _, want_t = temporal_shape(frame_count, fps)
         if want_t <= 0:
             return None
-        block = _SILENT_UNIT.get("lat")
+        key = (id(audio_vae), sr)
+        block = _SILENT_UNIT.get("lat") if _SILENT_UNIT.get("key") == key else None
         if block is None:
             # CHANNELS LAST. comfy.sd.VAE.encode() does `pixel_samples.movedim(-1, 1)`
             # before handing off, so the audio VAE -- which wants [B, 2, L] -- must be
@@ -3273,6 +3274,7 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
                 return None
             block = enc[..., _SILENT_EDGE:-_SILENT_EDGE].detach().to("cpu").clone()
             _SILENT_UNIT["lat"] = block
+            _SILENT_UNIT["key"] = key
         n = block.shape[-1]
         if n < 1:
             return None
@@ -8032,10 +8034,9 @@ class H3LongVideos:
                                "faster and leaner; 0 keeps the preset's own dimensions. Cost "
                                "scales with latent cells and attention is quadratic in them."}),
                 "shot_seconds": ("FLOAT", {"default": 10.0, "min": 1.0, "max": 15.0, "step": 0.5,
-                    "tooltip": "Length of EVERY shot. Uniform on purpose: noise is drawn to the "
-                               "latent's shape, so shots of different lengths get unrelated noise "
-                               "from the same seed and the grain resets at every cut. Snapped to "
-                               "H3's 17k+5 frame grid."}),
+                    "tooltip": "Maximum shot length. With 'from the beat', each shot is sized "
+                               "independently up to this cap; with 'fixed', every shot uses this "
+                               "length. Snapped to H3's 17k+5 frame grid."}),
                 "steps": ("INT", {"default": 8, "min": 1, "max": 100,
                     "tooltip": "6-8 with a turbo/distill LoRA; 20+ without one."}),
                 "cfg": ("FLOAT", {"default": 1.0, "min": 1.0, "max": 20.0, "step": 0.1,
@@ -11021,7 +11022,7 @@ class H3LongVideos:
                 f"names no camera, and it reads the staging rather than inventing a "
                 f"feeling -- a shot staging neither gets nothing, and a beat that "
                 f"already says what the face does is never argued with. Picture only: "
-                f"it can never open the audio branch. Off with face_under_duress")
+                f"it can never open the audio branch")
         if mouth_acting:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in mouth_acting)} kept their mouths "
@@ -12119,6 +12120,8 @@ class H3LongVideos:
                 lens[0], total, len(shots), round(total / H3_FPS, 2))
 
 
-NODE_CLASS_MAPPINGS = {"H3LongVideos": H3LongVideos}
-NODE_DISPLAY_NAME_MAPPINGS = {"H3LongVideos": "H3 Long Videos"}
+_NODE_IDS = ("H3LongVideos", "H3LongVideosFL2VA", "H3LongVideosV1",
+             "H3LongVideosREF2VA")
+NODE_CLASS_MAPPINGS = {name: H3LongVideos for name in _NODE_IDS}
+NODE_DISPLAY_NAME_MAPPINGS = {name: "H3 Long Videos" for name in _NODE_IDS}
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

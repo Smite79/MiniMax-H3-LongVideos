@@ -705,8 +705,14 @@ def place_in(text):
 
     Behind a preposition, so a room has to be somewhere somebody IS. "Ana looks
     at the door" names no room -- and a door is not on the list in any case."""
-    m = _PLACE_IN.search(text or "")
+    text = text or ""
+    m = _PLACE_IN.search(text)
     if not m:
+        return ""
+    clause = re.split(r"[.;!?]", text[:m.end()])[-1]
+    present = re.search(r"\b(?:is|are|was|were|stands?|sits?|waits?|lies?|remains?)\b",
+                        clause, re.I)
+    if not _MOVES.search(clause) and not present:
         return ""
     got = re.sub(r"\s+", " ", m.group(1).lower()).strip()
     # A BARE "room" NAMES NOWHERE. "Ana walks into the room" says she goes
@@ -1416,19 +1422,37 @@ class SceneState:
                                                or [""]))
 
         hw = hardware_in(beat)
-        applying = bool(hw) and bool(_APPLY.search(beat)) and not _RELEASE.search(beat)
+        spans = hardware_spans(beat)
+        applying = bool(hw) and bool(_APPLY.search(beat))
         releasing = bool(_RELEASE.search(beat))
 
-        if applying:
-            wearer = _wearer(beat, who, subject)
-            p = self.person(wearer)
+        if applying or releasing:
             # MODIFIERS BIND TO THE NEAREST ITEM. "handcuffs her wrists behind
             # her back and locks a steel collar around her neck, chained to the
             # wall" carries two modifiers and two items; giving both modifiers
             # to both items produced handcuffs chained to a wall they were never
             # near, and a collar held behind a back.
-            spans = hardware_spans(beat)
             for canon, part, written, at in spans:
+                boundaries = list(re.finditer(r"[,;]|\b(?:and|while)\b", beat, re.I))
+                lo = max((m.end() for m in boundaries if m.end() <= at), default=0)
+                hi = min((m.start() for m in boundaries if m.start() > at),
+                         default=len(beat))
+                clause = beat[lo:hi]
+                item_at = at - lo
+                apply_at = max((m.start() for m in _APPLY.finditer(clause)
+                                if m.start() <= item_at), default=-1)
+                release_at = max((m.start() for m in _RELEASE.finditer(clause)
+                                  if m.start() <= item_at), default=-1)
+                if apply_at < 0 and release_at < 0:
+                    continue
+                local_who = names_in(clause, cast)
+                wearer = _wearer(clause, local_who or who, subject)
+                p = self.person(wearer)
+                if release_at >= 0:
+                    keys = [k for k in list(p.hardware) if k[0] == canon]
+                    for key in keys:
+                        changed["released"].append((wearer, p.hardware.pop(key)))
+                    continue
                 # KEYED BY THE PAIR. A chain on the ankles and a chain on the
                 # wrists are two restraints; keyed by name alone the second
                 # overwrote the first and one of them was never drawn again.
@@ -1446,7 +1470,7 @@ class SceneState:
             # Its anchor needs no transferring either: with the tether gone from
             # the spans, the anchor binds to the nearest remaining item, which
             # is the one it was always describing.
-        elif releasing:
+        if releasing and not hw:
             # Whoever is actually wearing it. "The guard unlocks the handcuffs"
             # names only the agent, and taking the subject there tried to
             # release hardware from the man holding the key.
@@ -1457,13 +1481,8 @@ class SceneState:
             # Released by NAME, whatever part it is on: an unlocking beat says
             # "unlocks the chain", not which of two chains, and matching the
             # pair left one fastened forever.
-            _kinds = {c for c, _pt, _w in hw}
-            named = [k for k in list(p.hardware) if k[0] in _kinds]
-            if named:
-                for key in named:
-                    changed["released"].append((wearer, p.hardware.pop(key)))
-            elif re.search(r"\b(?:them|it|her|him|everything|all\s+of\s+it)\b",
-                           beat, re.I):
+            if re.search(r"\b(?:them|it|her|him|everything|all\s+of\s+it)\b",
+                         beat, re.I):
                 # "the guard releases her" names no item, so all of it comes off.
                 while p.hardware:
                     changed["released"].append((wearer, p.hardware.popitem()[1]))
@@ -1472,12 +1491,27 @@ class SceneState:
         # to be named -- a bare "she undresses" says nothing about which garment,
         # and guessing is how a garment came off a beat before the beat that
         # took it off.
-        wearer_g = _wearer(beat, who, subject) if len(who) > 1 else subject
-        if wearer_g:
-            p = self.person(wearer_g)
-            for g in garments_in(beat):
+        if subject:
+            for m in _GARMENT_ONE.finditer(beat):
+                g = f"{(m.group(1) or '').strip()} {m.group(2)}".strip().lower()
                 key = _garment_key(g)
-                if _TAKES_OFF.search(beat):
+                boundaries = list(re.finditer(r"[,;]|\b(?:and|while)\b", beat, re.I))
+                lo = max((x.end() for x in boundaries if x.end() <= m.start()), default=0)
+                hi = min((x.start() for x in boundaries if x.start() > m.start()),
+                         default=len(beat))
+                clause = beat[lo:hi]
+                item_at = m.start() - lo
+                actions = [(x.start(), "off") for x in _TAKES_OFF.finditer(clause)
+                           if x.start() <= item_at]
+                actions += [(x.start(), "on") for x in _PUTS_ON.finditer(clause)
+                            if x.start() <= item_at]
+                actions += [(x.start(), "aside") for x in _DISPLACES.finditer(clause)
+                            if x.start() <= item_at]
+                action = max(actions, default=(-1, ""))[1]
+                local_who = names_in(clause, cast)
+                wearer_g = _wearer(clause, local_who, subject)
+                p = self.person(wearer_g)
+                if action == "off":
                     if key not in [_garment_key(x) for x in p.removed]:
                         p.removed.append(g)
                         changed["removed"].append((wearer_g, g))
@@ -1485,7 +1519,7 @@ class SceneState:
                     p.displaced = [x for x in p.displaced
                                    if _garment_key(x) != key]
                     _bare_on(p, region_of(g))
-                elif _PUTS_ON.search(beat):
+                elif action == "on":
                     if key not in [_garment_key(x) for x in p.worn]:
                         p.worn.append(g)
                         changed["worn"].append((wearer_g, g))
@@ -1496,7 +1530,7 @@ class SceneState:
                     # dresses is told for the rest of the film that the region is
                     # bare, over the garment she just put on.
                     _bare_off(p, region_of(g))
-                elif _DISPLACES.search(beat):
+                elif action == "aside":
                     if key not in [_garment_key(x) for x in p.displaced]:
                         p.displaced.append(g)
                         changed["displaced"].append((wearer_g, g))
@@ -1506,7 +1540,11 @@ class SceneState:
         # ever said what was on the chest.
         _nude = nudity_in(beat)
         if _nude:
-            for n in (who or ([subject] if subject else [])):
+            nude_at = min((m.start() for rx, _regions in _NUDITY_RX
+                           for m in rx.finditer(beat)), default=len(beat))
+            located = [(abs(beat.find(n) - nude_at), n) for n in who if beat.find(n) >= 0]
+            owners = [min(located)[1]] if located else ([subject] if subject else [])
+            for n in owners:
                 q = self.person(n)
                 _bare_on(q, _nude)
                 # ...and it takes the garments OFF. Saying somebody is topless
