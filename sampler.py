@@ -11626,7 +11626,9 @@ class H3LongVideos:
                     continue
                 _made = []
                 for _ph in plan.shots[_i].events:
-                    _fx = foley_for(_ph, _len, int(sr), seed=int(seed) + _i)
+                    # NOT seed + shot. One object, one voice, every beat it is named
+                    # in -- and one room for the film. See foley_for.
+                    _fx = foley_for(_ph, _len, int(sr), seed=int(seed))
                     if _fx is None:
                         continue
                     audio[..., _lo:_hi] = (audio[..., _lo:_hi]

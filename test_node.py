@@ -1540,8 +1540,17 @@ def test_built_sound_sits_in_a_room():
         b = float(e[i + int(0.020 * sr):i + int(0.060 * sr)].pow(2).mean())
         return 10 * math.log10(max(b / max(a, 1e-20), 1e-20))
 
-    for phrase, floor in (("a lock snapping shut", -27.0),
-                          ("chain links dragging", -22.0)):
+    # FLOORS RECALIBRATED when foley_for was reseeded from the PHRASE rather than the
+    # shot index (one object, one voice across beats). The room is still wired -- that
+    # is what this asserts and it is unchanged -- but the noise texture moved with the
+    # generator, and with it the peak these numbers are measured around. Measured
+    # across five film seeds: "a lock snapping shut" lands -13.9..-19.8 and "chain
+    # links dragging" -22.3..-24.2, against the -31.9 and -35.6 they give with the
+    # room call REMOVED. The floors sit below the worst seed and well above the
+    # roomless figure, so the guarantee is the same one and it still fails if the
+    # call goes.
+    for phrase, floor in (("a lock snapping shut", -24.0),
+                          ("chain links dragging", -28.0)):
         got = built_tail(phrase)
         check(f"'{phrase}' is built in a room: {got:.1f} dB", got > floor)
 

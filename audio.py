@@ -363,6 +363,15 @@ _FOLEY = {
 }
 
 
+def phrase_seed(phrase):
+    """A stable number for a phrase. Python's own hash() is salted per process, so
+    the same chain would sound like a different chain on every relaunch."""
+    h = 0
+    for ch in str(phrase or ""):
+        h = (h * 131 + ord(ch)) & 0x7fffffff
+    return h
+
+
 def foley_for(phrase, n, sr, seed=0):
     """Build the sound `phrase` names, `n` samples long. None when there is no
     recipe -- which includes every vocal phrase, deliberately."""
@@ -371,12 +380,30 @@ def foley_for(phrase, n, sr, seed=0):
         make = _FOLEY.get(str(phrase or ""))
         if make is None or n < 64 or sr <= 0:
             return None
-        g = torch.Generator().manual_seed(int(seed) & 0x7fffffff)
+        # THE PROP'S VOICE IS THE PROP'S, and it does not change between shots.
+        #
+        # The seed was the film's seed plus the SHOT INDEX, and it drives the noise
+        # texture, the event jitter and the room together -- so the same chain, named
+        # in three consecutive beats, was built three times from three different
+        # generators and came back as three different chains in three different rooms.
+        # Reported as the sounds not being the same per beat, and it is the same
+        # complaint the picture side has about a face with nothing holding it.
+        #
+        # Seeded from the PHRASE instead: one object, one voice, every time it is
+        # named. Shot length still varies the event times, because the recipes lay
+        # them out across `secs`, so two shots of a chain are not a copy of each other
+        # unless they are the same length doing the same thing -- which is the one
+        # case where being identical is right.
+        g = torch.Generator().manual_seed((int(seed) + phrase_seed(phrase)) & 0x7fffffff)
         y = make(n, sr, g, n / float(sr))
         # The room goes on LAST and on everything, which is what a room does: it is
         # a property of the place, not of the prop. Applied here rather than in the
         # recipes so all 21 get it and none can forget it.
-        y = _room(y, sr, seed=int(seed) + 977)
+        #
+        # ...and a property of the PLACE cannot be re-rolled per shot, which is what
+        # the shot-index seed was doing: the reverb tail changed at every cut, so the
+        # room itself sounded like it was being rebuilt between beats.
+        y = _room(y, sr, seed=(int(seed) + 977) & 0x7fffffff)
         peak = float(y.abs().max())
         if not (peak > 0.0) or not torch.isfinite(y).all():
             return None

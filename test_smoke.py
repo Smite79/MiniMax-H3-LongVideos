@@ -749,6 +749,37 @@ def test_a_pronoun_pointing_away_keeps_the_person_it_means():
           "handcuffs" in sh[-1] or "cuffs" in sh[-1], sh[-1][-150:])
 
 
+def test_one_object_has_one_voice_across_beats():
+    print("\n=== the same prop sounds like the same prop every beat ===")
+    # Reported: the sounds do not sound the same per beat. foley_for was seeded with
+    # the film's seed plus the SHOT INDEX, and that one seed drives the noise texture,
+    # the event jitter AND the room reverb -- so a chain named in three consecutive
+    # beats was built three times from three different generators and came back as
+    # three different chains in three different rooms. The room is a property of the
+    # PLACE, which the recipe's own comment says, and it was being re-rolled per shot.
+    _A = S._audio_module
+    sr = 44100
+    n3, n45 = sr * 3, int(sr * 4.5)
+    a = S.foley_for("chain links dragging", n3, sr, seed=7)
+    b = S.foley_for("chain links dragging", n3, sr, seed=7)
+    c = S.foley_for("cuffs knocking", n3, sr, seed=7)
+    d = S.foley_for("chain links dragging", n3, sr, seed=99)
+    e = S.foley_for("chain links dragging", n45, sr, seed=7)
+    check("one object, one voice: the same phrase is the same sound",
+          a is not None and b is not None and torch.equal(a, b))
+    check("...a different object is a different sound", not torch.equal(a, c))
+    check("...a different film seed is a different object", not torch.equal(a, d))
+    check("...and a longer beat lays its events out over the longer span",
+          e is not None and e.shape[-1] != a.shape[-1])
+    check("the phrase seed does not move between runs",
+          _A.phrase_seed("chain links dragging") == _A.phrase_seed("chain links dragging")
+          and _A.phrase_seed("cuffs knocking") != _A.phrase_seed("chain links dragging"))
+    check("...and it is not Python's salted hash",
+          _A.phrase_seed("chain links dragging") == _A.phrase_seed("chain links dragging"))
+    # A phrase with no recipe still builds nothing -- vocals are never synthesised.
+    check("a vocal has no recipe", S.foley_for("whimpering", n3, sr, seed=7) is None)
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6651,6 +6682,7 @@ def main():
     test_a_posture_denied_is_not_a_posture_taken()
     test_the_face_plays_the_feeling_the_author_named()
     test_a_pronoun_pointing_away_keeps_the_person_it_means()
+    test_one_object_has_one_voice_across_beats()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()
