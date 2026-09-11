@@ -760,7 +760,25 @@ def revealed_by(covers, gone):
 _REGION_OF = engine._REGION_RX
 
 
-def bare_clause(gone, covers=None, worn=""):
+def body_of(pronoun):
+    """The body the sheet's declared pronoun means. "" where nothing is declared.
+
+    AN UNSPECIFIED BODY IS FILLED FROM THE PRIOR, which is the lesson this file
+    already recorded for the chest -- "this said 'The arms and shoulders are bare' and
+    stopped there, so the one region a bra occupies was unspecified, and an unspecified
+    region is filled by the model's own prior". The hip-down clause had the same gap
+    and it was never closed: "The legs are bare from the hip down" names the region and
+    says nothing about whose body it is, so the anatomy at the hip came from the prior
+    too. Reported as the wrong anatomy on a female character.
+
+    Read from the pronoun the author DECLARED, which the README already requires for
+    every entry, so this asserts nothing the sheet does not already say. `they` returns
+    nothing: an undeclared body is not a licence to guess one."""
+    return {"she": "a woman's body", "he": "a man's body"}.get(
+        str(pronoun or "").strip().lower(), "")
+
+
+def bare_clause(gone, covers=None, worn="", body=""):
     """Say the uncovered region is BARE, when the sheet names nothing under it.
 
     A removal clause is emphatic -- off the body, dropped out of frame -- and then
@@ -783,10 +801,10 @@ def bare_clause(gone, covers=None, worn=""):
         r = engine.region_of(item)
         if r and r not in regions:
             regions.append(r)
-    return bare_hold(regions, covers, worn, gone)
+    return bare_hold(regions, covers, worn, gone, body=body)
 
 
-def bare_hold(regions, covers=None, worn="", gone=(), whose=""):
+def bare_hold(regions, covers=None, worn="", gone=(), whose="", body=""):
     """Say those regions are bare -- from STATE, so it outlives its beat.
 
     The same suppression as the removal beat, because it is the same sentence:
@@ -840,7 +858,10 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose=""):
     if whose:
         joined = f"{whose}'s " + joined[4:] if joined.startswith("The ") else \
             f"{whose}: " + joined
-    return " " + joined + ", with nothing else worn there."
+    # ...AND WHOSE BODY IT IS. A bare region with no body named is anatomy left to the
+    # prior, and at cfg 1 nothing later takes back what the prior draws. See body_of.
+    return " " + joined + (f", on {body}" if body else "") + \
+        ", with nothing else worn there."
 
 
 def defer_tag_for(text, items):
@@ -8700,8 +8721,14 @@ class H3LongVideos:
             # nothing is.
             # ...and not beside BARE_HOLD, which already says everything comes off.
             # Both firing said it twice and attributed it twice.
+            # The body is named from the sheet's own declared pronoun, and only where
+            # one person is described -- with two, bare_hold's per-person path below
+            # carries it and naming it here would attach it to whichever of them the
+            # reader reached first.
+            _one_body = (body_of(sheet_pronoun(dict(sheet_lines(shot_sheet)).get(
+                (active or [""])[0], ""))) if len(active or []) == 1 else "")
             _bare = ("" if (_revealed or bare)
-                     else bare_clause(toks, covers, shot_sheet))
+                     else bare_clause(toks, covers, shot_sheet, body=_one_body))
             # ...and on EVERY shot after it, from state, for as long as the
             # region has nothing on it. Said only on the uncovering beat, the
             # region went unspecified from the next shot on -- and the model
@@ -8755,7 +8782,9 @@ class H3LongVideos:
                 _name_it = (len(_rows) > 1 or len(_who_here or []) > 1
                             or any(_n in _carried_on for _n, _r, _o in _rows))
                 _bare = "".join(
-                    bare_hold(_rg, covers, _on, whose=(_n if _name_it else ""))
+                    bare_hold(_rg, covers, _on, whose=(_n if _name_it else ""),
+                              body=body_of(sheet_pronoun(
+                                  dict(sheet_lines(shot_sheet)).get(_n, ""))))
                     for _n, _rg, _on in _rows)
                 if _bare:
                     bare_held.append(len(plan) + 1)

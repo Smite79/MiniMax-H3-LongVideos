@@ -850,6 +850,48 @@ def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
           "the whole body" in S.frame_hold("McKenna serves the ball.", "", 1))
 
 
+def test_a_bare_region_says_whose_body_it_is():
+    print("\n=== a bare region names the body, so the prior does not pick one ===")
+    # Reported: the wrong anatomy applied to a female character. This file already
+    # recorded the same failure for the chest -- "this said 'The arms and shoulders are
+    # bare' and stopped there, so the one region a bra occupies was unspecified, and an
+    # unspecified region is filled by the model's own prior". The hip-down clause had
+    # the identical gap and it was never closed: "The legs are bare from the hip down"
+    # names the region and says nothing about whose body it is, so the anatomy at the
+    # hip came from the prior too -- and at cfg 1 nothing later takes that back.
+    check("the declared pronoun is what names the body",
+          S.body_of("she") == "a woman's body" and S.body_of("he") == "a man's body")
+    # `they` is an UNDECLARED body, not a licence to guess one.
+    check("an undeclared body is not guessed",
+          S.body_of("they") == "" and S.body_of("") == "" and S.body_of(None) == "")
+    check("the clause carries it",
+          "on a woman's body" in S.bare_hold(["legs"], body="a woman's body"))
+    check("...and says nothing extra without it",
+          "body" not in S.bare_hold(["legs"]).replace("nothing else worn", ""))
+
+    for mem, beat, want in (
+            ("McKenna: she, 22, a grey vest, denim shorts.",
+             "McKenna takes off her shorts.\nremove: shorts", "a woman's body"),
+            ("Dan: he, 40, a work coat, jeans.",
+             "Dan takes off his jeans.\nremove: jeans", "a man's body")):
+        sh = [" ".join(x.split()) for x in run_node(
+            f"A bare room.\n\n{beat}\n\nThey stand still.",
+            plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
+        check(f"the uncovering shot names {want}", want in sh[0], sh[0][-120:])
+        # ...AND EVERY SHOT AFTER IT, from state: an unspecified region is refilled by
+        # the prior on every shot that leaves it unspecified, not only the first.
+        check(f"...and so does the shot after it ({want})", want in sh[1], sh[1][-120:])
+    nb = [" ".join(x.split()) for x in run_node(
+        "A bare room.\n\nAlex takes off their jeans.\nremove: jeans\n\nThey stand still.",
+        plan_only=True, character_memory="Alex: they, 30, a coat, jeans.")[3].split("---") if x.strip()]
+    # Scoped to the BARE clause: frame_hold legitimately says "the whole body" and a
+    # bare "body" substring would pass or fail on the wrong sentence.
+    check("an undeclared pronoun gets the region without a body",
+          "bare from the hip down" in nb[0]
+          and "on a woman's body" not in nb[0] and "on a man's body" not in nb[0],
+          nb[0][-120:])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6754,6 +6796,7 @@ def main():
     test_a_pronoun_pointing_away_keeps_the_person_it_means()
     test_one_object_has_one_voice_across_beats()
     test_a_feeling_belongs_to_the_face_the_beat_pins_it_on()
+    test_a_bare_region_says_whose_body_it_is()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()
