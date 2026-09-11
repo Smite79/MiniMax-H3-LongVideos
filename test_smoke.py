@@ -1009,7 +1009,9 @@ def test_person_described_once_end_to_end():
     s2 = run_node("A basement.\n\nMaya lies still on the floor.", plan_only=True,
                   character_memory="Maya: 27, silver hair, grey coat")[3]
     check("the sheet does not run into the beat", "grey coat Maya" not in s2)
-    check("...it is ended properly", "grey coat. Maya" in s2)
+    # THE GUARANTEE is the terminator, not what happens to sit after it: beat_leads
+    # puts the beat ahead of the sheet, so the sheet no longer runs into it at all.
+    check("...it is ended properly", "grey coat." in s2)
     # Using one channel only is unaffected.
     s3 = run_node(P, plan_only=True)[3]
     check("one channel alone still describes the person", "Maya: 27" in s3)
@@ -4879,8 +4881,11 @@ def test_a_softened_handoff_is_not_a_keyframe():
     soft = [x for x in re.split(r"(?=\[Shot )",
                                 run_node(P, plan_only=True, ref_noise_aug=0.95)[3])
             if x.strip()]
+    # Wherever the carried sheet sits in the shot -- beat_leads moves it after the
+    # beat -- what matters is that the removing shot still carries the belt and the
+    # shot after it does not.
     check("softened: the removing shot still says it is worn",
-          "chastity belt" in soft[2].split("Dan unlocks")[0])
+          "chastity belt" in soft[2])
     check("...and the next shot does not", "chastity belt" not in soft[3])
     # At an anchoring aug the keyframe does hold the first frame, and scrubbing the
     # removing shot is right: text saying it is worn would put it back at the end.
@@ -5118,8 +5123,11 @@ def test_an_instruction_is_not_the_action():
     sh = [x for x in re.split(r"(?=\[Shot )",
                               run_node(P, plan_only=True, character_memory=mem)[3])
           if x.strip()]
+    # The sheet entry itself, not the bare word: the quoted ORDER says "shorts" too,
+    # so a plain substring would pass even if the wardrobe had been scrubbed. Asserted
+    # on the entry because beat_leads moves the sheet after the beat.
     check("the shorts are still on while she is only told",
-          "shorts" in sh[0].split("Dana says")[0])
+          re.search(r"McKenna: she, 22,[^.]*shorts", sh[0]) is not None)
     check("...and nothing is taken off yet",
           "off during this shot" not in sh[0])
     check("...and nobody is lying down yet", "still lying down" not in sh[0])

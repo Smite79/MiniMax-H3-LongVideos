@@ -5777,6 +5777,41 @@ def rooms_named(text):
     return out
 
 
+def split_sheet(scene, names=()):
+    """(everything that is not a character sheet entry, the sheet entries).
+
+    WHAT LEADS A PROMPT DECIDES ITS COMPOSITION. This file already recorded that --
+    "anatomy in the opening tokens is what a distilled LoRA settles composition on",
+    which is why the gaze clause was moved to follow the beat rather than lead it --
+    and then left the biggest anatomy block in the prompt leading every shot: the
+    character sheet. "McKenna: she, 22, tall, long blonde hair, blue eyes, freckles"
+    is sixteen words of face, it has to be in every shot because clothing continuity
+    needs it there, and it sat in front of the action.
+
+    Measured on a volleyball beat: 69% of the shot's words were in sentences about a
+    face, and turning off every face guard only took that to 63%, because the sheet is
+    most of it. Reported across many attempts as the camera fixated on one character
+    staring into the lens -- with no reference image, no LoRA and a pinned first frame,
+    none of which touched it, because none of them were what was leading the prompt.
+
+    Splitting lets the scene keep the front, the beat follow it, and the appearance
+    come after the thing it is describing. The words are identical; only the order
+    changes, which is the one thing about this that was never tried."""
+    cast = [str(n).strip() for n in (names or ()) if str(n).strip()]
+    rest, sheet = [], []
+    for raw in str(scene or "").split("\n"):
+        for unit in re.split(r"(?<=[.!?])\s+", raw):
+            u = unit.strip()
+            if not u:
+                continue
+            if cast:
+                entry = any(re.match(r"^" + re.escape(n) + r"\s*:", u, re.I) for n in cast)
+            else:
+                entry = ":" in u
+            (sheet if entry else rest).append(u)
+    return " ".join(rest), " ".join(sheet)
+
+
 def scene_for_here(scene, here, always="", names=(), beat=""):
     """(text to send, rooms held back, True if it declined to hold anything).
 
@@ -7579,6 +7614,24 @@ class H3LongVideos:
                                "more speech -- babble, or the line again. The model chooses "
                                "WHEN to speak, so a small margin can clip the last word: raise "
                                "it if it does. 0 disables it."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "beat_leads": ("BOOLEAN", {"default": True,
+                    "tooltip": "Put the BEAT in front of the character sheet.\n\n"
+                               "The sheet has to be in every shot, because clothing "
+                               "continuity is read out of it. But it is a description of a "
+                               "FACE -- 'she, 22, tall, long blonde hair, blue eyes' -- and "
+                               "it was sitting in the opening tokens of every shot, ahead of "
+                               "the action. Measured: 69% of a shot's words were in "
+                               "sentences about a face, and turning every face guard off "
+                               "only reached 63%, because the sheet is most of it.\n\n"
+                               "What leads a prompt decides its composition: anatomy in the "
+                               "opening tokens is what a distilled model settles the frame "
+                               "on, which at cfg 1 no later sentence outvotes. On, the order "
+                               "is scene, then what happens, then who it happens to. The "
+                               "words are identical and none are rewritten -- only the "
+                               "order changes.\n\n"
+                               "Off restores the old order, so the two can be compared in "
+                               "one render."}),
             },
         }
 
@@ -7605,7 +7658,7 @@ class H3LongVideos:
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
-            speech_lead_seconds=0.5, speech_tail_seconds=2.0,
+            speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -7628,7 +7681,7 @@ class H3LongVideos:
             pace=pace, auto_sound=auto_sound, hold_scene_state=hold_scene_state,
             mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
-            speech_tail_seconds=speech_tail_seconds,
+            speech_tail_seconds=speech_tail_seconds, beat_leads=beat_leads,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             return self._render(prepared)
@@ -7648,7 +7701,7 @@ class H3LongVideos:
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
-            speech_lead_seconds=0.5, speech_tail_seconds=2.0,
+            speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -7973,6 +8026,7 @@ class H3LongVideos:
         _extras_seen = False        # the film has staged people the sheet does not name
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
+        led_shots = []              # shots whose beat was put ahead of the sheet
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
         wearing_shots = []          # shots that put one back on, given both ends
@@ -8964,7 +9018,23 @@ class H3LongVideos:
                 scene_welded.append((len(plan) + 1, list(_held_rooms)))
             elif _held_rooms:
                 scene_held.append((len(plan) + 1, list(_held_rooms), list(_held_text)))
-            line = f"{_scene_sent} {body}".strip() if _scene_sent else body
+            # WHAT LEADS DECIDES THE FRAME. See split_sheet: the appearance block goes
+            # after the action it describes, so the opening tokens are the place and
+            # what happens in it rather than sixteen words of face.
+            # NOT ON A SHOT CARRYING A PICTURE TAG. <Picture N> is numbered by the
+            # order the tags APPEAR in the shot, and the number is the image's place in
+            # that shot's reference list -- so moving the sheet past the beat renumbers
+            # them, and a renumbered reference is the wrong face on the wrong person.
+            # That is the oldest and worst bug in this file and it is not worth a
+            # composition gain. A shot with no tag has no numbering to disturb.
+            if beat_leads and _scene_sent and not picture_tags(f"{_scene_sent} {body}"):
+                _scene_part, _sheet_part = split_sheet(
+                    _scene_sent, [n for n, _ in sheet_lines(shot_sheet) if n])
+                line = " ".join(p for p in (_scene_part, body, _sheet_part) if p).strip()
+                if _sheet_part:
+                    led_shots.append(len(plan) + 1)
+            else:
+                line = f"{_scene_sent} {body}".strip() if _scene_sent else body
             # A state the text asserts but does not stage. Read from the whole line,
             # because the van usually stands in the scene paragraph rather than in
             # the beat -- and suppressed for anything this beat is actually working,
@@ -9840,6 +9910,19 @@ class H3LongVideos:
                 f"THIS: a travel beat opens in the room it is leaving, so that frame is the "
                 f"right one and the shot keeps its keyframe -- write the move as a journey "
                 f"('she walks through to the kitchen') and you get the walk instead of a cut")
+        if led_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in led_shots)} put the BEAT in front of "
+                f"the character sheet. The sheet has to be in every shot -- clothing "
+                f"continuity is read out of it -- but it is a description of a FACE, and it "
+                f"was leading every prompt ahead of the action. Measured: 69% of a shot's "
+                f"words sat in sentences about a face, and turning every face guard off only "
+                f"reached 63%, because the sheet is most of it. What LEADS a prompt decides "
+                f"its composition -- anatomy in the opening tokens is what a distilled model "
+                f"settles the frame on, and at cfg 1 no later sentence outvotes it. Your "
+                f"words are identical and none are rewritten; only the order changed, which "
+                f"is the one thing about this that had never been tried. Off with beat_leads "
+                f"to compare the two in one render")
         if frame_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in frame_shots)} stage something a "

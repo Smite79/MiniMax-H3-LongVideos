@@ -4471,7 +4471,10 @@ def test_schema():
     # speech_tail_seconds (2026-09-10) answers the node's own "dialogue headroom"
     # report: a 2s line in a 9s shot left 7s of open branch after it, which the
     # model filled with more speech. The lead-in pins the opening; this pins the close.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 39)
+    # beat_leads (2026-09-11) answers a camera fixated on one character through a
+    # reference image, a LoRA and a pinned first frame, none of which touched it: the
+    # character sheet was LEADING every prompt, and what leads decides composition.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 40)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4479,11 +4482,12 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-13:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-14:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
                               "ambient_audio", "ambient_level", "foley_level",
-                              "speech_lead_seconds", "speech_tail_seconds"])
+                              "speech_lead_seconds", "speech_tail_seconds",
+                              "beat_leads"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",
