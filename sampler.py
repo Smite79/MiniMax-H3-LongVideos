@@ -1008,6 +1008,39 @@ _CLAUSE_SPLIT = re.compile(
     r"|,\s+(?=\w+(?:ing|es|s|ed)\b))")
 
 
+def travel_spaces(beat):
+    """How many distinct spaces this beat shows on screen. 0 when it goes nowhere.
+
+    THE WALK IS THE EXPENSIVE PART OF A TRANSIT, AND IT WAS INVISIBLE TO THE SIZING.
+    beat_seconds counts ACTION CLAUSES, so the grammar of the sentence set the time
+    and the ground covered did not: "McKenna walks down the hallway to the living
+    room" is one verb phrase, so it was sized for one action -- 3.0s, the floor, the
+    SHORTEST shot in its script -- and then told to show three rooms inside it, while
+    "gets up and comes out of her bedroom" got 5.2s to stand up in one room. The beats
+    doing the most spatial work were getting the least time to do it.
+
+    A model handed 73 frames, a bedroom keyframe and instructions to reach a living
+    room cannot TRAVEL, so it blends the two into one hybrid space -- which is a
+    living room with a bed in it, the third route to a bug already fixed twice in the
+    text. _CLAUSE_SPLIT's own comment names this failure exactly, "a walk down a
+    hallway arriving as a cut to the far end", and fixed it only for comma lists.
+
+    AN INTRA-ROOM WALK IS NOT THIS and must stay short: test_pace measured "Maya walks
+    to the window" as under two seconds of real movement and the constants were tuned
+    down for it. A window is not a place, so it crosses nothing here. Only a beat that
+    actually ARRIVES somewhere counts, which is the same test travel_anchor applies
+    before it will say a journey happened at all.
+
+    The origin counts even when the beat does not name it: the shot opens in the room
+    it was already in, that room is on screen at frame one, and it has to be left."""
+    text = _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", str(beat or "")))
+    frm, via, to = travel_legs(text)
+    if not to:
+        return 0
+    named = [p for p in (frm, via, to) if p]
+    return len(named) + (0 if frm else 1)
+
+
 def beat_seconds(beat):
     """Roughly how much screen time this beat's content asks for.
 
@@ -1018,7 +1051,14 @@ def beat_seconds(beat):
     text = _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", beat or ""))
     text = _REMOVE_LINE.sub("", _ADD_LINE.sub("", text))
     clauses = [p for p in _CLAUSE_SPLIT.split(text) if p and len(p.split()) >= 2]
-    action = (BEAT_BASE_SEC + SECONDS_PER_ACTION * len(clauses)) if clauses else 0.0
+    # A ROOM BOUNDARY CROSSED ON SCREEN COSTS WHAT A STAGED ACTION COSTS. Rooms have
+    # to be established to be left, and crossing into one is work the grammar of the
+    # sentence does not show: one verb phrase can move somebody through three rooms.
+    # See travel_spaces. Reused constant rather than a new one, because this IS the
+    # same quantity -- screen time that something has to happen in.
+    crossings = max(0, travel_spaces(text) - 1)
+    action = (BEAT_BASE_SEC + SECONDS_PER_ACTION * (len(clauses) + crossings)) \
+        if (clauses or crossings) else 0.0
     spoken = sum(len(q.split()) for q in _QUOTED.findall(beat or "")) \
         + sum(len(q.split()) for q in _DIALOGUE_TAG.findall(beat or ""))
     return max(action, (spoken / WORDS_PER_SEC + 1.0) if spoken else 0.0)
@@ -5389,6 +5429,27 @@ def travel_in(beat):
     return (frm, via, to)
 
 
+def travel_legs(beat):
+    """(from, via, to) for a beat that moves somebody, with the one promotion that
+    the render and the SIZING have to agree on.
+
+    A BEAT THAT TRAVELS ALONG A PLACE ENDS IN IT. "walks down the hallway" reads as a
+    via with no destination, and travel_anchor says nothing without one -- so that
+    shot was told nothing about where it was, the tracked room kept the bedroom, and
+    the NEXT beat opened "in the bedroom" on its way to the kitchen. Reported as a bed
+    in the hallway. The place travelled along is where the beat arrives, so the shot
+    opens where the last one left off and walks into it, in frame.
+
+    Here rather than inline in the shot loop because travel_spaces reads the same
+    fact to size the shot. Kept in two places it would drift, and a transit rendered
+    as a walk while being sized as if it went nowhere is exactly the split that put a
+    three-room walk in a three-second shot."""
+    frm, via, to = travel_in(beat)
+    if via and not to:
+        via, to = "", via
+    return frm, via, to
+
+
 def where_hold(here, scene):
     """Say which room the shot is in, once the film has left the one in the scene.
 
@@ -5527,7 +5588,7 @@ def rooms_named(text):
     return out
 
 
-def scene_for_here(scene, here):
+def scene_for_here(scene, here, always="", names=(), beat=""):
     """(text to send, rooms held back, True if it declined to hold anything).
 
     THE SCENE PARAGRAPH IS STAMPED INTO EVERY SHOT, and it has to be -- a removal
@@ -5563,37 +5624,83 @@ def scene_for_here(scene, here):
     and a shot with no scene is a bigger change than the bug. The caller reports that
     case so the author can split the sentence.
 
+    `always` IS THE ANCHOR AND IS NEVER HELD. build_scene fuses the anchor and the
+    scene paragraph into one string before either reaches a shot, and an anchor is
+    documented as what belongs to the WHOLE film -- "look, camera, lighting,
+    location". So an anchor reading "Shot on 35mm in a cramped kitchen" names a room,
+    and without this it was held on every shot outside that kitchen: the film lost its
+    stock and its lens to a rule about furniture. The anchor's sentences are spared by
+    text, which survives terminate_lines adding a full stop to them.
+
+    `names` IS THE DECLARED CAST, and it is what identifies a sheet entry. A bare
+    colon test was the first guard and it had a hole both ways: "Her bedroom: an
+    unmade bed and a lamp." is the author describing a room, not a person, and it was
+    protected as though it were somebody's line -- so the bed survived in that
+    phrasing. Matching the LABEL against a name the sheet actually declares closes it
+    without ever risking a person: with no cast passed it falls back to protecting any
+    colon, because losing somebody's line is worse than a bed in one shot.
+
+    A ROOM THE BEAT ITSELF NAMES IS NEVER HELD. `here` goes stale whenever the beat's
+    verb is not one the movement readers know -- "McKenna pads into the kitchen" moves
+    nobody as far as place_in is concerned -- and a stale room would hold the
+    description of the room the shot is actually IN. The beat's own words outrank
+    anything inferred from them, which is this file's standing rule, so a sentence
+    about a room the beat mentions stays whatever the tracked room says.
+
     Holding NOTHING returns the text unchanged, byte for byte, so a script that never
     leaves one room is untouched and costs nothing."""
     text = str(scene or "")
     room = (here or "").strip().lower()
     if not text.strip() or not room:
-        return text, [], False
-    lines, held, survived = [], [], False
+        return text, [], False, []
+    cast = [str(n).strip() for n in (names or ()) if str(n).strip()]
+
+    def _is_sheet_entry(unit):
+        u = unit.strip()
+        for n in cast:
+            if re.match(r"^" + re.escape(n) + r"\s*:", u, re.I):
+                return True
+        return bool(not cast and ":" in u)
+
+    beat_rooms = set(rooms_named(
+        _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", str(beat or "")))))
+    spared = set()
+    for unit in re.split(r"(?<=[.!?])\s+", str(always or "")):
+        u = unit.strip().rstrip(".!? ").lower()
+        if u:
+            spared.add(u)
+    lines, held, held_text, survived = [], [], [], False
     for raw in text.split("\n"):
         kept = []
         for unit in re.split(r"(?<=[.!?])\s+", raw):
             # A sheet entry. Never touched.
-            if ":" in unit:
+            if _is_sheet_entry(unit):
                 kept.append(unit)
+                continue
+            # ...nor anything the anchor said. It frames the whole film.
+            if unit.strip().rstrip(".!? ").lower() in spared:
+                kept.append(unit)
+                survived = True
                 continue
             named = rooms_named(unit)
             # It names another room and not this one. A sentence naming BOTH stays --
             # it is partly about where we are, and keeping too much is the safe way to
             # be wrong here.
-            if named and room not in named:
+            if named and room not in named and not (beat_rooms & set(named)):
                 for r in named:
                     if r not in held:
                         held.append(r)
+                if unit.strip() not in held_text:
+                    held_text.append(unit.strip())
                 continue
             kept.append(unit)
             survived = True
         lines.append(" ".join(k for k in kept if k.strip()))
     if not held:
-        return text, [], False
+        return text, [], False, []
     if not survived:
-        return text, held, True
-    return "\n".join(l for l in (s.strip() for s in lines) if l), held, False
+        return text, held, True, held_text
+    return "\n".join(l for l in (s.strip() for s in lines) if l), held, False, held_text
 
 
 def direction_anchor(changes):
@@ -8516,16 +8623,11 @@ class H3LongVideos:
             _pace = pace_clause(beat_seconds(body), _have)
             if _pace:
                 paced_shots.append(len(plan) + 1)
-            _frm, _via, _to = travel_in(body)
-            # A BEAT THAT TRAVELS ALONG A PLACE ENDS IN IT. "walks down the
-            # hallway" reads as a via with no destination, and travel_anchor says
-            # nothing without one -- so that shot was told nothing about where it
-            # was, `here` kept the bedroom, and the NEXT beat opened "in the
-            # bedroom" on its way to the kitchen. Reported as a bed in the hallway.
-            # The place travelled along is where the beat arrives, so the shot
-            # opens where the last one left off and walks into it, in frame.
-            if _via and not _to:
-                _via, _to = "", _via
+            # travel_legs, not travel_in: the promotion of a bare via to the
+            # destination is read by the SIZING too, and a transit rendered as a walk
+            # while sized as if it went nowhere is how a three-room walk ended up in a
+            # three-second shot. See travel_legs and travel_spaces.
+            _frm, _via, _to = travel_legs(body)
             _travel = travel_anchor(_frm, _via, _to, here)
             if _travel:
                 travel_shots.append(len(plan) + 1)
@@ -8628,11 +8730,13 @@ class H3LongVideos:
             # room two beats after she left the bedroom. See scene_for_here. Only the
             # text SENT changes: shot_scene itself is left alone, so every reader above
             # and below this line keeps its full view of the scene.
-            _scene_sent, _held_rooms, _held_blocked = scene_for_here(shot_scene, here)
+            _scene_sent, _held_rooms, _held_blocked, _held_text = scene_for_here(
+                shot_scene, here, anchor,
+                [n for n, _ in sheet_lines(shot_sheet) if n], body)
             if _held_rooms and _held_blocked:
                 scene_welded.append((len(plan) + 1, list(_held_rooms)))
             elif _held_rooms:
-                scene_held.append((len(plan) + 1, list(_held_rooms)))
+                scene_held.append((len(plan) + 1, list(_held_rooms), list(_held_text)))
             line = f"{_scene_sent} {body}".strip() if _scene_sent else body
             # A state the text asserts but does not stage. Read from the whole line,
             # because the van usually stands in the scene paragraph rather than in
@@ -9449,11 +9553,12 @@ class H3LongVideos:
                 f"not one. Give the beat more to do, or shorten the shot, and it "
                 f"stops being needed")
         if scene_held:
-            _rooms = sorted({r for _, rs in scene_held for r in rs})
+            _rooms = sorted({r for _, rs, _ in scene_held for r in rs})
+            _waited = sorted({t for _, _, ts in scene_held for t in ts})
             notes.append(
                 f"the scene paragraph describes {', '.join(_rooms)}, and a paragraph that "
                 f"describes a room describes its FURNITURE too -- so that description WAITS "
-                f"OUTSIDE it, on shot(s) {', '.join(str(n) for n, _ in scene_held)}. The "
+                f"OUTSIDE it, on shot(s) {', '.join(str(n) for n, _, _ in scene_held)}. The "
                 f"paragraph is stamped into every shot, which is what gives a removal "
                 f"something to scrub, and the room's NAME was already right in every shot -- "
                 f"but the bed was in the text standing beside it, and at cfg 1 there is no "
@@ -9466,7 +9571,11 @@ class H3LongVideos:
                 f"because the keyframe IS the previous shot's last frame. So the words say "
                 f"where the shot ends and the frame carries where it began. Your paragraph is "
                 f"not edited: this is per shot, and a beat that walks back in gets it back in "
-                f"full. A character sheet line is never touched, whatever it names")
+                f"full. A character sheet line is never touched, whatever it names, and "
+                f"neither is the anchor or a room your beat mentions. What waited: "
+                + "; ".join(f'"{t}"' for t in _waited[:3])
+                + ". If one of those also carried the film's own hour or light, split it: "
+                  "one sentence for the film, one for the room")
         if scene_welded:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n, _ in scene_welded)} are not in the room the "

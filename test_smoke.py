@@ -1826,11 +1826,26 @@ def test_a_rooms_description_waits_outside_that_room():
     # BED IN THE LIVING ROOM. The paragraph is stamped into every shot, so the bed was
     # described in the living-room shot, and at cfg 1 nothing takes a named thing back.
     SCENE = "A small flat at night. Her bedroom has an unmade bed and a lamp."
-    out, held, blocked = S.scene_for_here(SCENE, "kitchen")
+    out, held, blocked, waited = S.scene_for_here(SCENE, "kitchen")
     check("another room's description is held", "unmade bed" not in out, out)
     check("...the film's own framing is kept", "small flat at night" in out, out)
     check("...the room is named for the report", held == ["bedroom"] and not blocked, str(held))
-    same, held2, _ = S.scene_for_here(SCENE, "bedroom")
+    check("...and the sentence that waited is quoted back",
+          waited == ["Her bedroom has an unmade bed and a lamp."], str(waited))
+    # A ROOM DESCRIBED WITH A COLON is the author describing a room, not a person.
+    colon = S.scene_for_here("A small flat at night. Her bedroom: an unmade bed and a lamp.",
+                             "kitchen", "", ["McKenna"])
+    check("a room written with a colon is still held",
+          "unmade bed" not in colon[0] and "at night" in colon[0], colon[0])
+    # ...while a declared name with a colon is protected even naming another room.
+    keepn = S.scene_for_here("McKenna: she, 22, asleep in the bedroom.", "kitchen", "", ["McKenna"])
+    check("a declared name's line is protected", "McKenna: she, 22" in keepn[0], keepn[0])
+    # A ROOM THE BEAT NAMES IS NEVER HELD -- `here` goes stale on an unlisted verb.
+    stale = S.scene_for_here("Her bedroom has an unmade bed. The kitchen is small and white.",
+                             "bedroom", "", ["McKenna"], "McKenna pads into the kitchen.")
+    check("a room the beat names survives a stale tracked room",
+          "small and white" in stale[0], stale[0])
+    same, held2, _, _ = S.scene_for_here(SCENE, "bedroom")
     check("the room we are IN keeps its description", "unmade bed" in same, same)
     check("...and reports nothing held", held2 == [], str(held2))
     # HOLDING NOTHING CHANGES NOTHING, byte for byte -- a script that never leaves one
@@ -1851,10 +1866,21 @@ def test_a_rooms_description_waits_outside_that_room():
           "unmade bed" not in two and "small and white" in two, two)
     # A sentence WELDING the film's framing to one room's furniture is kept, and the
     # caller is told, because holding it would take the night with the bedroom.
-    weld, weld_held, weld_blocked = S.scene_for_here(
+    weld, weld_held, weld_blocked, _ = S.scene_for_here(
         "A small flat at night, her bedroom with an unmade bed.", "kitchen")
     check("a welded sentence is kept rather than losing the film's framing",
           "at night" in weld and weld_blocked and weld_held == ["bedroom"], weld)
+    # THE ANCHOR IS NEVER HELD. build_scene fuses the anchor and the scene paragraph
+    # before either reaches a shot, and an anchor is what belongs to the WHOLE film --
+    # "look, camera, lighting, location". An anchor naming a room was being held on
+    # every shot outside it, so the film lost its stock and its lens to a rule about
+    # furniture.
+    ANCH = "Shot on 35mm in a cramped kitchen"
+    a_in = S.scene_for_here(ANCH + ".\nHer bedroom has an unmade bed.", "bedroom", ANCH)
+    check("an anchor naming another room is kept", "35mm" in a_in[0] and a_in[1] == [], a_in[0])
+    a_out = S.scene_for_here(ANCH + ".\nHer bedroom has an unmade bed.", "kitchen", ANCH)
+    check("...and the bedroom still goes while it stays",
+          "35mm" in a_out[0] and "unmade bed" not in a_out[0], a_out[0])
 
     # END TO END, the reported script, including the return.
     mem = "McKenna: she, 22, a grey t-shirt, black shorts."
