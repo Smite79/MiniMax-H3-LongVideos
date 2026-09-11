@@ -1818,6 +1818,69 @@ def test_a_walk_along_a_place_arrives_in_it():
           "carries along the hallway" in both and "arrives in the kitchen" in both, both[-160:])
 
 
+def test_a_rooms_description_waits_outside_that_room():
+    print("\n=== the scene's description of a room waits outside that room ===")
+    # Reported: a scene paragraph reading "Her bedroom has an unmade bed and a lamp",
+    # a walk from the bedroom down the hallway TO THE LIVING ROOM (which worked -- the
+    # room label was right), then a beat from the living room to the kitchen -- and a
+    # BED IN THE LIVING ROOM. The paragraph is stamped into every shot, so the bed was
+    # described in the living-room shot, and at cfg 1 nothing takes a named thing back.
+    SCENE = "A small flat at night. Her bedroom has an unmade bed and a lamp."
+    out, held, blocked = S.scene_for_here(SCENE, "kitchen")
+    check("another room's description is held", "unmade bed" not in out, out)
+    check("...the film's own framing is kept", "small flat at night" in out, out)
+    check("...the room is named for the report", held == ["bedroom"] and not blocked, str(held))
+    same, held2, _ = S.scene_for_here(SCENE, "bedroom")
+    check("the room we are IN keeps its description", "unmade bed" in same, same)
+    check("...and reports nothing held", held2 == [], str(held2))
+    # HOLDING NOTHING CHANGES NOTHING, byte for byte -- a script that never leaves one
+    # room must not be touched, and every other suite depends on that.
+    for txt, room in (("A kitchen. She is at the sink.", "kitchen"),
+                      ("Shot on 35mm, shallow depth of field.", "bedroom"),
+                      ("Two people, late evening.", "kitchen")):
+        check(f"unchanged: {txt[:28]!r}", S.scene_for_here(txt, room)[0] == txt)
+    check("no room known, nothing held", S.scene_for_here(SCENE, "")[1] == [])
+    # A SHEET LINE IS NEVER TOUCHED, whatever it names.
+    sheet = S.scene_for_here("A kitchen.\nMcKenna: she, 22, a grey t-shirt.", "bedroom")[0]
+    check("a sheet entry survives a room it does not match",
+          "McKenna: she, 22, a grey t-shirt." in sheet, sheet)
+    # Two rooms named: each is kept only in its own.
+    two = S.scene_for_here("Her bedroom has an unmade bed. The kitchen is small and white.",
+                           "kitchen")[0]
+    check("the other room goes and this one stays",
+          "unmade bed" not in two and "small and white" in two, two)
+    # A sentence WELDING the film's framing to one room's furniture is kept, and the
+    # caller is told, because holding it would take the night with the bedroom.
+    weld, weld_held, weld_blocked = S.scene_for_here(
+        "A small flat at night, her bedroom with an unmade bed.", "kitchen")
+    check("a welded sentence is kept rather than losing the film's framing",
+          "at night" in weld and weld_blocked and weld_held == ["bedroom"], weld)
+
+    # END TO END, the reported script, including the return.
+    mem = "McKenna: she, 22, a grey t-shirt, black shorts."
+    P = ("A small flat at night. Her bedroom has an unmade bed and a lamp.\n\n"
+         "McKenna gets up and comes out of her bedroom.\n\n"
+         "McKenna walks down the hallway to the living room.\n\n"
+         "McKenna goes from the living room to the kitchen.\n\n"
+         "McKenna goes back into her bedroom and lies down.")
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [" ".join(x.split()) for x in script.split("---") if x.strip()]
+    check("shot 1 is in the bedroom and keeps the bed", "unmade bed" in sh[0], sh[0][:140])
+    check("the shot ARRIVING in the living room has no bed", "unmade bed" not in sh[1], sh[1][:200])
+    check("...and the living-room-to-kitchen shot has no bed", "unmade bed" not in sh[2], sh[2][:200])
+    check("...and the bed comes back when she walks back in", "unmade bed" in sh[3], sh[3][:140])
+    check("the film's framing is on every shot",
+          all("small flat at night" in x for x in sh), "")
+    check("nobody loses their sheet line", all("McKenna: she, 22" in x for x in sh), "")
+    check("info reports which shots it waited on",
+          "WAITS OUTSIDE it, on shot(s) 2, 3" in info, "")
+    # A one-room script is untouched and says nothing about waiting.
+    info1 = run_node("A kitchen.\n\nMcKenna fills the kettle.\n\nMcKenna opens a cupboard.",
+                     plan_only=True, character_memory=mem)[2]
+    check("a script that never leaves one room reports nothing",
+          "WAITS OUTSIDE" not in info1, "")
+
+
 def test_a_covered_object_does_not_send_its_picture():
     print("\n=== an object out of view does not carry its reference ===")
     # Reported: the object looked different when it came back into view. While it was
@@ -6083,6 +6146,7 @@ def main():
     test_a_named_look_target_is_restated()
     test_a_line_with_no_look_turns_the_faces_to_each_other()
     test_a_walk_along_a_place_arrives_in_it()
+    test_a_rooms_description_waits_outside_that_room()
     test_a_covered_object_does_not_send_its_picture()
     test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()

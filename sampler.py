@@ -5499,6 +5499,103 @@ def place_named(text):
     return re.sub(r"\s+", " ", m.group(1)).strip().lower() if m else ""
 
 
+def rooms_named(text):
+    """Every room this text names, lowercased. "" -> [].
+
+    first_place returns only the FIRST one, which is what a tracked position needs.
+    A scene paragraph often names two -- "Her bedroom has an unmade bed. The kitchen
+    is small." -- and deciding whether a SENTENCE is about the room we are in means
+    accounting for all of them.
+
+    The same two exclusions as first_place, for the same reasons: a word that is also
+    an ordinary verb cannot win in free text with no preposition in front of it, and a
+    bare "room" names nowhere unless the word in front qualifies it."""
+    out = []
+    s = str(text or "")
+    for m in _PLACE_WORD.finditer(s):
+        got = re.sub(r"\s+", " ", m.group(0)).strip().lower()
+        if got in _PLACE_ALSO_A_VERB:
+            continue
+        if got == "room":
+            before = re.search(r"(\w+)\s+$", s[:m.start()])
+            word = before.group(1).lower() if before else ""
+            if word in _NOT_A_ROOM_MODIFIER or not word:
+                continue
+            got = word + " room"
+        if got not in out:
+            out.append(got)
+    return out
+
+
+def scene_for_here(scene, here):
+    """(text to send, rooms held back, True if it declined to hold anything).
+
+    THE SCENE PARAGRAPH IS STAMPED INTO EVERY SHOT, and it has to be -- a removal
+    needs the text to have something to scrub, and where_hold's own comment says the
+    paragraph "still names the room they started in and is stamped into every shot".
+    But a paragraph that describes the opening ROOM describes its FURNITURE too, and
+    furniture does not travel. Reported: a flat whose scene paragraph read "Her
+    bedroom has an unmade bed and a lamp", a walk from the bedroom down the hallway
+    to the living room, and then A BED IN THE LIVING ROOM. where_hold had the room's
+    NAME right in every shot; the bed was in the text standing beside it, and at cfg 1
+    there is no negative prompt that can take a named thing back.
+
+    THE ROOM THE SHOT ENDS IN decides this, not every room it passes through, and the
+    difference is the whole fix. A walk out of the bedroom genuinely shows the bedroom
+    in its opening frames -- but that shot's LAST frame is the next shot's keyframe, so
+    a bed drawn at the end of the walk is inherited by the shot after it, which is the
+    second route the same bed took into the living room. Nothing is lost by holding it
+    there: the opening room arrives as a PICTURE regardless, because the keyframe is
+    the previous shot's last frame and that frame IS the room being left. So the words
+    describe where the shot ends and the frame carries where it began.
+
+    A WITHHOLDING, NOT AN EDIT, exactly like the covered-garment deferral: the
+    author's paragraph is untouched, every reader inside this file still sees all of
+    it, this is only what the model is told for THIS shot, and a beat that walks back
+    into the bedroom gets the bed back in full.
+
+    TWO GUARDS. A sentence carrying a LABEL -- "McKenna: she, 22, ..." -- is a
+    character sheet entry and is never touched whatever it names, because losing a
+    person's line is the failure hide_item exists to prevent. And if holding would
+    leave the shot no scene sentence at all, nothing is held: a sentence that welds
+    the film's own framing to one room's furniture ("A small flat at night, her
+    bedroom with an unmade bed") would otherwise take the night away with the bedroom,
+    and a shot with no scene is a bigger change than the bug. The caller reports that
+    case so the author can split the sentence.
+
+    Holding NOTHING returns the text unchanged, byte for byte, so a script that never
+    leaves one room is untouched and costs nothing."""
+    text = str(scene or "")
+    room = (here or "").strip().lower()
+    if not text.strip() or not room:
+        return text, [], False
+    lines, held, survived = [], [], False
+    for raw in text.split("\n"):
+        kept = []
+        for unit in re.split(r"(?<=[.!?])\s+", raw):
+            # A sheet entry. Never touched.
+            if ":" in unit:
+                kept.append(unit)
+                continue
+            named = rooms_named(unit)
+            # It names another room and not this one. A sentence naming BOTH stays --
+            # it is partly about where we are, and keeping too much is the safe way to
+            # be wrong here.
+            if named and room not in named:
+                for r in named:
+                    if r not in held:
+                        held.append(r)
+                continue
+            kept.append(unit)
+            survived = True
+        lines.append(" ".join(k for k in kept if k.strip()))
+    if not held:
+        return text, [], False
+    if not survived:
+        return text, held, True
+    return "\n".join(l for l in (s.strip() for s in lines) if l), held, False
+
+
 def direction_anchor(changes):
     """Say which end of a staged change is which, for the ones that have a direction.
 
@@ -7541,6 +7638,8 @@ class H3LongVideos:
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
         dialogue_gaze_shots = []  # dialogue shots turned to face each other
+        scene_held = []           # (shot, rooms) whose scene description waited
+        scene_welded = []         # ...and shots where it could not be held
         looking_at = {}           # {name: target}, each held until it changes
         fall_shots = []           # shots told what takes the landing
         device_shots = []         # shots whose line belongs to a machine
@@ -8523,7 +8622,18 @@ class H3LongVideos:
                 notes.append(f"shot {i_shot + 1} names hardware with no body part beside "
                              f"it, so the shot says where it sits: "
                              f"{anchors.split(': ', 1)[1].rstrip('.')}")
-            line = f"{shot_scene} {body}".strip() if shot_scene else body
+            # The scene's description of a room this shot does not END in waits here.
+            # The paragraph is stamped into every shot, and a paragraph that describes
+            # a room describes its furniture too -- which is how a bed reached a living
+            # room two beats after she left the bedroom. See scene_for_here. Only the
+            # text SENT changes: shot_scene itself is left alone, so every reader above
+            # and below this line keeps its full view of the scene.
+            _scene_sent, _held_rooms, _held_blocked = scene_for_here(shot_scene, here)
+            if _held_rooms and _held_blocked:
+                scene_welded.append((len(plan) + 1, list(_held_rooms)))
+            elif _held_rooms:
+                scene_held.append((len(plan) + 1, list(_held_rooms)))
+            line = f"{_scene_sent} {body}".strip() if _scene_sent else body
             # A state the text asserts but does not stage. Read from the whole line,
             # because the van usually stands in the scene paragraph rather than in
             # the beat -- and suppressed for anything this beat is actually working,
@@ -9180,7 +9290,7 @@ class H3LongVideos:
             _sound_kept = "" if "sound" in _dropped else _sound
             sound_words += len(_sound_kept.split())
             guard_words += (len(shot_text.split()) - len(_sound_kept.split())
-                            - len(f"{shot_scene} {body}".split()))
+                            - len(f"{_scene_sent} {body}".split()))
             beat_words += len(body.split())
             total_words += len(shot_text.split())
             # The event sounds this beat implies, kept per shot so they can be
@@ -9338,6 +9448,36 @@ class H3LongVideos:
                 f"when, never how fast: 'slowly' is a style instruction and this is "
                 f"not one. Give the beat more to do, or shorten the shot, and it "
                 f"stops being needed")
+        if scene_held:
+            _rooms = sorted({r for _, rs in scene_held for r in rs})
+            notes.append(
+                f"the scene paragraph describes {', '.join(_rooms)}, and a paragraph that "
+                f"describes a room describes its FURNITURE too -- so that description WAITS "
+                f"OUTSIDE it, on shot(s) {', '.join(str(n) for n, _ in scene_held)}. The "
+                f"paragraph is stamped into every shot, which is what gives a removal "
+                f"something to scrub, and the room's NAME was already right in every shot -- "
+                f"but the bed was in the text standing beside it, and at cfg 1 there is no "
+                f"negative prompt that can take a named thing back. Reported as a bed in the "
+                f"living room two beats after she left the bedroom. The room a shot ENDS in "
+                f"decides this, not every room it passes through: a walk out of the bedroom "
+                f"does show it in the opening frames, but that shot's LAST frame is the next "
+                f"shot's keyframe, so a bed drawn at the end of the walk is inherited by the "
+                f"shot after it -- and the room being left arrives as a PICTURE anyway, "
+                f"because the keyframe IS the previous shot's last frame. So the words say "
+                f"where the shot ends and the frame carries where it began. Your paragraph is "
+                f"not edited: this is per shot, and a beat that walks back in gets it back in "
+                f"full. A character sheet line is never touched, whatever it names")
+        if scene_welded:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n, _ in scene_welded)} are not in the room the "
+                f"scene paragraph describes, and that description was KEPT anyway, because "
+                f"holding it would have left those shots no scene sentence at all. The "
+                f"paragraph welds the film's own framing to one room's furniture in a single "
+                f"sentence, so taking the room would take the lighting and the hour with it, "
+                f"and a shot with no scene is a bigger change than a bed in the wrong room. "
+                f"Split it in two -- one sentence for the film ('A small flat at night.') and "
+                f"one for the room ('Her bedroom has an unmade bed and a lamp.') -- and the "
+                f"room's half will wait outside that room on its own")
         if where_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in where_shots)} are in a room the "
