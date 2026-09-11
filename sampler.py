@@ -2099,6 +2099,24 @@ def vocal_sources_in(beat, sheet=""):
                          r"(?:" + pat + r")\b", b, re.I):
                 out.append((n, phrase))
                 break
+            # A COMPOUND SUBJECT IS TWO SOURCES, NOT ONE.
+            #
+            # "Mia and Tess laugh over breakfast" credited only Tess, so the shot said
+            # "the laughing is Tess's; every other mouth in the shot stays closed" --
+            # holding Mia's mouth shut in a beat that says she laughs. Reported as the
+            # acting not matching the scene.
+            #
+            # The conjunction guard above is RIGHT about "Dan holds the door and
+            # McKenna sobs", where `and` starts a new predicate with its own subject.
+            # What it cannot tell apart is two names sharing ONE verb, and the
+            # difference is whether a verb intervenes: here nothing stands between the
+            # names and the verb they share. Same reading posture_in already uses for
+            # "Kate and Sam sit down", which seats both.
+            if re.search(r"\b" + re.escape(n) + r"\b(?:\s*,\s*[\w'\u2019-]+)*"
+                         r"\s+and\s+[\w'\u2019-]+\s+"
+                         r"(?:" + pat + r")\b", b, re.I):
+                out.append((n, phrase))
+                break
     return out
 
 
@@ -3701,6 +3719,15 @@ def duress_face(beat, wearers, described, film_duress=False):
     be ambiguous -- two people, one of them restrained -- the hardware hold has
     already said "Every restraint on Nora", so the shot is not short of an
     attribution. It is short of a sentence about her face."""
+    # THE AUTHOR'S OWN EMOTION WINS, and it is said back in THEIR word rather than
+    # the film's generic mood. "The mood is grim; ... the mouth set" was being stamped
+    # over "terrified", which is a different performance, and over a happy scene it
+    # fired not at all -- so the emotional register was only ever asserted in one
+    # direction and only ever generically. Said wherever the beat names a feeling,
+    # duress or not, which is why this sits ahead of every duress test below.
+    _emotion = emotion_in(beat)
+    if _emotion and described:
+        return mood_face(_emotion)
     # The author's own face beat wins, exactly as it does against the mouth guard.
     # Where the beat says what the face is doing, the node has nothing to add.
     if mouth_performs(beat):
@@ -3715,6 +3742,50 @@ def duress_face(beat, wearers, described, film_duress=False):
     # Nobody under duress IN THIS SHOT, but the film is. The frame still is not a
     # happy one, and saying nothing is what let the captor smile through it.
     return DURESS_MOOD if film_duress else ""
+
+
+# AN EMOTION THE AUTHOR STATED, in their own word.
+#
+# Reported: under duress she does not act or respond like it, and the same in scenes
+# where she is supposed to be happy. Measured, the node was contradicting the beat in
+# both directions at once. "Mia hugs Tess, beaming." came out with "Mouths in the shot
+# stay closed" beside it, because beaming was in no list. "McKenna is terrified and
+# shaking." came out with "The mood is grim; the face shows the strain of it, the mouth
+# set" -- a generic, clenched, stoic face stamped over the specific word the author
+# chose, and then a mouth guard on top of that.
+#
+# An emotion is performed largely WITH THE MOUTH: delight is a smile, terror is an open
+# mouth, fury is bared teeth. A guard that closes the mouth closes the performance, and
+# at cfg 1 the flat positive instruction wins over the adjective in the beat.
+#
+# Read as a stand-down and as a register, never as an invention: where the author names
+# no feeling, nothing here fires and the film's own mood clause is untouched.
+_EMOTION = re.compile(
+    r"\b(?:happy|happily|happiness|delighted|delight(?:ed)?|thrilled|overjoyed|"
+    r"joyful|joyous|elated|ecstatic|beaming|beams?|gleeful|glee|cheerful|cheery|"
+    r"pleased|excited|excitement|grateful|relieved|relief|proud|smug|amused|"
+    r"terrified|terror|frightened|afraid|scared|fearful|panicked|panicking|panic|"
+    r"furious|fury|angry|angrily|anger|enraged|livid|seething|indignant|"
+    r"desperate|desperation|distraught|devastated|grief|grieving|heartbroken|"
+    r"miserable|wretched|ashamed|shame|humiliated|mortified|disgusted|horrified|"
+    r"anguished|anguish|agony|bereft|despair(?:ing)?)\b", re.I)
+
+
+def emotion_in(beat):
+    """The emotion this beat states, in the author's own word. "" when it states none."""
+    m = _EMOTION.search(str(beat or ""))
+    return m.group(0).lower() if m else ""
+
+
+def mood_face(word):
+    """Say the face plays the feeling the author named. "" when they named none.
+
+    Their word, not a synonym: "terrified" and "grim" are not the same performance,
+    and the generic one was replacing the specific one on every shot. Impersonal and
+    positive, like the other picture guards, and it names the mouth on purpose --
+    that is the half the guard beside it would otherwise hold shut."""
+    return (f" The face carries it: the expression is {word}, played in the eyes and "
+            f"the mouth together.") if word else ""
 
 
 def mouth_performs(beat):
@@ -9446,7 +9517,9 @@ class H3LongVideos:
                 _described, _film_duress) if hold_gaze else "")
             if _duress:
                 duress_shots.append(len(plan) + 1)
-            _mouth_busy = mouth_performs(body)
+            # A STATED EMOTION PUTS THE MOUTH TO WORK. Delight is a smile, terror is
+            # an open mouth; holding it closed holds the performance. See _EMOTION.
+            _mouth_busy = bool(mouth_performs(body) or emotion_in(body))
             _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
                                     and (not _speaks or _device_line)
                                     and not _voiced and not _mouth_busy) else ""

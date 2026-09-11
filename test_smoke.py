@@ -643,6 +643,61 @@ def test_a_posture_denied_is_not_a_posture_taken():
               "full length" in sh[i], sh[i][-120:])
 
 
+def test_the_face_plays_the_feeling_the_author_named():
+    print("\n=== a stated emotion is played, not clamped shut ===")
+    # Reported: under duress she does not act like it, and the same where she is
+    # supposed to be happy. The node was contradicting the beat in both directions.
+    # "Mia hugs Tess, beaming." got "Mouths in the shot stay closed" beside it, and
+    # "McKenna is terrified" got "The mood is grim; ... the mouth set" -- a generic
+    # clenched face stamped over the specific word the author chose.
+    check("an emotion is read in the author's word",
+          S.emotion_in("Mia is delighted with the news.") == "delighted"
+          and S.emotion_in("McKenna is terrified and shaking.") == "terrified")
+    check("...and nothing is invented where none is named",
+          S.emotion_in("McKenna walks to the door.") == "")
+    check("the clause names the mouth, which the guard would have held shut",
+          "mouth" in S.mood_face("delighted") and "delighted" in S.mood_face("delighted"))
+    check("no feeling, no clause", S.mood_face("") == "")
+
+    HAPPY = ("A sunny kitchen.\n\nMia and Tess laugh over breakfast.\n\n"
+             "Mia is delighted with the news.\n\nMia hugs Tess, beaming.")
+    HMEM = "Mia: she, 24, red hair.\nTess: she, 25, dark hair."
+    sh = [" ".join(x.split()) for x in
+          run_node(HAPPY, plan_only=True, character_memory=HMEM)[3].split("---") if x.strip()]
+    # BOTH are the source, so there is nobody left to hold and voice_sources stays
+    # quiet -- which is the guarantee. Before, only Tess was credited and Mia was told
+    # her mouth stays closed in a beat that says she laughs.
+    check("a compound subject makes both of them the source",
+          [n for n, _ in S.vocal_sources_in("Mia and Tess laugh over breakfast.", HMEM)]
+          == ["Mia", "Tess"])
+    check("...so neither of them is told her mouth stays closed",
+          "mouth in the shot stays closed" not in sh[0]
+          and "Mouths in the shot stay closed" not in sh[0], sh[0][-130:])
+    check("delight is played, not clamped",
+          "expression is delighted" in sh[1] and "Mouths in the shot stay closed" not in sh[1],
+          sh[1][-130:])
+    check("...and so is beaming",
+          "expression is beaming" in sh[2] and "Mouths in the shot stay closed" not in sh[2],
+          sh[2][-130:])
+
+    DUR = ("A bare cell, one bulb.\n\nMcKenna is cuffed to the bench.\n\n"
+           "McKenna is terrified and shaking.\n\nMcKenna stares at the door, desperate.")
+    ds = [" ".join(x.split()) for x in
+          run_node(DUR, plan_only=True, character_memory="McKenna: she, 22, a grey vest, wrist cuffs.")[3].split("---") if x.strip()]
+    check("the author's word replaces the generic mood",
+          "expression is terrified" in ds[1] and "the mouth set" not in ds[1], ds[1][-130:])
+    check("...and again where she is desperate",
+          "expression is desperate" in ds[2] and "the mouth set" not in ds[2], ds[2][-130:])
+    check("a duress shot that names no feeling keeps the film's mood",
+          "The mood is grim" in ds[0], ds[0][-130:])
+    # THE GUARD THAT EXISTS FOR A REASON still holds: `and` starting a new predicate
+    # must not credit the wrong mouth.
+    _sheet = "Dan: he, 40.\nMcKenna: she, 22."
+    check("a new predicate after `and` credits only its own subject",
+          [n for n, _ in S.vocal_sources_in("Dan holds the door and McKenna sobs.", _sheet)]
+          == ["McKenna"])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6543,6 +6598,7 @@ def main():
     test_an_unstated_frame_becomes_a_portrait()
     test_an_interrupt_releases_the_frame_buffer()
     test_a_posture_denied_is_not_a_posture_taken()
+    test_the_face_plays_the_feeling_the_author_named()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()
