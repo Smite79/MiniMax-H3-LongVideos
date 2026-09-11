@@ -698,6 +698,57 @@ def test_the_face_plays_the_feeling_the_author_named():
           == ["McKenna"])
 
 
+def test_a_pronoun_pointing_away_keeps_the_person_it_means():
+    print("\n=== 'Tess kneels beside her' keeps McKenna described ===")
+    # Reported: scene cohesion lost -- restraints not matching between shots, hair
+    # changing, a body not the same size twice. With two women on the sheet every
+    # pronoun collapsed onto whoever the beat named: "Tess kneels beside her" credited
+    # "her" to Tess, because Tess declares "she", so McKenna -- who is in the shot and
+    # is what "her" refers to -- lost her sheet line entirely. A person in frame with no
+    # description is a person the model dresses out of nothing, and with no reference
+    # image in the run the sheet text is the only thing holding her together.
+    same = "McKenna: she, 22, long blonde hair.\nTess: she, 21, short dark hair."
+    mixed = "McKenna: she, 22, long blonde hair.\nDan: he, 40, a work coat."
+    three = same + "\nMara: she, 30, grey hair."
+    prev = ["McKenna", "Tess"]
+
+    def kept(sheet, beat):
+        return sorted(S.sheet_for_beat(sheet, beat, previous=prev)[1])
+
+    check("a pronoun aimed away keeps the person it means",
+          kept(same, "Tess kneels beside her.") == ["McKenna", "Tess"])
+    check("...and so does a look", kept(same, "Tess looks at her.") == ["McKenna", "Tess"])
+    # THE RECORDED REGRESSION ON THE OTHER SIDE. "behind" is deliberately not a
+    # proximity preposition here: a door is shut behind ONESELF, and reading that as
+    # another person present is the bug the resolver's own comment records fixing.
+    check("a door shut behind him is still nobody else",
+          kept(mixed, "Dan walks out and shuts the door behind him.") == ["Dan"])
+    # A possessive is not an object pronoun, and an ordinary beat is untouched.
+    check("a possessive keeps its own reading", kept(same, "Tess unlocks her cuffs.") == ["Tess"])
+    check("a beat with no pronoun is untouched",
+          kept(same, "Tess watches from the door.") == ["Tess"])
+    check("two named already leaves the pronoun alone",
+          kept(same, "Tess and McKenna look at her hands.") == ["McKenna", "Tess"])
+    # NOTHING IS GUESSED between two candidates.
+    check("three women, no guess", kept(three, "Tess kneels beside her.") == ["Tess"])
+    check("the reader itself is narrow",
+          S.pronoun_points_away("Tess kneels beside her.")
+          and not S.pronoun_points_away("shuts the door behind him.")
+          and not S.pronoun_points_away("Tess looks at her hands."))
+
+    mem = ("McKenna: she, 22, long blonde hair, large breasts, a grey vest, steel handcuffs.\n"
+           "Tess: she, 21, short dark hair, a red top.")
+    P = ("A bare cell, one bulb.\n\nDan cuffs McKenna's wrists behind her back.\n\n"
+         "McKenna pulls at the cuffs.\n\nMcKenna sits down on the bench.\n\n"
+         "Tess kneels beside her.")
+    sh = [" ".join(x.split()) for x in
+          run_node(P, plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
+    check("the shot that only names Tess still describes McKenna",
+          "McKenna: she, 22, long blonde hair" in sh[-1], sh[-1][-150:])
+    check("...and her restraints are held there too",
+          "handcuffs" in sh[-1] or "cuffs" in sh[-1], sh[-1][-150:])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6599,6 +6650,7 @@ def main():
     test_an_interrupt_releases_the_frame_buffer()
     test_a_posture_denied_is_not_a_posture_taken()
     test_the_face_plays_the_feeling_the_author_named()
+    test_a_pronoun_pointing_away_keeps_the_person_it_means()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

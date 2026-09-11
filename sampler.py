@@ -379,6 +379,34 @@ _SPOKEN_SPAN = engine._SPOKEN_SPAN
 _outside_speech = engine._outside_speech
 
 
+# AN OBJECT PRONOUN AFTER A PREPOSITION OF PROXIMITY IS SOMEBODY ELSE.
+#
+# "Tess kneels beside her" cannot mean Tess kneels beside herself, but with two women
+# on the sheet the pronoun resolver credited "her" to Tess -- she declares "she", so it
+# read as already accounted for -- and McKenna, who is in the shot and is what "her"
+# refers to, lost her sheet line. A person in frame with no description is a person the
+# model dresses out of nothing: reported as hair changing between shots, restraints not
+# matching, and a body that is not the same size twice.
+#
+# DELIBERATELY NARROW, because the rule it refines is right in the ordinary case and
+# there is a recorded regression on either side of it.
+#   * `behind` is NOT in this list. "Jon walks out and shuts the door behind him" is
+#     behind HIMSELF, and reading it as another person is the exact bug the resolver's
+#     own comment records fixing.
+#   * A pronoun followed by a noun is possessive, not an object: "look at her hands" is
+#     Nora's hands, and the two-name case is excluded anyway.
+# The pronoun must end its phrase -- punctuation, a conjunction, or the end of the beat.
+_PRONOUN_AT = re.compile(
+    r"\b(?:beside|alongside|next\s+to|opposite|toward|towards|at|to|over|onto|into|"
+    r"against|with|near|by)\s+(her|him|them)\b"
+    r"(?=\s*[.,;:!?]|\s+(?:and|but|then|while|as|so|who|before|after)\b|\s*$)", re.I)
+
+
+def pronoun_points_away(beat):
+    """Does this beat aim a pronoun at somebody OTHER than the person it names?"""
+    return bool(_PRONOUN_AT.search(str(beat or "")))
+
+
 def sheet_for_beat(sheet, beat, previous=None):
     """(the sheet lines for the people this beat involves, the names kept).
 
@@ -465,6 +493,21 @@ def sheet_for_beat(sheet, beat, previous=None):
                 continue
             # Already accounted for by somebody the beat names outright: "Nora and Dan
             # look at her hands" needs nobody else for "her".
+            #
+            # UNLESS THE PRONOUN POINTS AWAY FROM THEM. "Tess kneels beside her" names
+            # one person and aims the pronoun at another, and crediting it to Tess left
+            # McKenna in the shot with no description at all. Only with exactly one name
+            # in the beat -- with two there is somebody for the pronoun to belong to --
+            # and only where exactly one other person on the sheet declares that
+            # pronoun, so nothing is guessed between two candidates. See _PRONOUN_AT.
+            _away = (len(named) == 1 and pronoun_points_away(beat))
+            if _away:
+                _others = [n for n, ln in rows
+                           if n and n not in named and sheet_pronoun(ln) == group]
+                if len(_others) == 1:
+                    named.append(_others[0])
+                    matched = True
+                    continue
             if any(sheet_pronoun(ln) == group for n, ln in rows if n and n in named):
                 matched = True
                 continue
