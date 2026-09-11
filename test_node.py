@@ -2100,8 +2100,16 @@ def test_a_journey_has_two_ends():
     check("the established room is the origin",
           "opens in the living room"
           in S.travel_anchor("", "", "bedroom", here="living room"))
-    check("no origin anywhere, nothing said",
-          S.travel_anchor("", "", "bedroom") == "")
+    # NO ORIGIN ANYWHERE IS STILL A JOURNEY. This asserted silence, and silence was
+    # the bug: a beat walking out of a gym -- a room that was on no list, so the
+    # origin was never established -- was told to walk nowhere, while its keyframe
+    # was the previous shot's last frame. Reported as the scene shifting to the
+    # locker room instead of the characters walking into it. Naming no origin is
+    # fine; what the shot needs is for the arrival to be PERFORMED.
+    _noorigin = S.travel_anchor("", "", "locker room")
+    check("no origin anywhere still walks in",
+          "enters the locker room" in _noorigin and "every step in frame" in _noorigin)
+    check("...and names no origin it does not have", "opens in the" not in _noorigin)
     check("...and going nowhere says nothing",
           S.travel_anchor("bedroom", "", "bedroom") == "")
     # place_named is what latches the room when a beat only says where people are.

@@ -388,6 +388,44 @@ def test_extras_are_not_forbidden_by_the_body_count():
           "fixes the camera on one person" not in on, "")
 
 
+def test_a_walk_into_an_unlisted_room_is_still_walked():
+    print("\n=== heading for the locker room is walked, not cut to ===")
+    # Reported: girls playing volleyball in a gym head to the locker room, and the
+    # scene shifted to a locker room instead of them walking into it. Four faults at
+    # once: "gym" and "locker room" were in no place list, so the ORIGIN was never
+    # established; travel_anchor returned nothing without an origin, so the shot was
+    # never told to walk; _MOD swallowed "locker" so the destination read as bare
+    # "room"; and the body-count clause re-forbade the other girls one beat after
+    # allowing them.
+    check("a gym is a place", S.first_place("A school gym, hard light.") == "gym")
+    check("a locker room is one room, not 'room'",
+          S.travel_legs("They head to the locker room.")[2] == "locker room")
+    check("a journey with no origin still walks in",
+          "enters the locker room" in S.travel_anchor("", "", "locker room"))
+    # ...and the hardware words this file needs are still NOT places.
+    check("bars are restraints, not a room",
+          S.travel_legs("She is chained to the bars.")[2] == "")
+    check("lifting is not travelling",
+          S.travel_legs("He lifts her to the bed.")[2] == "")
+
+    mem = "Mia: she, 19, a blue kit.\nTess: she, 19, a red kit."
+    P = ("A school gym, hard overhead light.\n\n"
+         "Mia and Tess play volleyball with other girls.\n\n"
+         "They head to the locker room.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    sh = [" ".join(x.split()) for x in out[3].split("---") if x.strip()]
+    check("the move is performed as a walk",
+          "opens in the gym and arrives in the locker room" in sh[1]
+          and "every step in frame" in sh[1], sh[1][-150:])
+    check("the extras are not forbidden on the walk shot",
+          "one body for each person" not in sh[1], sh[1][-110:])
+    check("...nor on the shot that staged them",
+          "one body for each person" not in sh[0], sh[0][-110:])
+    check("the room is reported by its real name",
+          "enters locker room" in out[2] or "locker room" in out[2], "")
+    check("...and not as bare 'room'", "the film enters room," not in out[2], "")
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6262,6 +6300,7 @@ def main():
     test_a_cut_keeps_its_own_first_frame()
     test_a_room_change_with_no_walk_is_a_cut()
     test_extras_are_not_forbidden_by_the_body_count()
+    test_a_walk_into_an_unlisted_room_is_still_walked()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

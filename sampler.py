@@ -2456,7 +2456,14 @@ def reference_note(n_refs, aug, has_first_frame):
     if not has_first_frame:
         note += (". Shot 1 has no keyframe, so the reference is its only picture and "
                  "nothing competes with reproducing it -- that shot is where a "
-                 "near-clean reference shows up as the opening frame")
+                 "near-clean reference shows up as the opening frame, AND IT DOES NOT "
+                 "STAY THERE: every later shot opens on the previous shot's last "
+                 "frame, so whatever composition shot 1 settles on is handed down the "
+                 "whole chain. A portrait reproduced at shot 1 is therefore a portrait "
+                 "framing for the film, which is what 'the camera is fixated on her' "
+                 "is. Wire a wide establishing frame into first_frame and shot 1 is "
+                 "pinned to that composition instead -- it is the one input that "
+                 "outranks a reference, because it IS frame one")
     return note
 
 
@@ -4001,7 +4008,7 @@ def extras_in(beat):
     return bool(_EXTRA_PEOPLE.search(str(beat or "")))
 
 
-def cast_hold(names, beat=""):
+def cast_hold(names, beat="", extras=False):
     """A positive body-count constraint for an exact two-person composition.
 
     STANDS DOWN WHERE THE BEAT STAGES EXTRAS. "There are two people in the shot,
@@ -4012,7 +4019,12 @@ def cast_hold(names, beat=""):
     file's standing rule, so a beat that puts more bodies in the frame keeps them and
     the count goes unsaid."""
     people = list(dict.fromkeys(n for n in (names or []) if n))
-    if len(people) != 2 or extras_in(beat):
+    # `extras` LATCHES for the film. The girls who were playing volleyball are still
+    # there in the beat that walks them to the locker room, and that beat names
+    # nobody but the two on the sheet -- so a per-beat test re-forbade them one shot
+    # after allowing them. Background people do not leave because a sentence stopped
+    # mentioning them.
+    if len(people) != 2 or extras or extras_in(beat):
         return ""
     return " There are two people in the shot, with one body for each person."
 
@@ -5538,8 +5550,17 @@ def travel_anchor(frm, via, to, here=""):
                 f"arrives in the {to}, {walk}") if start else (
                 f" The shot carries along the {via} and arrives in the {to}, "
                 f"{walk}")
+    # AN UNKNOWN ORIGIN IS STILL A JOURNEY. This returned nothing when the room
+    # they set out from was not on the list or had never been named -- so a beat
+    # walking out of a gym was told to walk nowhere, and with the previous shot's
+    # last frame as its keyframe the set simply changed under the characters.
+    # Reported as the scene shifting to the locker room instead of them walking into
+    # it. Naming no origin is fine; what the shot needs is that the arrival is
+    # PERFORMED. Positively phrased, like everything else at cfg 1: the way in, then
+    # the room.
     if not start:
-        return ""
+        return (f" The shot enters the {to} on screen: the way in first, then the "
+                f"{to} itself, the arrival played out and every step in frame.")
     return f" The shot opens in the {start} and arrives in the {to}, {walk}"
 
 
@@ -7806,6 +7827,7 @@ class H3LongVideos:
         stripped_shots = set()      # 0-based shots that took something off
         cut_shots = set()           # 0-based shots opening in a room the keyframe is not in
         _undescribed = []           # rooms the film enters that the prompt never describes
+        _extras_seen = False        # the film has staged people the sheet does not name
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
         wearing_shots = []          # shots that put one back on, given both ends
@@ -8976,7 +8998,9 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
-            _cast_hold = cast_hold(_described, body)
+            if extras_in(body):
+                _extras_seen = True
+            _cast_hold = cast_hold(_described, body, _extras_seen)
 
             # Where the beat says somebody is looking, said once more as a fact
             # about the eyes and the head. One mention in the beat loses to a

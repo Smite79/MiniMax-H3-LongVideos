@@ -201,16 +201,34 @@ RELEASE_VERB = (
 # the engine knew a cell and a warehouse, the sampler did not, so a scene set in
 # either was a room to one reader and nowhere to the other. Same fault the
 # garment lists had, waiting to be reported.
+# MULTI-WORD ROOMS COME BEFORE BARE "room". _MOD is non-greedy, so it tries no
+# modifier first and the longest place wins -- but only if the long form is here to
+# win with. Without "locker\s+room", "heads to the locker room" read its destination
+# as "room": _MOD swallowed "locker" and the capture took what was left, so the film
+# was reported as entering "room" and the shot was told to arrive in one.
+#
+# A gym, a locker room and a court were in no list at all, which is worse than vague:
+# with the ORIGIN unknown, travel_anchor emitted nothing, so a beat walking out of a
+# gym was never told to walk and the set simply changed under the characters.
 PLACES = (r"hallway|hall|corridor|passage|landing|stairwell|staircase|stairs|"
           r"steps|bedroom|bathroom|washroom|kitchen|living\s+room|lounge|"
-          r"dining\s+room|study|office|garage|basement|cellar|attic|loft|porch|"
+          r"dining\s+room|locker\s+rooms?|changing\s+rooms?|dressing\s+rooms?|"
+          r"waiting\s+rooms?|utility\s+rooms?|gymnasium|gym|classroom|library|"
+          r"cafeteria|canteen|reception|laundry|pantry|sauna|balcony|terrace|"
+          r"rooftop|elevator|court|pool|showers|shower|store|shop|studio|"
+          r"study|office|garage|basement|cellar|attic|loft|porch|"
           r"veranda|garden|yard|driveway|street|alley|car\s?park|lobby|foyer|"
           r"doorway|cell|warehouse|barn|shed|van|truck|room")
 # Place words that are also ordinary verbs or everyday nouns. A reader with a
 # preposition in front of it ("in the study") can tell which sense is meant; the
 # free-text one cannot, and "she steps out", "they study the map" and "he lands
 # badly" are all commoner than the rooms they collide with.
-PLACE_ALSO_A_VERB = {"steps", "landing", "study", "lounge", "garage", "porch"}
+# "bar" and "lift" are deliberately NOT places in this file at all: bars are
+# restraint hardware here ("chained to the bars") and lifting is what happens to a
+# garment or a body, so behind a preposition they would both read as journeys.
+PLACE_ALSO_A_VERB = {"steps", "landing", "study", "lounge", "garage", "porch",
+                     "court", "pool", "shower", "showers", "store", "shop",
+                     "studio", "reception"}
 # A room is usually described, not just named -- "the tiled bathroom", "the long
 # hallway". Up to three adjectives, non-greedy so the NEAREST room still wins.
 _ROOM_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|"
