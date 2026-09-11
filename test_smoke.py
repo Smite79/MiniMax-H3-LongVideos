@@ -800,6 +800,56 @@ def test_one_object_has_one_voice_across_beats():
     check("a vocal has no recipe", S.foley_for("whimpering", n3, sr, seed=7) is None)
 
 
+def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
+    print("\n=== one person's feeling is not worn by everybody in the shot ===")
+    # Reported: actions performed by all the characters when that is not the case.
+    # mood_face was impersonal -- "The face carries it: the expression is terrified" --
+    # which in a two-hander is a sentence about whoever is on screen, so the captor
+    # wore his victim's terror. gaze_hold already makes this call: name the owner once
+    # a second person is in the shot. With one person there is nobody else it could be,
+    # and naming them again is a second mention, which has its own cost.
+    cast = ["McKenna", "Dan"]
+    check("the owner is the person the beat puts in front of it",
+          S.emotion_owner("McKenna is terrified as Dan steps closer.", cast, "terrified")
+          == "McKenna")
+    check("...and `and` opens a new predicate with its own subject",
+          S.emotion_owner("Dan holds the door and McKenna is terrified.", cast, "terrified")
+          == "McKenna")
+    check("a feeling pinned on nobody has no owner",
+          S.emotion_owner("The room is terrified.", cast, "terrified") == "")
+    check("a named clause names them", "McKenna's face carries" in S.mood_face("terrified", "McKenna"))
+    check("a solo clause stays impersonal", S.mood_face("terrified").startswith(" The face"))
+    # TWO PEOPLE CAN FEEL DIFFERENT THINGS, and giving only the first left the other
+    # face to the prior -- the same half-fix as naming one of two speakers.
+    pairs = S.emotion_pairs("Dan is furious and McKenna is terrified.", cast)
+    check("both feelings are pinned", pairs == [("Dan", "furious"), ("McKenna", "terrified")],
+          str(pairs))
+    check("...and said in one sentence",
+          "Dan's face carries furious" in S.mood_faces(pairs)
+          and "McKenna's carries terrified" in S.mood_faces(pairs))
+    check("no pairs, nothing said", S.mood_faces([]) == "")
+
+    mem = "McKenna: she, 22, long blonde hair, a grey vest.\nDan: he, 40, a work coat."
+    P = ("A bare cell, one bulb.\n\nMcKenna is terrified as Dan steps closer.\n\n"
+         "McKenna is delighted.\n\nDan is furious and McKenna is terrified.\n\n"
+         "Dan holds the door and McKenna is terrified.")
+    sh = [" ".join(x.split()) for x in
+          run_node(P, plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
+    check("two in the shot: the terror is hers and is named",
+          "McKenna's face carries" in sh[0] and "The face carries" not in sh[0], sh[0][-120:])
+    check("one in the shot: nobody else it could be",
+          "The face carries it: the expression is delighted" in sh[1], sh[1][-120:])
+    check("two feelings, two faces", "Dan's face carries furious" in sh[2]
+          and "McKenna's carries terrified" in sh[2], sh[2][-130:])
+    check("a new predicate does not hand it to the other one",
+          "McKenna's face carries" in sh[3] and "Dan's face" not in sh[3], sh[3][-120:])
+    # The frame clause counts bodies too: "the whole body" of two people is one body.
+    check("the frame clause is plural with two in the shot",
+          "every body in it whole" in S.frame_hold("McKenna serves the ball.", "", 2))
+    check("...and singular with one",
+          "the whole body" in S.frame_hold("McKenna serves the ball.", "", 1))
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6703,6 +6753,7 @@ def main():
     test_the_face_plays_the_feeling_the_author_named()
     test_a_pronoun_pointing_away_keeps_the_person_it_means()
     test_one_object_has_one_voice_across_beats()
+    test_a_feeling_belongs_to_the_face_the_beat_pins_it_on()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

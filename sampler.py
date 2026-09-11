@@ -3778,7 +3778,14 @@ def duress_face(beat, wearers, described, film_duress=False):
     # duress or not, which is why this sits ahead of every duress test below.
     _emotion = emotion_in(beat)
     if _emotion and described:
-        return mood_face(_emotion)
+        # ONE PERSON, NOBODY ELSE IT COULD BE. More than one and the feeling has to be
+        # pinned, or the sentence lands on every face in the shot -- and a feeling the
+        # beat pins on nobody holds nobody, exactly as a vocal does: guessing which of
+        # two faces wears it is how the captor came to look terrified.
+        if len(described) < 2:
+            return mood_face(_emotion)
+        _pairs = emotion_pairs(beat, described)
+        return mood_faces(_pairs)
     # The author's own face beat wins, exactly as it does against the mouth guard.
     # Where the beat says what the face is doing, the node has nothing to add.
     if mouth_performs(beat):
@@ -3828,15 +3835,73 @@ def emotion_in(beat):
     return m.group(0).lower() if m else ""
 
 
-def mood_face(word):
+def emotion_owner(beat, names, word):
+    """Whose feeling it is: the person the beat puts in front of it. "" if nobody.
+
+    The shape subjects_for uses, conjunction guard included, so "Dan holds the door
+    and McKenna is terrified" does not hand the terror to Dan. Takes a name list
+    rather than a sheet because the caller already has the shot's cast."""
+    b = str(beat or "")
+    for n in (names or []):
+        if n and re.search(r"\b" + re.escape(n) + r"\b"
+                           r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?"
+                           r"\s+(?:is|was|looks?|looked|seems?|feels?|felt|sounds?|"
+                           r"becomes?|became|goes|went|turns?|gets?|got)?\s*"
+                           + re.escape(word) + r"\b", b, re.I):
+            return n
+    return ""
+
+
+def emotion_pairs(beat, names):
+    """[(who, feeling)] for the feelings this beat pins on people. Two at most.
+
+    TWO PEOPLE CAN FEEL DIFFERENT THINGS IN ONE SHOT. "Dan is furious and McKenna is
+    terrified" gave only the first of them, so one face was performing and the other
+    was left to the prior -- the same half-fix as naming one of two speakers. Two at
+    most, like the layering clause: a shot carrying four feelings has stopped being
+    about its beat."""
+    out, seen = [], set()
+    for m in _EMOTION.finditer(str(beat or "")):
+        word = m.group(0).lower()
+        who = emotion_owner(beat, names, word)
+        if who and who not in seen:
+            seen.add(who)
+            out.append((who, word))
+        if len(out) >= 2:
+            break
+    return out
+
+
+def mood_faces(pairs):
+    """Say whose feeling is whose, for one or two people. "" for none."""
+    ps = [(w, e) for w, e in (pairs or []) if w and e]
+    if not ps:
+        return ""
+    if len(ps) == 1:
+        return mood_face(ps[0][1], ps[0][0])
+    return (f" {ps[0][0]}'s face carries {ps[0][1]} and {ps[1][0]}'s carries "
+            f"{ps[1][1]}, each played in the eyes and the mouth.")
+
+
+def mood_face(word, who=""):
     """Say the face plays the feeling the author named. "" when they named none.
 
     Their word, not a synonym: "terrified" and "grim" are not the same performance,
-    and the generic one was replacing the specific one on every shot. Impersonal and
-    positive, like the other picture guards, and it names the mouth on purpose --
-    that is the half the guard beside it would otherwise hold shut."""
+    and the generic one was replacing the specific one on every shot.
+
+    NAMED ONCE A SECOND PERSON IS IN THE SHOT, which is the call gaze_hold already
+    makes for the same reason. Said impersonally, "the face carries it: the expression
+    is terrified" is a sentence about whoever is on screen -- so in a two-hander the
+    captor wore his victim's terror. Reported as actions being performed by all the
+    characters at once. With one person there is nobody else it could be, and naming
+    them again is a second mention of a person, which has its own cost."""
+    if not word:
+        return ""
+    if who:
+        return (f" {who}'s face carries it: the expression is {word}, played in the "
+                f"eyes and the mouth together.")
     return (f" The face carries it: the expression is {word}, played in the eyes and "
-            f"the mouth together.") if word else ""
+            f"the mouth together.")
 
 
 def mouth_performs(beat):
@@ -4847,7 +4912,7 @@ _FRAME_SIZE = re.compile(
     r"\bknees?[-\s]up\b|\bhead\s+to\s+(?:toe|foot|feet)\b", re.I)
 
 
-def frame_hold(beat, anchor=""):
+def frame_hold(beat, anchor="", people=1):
     """Say the frame holds a whole body, where nothing else says what the frame is.
 
     THE PORTRAIT IS WHAT AN UNSTATED FRAME BECOMES. This file already records the
@@ -4873,6 +4938,9 @@ def frame_hold(beat, anchor=""):
         return ""
     if not (_WHOLE_BODY.search(b) or _TRAVEL_VERB.search(b)):
         return ""
+    if int(people or 1) > 1:
+        return (" The frame holds every body in it whole, head to feet, with the room "
+                "around them.")
     return (" The frame holds the whole body, head to feet, with the room around it.")
 
 
@@ -9461,7 +9529,7 @@ class H3LongVideos:
             # What the frame holds, where the beat and the anchor both leave it open.
             # An unstated frame becomes the prior, and the prior for a described
             # person is a portrait facing the lens. See frame_hold.
-            _frame = frame_hold(body, anchor)
+            _frame = frame_hold(body, anchor, len(_described or []) or 1)
             if _frame:
                 frame_shots.append(len(plan) + 1)
             # ONE sentence for the hardware. The hold, the name of the thing and
