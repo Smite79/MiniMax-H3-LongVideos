@@ -472,8 +472,18 @@ def test_two_person_cast_has_one_body_each():
     check("an exact pair gets a composition constraint",
           S.cast_hold(["Dan", "Crystal"]) ==
           " There are two people in the shot, with one body for each person.")
-    check("duplicate names do not manufacture a pair", S.cast_hold(["Dan", "Dan"]) == "")
-    check("a solo shot is untouched", S.cast_hold(["Dan"]) == "")
+    # One person named twice is ONE person: the guarantee is that no pair is
+    # manufactured, and the solo count is what that now reads as.
+    check("duplicate names do not manufacture a pair",
+          S.cast_hold(["Dan", "Dan"]) == " There is one person in the shot: one body, one face.")
+    # THE SOLO SHOT IS WHERE A DUPLICATE HAS NOTHING AGAINST IT. This asserted
+    # silence, with no recorded reason for it, so the shot most at risk of coming back
+    # as twins was the one saying nothing about how many bodies were in it. Reported,
+    # repeatedly, as duplicate characters.
+    check("a solo shot gets a count too",
+          S.cast_hold(["Dan"]) == " There is one person in the shot: one body, one face.")
+    check("...and it stands down for staged extras",
+          S.cast_hold(["Dan"], "A crowd watches him.") == "")
     check("a crowd shot is untouched", S.cast_hold(["Dan", "Crystal", "Mara"]) == "")
 
 

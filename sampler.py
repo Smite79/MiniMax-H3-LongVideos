@@ -4147,7 +4147,14 @@ def extras_in(beat):
 
 
 def cast_hold(names, beat="", extras=False):
-    """A positive body-count constraint for an exact two-person composition.
+    """A positive body-count constraint for a one- or two-person composition.
+
+    THE SOLO SHOT HAD NO COUNT AT ALL, and a solo shot is where a duplicate of the
+    one person in it has nothing standing against it. The pair case has been asserted
+    since this function was written; the one-person case returned "" with no recorded
+    reason for it, so the shot most at risk of being rendered as twins was the shot
+    that said nothing about how many bodies were in it. Reported, repeatedly, as
+    duplicate characters.
 
     STANDS DOWN WHERE THE BEAT STAGES EXTRAS. "There are two people in the shot,
     with one body for each person" is exactly right against a duplicated character
@@ -4157,14 +4164,22 @@ def cast_hold(names, beat="", extras=False):
     file's standing rule, so a beat that puts more bodies in the frame keeps them and
     the count goes unsaid."""
     people = list(dict.fromkeys(n for n in (names or []) if n))
-    # `extras` LATCHES for the film. The girls who were playing volleyball are still
-    # there in the beat that walks them to the locker room, and that beat names
-    # nobody but the two on the sheet -- so a per-beat test re-forbade them one shot
-    # after allowing them. Background people do not leave because a sentence stopped
-    # mentioning them.
-    if len(people) != 2 or extras or extras_in(beat):
+    # `extras` is kept as a parameter so a caller can stand the count down explicitly.
+    # It is no longer LATCHED for the film: one plural word anywhere -- "the others
+    # have gone" included -- then silenced the count on every shot that followed, and
+    # this is the clause that keeps a duplicate or a stranger out of the frame.
+    if extras or extras_in(beat):
         return ""
-    return " There are two people in the shot, with one body for each person."
+    if len(people) == 1:
+        return " There is one person in the shot: one body, one face."
+    if len(people) == 2:
+        return " There are two people in the shot, with one body for each person."
+    # THREE OR MORE IS LEFT ALONE, as it always has been. The count comes from the
+    # cast this file decided is in the shot, and the more people that decision holds
+    # the likelier one of them is described without being in frame -- an assertion
+    # that there are four bodies is then a request for a fourth. One and two are the
+    # counts the duplicate reports are about.
+    return ""
 
 
 def restrained_by_beat(beat, cast):
