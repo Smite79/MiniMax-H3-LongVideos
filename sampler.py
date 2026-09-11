@@ -4678,13 +4678,22 @@ _WHOLE_BODY = re.compile(
     r"sprints?|sprinting|dances?|dancing|plays?|playing|climbs?|climbing|"
     r"lifts?|lifting|carries|carrying|pushes|pushing|pulls?|pulling|"
     r"swims?|swimming|stretches|stretching|wrestles?|fights?|fighting)\b", re.I)
-# Anything the author has already said about the camera. Their word wins and this
-# stands down -- including a close-up, which is a frame they ASKED for.
-_FRAMING_WORD = re.compile(
-    r"\b(?:close[-\s]?up|close\s+shot|tight\s+shot|wide\s+shot|wide|medium\s+shot|"
-    r"long\s+shot|full\s+shot|two[-\s]?shot|over[-\s]the[-\s]shoulder|pov|"
-    r"framing|frame[ds]?|shot\s+on|lens|close\s+on|tight\s+on|macro|"
-    r"head\s+and\s+shoulders|portrait)\b", re.I)
+# A SHOT SIZE, which is the only kind of camera note that answers "how much of the
+# person is in frame". This began as any camera word at all and that was wrong in the
+# one way that mattered: the README tells you to put the camera in the anchor, so
+# "Shot on 35mm, handheld" or "anamorphic lens" -- which say NOTHING about subject
+# distance -- silenced the clause on every shot of a real script. Reported as the
+# framing fix doing nothing whatsoever, and it was doing nothing: it never ran.
+#
+# Lens, stock, grade, mood and camera movement are not sizes and do not stand it
+# down. A close-up does, because a close-up is a frame somebody asked for.
+_FRAME_SIZE = re.compile(
+    r"\bclose[-\s]?ups?|\bclose\s+(?:shots?|on)\b|\btight\s+(?:shots?|on)\b|\bmacro\b|"
+    r"\bwide\s+(?:shots?|angle)\b|\bwide\b|\bestablishing\b|\blong\s+shots?\b|"
+    r"\bfull\s+(?:shots?|body|figure|length)\b|\bmedium\s+shots?\b|\bmid\s+shots?\b|"
+    r"\btwo[-\s]?shots?\b|\bover[-\s]the[-\s]shoulder\b|\bpov\b|"
+    r"\bhead\s+and\s+shoulders\b|\bportrait\b|\bwaist[-\s]up\b|"
+    r"\bknees?[-\s]up\b|\bhead\s+to\s+(?:toe|foot|feet)\b", re.I)
 
 
 def frame_hold(beat, anchor=""):
@@ -4707,7 +4716,7 @@ def frame_hold(beat, anchor=""):
     somebody asked for. Impersonal, like the other picture guards, and positively
     phrased: it says what the frame holds, never what it is not."""
     b = str(beat or "")
-    if _FRAMING_WORD.search(b) or _FRAMING_WORD.search(str(anchor or "")):
+    if _FRAME_SIZE.search(b) or _FRAME_SIZE.search(str(anchor or "")):
         return ""
     if tight_framing(b) or tight_framing(str(anchor or "")):
         return ""

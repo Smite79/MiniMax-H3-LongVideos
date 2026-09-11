@@ -492,8 +492,19 @@ def test_an_unstated_frame_becomes_a_portrait():
     # The author's camera always wins -- a close-up included, since somebody asked for it.
     check("a close-up in the beat stands it down",
           S.frame_hold("Close-up on her face as she serves.") == "")
-    check("framing in the anchor stands it down",
-          S.frame_hold("McKenna serves the ball.", "Shot on 35mm, wide shots throughout.") == "")
+    # A SHOT SIZE stands it down; a lens, a stock or a camera move does not. This was
+    # any camera word at all, and that silenced the clause on every shot of any real
+    # script -- the README tells you to put the camera in the anchor, so "Shot on 35mm,
+    # handheld" disabled it everywhere. Reported as the framing fix doing nothing, and
+    # it was doing nothing: it never ran.
+    check("a stated shot size stands it down",
+          S.frame_hold("McKenna serves the ball.", "Shot on 35mm, wide shots throughout.") == ""
+          and S.frame_hold("McKenna serves the ball.", "Medium shots, eye level.") == ""
+          and S.frame_hold("McKenna serves the ball.", "Close-ups throughout.") == "")
+    for _a in ("Shot on 35mm, handheld, natural light.", "Cinematic, anamorphic lens.",
+               "35mm film, shallow depth of field.", "Handheld, available light, grainy."):
+        check(f"a camera note with no size still fires: {_a[:30]!r}",
+              S.frame_hold("McKenna serves the ball.", _a) != "", _a)
     check("...and a wide shot named in the beat too",
           S.frame_hold("A wide shot as McKenna serves.") == "")
 
