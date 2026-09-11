@@ -339,6 +339,55 @@ def test_a_room_change_with_no_walk_is_a_cut():
           int(r[0].shape[0]) == r[5] and r[5] > 0, str(r[5]))
 
 
+def test_extras_are_not_forbidden_by_the_body_count():
+    print("\n=== a beat that stages extras keeps them ===")
+    # Reported: character_guard turned off to get random girls into a scene, and the
+    # camera stayed fixated on the primary character. Two separate causes.
+    #
+    # The body-count clause is what forbade the extras. With exactly two described
+    # people, every shot was told "There are two people in the shot, with one body for
+    # each person" -- right against a duplicated character, wrong against "two women
+    # dance behind them", where it forbids as a positive fact the people the author
+    # just asked for.
+    check("a pair still gets the count",
+          "one body for each person" in S.cast_hold(["Dan", "Crystal"]))
+    check("...but not when the beat stages extras",
+          S.cast_hold(["Dan", "Crystal"], "Two women dance behind them.") == "")
+    check("...nor a crowd", S.cast_hold(["Dan", "Crystal"], "A crowd watches.") == "")
+    # "both" and "they" are group cues about the NAMED cast -- group_beat owns those
+    # and they must not stand the count down.
+    check("a group cue about the cast is not extras",
+          "one body for each person" in S.cast_hold(["Dan", "Crystal"], "They both sit down."))
+    check("extras_in reads plural people, not body parts",
+          S.extras_in("Other girls wait.") and not S.extras_in("He lowers his arms."))
+
+    mem = "Dan: he, 40, a work coat.\nCrystal: she, 26, a red dress."
+    sh = [" ".join(x.split()) for x in run_node(
+        "A bar.\n\nDan and Crystal sit at the bar.\n\n"
+        "Dan and Crystal talk while two women dance behind them.",
+        plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
+    check("the pair-only shot keeps the count",
+          "one body for each person" in sh[0], sh[0][-90:])
+    check("...and the shot staging extras does not",
+          "one body for each person" not in sh[1], sh[1][-120:])
+
+    # THE CAMERA is the other half, and it is the guard itself: off, every sheet line
+    # goes into every shot -- including the one carrying <Picture N> -- so a near-clean
+    # reference rides all of them and the portrait's composition becomes the shot's.
+    img = torch.rand(1, H, W, 3)
+    P = "A bar.\n\nCrystal waits.\n\nCrystal turns."
+    MEM1 = "Crystal: <Picture 1>, she, 26, a red dress."
+    off = run_node(P, plan_only=True, character_memory=MEM1,
+                   ref_image_1=img, character_guard=False)[2]
+    check("guard off with a tagged reference is reported",
+          "fixes the camera on one person" in off, "")
+    check("...and it says the guard adds nobody", "ADDS NOBODY" in off, "")
+    on = run_node(P, plan_only=True, character_memory=MEM1,
+                  ref_image_1=img, character_guard=True)[2]
+    check("...and stays quiet with the guard on",
+          "fixes the camera on one person" not in on, "")
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6212,6 +6261,7 @@ def main():
     test_render()
     test_a_cut_keeps_its_own_first_frame()
     test_a_room_change_with_no_walk_is_a_cut()
+    test_extras_are_not_forbidden_by_the_body_count()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

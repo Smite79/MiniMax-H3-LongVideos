@@ -3984,10 +3984,35 @@ def fit_guards(clauses, beat_words):
     return kept, dropped
 
 
-def cast_hold(names):
-    """A positive body-count constraint for an exact two-person composition."""
+# PEOPLE THE BEAT STAGES WHO ARE ON NOBODY'S SHEET. Extras: a crowd, dancers,
+# other girls, two men at the bar. Plural nouns only, and deliberately not "both",
+# "they" or "the two of them" -- those are group cues about the NAMED cast and
+# group_beat already owns them. A singular "someone" is not here either: one more
+# person is what the cast clause is already counting.
+_EXTRA_PEOPLE = re.compile(
+    r"\b(?:crowds?|groups?|others|onlookers|bystanders|passers-?by|spectators|"
+    r"people|dancers|guests|customers|patrons|strangers|students|staff|tourists|"
+    r"girls|women|men|boys|guys|ladies|blondes|brunettes|figures|silhouettes)\b",
+    re.I)
+
+
+def extras_in(beat):
+    """Does this beat stage people beyond the ones the sheet names?"""
+    return bool(_EXTRA_PEOPLE.search(str(beat or "")))
+
+
+def cast_hold(names, beat=""):
+    """A positive body-count constraint for an exact two-person composition.
+
+    STANDS DOWN WHERE THE BEAT STAGES EXTRAS. "There are two people in the shot,
+    with one body for each person" is exactly right against a duplicated character
+    and exactly wrong against "two women dance behind them": it forbids, as a
+    positive fact, the people the author just asked for. Reported as extras refusing
+    to appear. The author's words outrank anything inferred from them, which is this
+    file's standing rule, so a beat that puts more bodies in the frame keeps them and
+    the count goes unsaid."""
     people = list(dict.fromkeys(n for n in (names or []) if n))
-    if len(people) != 2:
+    if len(people) != 2 or extras_in(beat):
         return ""
     return " There are two people in the shot, with one body for each person."
 
@@ -8951,7 +8976,7 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
-            _cast_hold = cast_hold(_described)
+            _cast_hold = cast_hold(_described, body)
 
             # Where the beat says somebody is looking, said once more as a fact
             # about the eyes and the head. One mention in the beat loses to a
@@ -10356,6 +10381,22 @@ class H3LongVideos:
                 f"'{_who[0]}: <Picture 2>, ...' -- so every shot with both of them "
                 f"carries both faces. No wording fixes this: nothing in the text "
                 f"outranks a photograph")
+        if refs_all and _tagged and not character_guard:
+            notes.append(
+                f"character_guard is OFF and {len(refs_all)} reference image(s) are tagged -- "
+                f"the combination that fixes the camera on one person. Off, EVERY sheet line "
+                f"goes into every shot, including the line carrying <Picture N>, so the "
+                f"reference is named in every shot and rides all of them. At ref_noise_aug "
+                f"{float(ref_noise_aug):g} that asks the model to reproduce the PICTURE -- "
+                f"pose and framing, not only the face -- so the portrait's composition "
+                f"becomes every shot's composition, and anyone without a reference is placed "
+                f"relative to it. AND TURNING THE GUARD OFF ADDS NOBODY: it describes the "
+                f"people your SHEET already names, in every shot, whether the beat involves "
+                f"them or not. For extras nobody has a sheet entry for, leave the guard ON "
+                f"and write them into the beat -- your words reach the model verbatim and an "
+                f"unnamed person needs no entry. To loosen the framing instead, lower "
+                f"ref_noise_aug (try 0.95, then 0.90) or crop the reference to head and "
+                f"shoulders, so there is less composition in it to reproduce")
         if refs_all:
             _named = sum(1 for s in plan.prompts if picture_tags(s))
             notes.append(
