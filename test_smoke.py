@@ -529,6 +529,71 @@ def test_an_unstated_frame_becomes_a_portrait():
     check("no gibberish reaches the shot", "and picks on screen" not in sh[1], sh[1][-90:])
 
 
+def test_an_interrupt_releases_the_frame_buffer():
+    print("\n=== stopping a run drops the frame buffer before it unwinds ===")
+    # Reported: stopping a run aborted the process with a CUDA illegal memory access,
+    # thrown from cuMemFreeAsync inside a tensor destructor rather than from any line of
+    # Python. An interrupt is a BaseException, so it skips every `del` in the render loop
+    # and leaves a multi-gigabyte frame buffer for the collector to free in its own
+    # order, after ComfyUI has begun unloading the models it was sized against.
+    acc = S.FrameAccumulator(8, torch.float32, True)
+    acc.add(torch.zeros((4, 1, 1, 3)))
+    acc.add(torch.zeros((4, 1, 1, 3)))
+    check("the buffer holds frames", acc.tensor is not None and acc.used == 8)
+    acc.release()
+    check("release drops the tensor", acc.tensor is None)
+    check("...and the overflow list", acc.overflow == [] and acc.used == 0)
+
+    # THE CAPACITY IS AN UPPER BOUND. It used to subtract one frame per seam, assuming
+    # trim_seam drops one from every shot after the first -- and a shot that opens on no
+    # keyframe keeps its first frame, so the buffer filled and the overflow list started
+    # retaining whole shots of decoded frames, on the GPU, uncopied.
+    acc2 = S.FrameAccumulator(6, torch.float32, False)
+    acc2.add(torch.zeros((3, 1, 1, 3)))
+    acc2.add(torch.zeros((3, 1, 1, 3)))
+    check("a correctly sized buffer never reaches overflow", acc2.overflow == [])
+
+    # An interrupt out of the render path releases the buffer and is re-raised intact.
+    node = S.H3LongVideos()
+    # run() clears _frames on entry, so the buffer has to be published the way _render
+    # publishes it: assigned inside the render, then interrupted.
+    held = S.FrameAccumulator(4, torch.float32, True)
+    held.add(torch.zeros((4, 1, 1, 3)))
+    import comfy.model_management as _mm
+    _Interrupt = getattr(_mm, "InterruptProcessingException", None)
+    if _Interrupt is None:
+        class _Interrupt(BaseException):
+            pass
+    check("the interrupt is a BaseException, so no `except Exception` eats it",
+          issubclass(_Interrupt, BaseException) and not issubclass(_Interrupt, Exception))
+
+    def _boom(_self, _prepared):
+        _self._frames = held
+        raise _Interrupt()
+    _orig = S.H3LongVideos._render
+    S.H3LongVideos._render = _boom
+    try:
+        raised = None
+        try:
+            node.run(**_render_args())
+        except BaseException as e:
+            raised = e
+        check("the interrupt is re-raised, never swallowed",
+              isinstance(raised, _Interrupt), type(raised).__name__)
+        check("...and the frame buffer was dropped on the way out",
+              held.tensor is None and node._frames is None)
+    finally:
+        S.H3LongVideos._render = _orig
+
+
+def _render_args():
+    return dict(model=FakeModel(), clip=FakeCLIP(), vae=FakeVAE(), audio_vae=FakeAudioVAE(),
+                prompt="A room.\n\nHe walks in.", resolution="4:3", megapixels=0.0,
+                shot_seconds=FRAMES / S.H3_FPS, steps=2, cfg=1.0,
+                sampler_name="res_multistep", scheduler="simple", seed=1,
+                apply_model_sampling=False, tiled_decode=False)
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6427,6 +6492,7 @@ def main():
     test_a_walk_into_an_unlisted_room_is_still_walked()
     test_a_move_to_any_place_is_performed()
     test_an_unstated_frame_becomes_a_portrait()
+    test_an_interrupt_releases_the_frame_buffer()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

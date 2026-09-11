@@ -43,11 +43,40 @@ class FrameAccumulator:
         self.overflow.append(frames.to("cpu", self.dtype, copy=True)
                              if self.store_on_cpu else frames)
 
+    def release(self):
+        """Drop every tensor held, now, rather than whenever the collector gets to it.
+
+        On an interrupt the render unwinds through frames the collector tears down in
+        its own order, and a large video buffer freed after the models it was sized
+        against have already gone is a free the allocator cannot explain. Deliberately
+        does NOT empty the cache: that is another CUDA call, and if the context is
+        already in a sticky error state it is one more thing to abort inside."""
+        self.tensor = None
+        self.overflow = []
+        self.used = 0
+
     def finish(self):
         if not self.overflow:
             if self.tensor is None:
                 return torch.cat(self.overflow, dim=0)
-            out = self.tensor if self.used == self.tensor.shape[0] else self.tensor[:self.used]
+            if self.used == self.tensor.shape[0]:
+                out = self.tensor
+            else:
+                # COMPACT, never a slice. A slice of a larger buffer keeps the WHOLE
+                # buffer's storage alive, which is the retention this class exists to
+                # prevent -- and test_the_chain_is_never_held_twice measures exactly
+                # that, demanding no unused bytes behind the returned tensor.
+                #
+                # There is slack because the capacity is now an upper bound: it can no
+                # longer assume trim_seam drops a frame at every seam, since a shot that
+                # opens on no keyframe keeps its first frame. Over-allocating by at most
+                # one frame per seam and compacting once is the bounded cost. The
+                # alternative -- an exact guess that can be too small -- drops into the
+                # overflow list, which with cleanup_between_shots off holds every shot's
+                # decoded frames live on the GPU until the end of the run.
+                out = torch.empty((self.used,) + tuple(self.tensor.shape[1:]),
+                                  dtype=self.dtype, device=self.tensor.device)
+                out.copy_(self.tensor[:self.used])
             self.tensor = None
             return out
 

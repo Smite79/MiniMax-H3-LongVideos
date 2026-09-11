@@ -7663,6 +7663,16 @@ class H3LongVideos:
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
 
+        # An interrupt arrives as a BaseException (model_management.py:2133), so it is
+        # NOT caught by the `except Exception` handlers in this file and must not be --
+        # stopping a run has to stop it. What it does skip is every `del` in the render
+        # loop, leaving a multi-gigabyte frame buffer to be freed by the collector in
+        # its own order, after ComfyUI has already started unloading the models it was
+        # sized against. Reported as an illegal memory access on stopping a run, thrown
+        # from cuMemFreeAsync inside a tensor destructor rather than from any line of
+        # Python. Dropping it here makes that free happen at a known point, before the
+        # unwind; the interrupt is then re-raised untouched.
+        self._frames = None
         prepared = self._prepare(
             model=model, clip=clip, vae=vae,
             audio_vae=audio_vae, prompt=prompt, resolution=resolution,
@@ -7684,7 +7694,18 @@ class H3LongVideos:
             speech_tail_seconds=speech_tail_seconds, beat_leads=beat_leads,
             **_removed)
         if isinstance(prepared, PreparedVideo):
-            return self._render(prepared)
+            try:
+                return self._render(prepared)
+            except BaseException:
+                _f, self._frames = self._frames, None
+                if _f is not None:
+                    try:
+                        _f.release()
+                    except Exception:
+                        pass            # teardown must not mask the interrupt
+                raise
+            finally:
+                self._frames = None
         return prepared
 
     def _prepare(self, model, clip, vae, audio_vae, prompt, resolution, megapixels, shot_seconds,
@@ -10973,10 +10994,23 @@ class H3LongVideos:
         fresh = []
         t_start = time.perf_counter()
         aud_out, sr = [], 44100
+        # AN UPPER BOUND, NOT AN ESTIMATE. This used to subtract one frame per seam on
+        # the assumption that trim_seam drops one from every shot after the first. It no
+        # longer does: a shot that opens on no keyframe keeps its first frame, and a
+        # room change or a removal makes such shots on purpose. The buffer then filled
+        # and FrameAccumulator fell through to its overflow list -- which, with
+        # cleanup_between_shots off, retains each shot's decoded frames ON THE GPU,
+        # uncopied, for the rest of the run. Higher peak VRAM under dynamic VRAM loading
+        # is where a bad free turns into an illegal access, and the whole point of the
+        # accumulator is that the final tensor is allocated ONCE.
+        #
+        # Over-allocating by at most one frame per seam is a rounding error against a
+        # chain of hundreds, and it is the difference between a bounded allocation and
+        # an unbounded list of live GPU tensors.
         frame_capacity = sum(shot.frame_count for shot in plan.shots)
-        if trim_seam:
-            frame_capacity -= max(0, len(plan) - 1)
         frames = FrameAccumulator(frame_capacity, _image_out_dtype(), cleanup_between_shots)
+        # Reachable from run(), so an interrupt can drop it before unwinding. See there.
+        self._frames = frames
         av_fix = 0                  # samples of A/V drift corrected across the chain
         _captured = {}              # name -> a frame from the last shot they were in
         _captured_from = {}         # name -> which shot that frame came from
