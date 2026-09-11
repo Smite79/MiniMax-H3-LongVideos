@@ -476,6 +476,48 @@ def test_a_move_to_any_place_is_performed():
           "travels to the" not in plain, plain[-110:])
 
 
+def test_an_unstated_frame_becomes_a_portrait():
+    print("\n=== a shot that says nothing about the camera is told what the frame holds ===")
+    # Reported: the camera fixated on one character, staring into the lens -- WITH THE
+    # REFERENCE IMAGE REMOVED, which is what ruled the reference out and left the text.
+    # Measured on a volleyball beat: 15 words of appearance from the sheet and 9 of
+    # mouth guard against 8 words of action. The sheet describes a face in every shot
+    # because clothing continuity needs it there; nothing said how much of the person
+    # to show, and an unstated attribute is left to the model's PRIOR, which this file
+    # already records as "a portrait: facing the lens, pleasantly".
+    check("a whole-body action gets a frame",
+          "whole body" in S.frame_hold("McKenna serves the ball hard across the net."))
+    check("...and so does a move", "whole body" in S.frame_hold("McKenna walks to the bench."))
+    check("a face acting does not", S.frame_hold("McKenna smiles.") == "")
+    # The author's camera always wins -- a close-up included, since somebody asked for it.
+    check("a close-up in the beat stands it down",
+          S.frame_hold("Close-up on her face as she serves.") == "")
+    check("framing in the anchor stands it down",
+          S.frame_hold("McKenna serves the ball.", "Shot on 35mm, wide shots throughout.") == "")
+    check("...and a wide shot named in the beat too",
+          S.frame_hold("A wide shot as McKenna serves.") == "")
+
+    mem = "McKenna: she, 22, tall, long blonde hair, blue eyes, a blue kit."
+    P = ("A school gym, hard overhead light.\n\n"
+         "McKenna serves the ball hard across the net.\n\n"
+         "McKenna walks to the bench and picks up a towel.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    sh = [" ".join(x.split()) for x in out[3].split("---") if x.strip()]
+    for i, shot in enumerate(sh, 1):
+        check(f"shot {i} is told what the frame holds",
+              "whole body, head to feet" in shot, shot[-90:])
+    check("the reason is reported", "frame HOLDS" in out[2], "")
+    # REGRESSION: the destination capture must not run through a conjunction. It read
+    # "the bench and picks", whose head is a verb, so the blocklist never saw the
+    # bench -- and the shot was told to travel "to the bench and picks".
+    check("a destination stops at a conjunction",
+          S.moved_to("McKenna walks to the bench and picks up a towel.") == "")
+    check("...and a compound room is still a room",
+          S.moved_to("They head to the locker room.") == "locker room"
+          and S.moved_to("He walks into the engine room.") == "engine room")
+    check("no gibberish reaches the shot", "and picks on screen" not in sh[1], sh[1][-90:])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -523,13 +565,23 @@ def test_references_and_silence():
     # It carries the mouth clause and nothing else: no sound sentence, because a
     # clause would describe an acoustic the conditioning removes. The mouth clause is
     # the picture half of the same guarantee and has its own switch.
+    # THE GUARANTEE, not the whole string -- the same lesson the clip4 check below
+    # records: "asserting the whole string made this fail every time an unrelated
+    # clause was added beside it". What matters here is that a silenced shot gets no
+    # sound sentence, and that the mouth clause is the picture half of it.
     check("...with no sound sentence added to a silenced shot",
-          clip2.seen[1][0] == "A room. He walks in." + S.MOUTH_HOLD, clip2.seen[1][0])
+          "It sounds like" not in clip2.seen[1][0]
+          and "the only sound" not in clip2.seen[1][0]
+          and S.MOUTH_HOLD in clip2.seen[1][0]
+          and "A room. He walks in." in clip2.seen[1][0], clip2.seen[1][0])
     clip2b = FakeCLIP()
     run_node(TWO_LINE_ROOM, clip=clip2b, mouths_shut_when_no_line=False,
              auto_sound=False)
     check("...and none at all with the mouth guard off",
-          clip2b.seen[1][0] == "A room. He walks in.", clip2b.seen[1][0])
+          "It sounds like" not in clip2b.seen[1][0]
+          and "the only sound" not in clip2b.seen[1][0]
+          and S.MOUTH_HOLD not in clip2b.seen[1][0]
+          and "A room. He walks in." in clip2b.seen[1][0], clip2b.seen[1][0])
     # The shot that DOES speak gets the open form: closing the list there would be
     # telling the model the line is not in it.
     clip4 = FakeCLIP()
@@ -546,7 +598,10 @@ def test_references_and_silence():
     clip3 = FakeCLIP()
     run_node("A room.\n\nHe walks in.", clip=clip3, auto_sound=False)
     check("...and with that off only the mouth clause remains",
-          clip3.seen[1][0] == "A room. He walks in." + S.MOUTH_HOLD, clip3.seen[1][0])
+          "It sounds like" not in clip3.seen[1][0]
+          and "the only sound" not in clip3.seen[1][0]
+          and S.MOUTH_HOLD in clip3.seen[1][0]
+          and "A room. He walks in." in clip3.seen[1][0], clip3.seen[1][0])
 
 
 def test_first_frame():
@@ -6352,6 +6407,7 @@ def main():
     test_extras_are_not_forbidden_by_the_body_count()
     test_a_walk_into_an_unlisted_room_is_still_walked()
     test_a_move_to_any_place_is_performed()
+    test_an_unstated_frame_becomes_a_portrait()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

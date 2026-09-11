@@ -4670,6 +4670,52 @@ _TIGHT_FRAME = re.compile(
     r"\bfills?\s+the\s+frame\b|\bmacro\b", re.I)
 
 
+# A WHOLE BODY DOING SOMETHING. Not a face acting, and not a hand: these are the
+# verbs whose action does not fit inside a portrait.
+_WHOLE_BODY = re.compile(
+    r"\b(?:serves?|serving|throws?|throwing|kicks?|kicking|hits?|hitting|"
+    r"swings?|swinging|spikes?|blocks?|blocking|jumps?|jumping|runs?|running|"
+    r"sprints?|sprinting|dances?|dancing|plays?|playing|climbs?|climbing|"
+    r"lifts?|lifting|carries|carrying|pushes|pushing|pulls?|pulling|"
+    r"swims?|swimming|stretches|stretching|wrestles?|fights?|fighting)\b", re.I)
+# Anything the author has already said about the camera. Their word wins and this
+# stands down -- including a close-up, which is a frame they ASKED for.
+_FRAMING_WORD = re.compile(
+    r"\b(?:close[-\s]?up|close\s+shot|tight\s+shot|wide\s+shot|wide|medium\s+shot|"
+    r"long\s+shot|full\s+shot|two[-\s]?shot|over[-\s]the[-\s]shoulder|pov|"
+    r"framing|frame[ds]?|shot\s+on|lens|close\s+on|tight\s+on|macro|"
+    r"head\s+and\s+shoulders|portrait)\b", re.I)
+
+
+def frame_hold(beat, anchor=""):
+    """Say the frame holds a whole body, where nothing else says what the frame is.
+
+    THE PORTRAIT IS WHAT AN UNSTATED FRAME BECOMES. This file already records the
+    reason: "an attribute a prompt does not state is not LEFT to the model, it is
+    left to the model's prior -- which for a named, described person is a PORTRAIT:
+    facing the lens, pleasantly, because that is what photographs of people are."
+    The sheet describes a face in every shot, because clothing continuity needs it,
+    and the mouth guard describes a mouth in every silent shot, because babble needs
+    it -- so the text is weighted towards a face and nothing in it says how much of
+    the person to show. Measured on a volleyball beat: 15 words of appearance and 9
+    of mouth against 8 of action. Reported as the camera staying fixated on one
+    character, staring into the lens, with no reference image anywhere in the run.
+
+    Only where the beat stages something a portrait cannot contain, and only where
+    the author has said nothing about the camera -- in the beat or in the anchor.
+    Their framing always wins, a close-up included, because a close-up is a frame
+    somebody asked for. Impersonal, like the other picture guards, and positively
+    phrased: it says what the frame holds, never what it is not."""
+    b = str(beat or "")
+    if _FRAMING_WORD.search(b) or _FRAMING_WORD.search(str(anchor or "")):
+        return ""
+    if tight_framing(b) or tight_framing(str(anchor or "")):
+        return ""
+    if not (_WHOLE_BODY.search(b) or _TRAVEL_VERB.search(b)):
+        return ""
+    return (" The frame holds the whole body, head to feet, with the room around it.")
+
+
 def tight_framing(text):
     """Does this beat call for a frame close enough to lose the anchor point?"""
     return bool(_TIGHT_FRAME.search(text or ""))
@@ -5560,10 +5606,18 @@ waist hip hips thigh thighs wrist wrists ankle ankles bum butt crotch
 """.split())
 
 # Same shape as _GOES_TO, with an OPEN noun where that one has the place list.
+# The destination STOPS at a conjunction. Without that guard the capture ran
+# straight through one -- "walks to the bench and picks up a towel" produced the
+# destination "bench and picks", whose last word is a verb, so the blocklist never
+# saw the bench it was there to catch and the shot was told to travel "to the bench
+# and picks". Every word of the destination is checked, not only the head, for the
+# same reason.
 _MOVES_TO_ANY = re.compile(
     r"\b(?:to|into|toward|towards|inside|through\s+to|"
     r"enters?|entered|entering|steps?\s+into|stepped\s+into)\s+"
-    + _DET_POSS + r"\s+((?:[A-Za-z][\w-]*\s+){0,2}[A-Za-z][\w-]*)\b", re.I)
+    + _DET_POSS + r"\s+((?:(?!(?:and|or|then|but|while|as|before|after|with|for|"
+    r"to|into|onto|from|at|on|in|of)\b)[A-Za-z][\w-]*\s+){0,2}"
+    r"(?!(?:and|or|then|but|while|as)\b)[A-Za-z][\w-]*)\b", re.I)
 
 
 def moved_to(beat, people=()):
@@ -5582,6 +5636,11 @@ def moved_to(beat, people=()):
     names = {str(n).strip().lower() for n in (people or ()) if str(n).strip()}
     for m in _MOVES_TO_ANY.finditer(b):
         dest = re.sub(r"\s+", " ", m.group(1)).strip()
+        # THE HEAD NOUN DECIDES, not every word in the phrase. A locker is furniture
+        # and a locker ROOM is a room; so are an engine room and a boiler room. The
+        # conjunction guard in the pattern is what stops a run-on phrase reaching
+        # here with a verb for a head, which is what let "the bench and picks" past a
+        # blocklist that holds "bench".
         head = dest.split()[-1].lower().strip("-")
         if (len(head) < 3 or head in _NOT_A_DESTINATION or head in names
                 or dest.lower() in names or _EXTRA_PEOPLE.search(dest)):
@@ -7904,6 +7963,7 @@ class H3LongVideos:
         _undescribed = []           # rooms the film enters that the prompt never describes
         _extras_seen = False        # the film has staged people the sheet does not name
         open_moves = []             # (shot, where) moves to a place the list cannot name
+        frame_shots = []            # shots told what the frame holds
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
         wearing_shots = []          # shots that put one back on, given both ends
@@ -9139,6 +9199,12 @@ class H3LongVideos:
             _gazers = [n for n in (_described or []) if looking_at.get(n)] + _carried
             _gaze = ""
             _faces = ""     # the eye-line inferred for a dialogue shot
+            # What the frame holds, where the beat and the anchor both leave it open.
+            # An unstated frame becomes the prior, and the prior for a described
+            # person is a portrait facing the lens. See frame_hold.
+            _frame = frame_hold(body, anchor)
+            if _frame:
+                frame_shots.append(len(plan) + 1)
             # ONE sentence for the hardware. The hold, the name of the thing and
             # where it holds were three separate clauses written for three separate
             # reports, each naming the same object again -- 53 words about one pair
@@ -9513,6 +9579,11 @@ class H3LongVideos:
                 # -- it took the budget from "Only Dan speaks" on a seven-word beat.
                 # An inference is cut before anything the author's own words imply.
                 (15, "faces", _faces),
+                # The frame, where nothing else says what it is. Ranked with the
+                # other inferred picture guards and below everything the author's
+                # own words imply: it is a guess about the camera, and the camera is
+                # the author's to state. See frame_hold.
+                (15, "frame", _frame),
                 (6, "told", _told),          # a listener given an order to ignore
                 (13, "turn", turn),
                 # LAST in the list, and last in the ranking of anything the author's
@@ -9760,6 +9831,23 @@ class H3LongVideos:
                 f"THIS: a travel beat opens in the room it is leaving, so that frame is the "
                 f"right one and the shot keeps its keyframe -- write the move as a journey "
                 f"('she walks through to the kitchen') and you get the walk instead of a cut")
+        if frame_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in frame_shots)} stage something a "
+                f"portrait cannot contain and say nothing about the camera, so they are "
+                f"told what the frame HOLDS: the whole body, head to feet, with the room "
+                f"around it. An attribute a prompt does not state is not left to the model, "
+                f"it is left to the model's PRIOR -- and the prior for a named, described "
+                f"person is a portrait facing the lens. The sheet describes a face in every "
+                f"shot because clothing continuity needs it there, and the mouth guard "
+                f"describes a mouth in every silent shot because babble needs it, so the "
+                f"text leans towards a face and nothing in it said how much of the person to "
+                f"show. Reported as the camera fixated on one character staring into the "
+                f"lens, with no reference image in the run at all. Your camera always wins: "
+                f"write any framing in the beat or the anchor -- a close-up included, since "
+                f"a close-up is a frame somebody asked for -- and this stands down. It is "
+                f"ranked below everything your own words imply, so a crowded shot drops it "
+                f"first")
         if open_moves:
             notes.append(
                 "shot(s) " + ", ".join(f"{n} (to the {w})" for n, w in open_moves[:6])
