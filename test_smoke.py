@@ -294,6 +294,51 @@ def test_a_cut_keeps_its_own_first_frame():
           and int(plain[0].shape[0]) == plain[5], str(plain[5]))
 
 
+def test_a_room_change_with_no_walk_is_a_cut():
+    print("\n=== a shot that opens in another room starts fresh ===")
+    # Reported: at the end beat the living room turned into a bathroom. Every shot is
+    # anchored to the previous shot's last frame and a keyframe is a PICTURE, which
+    # outvotes any sentence -- so a living-room shot opening on a frame of the kitchen
+    # renders neither, it renders a blend, and a kitchen blended with the words "living
+    # room" is a bathroom: tiles, a sink, cabinets. There was no room-change case in the
+    # keyframe decision at all; only a removal or a newly placed character broke it.
+    mem = "McKenna: she, 22, a grey t-shirt, black shorts."
+    P = ("A small flat at night. Her bedroom has an unmade bed and a lamp.\n\n"
+         "McKenna gets up and comes out of her bedroom.\n\n"
+         "McKenna walks down the hallway to the living room.\n\n"
+         "McKenna goes from the living room to the kitchen.\n\n"
+         "McKenna sits on the sofa in the living room.")
+    info = run_node(P, plan_only=True, character_memory=mem)[2]
+    check("the shot that jumps rooms is cut, and only it",
+          "shot(s) 4 START FRESH" in info, info[:160])
+    # A WALK IS NOT THIS: a travel beat opens in the room it is leaving.
+    walk = run_node("A flat.\n\nMcKenna walks from the bedroom to the hallway.\n\n"
+                    "McKenna walks from the hallway to the kitchen.",
+                    plan_only=True, character_memory=mem)[2]
+    check("a journey keeps its keyframe", "START FRESH" not in walk, "")
+    # ...but a journey starting somewhere the last shot did not end is still a cut.
+    jump = run_node("A flat.\n\nMcKenna is in the kitchen.\n\n"
+                    "McKenna walks from the bedroom to the bathroom.",
+                    plan_only=True, character_memory=mem)[2]
+    check("a walk whose origin is not where we were is a cut",
+          "START FRESH" in jump, jump[:160])
+    one = run_node("A kitchen with a white table.\n\nMcKenna fills the kettle.\n\n"
+                   "McKenna sits down.", plan_only=True, character_memory=mem)[2]
+    check("a one-room script is untouched",
+          "START FRESH" not in one and "never describes" not in one, "")
+    # A room the prompt never describes is a room the model invents -- say so.
+    check("an undescribed room is reported",
+          "never describes" in info and "living room" in info, "")
+    desc = run_node("A flat. The living room has a green sofa. The kitchen is small and white."
+                    "\n\nMcKenna is in the living room.\n\nMcKenna is in the kitchen.",
+                    plan_only=True, character_memory=mem)[2]
+    check("a described room draws no warning", "never describes" not in desc, desc[:150])
+    # The render path still runs when a shot opens on no keyframe.
+    r = run_node(P, character_memory=mem)
+    check("the render path runs through a room cut",
+          int(r[0].shape[0]) == r[5] and r[5] > 0, str(r[5]))
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6166,6 +6211,7 @@ def main():
     test_plan()
     test_render()
     test_a_cut_keeps_its_own_first_frame()
+    test_a_room_change_with_no_walk_is_a_cut()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

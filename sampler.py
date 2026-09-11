@@ -7567,6 +7567,9 @@ class H3LongVideos:
                 f"dropped the duplicate")
         static = build_scene(anchor, scene, "", "")
         scene = build_scene(anchor, scene, "", sheet)      # the whole of it, for inference
+        # Which rooms the author actually DESCRIBES. A room the text only names is a
+        # room the model invents; this is what the warning below is read from.
+        _described_rooms = set(rooms_named(static))
         if sheet:
             notes.append(f"folded {sheet.count(chr(10)) + 1} character-sheet line(s) into "
                          f"the scene instead of spending a shot on them -- a sheet "
@@ -7776,6 +7779,8 @@ class H3LongVideos:
         vocal_shots = []            # shots where a vocal was given an owner
         muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
+        cut_shots = set()           # 0-based shots opening in a room the keyframe is not in
+        _undescribed = []           # rooms the film enters that the prompt never describes
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
         wearing_shots = []          # shots that put one back on, given both ends
@@ -8633,7 +8638,29 @@ class H3LongVideos:
                 travel_shots.append(len(plan) + 1)
             # The room the next beat starts from: where this one ended, or where it
             # simply says everyone is.
+            _room_before = here
             here = _to or _frm or place_named(body) or here
+            # A ROOM THE KEYFRAME IS NOT IN IS A CUT.
+            #
+            # Every shot is anchored to the previous shot's last frame, and a keyframe
+            # is a PICTURE, which outvotes any sentence -- the reasoning
+            # restart_after_removal is already built on. So a shot that OPENS in a
+            # different room from the one the shot before ended in has a first frame
+            # showing the wrong room, and the model reconciles the two by blending
+            # them. Reported as a living room turning into a bathroom, which is exactly
+            # what a kitchen frame and the words "living room" have in common: tiles, a
+            # sink, cabinets. Breaking the chain costs a cut where a cut belongs.
+            #
+            # A WALK IS NOT THIS. A travel beat opens in the room it is leaving, so that
+            # frame is the right one -- which is why the test is on where the shot
+            # OPENS, not on whether the room changed. A beat naming an origin of its own
+            # is judged on that origin, so "walks from the bedroom to the bathroom"
+            # after a kitchen shot is still a cut.
+            _opens_in = _frm or (_room_before if _travel else here)
+            if (len(plan) and _opens_in and _room_before and _opens_in != _room_before):
+                cut_shots.add(len(plan))
+            if here and here not in _described_rooms and here not in _undescribed:
+                _undescribed.append(here)
             # ...and say so on later shots, because the scene paragraph still
             # names the room they started in and is stamped into every shot.
             _where = where_hold(here, scene) if not _travel else ""
@@ -9587,6 +9614,32 @@ class H3LongVideos:
                 f"Split it in two -- one sentence for the film ('A small flat at night.') and "
                 f"one for the room ('Her bedroom has an unmade bed and a lamp.') -- and the "
                 f"room's half will wait outside that room on its own")
+        if cut_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n + 1) for n in sorted(cut_shots))} START FRESH, "
+                f"because they OPEN IN A DIFFERENT ROOM from the one the shot before ended "
+                f"in. Every shot is anchored to the previous shot's last frame, and a "
+                f"keyframe is a PICTURE, which outvotes any sentence -- so a living-room shot "
+                f"opening on a frame of the kitchen renders neither of them, it renders a "
+                f"blend, and a kitchen blended with the words 'living room' is a bathroom: "
+                f"tiles, a sink, cabinets. Breaking the chain costs a cut exactly where a cut "
+                f"belongs, which is the same trade restart_after_removal makes. A WALK IS NOT "
+                f"THIS: a travel beat opens in the room it is leaving, so that frame is the "
+                f"right one and the shot keeps its keyframe -- write the move as a journey "
+                f"('she walks through to the kitchen') and you get the walk instead of a cut")
+        if _undescribed:
+            _them = "them" if len(_undescribed) > 1 else "it"
+            notes.append(
+                f"the film enters {', '.join(_undescribed)}, and your prompt never "
+                f"describes {_them} -- a room the text only NAMES is a room the model "
+                f"invents, and what it invents from is the frame the shot opened on plus "
+                f"whatever the other rooms suggest. Reported as a living room turning into "
+                f"a bathroom: a kitchen frame and the words 'living room' share tiles, a "
+                f"sink and cabinets, and nothing in the text said otherwise. Give each "
+                f"room a sentence of its own -- 'The living room has a green sofa and a low "
+                f"table.' -- either in the beat that enters it or in the scene paragraph. A "
+                f"scene sentence that names a room is carried ONLY in the shots that are in "
+                f"that room, so it costs every other shot nothing")
         if where_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in where_shots)} are in a room the "
@@ -10504,7 +10557,8 @@ class H3LongVideos:
             shift_audio=shift_audio, shift_video=shift_video,
             sigmas=sigmas, silence_nonspeech=silence_nonspeech,
             speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, staging_shots=staging_shots, steps=steps,
-            stripped_shots=stripped_shots, tiled_decode=tiled_decode, trim_seam=trim_seam,
+            stripped_shots=stripped_shots, cut_shots=cut_shots,
+            tiled_decode=tiled_decode, trim_seam=trim_seam,
             upscale=upscale, upscale_batch=upscale_batch, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
         )
@@ -10552,6 +10606,7 @@ class H3LongVideos:
         staging_shots = prepared.staging_shots
         steps = prepared.steps
         stripped_shots = prepared.stripped_shots
+        cut_shots = prepared.cut_shots
         tiled_decode = prepared.tiled_decode
         trim_seam = prepared.trim_seam
         upscale = prepared.upscale
@@ -10587,6 +10642,7 @@ class H3LongVideos:
         _recovered = []             # (shot, name, source shot) actually pinned
         _handoff_claimed = []       # shots whose demoted handoff was named in the text
         _untrimmed = []             # shots that opened on no keyframe, so kept frame one
+        fresh_room = []             # shots cut because they open in another room
         _carried = []               # (shot, who was there, who joins) room carried on
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         _SILENCE_STATUS.update(asked=0, applied=0, why="")
@@ -10612,6 +10668,13 @@ class H3LongVideos:
             if restart_after_removal and (i - 1) in stripped_shots:
                 shot_handoff = None
                 fresh.append(i + 1)
+            # ...and so does a shot that OPENS IN A DIFFERENT ROOM. Before the
+            # _placed_shots branch on purpose: that one DEMOTES the frame to a
+            # reference claiming "this room a moment earlier", which is a lie when the
+            # room has changed. See cut_shots.
+            elif i in cut_shots:
+                shot_handoff = None
+                fresh_room.append(i + 1)
             # ...and so does a shot that INTRODUCES somebody already in position.
             #
             # Same reasoning, same evidence. The keyframe is the previous shot's last

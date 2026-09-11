@@ -93,6 +93,7 @@ class PreparedVideo:
     staging_shots: object
     steps: int
     stripped_shots: object
+    cut_shots: object
     tiled_decode: bool
     trim_seam: bool
     upscale: str
