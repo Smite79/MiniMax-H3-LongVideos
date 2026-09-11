@@ -259,6 +259,41 @@ def test_render():
     check("info is populated", bool(info))
 
 
+def test_a_cut_keeps_its_own_first_frame():
+    print("\n=== a shot that opens on no keyframe keeps frame one ===")
+    # Reported: the last frame and the first frame of the next beat not matching up.
+    # trim_seam drops a shot's first frame because it is "the model's own reproduction
+    # of the keyframe, so it is a duplicate" -- true only of a shot that OPENED on one.
+    # restart_after_removal breaks the chain after a garment comes off, so the next
+    # shot opens on nothing at all and its first frame is the genuine opening frame of
+    # a deliberate cut. Trimming it threw away real footage and left frame TWO meeting
+    # the shot before, which is what the mismatch looks like.
+    mem = "Mara: she, 30, a grey coat, white top."
+    P = ("A room.\n\nMara stands by the window.\n\n"
+         "Mara pulls off her coat.\nremove: coat\n\n"
+         "Mara waits.")
+    on = run_node(P, character_memory=mem, restart_after_removal=True, trim_seam=True)
+    off = run_node(P, character_memory=mem, restart_after_removal=False, trim_seam=True)
+    check("the kept frame is reported, not a silent change in the count",
+          "kept their FIRST frame" in on[2], on[2][:160])
+    check("...and a fully chained run says nothing about it",
+          "kept their FIRST frame" not in off[2], "")
+    check("a cut keeps the frame a keyframed shot would have dropped",
+          on[5] == off[5] + 1, f"{on[5]} vs {off[5]}")
+    check("the frames returned match the reported total",
+          int(on[0].shape[0]) == on[5], f"{int(on[0].shape[0])} vs {on[5]}")
+
+    def _per_frame(r):
+        return r[1]["waveform"].shape[-1] / max(1, int(r[0].shape[0]))
+    check("picture and sound are trimmed together",
+          abs(_per_frame(on) - _per_frame(off)) < 2.0,
+          f"{_per_frame(on):.2f} vs {_per_frame(off):.2f}")
+    plain = run_node("A room.\n\nHe walks in.\n\nShe follows.", trim_seam=True)
+    check("a fully chained script still trims every seam",
+          "kept their FIRST frame" not in plain[2]
+          and int(plain[0].shape[0]) == plain[5], str(plain[5]))
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6130,6 +6165,7 @@ def main():
     test_independent_adult_arm_actions()
     test_plan()
     test_render()
+    test_a_cut_keeps_its_own_first_frame()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

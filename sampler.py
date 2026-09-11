@@ -10586,6 +10586,7 @@ class H3LongVideos:
         _captured_from = {}         # name -> which shot that frame came from
         _recovered = []             # (shot, name, source shot) actually pinned
         _handoff_claimed = []       # shots whose demoted handoff was named in the text
+        _untrimmed = []             # shots that opened on no keyframe, so kept frame one
         _carried = []               # (shot, who was there, who joins) room carried on
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         _SILENCE_STATUS.update(asked=0, applied=0, why="")
@@ -10846,9 +10847,31 @@ class H3LongVideos:
             except Exception:
                 pass                       # a recovered frame is a nicety, not the render
             del hand_src
-            if trim_seam and i > 0:
+            # TRIM ONLY WHERE THERE WAS A KEYFRAME TO DUPLICATE.
+            #
+            # The first frame of a shot is dropped because it is "the model's own
+            # reproduction of the keyframe, so it is a duplicate" -- and that is true
+            # only of a shot that OPENED on one. Three paths above leave a shot with
+            # no keyframe: restart_after_removal breaks the chain after a garment
+            # comes off, a character introduced already in position demotes the
+            # handoff to a reference, and the same case unclaimable drops it. On those
+            # shots the first frame is not a reproduction of anything -- it is the
+            # genuine opening frame of a deliberate cut -- and trimming it threw away
+            # real footage AND removed the one frame nearest the shot before it.
+            # Reported as the last frame and the first frame of the next beat not
+            # matching up, which is exactly what it looks like: the bridge frame is
+            # gone and what meets the cut is frame two.
+            #
+            # `demoted` is build_conditioning's own answer to "did the handoff ride as
+            # a reference instead of anchoring frame one", so this asks the question
+            # of the code that decided it rather than re-deriving the three cases and
+            # drifting from them. The audio trim moves with the video trim or the two
+            # come apart by a frame.
+            if trim_seam and i > 0 and shot_handoff is not None and not demoted:
                 imgs = imgs[1:]
                 wav["waveform"] = wav["waveform"][..., max(0, round(sr / H3_FPS)):]
+            elif trim_seam and i > 0:
+                _untrimmed.append(i + 1)
             # Make the sound exactly as long as the picture it belongs to.
             #
             # The audio latent count is round(frames / 24 * 40), which lands exactly
@@ -10885,6 +10908,19 @@ class H3LongVideos:
             if cleanup_between_shots:
                 _deep_cleanup()
 
+        if _untrimmed:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in _untrimmed)} kept their FIRST frame "
+                f"even though trim_seam is on, because they did not open on a keyframe. "
+                f"The trim exists to drop a duplicate -- the model's own reproduction of "
+                f"the frame it was handed -- and these shots were handed none: the chain "
+                f"is broken deliberately after a removal, and a character introduced "
+                f"already in position gets the previous frame as a REFERENCE rather than "
+                f"as frame one. Their first frame is the real opening frame of a cut, so "
+                f"trimming it threw away footage and left frame TWO meeting the shot "
+                f"before -- reported as the last frame and the first frame of the next "
+                f"beat not matching up. The audio is trimmed with the picture or not at "
+                f"all, so the two cannot come apart")
         if _handoff_claimed:
             notes.append(
                 f"ref_noise_aug is below {KEYFRAME_SAFE_AUG:g}, so on shot(s) "
