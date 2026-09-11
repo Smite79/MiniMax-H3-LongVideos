@@ -500,10 +500,18 @@ def sheet_for_beat(sheet, beat, previous=None):
             # in the beat -- with two there is somebody for the pronoun to belong to --
             # and only where exactly one other person on the sheet declares that
             # pronoun, so nothing is guessed between two candidates. See _PRONOUN_AT.
+            # ...AND ONLY AT SOMEBODY WHO IS ACTUALLY IN THE SCENE. Read from the
+            # previous shot's cast, not from the sheet: off the sheet, "Tess looks at
+            # her" dragged whichever other woman was WRITTEN DOWN into the shot, even
+            # one who had left two beats earlier or never appeared at all. That is a
+            # random in the scene, which is the thing character_guard exists to
+            # prevent, reintroduced by the fix for the opposite problem.
+            _present = {n for n in (previous or []) if n}
             _away = (len(named) == 1 and pronoun_points_away(beat))
-            if _away:
+            if _away and _present:
                 _others = [n for n, ln in rows
-                           if n and n not in named and sheet_pronoun(ln) == group]
+                           if n and n not in named and n in _present
+                           and sheet_pronoun(ln) == group]
                 if len(_others) == 1:
                     named.append(_others[0])
                     matched = True
@@ -4119,9 +4127,23 @@ _EXTRA_PEOPLE = re.compile(
     re.I)
 
 
+# PEOPLE MENTIONED ARE NOT PEOPLE STAGED. "They hear people outside" puts nobody in
+# the frame and "the others have gone" says the opposite of staging them -- and both
+# used to count, which then stood the body-count clause down and let a random into
+# every later shot. A plural noun in an absence or an offscreen phrase is not a crowd.
+_NOT_STAGED = re.compile(
+    r"\b(?:gone|left|leaving|went|departed|vanished|absent|empty|alone|"
+    r"outside|elsewhere|away|upstairs|downstairs|next\s+door|beyond|"
+    r"no\s+one|no[- ]?body|none|without|hears?|heard|hearing|listens?|"
+    r"remembers?|imagines?|thinks?\s+of|expects?|waits?\s+for)\b", re.I)
+
+
 def extras_in(beat):
-    """Does this beat stage people beyond the ones the sheet names?"""
-    return bool(_EXTRA_PEOPLE.search(str(beat or "")))
+    """Does this beat stage people beyond the ones the sheet names, IN the frame?"""
+    b = str(beat or "")
+    if not _EXTRA_PEOPLE.search(b):
+        return False
+    return not _NOT_STAGED.search(b)
 
 
 def cast_hold(names, beat="", extras=False):
@@ -8159,7 +8181,6 @@ class H3LongVideos:
         stripped_shots = set()      # 0-based shots that took something off
         cut_shots = set()           # 0-based shots opening in a room the keyframe is not in
         _undescribed = []           # rooms the film enters that the prompt never describes
-        _extras_seen = False        # the film has staged people the sheet does not name
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
         led_shots = []              # shots whose beat was put ahead of the sheet
@@ -9357,9 +9378,17 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
-            if extras_in(body):
-                _extras_seen = True
-            _cast_hold = cast_hold(_described, body, _extras_seen)
+            # PER BEAT, NOT LATCHED FOR THE FILM.
+            #
+            # The latch was mine and it was too big: one plural word anywhere -- even
+            # "the others have gone" -- stood the body-count clause down for every
+            # shot that followed, and that clause is what keeps a duplicate or a
+            # stranger out of the frame. Reported as randoms showing up again with
+            # character_guard on. A returning body count can suppress an extra on a
+            # beat that does not mention them, which is a smaller fault than losing
+            # the guard for the rest of the film: write the extras into the beats they
+            # are in and they keep.
+            _cast_hold = cast_hold(_described, body)
 
             # Where the beat says somebody is looking, said once more as a fact
             # about the eyes and the head. One mention in the beat loses to a

@@ -417,10 +417,16 @@ def test_a_walk_into_an_unlisted_room_is_still_walked():
     check("the move is performed as a walk",
           "opens in the gym and arrives in the locker room" in sh[1]
           and "every step in frame" in sh[1], sh[1][-150:])
-    check("the extras are not forbidden on the walk shot",
-          "one body for each person" not in sh[1], sh[1][-110:])
-    check("...nor on the shot that staged them",
+    check("the extras are not forbidden on the shot that stages them",
           "one body for each person" not in sh[0], sh[0][-110:])
+    # AND THE BODY COUNT COMES BACK on a beat that mentions nobody but the sheet.
+    # It used to latch for the whole film, and that stood down the one clause keeping
+    # a duplicate or a stranger out of the frame -- reported as randoms showing up
+    # again with character_guard on. Suppressing an extra on a beat that does not
+    # mention them is the smaller fault, and the remedy is to write them into the
+    # beats they are in.
+    check("...and the count returns where the beat names nobody else",
+          "one body for each person" in sh[1], sh[1][-110:])
     check("the room is reported by its real name",
           "enters locker room" in out[2] or "locker room" in out[2], "")
     check("...and not as bare 'room'", "the film enters room," not in out[2], "")
@@ -729,8 +735,22 @@ def test_a_pronoun_pointing_away_keeps_the_person_it_means():
           kept(same, "Tess watches from the door.") == ["Tess"])
     check("two named already leaves the pronoun alone",
           kept(same, "Tess and McKenna look at her hands.") == ["McKenna", "Tess"])
-    # NOTHING IS GUESSED between two candidates.
-    check("three women, no guess", kept(three, "Tess kneels beside her.") == ["Tess"])
+    # A PRONOUN CAN ONLY POINT AT SOMEBODY IN THE SCENE, which is also what stops a
+    # random: off the sheet alone, "Tess looks at her" dragged in whichever other
+    # woman was written down, including one who had left or never appeared.
+    check("somebody absent is not dragged in",
+          S.sheet_for_beat(same, "Tess looks at her.", previous=["Tess"])[1] == ["Tess"])
+    check("...nor when nothing is carried at all",
+          S.sheet_for_beat(same, "Tess stares at her.", previous=[])[1] == ["Tess"])
+    # Three on the sheet but only two in the scene RESOLVES, because there is only one
+    # candidate present -- the sheet could not tell them apart and presence can.
+    check("three on the sheet, two in the scene, resolved",
+          sorted(S.sheet_for_beat(three, "Tess kneels beside her.",
+                                  previous=["McKenna", "Tess"])[1]) == ["McKenna", "Tess"])
+    # ...and NOTHING is guessed when two candidates are both present.
+    check("two candidates present, no guess",
+          S.sheet_for_beat(three, "Tess kneels beside her.",
+                           previous=["McKenna", "Tess", "Mara"])[1] == ["Tess"])
     check("the reader itself is narrow",
           S.pronoun_points_away("Tess kneels beside her.")
           and not S.pronoun_points_away("shuts the door behind him.")
