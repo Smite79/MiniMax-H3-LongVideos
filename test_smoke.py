@@ -426,6 +426,56 @@ def test_a_walk_into_an_unlisted_room_is_still_walked():
     check("...and not as bare 'room'", "the film enters room," not in out[2], "")
 
 
+def test_a_move_to_any_place_is_performed():
+    print("\n=== a move to a place no list names is still walked ===")
+    # Asked for: this has to work for ANY scene. Adding room words one report at a
+    # time fixes one script each -- a dungeon, a cargo bay, a stable, a chapel would
+    # each hit the same wall the locker room did. So the gate is inverted: an unlisted
+    # destination is a PLACE unless it is furniture, a fitting, a body part, a vehicle
+    # or a person, and there are far fewer common object destinations in English than
+    # there are names for rooms.
+    for where in ("dungeon", "cargo bay", "stable", "chapel", "morgue", "greenhouse",
+                  "tent", "boiler room", "cockpit", "sauna", "vault", "crypt",
+                  "laundromat", "observatory", "infirmary", "barracks"):
+        b = f"They head to the {where}."
+        check(f"a {where} is somewhere to go", S.moved_to(b) == where, S.moved_to(b))
+        check(f"...and it costs the walk: {where}", S.travel_spaces(b) == 2)
+    # What must stay inside the room it is in.
+    for thing in ("door", "window", "bench", "bed", "lockers", "table", "bars",
+                  "girl", "van"):
+        check(f"a {thing} is not somewhere to go",
+              S.moved_to(f"She walks to the {thing}.") == "", thing)
+    for phrase in ("her hand", "his shoulder", "other girls"):
+        check(f"{phrase!r} is not somewhere to go",
+              S.moved_to(f"She walks to {phrase}.") == "", phrase)
+    # A place named without MOVEMENT is not a journey, exactly as before.
+    for b in ("She looks at the dungeon.", "The dungeon is cold.",
+              "He waits in the chapel."):
+        check(f"not a move: {b[:26]!r}", S.moved_to(b) == "")
+
+    # End to end, across scenes nothing in this file was written for.
+    mem = "Mia: she, 19, a blue kit."
+    for label, P, dest in (
+            ("dungeon", "A stone dungeon lit by torches.\n\nMia stands by the wall."
+                        "\n\nMia is led to the armoury.", "armoury"),
+            ("freighter", "The cargo bay of a freighter.\n\nMia checks a crate."
+                          "\n\nMia heads to the cockpit.", "cockpit"),
+            ("farmyard", "A muddy farmyard at dawn.\n\nMia feeds the chickens."
+                         "\n\nMia walks to the stable.", "stable")):
+        out = run_node(P, plan_only=True, character_memory=mem)
+        last = " ".join([x for x in out[3].split("---") if x.strip()][-1].split())
+        check(f"{label}: the arrival is performed",
+              f"travels to the {dest}" in last and "first step to its last" in last,
+              last[-120:])
+        check(f"{label}: and it is reported",
+              f"to the {dest}" in out[2] and "cannot name" in out[2], "")
+    # An object destination adds nothing, so ordinary beats are not crowded.
+    plain = run_node("A kitchen.\n\nMia fills the kettle.\n\nMia walks to the window.",
+                     plan_only=True, character_memory=mem)[3]
+    check("a move to an object inside the room adds no clause",
+          "travels to the" not in plain, plain[-110:])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6301,6 +6351,7 @@ def main():
     test_a_room_change_with_no_walk_is_a_cut()
     test_extras_are_not_forbidden_by_the_body_count()
     test_a_walk_into_an_unlisted_room_is_still_walked()
+    test_a_move_to_any_place_is_performed()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

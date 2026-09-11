@@ -1036,7 +1036,9 @@ def travel_spaces(beat):
     text = _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", str(beat or "")))
     frm, via, to = travel_legs(text)
     if not to:
-        return 0
+        # A place the list cannot name still has to be walked to, and getting there
+        # still costs screen time. Origin plus destination. See moved_to.
+        return 2 if moved_to(text) else 0
     named = [p for p in (frm, via, to) if p]
     return len(named) + (0 if frm else 1)
 
@@ -5523,6 +5525,79 @@ def where_hold(here, scene):
             f"furniture are the {here}'s throughout.")
 
 
+# THINGS THAT ARE IN A ROOM RATHER THAN BEING ONE.
+#
+# A closed list of place words cannot name every room a script invents -- a dungeon,
+# a cargo bay, a stable, a chapel, a sauna, a morgue -- and a closed list is exactly
+# why "they head to the locker room" was read as going nowhere and the set changed
+# under the characters instead of being walked into. Adding room words one report at
+# a time fixes one script each.
+#
+# So the generalisable side of the problem is the INVERSE: an unlisted destination is
+# taken as a place unless it is one of these. Furniture, fittings, a body part, a
+# position within a space, a vehicle, or a person. There are far fewer common object
+# destinations in English than there are names for rooms, and this list does not have
+# to grow when somebody writes a scene nobody has written before.
+#
+# "door" is the original of this whole failure and is named first: _PLACE once held
+# it, so "Ana looks at the door" moved the camera into a door.
+_NOT_A_DESTINATION = frozenset("""
+door doors doorknob handle window windows curtain curtains blind blinds mirror
+sink basin bath tap taps table desk counter worktop bench chair seat stool sofa
+couch armchair bed mattress headboard pillow cushion duvet quilt sheets blanket
+cupboard cabinet drawer drawers shelf shelves wardrobe closet locker lockers
+fridge freezer oven stove hob kettle microwave dishwasher washer machine
+floor ground ceiling wall walls rail railing bannister bars bar post pole fence
+light lights lamp switch socket screen tv television phone radio speaker camera
+bag bags box crate case suitcase trunk basket bin sack tray bottle glass cup
+car van truck bike motorbike trailer boat seat
+edge middle centre center side sides end front back rear top bottom corner corners
+spot position point row line queue
+girl boy man woman lady guy person stranger guard nurse doctor teacher
+hand hands arm arms elbow shoulder shoulders knee knees foot feet leg legs lap
+face mouth lips chin neck throat hair head chest breast breasts stomach belly
+waist hip hips thigh thighs wrist wrists ankle ankles bum butt crotch
+""".split())
+
+# Same shape as _GOES_TO, with an OPEN noun where that one has the place list.
+_MOVES_TO_ANY = re.compile(
+    r"\b(?:to|into|toward|towards|inside|through\s+to|"
+    r"enters?|entered|entering|steps?\s+into|stepped\s+into)\s+"
+    + _DET_POSS + r"\s+((?:[A-Za-z][\w-]*\s+){0,2}[A-Za-z][\w-]*)\b", re.I)
+
+
+def moved_to(beat, people=()):
+    """Where this beat MOVES somebody, whatever the place is called. "" if nowhere.
+
+    The place-list readers answer first and more richly, because a known room can be
+    named at both ends of the journey. This is what answers when they cannot: a
+    travel verb, a destination, and a head noun that is not furniture, a body part,
+    a vehicle or a person. It establishes NO room state -- it does not decide cuts,
+    it does not feed where_hold or the acoustics, and it never claims to know what
+    kind of space it is. All it does is make the arrival be PERFORMED, which is the
+    one thing the reported failure was missing."""
+    b = _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", str(beat or "")))
+    if not _TRAVEL_VERB.search(b):
+        return ""
+    names = {str(n).strip().lower() for n in (people or ()) if str(n).strip()}
+    for m in _MOVES_TO_ANY.finditer(b):
+        dest = re.sub(r"\s+", " ", m.group(1)).strip()
+        head = dest.split()[-1].lower().strip("-")
+        if (len(head) < 3 or head in _NOT_A_DESTINATION or head in names
+                or dest.lower() in names or _EXTRA_PEOPLE.search(dest)):
+            continue
+        return dest.lower()
+    return ""
+
+
+def move_clause(dest):
+    """Perform an arrival the place list cannot name. "" when there is nowhere."""
+    if not dest:
+        return ""
+    return (f" The shot travels to the {dest} on screen, the whole move played out "
+            f"from its first step to its last.")
+
+
 def travel_anchor(frm, via, to, here=""):
     """Say where the shot starts, what it passes, and where it ends. "" if nowhere.
 
@@ -7828,6 +7903,7 @@ class H3LongVideos:
         cut_shots = set()           # 0-based shots opening in a room the keyframe is not in
         _undescribed = []           # rooms the film enters that the prompt never describes
         _extras_seen = False        # the film has staged people the sheet does not name
+        open_moves = []             # (shot, where) moves to a place the list cannot name
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
         wearing_shots = []          # shots that put one back on, given both ends
@@ -8683,6 +8759,14 @@ class H3LongVideos:
             _travel = travel_anchor(_frm, _via, _to, here)
             if _travel:
                 travel_shots.append(len(plan) + 1)
+            else:
+                # The place list could not name either end. Perform the arrival
+                # anyway: a move nobody is told to make is a move the model cuts to.
+                # See moved_to -- this establishes no room state at all.
+                _open_to = moved_to(body, active)
+                _travel = move_clause(_open_to)
+                if _travel:
+                    open_moves.append((len(plan) + 1, _open_to))
             # The room the next beat starts from: where this one ended, or where it
             # simply says everyone is.
             _room_before = here
@@ -9676,6 +9760,18 @@ class H3LongVideos:
                 f"THIS: a travel beat opens in the room it is leaving, so that frame is the "
                 f"right one and the shot keeps its keyframe -- write the move as a journey "
                 f"('she walks through to the kitchen') and you get the walk instead of a cut")
+        if open_moves:
+            notes.append(
+                "shot(s) " + ", ".join(f"{n} (to the {w})" for n, w in open_moves[:6])
+                + " move somewhere the place list cannot name, so the arrival is told to be "
+                  "PERFORMED -- the whole move on screen, first step to last. A closed list "
+                  "of room words can never cover a script nobody has written yet, and a move "
+                  "nobody is told to make is a move the model CUTS to: reported as the set "
+                  "changing under the characters instead of them walking into it. This reads "
+                  "the destination from your own words and claims nothing else about it -- no "
+                  "room state, no acoustic, no cut decision -- so a dungeon, a cargo bay or a "
+                  "stable all work without being listed anywhere. Anything that is furniture, "
+                  "a body part, a vehicle or a person is left alone")
         if _undescribed:
             _them = "them" if len(_undescribed) > 1 else "it"
             notes.append(
