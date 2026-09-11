@@ -1189,7 +1189,7 @@ def exertion_in(beat):
 # Sound the text asks for. H3 is joint, so the same prose conditions the audio
 # branch -- a scene is scored by describing it, not by a setting.
 _SOUND_CUE = re.compile(
-    r"\b(?:sounds?|noises?|echo(?:e?s|ing)?|silence|rattl(?:e|es|ing)|clank(?:s|ing)?|"
+    r"\b(?:sounds?|noises?|echo(?:e?s|ing)?|rattl(?:e|es|ing)|clank(?:s|ing)?|"
     r"clink(?:s|ing)?|creak(?:s|ing)?|scrap(?:e|es|ing)|thud(?:s|ding)?|bang(?:s|ing)?|"
     r"slam(?:s|ming)?|clatter(?:s|ing)?|jingl(?:e|es|ing)|squeak(?:s|ing)?|"
     r"footsteps?|breath(?:s|es|ing)?|pant(?:s|ing)?|gasp(?:s|ing)?|sigh(?:s|ing)?|"
@@ -1207,6 +1207,10 @@ _SOUND_CUE = re.compile(
     # "she is quiet" and "a faint smile" are the absence of one or nothing to do with
     # one. Opening the branch on those is a free branch with no line in the shot,
     # which is where an invented voice comes from.
+    # `silence` sat at the head of this list as a noun and did exactly that: "she
+    # sits in silence" read as a sound being asked for, opened the branch, and the
+    # one word that most plainly asks for a pinned shot was the one that unpinned
+    # it. A beat that names silence names nothing to make; it gets the default.
     r"loud(?:ly)?|quietly|faintly|audible|noisy|deafening|"
     r"scuff(?:s|ing|ed)?|crunch(?:es|ing|ed)?|thump(?:s|ing|ed)?|"
     r"patter(?:s|ing)?|whirr?(?:s|ing)?|whine(?:s|d)?|whining|rumbl(?:e|es|ing)|"
