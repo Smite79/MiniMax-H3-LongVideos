@@ -5213,7 +5213,8 @@ def posture_in(beat, cast):
         # that followed it, and the beat registered no posture at all.
         hits = sorted(((m.start(), pose) for pose, rx in _POSTURE_OF
                        for m in rx.finditer(part)
-                       if not _in_a_request(b, base + m.start())),
+                       if not _in_a_request(b, base + m.start())
+                       and not engine.denied_posture(part, m.start())),
                       key=lambda h: h[0])
         prev = 0
         for at, pose in hits:

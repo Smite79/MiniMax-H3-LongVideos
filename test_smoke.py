@@ -594,6 +594,55 @@ def _render_args():
                 apply_model_sampling=False, tiled_decode=False)
 
 
+def test_a_posture_denied_is_not_a_posture_taken():
+    print("\n=== chained into a squat, she is not told she is standing ===")
+    # Reported: chained by the ankles, forced into a squat she cannot stand out of --
+    # and she stands. The chains were read as stretching.
+    #
+    # Every chain clause was correct: CHAIN_POSE_HOLD, with the metal "already drawn to
+    # its full length, so the position it fixes is the position that keeps", was on
+    # every shot after the squat. What sat beside it was the posture latch saying she
+    # was STANDING -- because "She cannot stand." matched `stand` and nothing looked at
+    # the `cannot`. The latch carried it forward, so every later shot asserted, flatly
+    # and positively, the one thing the chains existed to prevent. At cfg 1 a positive
+    # statement wins, so the chains stretched.
+    P = "Dan forces McKenna down into a squat. She cannot stand."
+    check("the squat is what she is in, not standing",
+          S.posture_in(P, ["McKenna"]) == {"McKenna": "squatting"},
+          str(S.posture_in(P, ["McKenna"])))
+    # An ATTEMPT is not an arrival -- the same error in a friendlier disguise.
+    for b in ("McKenna tries to stand.", "McKenna struggles to get up.",
+              "McKenna is unable to stand.", "McKenna is no longer able to stand."):
+        check(f"not a posture taken: {b[:34]!r}", S.posture_in(b, ["McKenna"]) == {})
+    # ...and a posture plainly stated is still read.
+    for b, w in (("McKenna stands up.", "standing"), ("McKenna sits down.", "sitting"),
+                 ("McKenna squats down.", "squatting")):
+        check(f"still read: {b[:22]!r}", S.posture_in(b, ["McKenna"]) == {"McKenna": w})
+    # The cue belongs to its OWN clause: reaching past the comma would silence a
+    # posture the beat plainly states.
+    check("a cue does not cross a clause boundary",
+          S.posture_in("McKenna cannot kneel, so she sits.", ["McKenna"]) == {"McKenna": "sitting"})
+    check("...nor does a later strain undo a stated posture",
+          S.posture_in("McKenna stands and strains against the chains.", ["McKenna"])
+          == {"McKenna": "standing"})
+    check("the engine reader agrees", S.engine.posture_in("She cannot stand.") == ""
+          and S.engine.posture_in("She stands.") == "standing")
+
+    mem = ("McKenna: she, 22, a grey vest, ankle chains, wrist cuffs.\n"
+           "Dan: he, 40, a work coat.")
+    SC = ("A bare cell, one bulb.\n\nDan chains her ankles to a ring in the floor.\n\n"
+          "Dan forces McKenna down into a squat. She cannot stand.\n\n"
+          "McKenna stays down, breathing hard.\n\nMcKenna tries to stand.")
+    sh = [" ".join(x.split()) for x in
+          run_node(SC, plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
+    # The squat is staged in shot 2 (index 1); every shot from there on.
+    for i in (1, 2, 3):
+        check(f"shot {i + 1} never says she is standing",
+              "is still standing" not in sh[i], sh[i][-120:])
+        check(f"...and shot {i + 1} keeps the chain at full length",
+              "full length" in sh[i], sh[i][-120:])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6493,6 +6542,7 @@ def main():
     test_a_move_to_any_place_is_performed()
     test_an_unstated_frame_becomes_a_portrait()
     test_an_interrupt_releases_the_frame_buffer()
+    test_a_posture_denied_is_not_a_posture_taken()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

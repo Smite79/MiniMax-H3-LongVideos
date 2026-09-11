@@ -790,6 +790,49 @@ def garment_words(text):
             out.append(low)
     return out
 
+# A POSTURE DENIED IS NOT A POSTURE TAKEN.
+#
+# Reported: a woman chained by the ankles and forced into a squat stood up anyway.
+# The chain clauses were all correct -- the metal "already drawn to its full length,
+# so the position it fixes is the position that keeps" was on every shot after the
+# squat. What sat beside it was the posture latch saying she was STANDING, because
+# "She cannot stand." matched `stand` and nothing looked at the `cannot`. The latch
+# then carried that forward, so every later shot asserted, flatly and positively,
+# the one thing the chains were there to prevent. At cfg 1 a positive statement wins.
+#
+# The same shape as _in_a_request, which already suppresses a posture that is ASKED
+# for rather than taken. Attempts are here too: "tries to stand", "struggles to get
+# up", "strains to rise" are all bodies that have NOT got there, and reading them as
+# arrival is the same error in a friendlier disguise.
+#
+# A SHORT WINDOW on purpose -- the five words before the verb. The cue always sits
+# immediately in front of it ("cannot stand", "no longer able to stand"), and a wider
+# reach would let a `cannot` from a different clause silence a real posture.
+_POSTURE_DENIED = _rx(
+    r"\b(?:cannot|can\s*not|can['\u2019]?t|could\s*not|could\s*n['\u2019]?t|"
+    r"unable|never|not\s+able|no\s+longer\s+able|"
+    r"does\s*n['\u2019]?t|does\s+not|do\s*n['\u2019]?t|did\s*n['\u2019]?t|did\s+not|"
+    r"will\s+not|wo\s*n['\u2019]?t|fail(?:s|ed|ing)?|"
+    r"tr(?:y|ies|ied|ying)|attempt(?:s|ed|ing)?|struggl(?:e|es|ed|ing)|"
+    r"strain(?:s|ed|ing)?|fight(?:s|ing)?|want(?:s|ed)?|need(?:s|ed)?|"
+    r"told|ordered|asked|begs?|begged)\b")
+
+
+def denied_posture(text, at):
+    """Is the posture verb at `at` negated, or only attempted, by what precedes it?"""
+    before = str(text or "")[:max(0, int(at))]
+    # A cue belongs to its OWN clause. Without stopping at the boundary, "McKenna
+    # cannot kneel, so she sits" reached back past the comma and silenced the sitting
+    # -- suppressing a posture the beat plainly states, which is the same class of
+    # error in the other direction.
+    cut = 0
+    for _m in re.finditer(r"[,;:.!?]|\b(?:so|and|but|then|yet|while|as|before|after)\b",
+                          before, re.I):
+        cut = _m.end()
+    window = " ".join(re.findall(r"[\w'\u2019]+", before[cut:])[-5:])
+    return bool(_POSTURE_DENIED.search(window))
+
+
 def posture_in(text):
     """The posture this beat puts a body in. '' when it does not.
 
@@ -798,7 +841,7 @@ def posture_in(text):
     for that, but off the same vocabulary."""
     t = text or ""
     hits = sorted((m.start(), name) for name, rx in _POSTURE_OF
-                  for m in [rx.search(t)] if m)
+                  for m in rx.finditer(t) if not denied_posture(t, m.start()))
     return hits[0][1] if hits else ""
 
 
