@@ -17,6 +17,7 @@ class Shot:
     events: list[str]
     frame_count: int = 0
     refs: list[object] = field(default_factory=list)
+    line_seconds: float = 0.0     # the planner's estimate of the spoken line, words / WORDS_PER_SEC
 
 
 @dataclass
@@ -88,6 +89,7 @@ class PreparedVideo:
     sigmas: object
     silence_nonspeech: bool
     speech_lead_seconds: float
+    speech_tail_seconds: float
     staging_shots: object
     steps: int
     stripped_shots: object

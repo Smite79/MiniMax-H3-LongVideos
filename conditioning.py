@@ -72,7 +72,7 @@ def _build_ref_images(vae, images, gen_w, gen_h, mode="match"):
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                        handoff=None, refs=None,
                        ref_noise_aug=0.999, silent=False, ref_image_size="match",
-                       handoff_as_ref=False, speech_lead_seconds=0.0):
+                       handoff_as_ref=False, speech_lead_seconds=0.0, speech_tail_frames=0):
     """Encode prompt, identity references, keyframe, and audio constraints for a shot."""
     latent, fc = _empty_av_latent(width, height, length, H3_FPS)
     refs = [r for r in (refs or []) if r is not None]
@@ -142,7 +142,9 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
                     "latent": _keyframe_latent(vae, hand_img)})
     # Audio keyframes are extra conditioning rows in H3's PackedLayout. Pin the
     # generated target stream instead, so the joint model also sees a quiet mouth.
-    if silent or float(speech_lead_seconds or 0.0) > 0.0:
+    # A dialogue shot pins its opening (the lead) and, past the line's estimated end,
+    # its close (the tail); the span between is the model's.
+    if silent or float(speech_lead_seconds or 0.0) > 0.0 or int(speech_tail_frames or 0) > 0:
         _SILENCE_STATUS["asked"] += 1
         if audio_vae is None:
             _SILENCE_STATUS["why"] = "no audio VAE is wired to the node"
@@ -155,7 +157,8 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
             else:
                 lead = None if silent else round(float(speech_lead_seconds) *
                                                  AUDIO_LATENT_FPS)
-                if _pin_audio_silence(latent, sil, lead):
+                tail = 0 if silent else int(speech_tail_frames or 0)
+                if _pin_audio_silence(latent, sil, lead, tail):
                     _SILENCE_STATUS["applied"] += 1
                 else:
                     _SILENCE_STATUS["why"] = "the silent latent did not match the shot"

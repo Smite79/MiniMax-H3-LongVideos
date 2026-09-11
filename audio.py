@@ -21,6 +21,12 @@ class ShotAudio:
     silence_enabled: bool
     lead_seconds: float
     latent_fps: int
+    # The tail. Everything after the line's expected end is pinned the way the lead
+    # pins everything before its start. All three default off, so a ShotAudio built
+    # the old way -- six positional arguments -- behaves exactly the old way.
+    line_seconds: float = 0.0      # planner's estimate of the spoken line
+    tail_seconds: float = 0.0      # free audio kept after that estimate; 0 = no tail pin
+    frame_count: int = 0           # the shot in pixel frames; the audio T comes from it
 
     @property
     def pinned(self):
@@ -33,8 +39,28 @@ class ShotAudio:
         return round(self.lead_seconds * self.latent_fps)
 
     @property
+    def tail_frames(self):
+        """Audio latent frames pinned at the END of a dialogue shot.
+
+        The lead pins the opening so the line cannot start early; nothing pinned the
+        close, and a 2s line in a 9s shot left 7s of open branch in a shot the model
+        knows has a voice in it -- which is where speech carries on past the line, or
+        doubles it. The free span is lead + the line's estimate + tail_seconds; the
+        rest is held at encoded silence. The model chooses WHEN to speak, so the
+        margin is the author's dial: a clipped word costs more than a second of babble.
+        Off unless the shot speaks, the margin is set, and at least half a second would
+        be pinned -- a sliver is not worth the risk of clipping."""
+        if (not self.speech or self.tail_seconds <= 0 or self.line_seconds <= 0
+                or self.frame_count <= 0):
+            return 0
+        total = temporal_shape(self.frame_count)[2]
+        free = self.lead_frames + round((self.line_seconds + self.tail_seconds) * self.latent_fps)
+        tail = total - free
+        return tail if tail >= round(0.5 * self.latent_fps) else 0
+
+    @property
     def needs_silence_latent(self):
-        return self.pinned or self.lead_frames > 0
+        return self.pinned or self.lead_frames > 0 or self.tail_frames > 0
 
     @property
     def accepts_built_foley(self):
@@ -593,8 +619,14 @@ def _silent_audio_latent(audio_vae, frame_count, fps):
         return None                         # never fail a render for a nicety
 
 
-def _pin_audio_silence(latent, silence, lead_frames=None):
-    """Start target audio at encoded silence and preserve the requested span."""
+def _pin_audio_silence(latent, silence, lead_frames=None, tail_frames=0):
+    """Start target audio at encoded silence and preserve the requested span(s).
+
+    lead_frames None pins the whole shot. Otherwise the first lead_frames and the
+    last tail_frames are held at silence and the span between is left to the model
+    -- that is where the line goes. The tail is clipped to what the lead leaves, so
+    the two can never overlap. Nothing pinned at all is a no-op, reported as False
+    so the caller does not count it as applied."""
     try:
         video, audio = latent["samples"].unbind()
         silence = silence.to(device=audio.device, dtype=audio.dtype)
@@ -604,10 +636,15 @@ def _pin_audio_silence(latent, silence, lead_frames=None):
         if lead_frames is None:
             audio_mask.zero_()
         else:
-            n = min(audio.shape[-1], max(0, int(lead_frames)))
-            if n <= 0:
+            t = audio.shape[-1]
+            n = min(t, max(0, int(lead_frames)))
+            m = min(t - n, max(0, int(tail_frames or 0)))
+            if n <= 0 and m <= 0:
                 return False
-            audio_mask[..., :n] = 0
+            if n > 0:
+                audio_mask[..., :n] = 0
+            if m > 0:
+                audio_mask[..., t - m:] = 0
         latent["samples"] = comfy.nested_tensor.NestedTensor((video, silence))
         latent["noise_mask"] = comfy.nested_tensor.NestedTensor(
             (torch.ones_like(video[:, :1]), audio_mask))

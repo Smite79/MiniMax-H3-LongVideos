@@ -1770,6 +1770,54 @@ def test_a_named_look_target_is_restated():
     check("...and leaves the beat exactly as written", "looking at the TV" in off, "")
 
 
+def test_a_line_with_no_look_turns_the_faces_to_each_other():
+    print("\n=== a dialogue shot that names no look faces the speakers to each other ===")
+    # Reported: "it looks like they are talking to a camera and not to each other."
+    # gaze_hold only restates a look the beat NAMED; a line with none left both
+    # faces to the portrait prior. Two people and a line get one impersonal sentence.
+    mem = "Dan: he, 40, a grey jacket.\nMara: she, 30, a red coat."
+    P = ("A kitchen.\n\nDan and Mara stand at the counter. Dan asks: \"Is that the last one?\"\n\n"
+         "Mara looks at the window and says: \"Nearly.\"\n\n"
+         "Dan waits alone.")
+    info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
+    sh = [s for s in script.split("---") if s.strip()]
+    check("two people and a line, no look staged: they face each other",
+          "face each other" in sh[0], sh[0][-90:])
+    check("...said positively, naming no camera", "camera" not in sh[0].lower(), "")
+    check("a look the beat stages wins, and this stands down",
+          "turned to the window" in sh[1] and "face each other" not in sh[1], sh[1][-90:])
+    check("no line, nothing to face", "face each other" not in sh[2], "")
+    check("info names the shot", "shot(s) 1 carry a line and two or more people" in info, "")
+    off = run_node(P, plan_only=True, character_memory=mem, hold_gaze=False)[3]
+    check("the switch turns it off", "face each other" not in off, "")
+
+
+def test_a_walk_along_a_place_arrives_in_it():
+    print("\n=== a beat that travels along a place ends in it ===")
+    # Reported: she leaves the bedroom, walks down the hallway, comes across a BED,
+    # then reaches the kitchen. "down the hallway" is a via with no destination;
+    # travel_anchor said nothing, `here` stayed "bedroom", and the kitchen beat was
+    # told it opened in the bedroom -- two shots after she had left it.
+    mem = "McKenna: she, 22, a grey t-shirt, black shorts."
+    P = ("A small flat at night. Her bedroom has an unmade bed and a lamp.\n\n"
+         "McKenna gets up and comes out of her bedroom.\n\n"
+         "McKenna walks down the hallway.\n\n"
+         "McKenna goes into the kitchen.")
+    script = run_node(P, plan_only=True, character_memory=mem)[3]
+    sh = [" ".join(x.split()) for x in script.split("---") if x.strip()]
+    check("the hallway shot is told it opens where she left off and arrives in the hallway",
+          "opens in the bedroom and arrives in the hallway" in sh[1], sh[1][-160:])
+    check("...with the walk played out in frame", "every step in frame" in sh[1], "")
+    check("the kitchen shot opens in the HALLWAY, not the bedroom",
+          "opens in the hallway and arrives in the kitchen" in sh[2], sh[2][-160:])
+    check("...and is never sent back to the bedroom", "opens in the bedroom" not in sh[2], "")
+    # A via WITH a destination is untouched: the destination still wins.
+    both = run_node("A flat.\n\nMcKenna walks down the hallway to the kitchen.",
+                    plan_only=True, character_memory=mem)[3]
+    check("a via with a destination keeps both",
+          "carries along the hallway" in both and "arrives in the kitchen" in both, both[-160:])
+
+
 def test_a_covered_object_does_not_send_its_picture():
     print("\n=== an object out of view does not carry its reference ===")
     # Reported: the object looked different when it came back into view. While it was
@@ -3393,6 +3441,37 @@ def test_a_hidden_garments_lettering_goes_with_it():
     check("a fragment naming another garment keeps it",
           "denim shorts" in got3.lower(), got3)
 
+    # THE PRINT IN ITS OWN FRAGMENT. Above, the lettering sits inside the
+    # garment's fragment, so the removal empties it and it goes whole. Written
+    # after the comma -- which is how a sheet lists attributes -- nothing was
+    # removed from it, so it stayed, right before the shorts with no garment to
+    # carry it. Reported as the thong's lettering on the shorts, again. A
+    # sentence of its own failed worse: the fragment kept the shorts, so the
+    # whole of it stayed, shipping "She . BRAT is printed across the back."
+    for label, T in (
+            ("its own fragment",
+             'McKenna: she, 26, a black thong, "BRAT" printed across the back, denim shorts.'),
+            ("pointing back with a pronoun",
+             "McKenna: she, 26, a black thong, the word BRAT across its back, denim shorts."),
+            ("a bare capitalised word",
+             "McKenna: she, 26, a black thong, BRAT across the back, denim shorts."),
+            ("a trailing modifier that is not a print",
+             "McKenna: she, 26, a black thong, with a bow at the hip, denim shorts."),
+            ("a sentence of its own",
+             "McKenna: she, 26, denim shorts. She wears a black thong. BRAT is printed across the back.")):
+        got = S.hide_item(T, ["thong"])
+        check(f"the print goes with the garment: {label}",
+              "brat" not in got.lower() and "bow" not in got.lower()
+              and "denim shorts" in got.lower() and "McKenna" in got
+              and "She ." not in got, got)
+    # ...and only what CONTINUES the garment. An item that merely follows it in
+    # the list stands on its own, or a covered thong would take the lipstick with it.
+    T5 = "McKenna: she, 26, a black thong, red lipstick, a tattoo across the lower back, denim shorts."
+    got5 = S.hide_item(T5, ["thong"])
+    check("an unrelated item after the garment stays",
+          "red lipstick" in got5 and "tattoo across the lower back" in got5
+          and "thong" not in got5, got5)
+
 def test_camera_framing_is_read_from_the_anchor():
     print("\n=== a close frame written in the ANCHOR is still a close frame ===")
     # The anchor is the documented home for camera -- "Framing that belongs to the
@@ -4381,6 +4460,27 @@ def test_silence_pins_the_generated_audio():
     _, audio_mask = latent["noise_mask"].unbind()
     check("the first half-second is locked", bool(torch.all(audio_mask[..., :20] == 0)))
     check("speech can denoise after the lead-in", bool(torch.all(audio_mask[..., 20:] == 1)))
+
+    latent = {"samples": FakeNested((video, audio))}
+    check("a lead-in and a tail install together", S._pin_audio_silence(latent, silence, 20, 8))
+    _, audio_mask = latent["noise_mask"].unbind()
+    check("the opening is locked", bool(torch.all(audio_mask[..., :20] == 0)))
+    check("the close is locked", bool(torch.all(audio_mask[..., -8:] == 0)))
+    check("the line's span between them is free", bool(torch.all(audio_mask[..., 20:-8] == 1)))
+
+    latent = {"samples": FakeNested((video, audio))}
+    check("a tail alone is enough to install", S._pin_audio_silence(latent, silence, 0, 8))
+    _, audio_mask = latent["noise_mask"].unbind()
+    check("...and it locks only the close",
+          bool(torch.all(audio_mask[..., -8:] == 0)) and bool(torch.all(audio_mask[..., :-8] == 1)))
+
+    latent = {"samples": FakeNested((video, audio))}
+    check("a tail that would overlap the lead is clipped to what is left",
+          S._pin_audio_silence(latent, silence, 30, 20))
+    _, audio_mask = latent["noise_mask"].unbind()
+    check("...so the lead keeps its 30 and the tail takes the other 10", bool(torch.all(audio_mask == 0)))
+    check("nothing to pin is reported, not counted as applied",
+          not S._pin_audio_silence({"samples": FakeNested((video, audio))}, silence, 0, 0))
 
     bad = {"samples": FakeNested((video, audio))}
     check("a mismatched silent latent is rejected",
@@ -5981,6 +6081,8 @@ def main():
     test_undressing_does_not_drop_her()
     test_an_unbound_fall_is_told_what_catches_it()
     test_a_named_look_target_is_restated()
+    test_a_line_with_no_look_turns_the_faces_to_each_other()
+    test_a_walk_along_a_place_arrives_in_it()
     test_a_covered_object_does_not_send_its_picture()
     test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()

@@ -4833,6 +4833,27 @@ def gaze_hold(target, who="", is_person=False):
     return f" The eyes and the head are turned to {what}."
 
 
+def dialogue_gaze(n_people):
+    """One impersonal sentence turning speakers and listeners to each other.
+
+    gaze_hold restates a look the beat named. A dialogue beat that names none
+    leaves both faces to the portrait prior, and the prior is the lens: reported
+    as "it looks like they are talking to a camera and not to each other". A
+    spoken line has an addressee whether or not the beat wrote one, and the
+    addressee is in the shot, so turning the faces to each other is the one thing
+    that can be said without inventing anything.
+
+    Impersonal, like gaze_hold, and for the same reason: on a dialogue shot the
+    speaker's name is spent by the mouth guard and the listener's by told_hold,
+    and a third mention is a third person. Positively phrased -- at cfg 1 naming
+    the lens would ask for it. Says nothing about where the camera is."""
+    if n_people < 2:
+        return ""
+    if n_people == 2:
+        return " They face each other, eyes on each other."
+    return " Eyes on whoever is speaking, faces turned to them."
+
+
 def forced_pose(text):
     """Does this text put a body into a position that hardware can enforce?"""
     return bool(_FORCED_POSE.search(text or ""))
@@ -6163,6 +6184,33 @@ def extract_removals(beat):
     return body, removed
 
 
+# What makes a garment-less fragment read as CONTINUING the item before it. A
+# print cue, a quoted span, a pronoun pointing back, a fragment that opens with
+# the preposition that would have followed the noun -- or a capitalised word
+# placed ON the garment. Capitals alone are not enough: "PVC mini-skirt" is a
+# material, and a first version took the skirt with the belt in front of it.
+# "red lipstick" or "a tattoo across the lower back" has none of these and
+# stands on its own; "BRAT across the back" and "with a bow at the hip" do not.
+_PRINT_WORDS = re.compile(
+    r"\b(?:print(?:ed|s)?|lettering|letter(?:s|ed)?|text|reads?|reading|says|"
+    r"written|writing|embroider(?:ed|y)|emblazoned|stitched|stamped|logo|slogan|"
+    r"motto|monogram(?:med)?|words?|font|spell(?:s|ed|ing)?|its|it)\b", re.I)
+_QUOTED_SPAN = re.compile(r'["“][^"”]+["”]')
+_CAPS_WORD = re.compile(r"\b[A-Z]{2,}\b")                           # case matters
+_ON_GARMENT = re.compile(
+    r"\b(?:across|on|along|down|over)\s+(?:the|its|her|his|their)\s+"
+    r"(?:front|back|chest|waistband|hem|seat|rear|crotch|straps?|cups?|hips?|"
+    r"bum|butt)\b", re.I)
+_CONTINUES = re.compile(r"^\s*(?:with|across|along|down|over|on|at|bearing|"
+                        r"reading|printed|lettered|emblazoned)\b", re.I)
+
+
+def _continues_item(unit):
+    return bool(_PRINT_WORDS.search(unit) or _QUOTED_SPAN.search(unit)
+                or _CONTINUES.search(unit)
+                or (_CAPS_WORD.search(unit) and _ON_GARMENT.search(unit)))
+
+
 def hide_item(text, items):
     """Take the named items out of a sheet line, keeping everything else.
 
@@ -6177,18 +6225,27 @@ def hide_item(text, items):
     22") never disappears, whatever else is in it."""
     if not text or not items:
         return text
+    pats = [re.compile(r"(?:\b\w+[\w-]*\s+){0,3}?\b" + re.escape(str(i).strip()) + r"\b",
+                       re.I) for i in items if str(i).strip()]
     out_lines = []
     for line in str(text).split("\n"):
         frags, kept = line.split(","), []
+        trailing = False        # the unit just before this one went with its garment
+        entry = ":" in line     # a labelled sheet entry: where attribute lists live
         for n, frag in enumerate(frags):
-            new = frag
-            for item in items:
-                if not str(item).strip():
-                    continue
-                # The item, plus any adjectives sitting directly in front of it.
-                new = re.sub(r"(?:\b\w+[\w-]*\s+){0,3}?\b"
-                             + re.escape(str(item).strip()) + r"\b",
-                             "", new, flags=re.I)
+            # A UNIT IS A SENTENCE, not only a comma-fragment. A fragment holding
+            # "denim shorts. She wears a black thong. BRAT is printed across the
+            # back." kept all of it because the shorts were still in it, and
+            # shipped "She . BRAT is printed across the back." -- a stub and a
+            # stranded print. Each sentence is judged alone, and the ones kept
+            # are put back with the single space that separated them.
+            units, kept_units = re.split(r"(?<=[.!?])\s+", frag), []
+            for unit in units:
+                new = unit
+                for p in pats:
+                    # The item, plus any adjectives sitting directly in front of it.
+                    new = p.sub("", new)
+                removed = new != unit
             # THE PRINT ON A COVERED GARMENT GOES WITH THE GARMENT.
             #
             # Reported: a thong under shorts, lettering on the thong, and the
@@ -6209,23 +6266,43 @@ def hide_item(text, items):
             # which is the case hide_item exists to protect -- and never when the
             # fragment carries the person's LABEL, which would take their name out
             # of the sheet with it.
-            if (new != frag and ":" not in frag
-                    and not garments_in(new) and re.search(r"\w", new)):
-                continue
+                if (removed and ":" not in unit
+                        and not garments_in(new) and re.search(r"\w", new)):
+                    trailing = True
+                    continue
             # An article left standing alone ("a", "the") is not a garment,
             # so the fragment goes. A fragment carrying the person's LABEL
             # never reaches this test empty -- the removal takes the item and
             # leaves the name -- which is why there is no separate guard for
             # it. One was written; a disable-check showed it never fired, and
             # a guard that looks protective and is not is worse than none.
-            if not re.sub(r"\b(?:a|an|the|and|with|in)\b|[\s,.;]", "", new):
-                continue
-            kept.append(new)
+                if not re.sub(r"\b(?:a|an|the|and|with|in)\b|[\s,.;]", "", new):
+                    if removed:
+                        trailing = True
+                    continue
+                # THE PRINT IN ITS OWN FRAGMENT GOES TOO. The rule above catches a
+                # print written inside the garment's fragment; one written after
+                # the comma -- "a black thong, BRAT across the back, denim shorts"
+                # -- had nothing removed from it, so it stayed, now sitting right
+                # before the shorts with no garment to carry it. Reported as the
+                # thong's lettering on the shorts, again. A garment-less unit that
+                # reads as continuing the one just dropped goes with it; anything
+                # else stands on its own and ends the chain.
+                if (entry and not removed and trailing and ":" not in unit
+                        and not garments_in(unit) and _continues_item(unit)):
+                    continue
+                kept_units.append(new)
+                trailing = False
+            if kept_units:
+                kept.append(" ".join(kept_units))
         joined = ",".join(kept)
         # Tidy the seams the removal leaves: doubled commas and spaces.
         joined = re.sub(r"\s*,\s*,+", ",", joined)
         joined = re.sub(r"\s{2,}", " ", joined).strip()
         joined = re.sub(r",\s*([.;]|$)", r"\1", joined)
+        # A dropped sentence can leave the next fragment's comma sitting right
+        # after the previous full stop: "A bright beach., on the sand".
+        joined = re.sub(r"([.!?])\s*,\s*", r"\1 ", joined)
         # The seams a removal leaves at the LABEL. "Ana: chastity belt, jeans"
         # becomes "Ana: , jeans" and "Ana: a chastity belt" becomes "Ana: ."
         # Both are malformed, and a sheet entry the reader cannot parse is
@@ -6550,6 +6627,7 @@ _WIDGET_RANGE = {
     "ambient_level": (0.25, 0.0, 1.0, float),
     "foley_level": (0.35, 0.0, 1.0, float),
     "speech_lead_seconds": (0.5, 0.0, 2.0, float),
+    "speech_tail_seconds": (2.0, 0.0, 10.0, float),
 }
 
 
@@ -6994,6 +7072,13 @@ class H3LongVideos:
                                "camera is, so a shot looking straight down the line of "
                                "sight is unaffected. Looking at a PERSON is left alone: "
                                "restating a pronoun says nothing the beat did not.\n\n"
+                               "A LINE WITH NOBODY NAMED TO LOOK AT turns the faces to "
+                               "each other. Reported: two people talking to the camera "
+                               "instead of each other. With no look staged, both faces "
+                               "fall to the same portrait prior, and a line has an "
+                               "addressee whether or not the beat wrote one. Said once, "
+                               "impersonally, only with two or more people in the shot; "
+                               "a beat that names a look is never argued with.\n\n"
                                "IT ALSO SPEAKS FOR THE EXPRESSION, because that is the "
                                "same pull. Reported: she smiles at the camera in a "
                                "scene of duress. A four-shot scene of a woman "
@@ -7091,6 +7176,16 @@ class H3LongVideos:
                                "dialogue shot. This stops pre-babble and keeps the joint "
                                "model's mouth still during that span. 0 disables it; a long "
                                "lead can trim the first word."}),
+                "speech_tail_seconds": ("FLOAT", {"default": 2.0, "min": 0.0,
+                    "max": 10.0, "step": 0.5,
+                    "tooltip": "Free audio kept AFTER a dialogue shot's line, in seconds. The "
+                               "line's length is estimated from its words; past lead + line + "
+                               "this margin the audio is pinned to encoded silence, the way "
+                               "the lead-in pins the opening. A short line in a long shot "
+                               "otherwise leaves seconds of open branch the model fills with "
+                               "more speech -- babble, or the line again. The model chooses "
+                               "WHEN to speak, so a small margin can clip the last word: raise "
+                               "it if it does. 0 disables it."}),
             },
         }
 
@@ -7117,7 +7212,7 @@ class H3LongVideos:
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
-            speech_lead_seconds=0.5,
+            speech_lead_seconds=0.5, speech_tail_seconds=2.0,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -7140,6 +7235,7 @@ class H3LongVideos:
             pace=pace, auto_sound=auto_sound, hold_scene_state=hold_scene_state,
             mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
+            speech_tail_seconds=speech_tail_seconds,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             return self._render(prepared)
@@ -7159,7 +7255,7 @@ class H3LongVideos:
             character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
-            speech_lead_seconds=0.5,
+            speech_lead_seconds=0.5, speech_tail_seconds=2.0,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -7186,7 +7282,8 @@ class H3LongVideos:
             upscale_target_short_edge=upscale_target_short_edge,
             upscale_batch=upscale_batch, pace=pace,
             ambient_level=ambient_level, foley_level=foley_level,
-            speech_lead_seconds=speech_lead_seconds))
+            speech_lead_seconds=speech_lead_seconds,
+            speech_tail_seconds=speech_tail_seconds))
         megapixels, shot_seconds = _fixed["megapixels"], _fixed["shot_seconds"]
         steps, cfg = _fixed["steps"], _fixed["cfg"]
         shift_video, shift_audio = _fixed["shift_video"], _fixed["shift_audio"]
@@ -7196,6 +7293,7 @@ class H3LongVideos:
         upscale_batch, pace = _fixed["upscale_batch"], _fixed["pace"]
         ambient_level, foley_level = _fixed["ambient_level"], _fixed["foley_level"]
         speech_lead_seconds = _fixed["speech_lead_seconds"]
+        speech_tail_seconds = _fixed["speech_tail_seconds"]
         notes.extend(_fixnotes)
         # <Picture N> means ref_image_N, the socket. Everything downstream works on
         # the packed roster instead, so translate once, here, before anything has
@@ -7442,6 +7540,7 @@ class H3LongVideos:
         named_shots = []          # shots reminded the thing is still there
         anchored_shots = []       # shots reminded of it
         gaze_shots = []           # shots told where the look goes
+        dialogue_gaze_shots = []  # dialogue shots turned to face each other
         looking_at = {}           # {name: target}, each held until it changes
         fall_shots = []           # shots told what takes the landing
         device_shots = []         # shots whose line belongs to a machine
@@ -8319,6 +8418,15 @@ class H3LongVideos:
             if _pace:
                 paced_shots.append(len(plan) + 1)
             _frm, _via, _to = travel_in(body)
+            # A BEAT THAT TRAVELS ALONG A PLACE ENDS IN IT. "walks down the
+            # hallway" reads as a via with no destination, and travel_anchor says
+            # nothing without one -- so that shot was told nothing about where it
+            # was, `here` kept the bedroom, and the NEXT beat opened "in the
+            # bedroom" on its way to the kitchen. Reported as a bed in the hallway.
+            # The place travelled along is where the beat arrives, so the shot
+            # opens where the last one left off and walks into it, in frame.
+            if _via and not _to:
+                _via, _to = "", _via
             _travel = travel_anchor(_frm, _via, _to, here)
             if _travel:
                 travel_shots.append(len(plan) + 1)
@@ -8656,6 +8764,7 @@ class H3LongVideos:
                         and n not in set(subjects_for(body, sheet, _MOVES_OFF_SRC))]
             _gazers = [n for n in (_described or []) if looking_at.get(n)] + _carried
             _gaze = ""
+            _faces = ""     # the eye-line inferred for a dialogue shot
             # ONE sentence for the hardware. The hold, the name of the thing and
             # where it holds were three separate clauses written for three separate
             # reports, each naming the same object again -- 53 words about one pair
@@ -8979,6 +9088,19 @@ class H3LongVideos:
                     _gaze = gaze_hold(_target)
             if _gaze:
                 gaze_shots.append(len(plan) + 1)
+            # A LINE SAID, NO LOOK STAGED. gaze_hold restates what the beat named;
+            # a dialogue beat that names no look leaves both faces to the portrait
+            # prior, which is the lens. Reported as two people talking to the
+            # camera instead of each other. The addressee is in the shot, so the
+            # faces are turned to each other -- impersonally, both names here
+            # being already spent. Not for a voice from a device: somebody on the
+            # phone is not facing the room. A look the beat stages, even a pronoun
+            # one gaze_hold declines to restate, is never argued with.
+            if (hold_gaze and not _gaze and _speaks and not _look_now
+                    and not _device_line and len(_described or []) >= 2):
+                _faces = dialogue_gaze(len(_described))
+                if _faces:
+                    dialogue_gaze_shots.append(len(plan) + 1)
             _guards = [
                 (1, "removal", tail),        # the beat's own action, completing
                 (1, "wearing", _wearing),    # ...and its mirror, a garment going on
@@ -9011,9 +9133,17 @@ class H3LongVideos:
                 (12, "duress", _duress),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language
+                # The eye-line INFERRED for a dialogue shot. Reads after the mouth
+                # guard it belongs with. Rank 15, below even sound: it is a guess
+                # about where the eyes go, and at rank 11 -- the staged look's rank
+                # -- it took the budget from "Only Dan speaks" on a seven-word beat.
+                # An inference is cut before anything the author's own words imply.
+                (15, "faces", _faces),
                 (6, "told", _told),          # a listener given an order to ignore
                 (13, "turn", turn),
-                # LAST in the list and LAST in the ranking, both on purpose.
+                # LAST in the list, and last in the ranking of anything the author's
+                # words imply -- only the inferred eye-line (15) is cut before it.
+                # Both on purpose.
                 #
                 # This was appended after fit_guards and so was the one piece of
                 # node-written text no budget could reach -- unranked, uncuttable,
@@ -9141,12 +9271,18 @@ class H3LongVideos:
         # speech after the line comes from. Reported per shot, because the fix is the
         # author's: a longer line, or a shorter shot.
         _tail = []
+        _tailpin = []               # (shot, seconds) pinned past the line's end
         for _i, _b in enumerate(beats):
             if _i >= len(lens) or not has_speech(_b):
                 continue
             _words = (sum(len(q.split()) for q in _QUOTED.findall(_b))
                       + sum(len(q.split()) for q in _DIALOGUE_TAG.findall(_b)))
             _say = _words / WORDS_PER_SEC
+            plan.shots[_i].line_seconds = _say
+            _tf = ShotAudio(True, True, False, bool(silence_nonspeech), speech_lead_seconds,
+                            AUDIO_LATENT_FPS, _say, speech_tail_seconds, lens[_i]).tail_frames
+            if _tf:
+                _tailpin.append((_i + 1, _tf / AUDIO_LATENT_FPS))
             _shot = lens[_i] / H3_FPS
             if _shot - _say >= 3.0:
                 _tail.append((_i + 1, _words, _say, _shot))
@@ -9432,6 +9568,19 @@ class H3LongVideos:
                 f"camera while the other does his part: the target was one string with "
                 f"no owner, said impersonally, so a look she staged went on being said "
                 f"in shots she was not in and landed on whoever was. Off with hold_gaze")
+        if dialogue_gaze_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in dialogue_gaze_shots)} carry a line "
+                f"and two or more people, and the beat names nothing to look at, so the "
+                f"faces are turned to each other. Reported as two people talking to the "
+                f"camera instead of each other: with no look staged, both faces fall to "
+                f"the model's prior -- a portrait, facing the lens -- and a near-clean "
+                f"reference asks for exactly that pose. A line has an addressee whether "
+                f"or not the beat wrote one, and the addressee is in the shot, so this is "
+                f"the one thing that can be said without inventing. One impersonal "
+                f"sentence: both names in the shot are already spent, and a third "
+                f"mention is a third person. Write 'looks at' or 'turns to' in the beat "
+                f"and that is said instead. Off with hold_gaze")
         if anchored_shots:
             notes.append(
                 f"fastened limbs held in place on shot(s) {', '.join(str(n) for n in anchored_shots)}"
@@ -10048,7 +10197,7 @@ class H3LongVideos:
         # Probed whenever silencing is ON, not only when a shot is silent today:
         # an ambient bed can cover every shot, and the answer still matters for
         # the moment one is not covered -- and for knowing the wiring is sound.
-        if silence_nonspeech or speech_lead_seconds > 0:
+        if silence_nonspeech or speech_lead_seconds > 0 or speech_tail_seconds > 0:
             if audio_vae is None:
                 notes.append(
                     "SILENCE CANNOT BE APPLIED: no audio VAE is wired to the node's "
@@ -10075,7 +10224,14 @@ class H3LongVideos:
                     f"{n_silent} line-free shot(s) above can be pinned to it rather "
                     f"than merely told to be quiet"
                     + (f", and dialogue gets a {speech_lead_seconds:g}s silent lead-in"
-                       if speech_lead_seconds > 0 else ""))
+                       if speech_lead_seconds > 0 else "")
+                    + ((", and a silent tail past the line on shot(s) "
+                        + ", ".join(f"{n} (last {s:.1f}s)" for n, s in _tailpin)
+                        + f" -- everything after lead + the line's estimate + "
+                        f"{speech_tail_seconds:g}s is pinned, so the branch cannot carry on "
+                        f"talking into the seconds the line does not fill. The model chooses "
+                        f"when to speak: if a last word is clipped, raise speech_tail_seconds")
+                       if _tailpin else ""))
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(plan.prompts, 1))
         info = " | ".join(notes)
         if plan_only:
@@ -10098,7 +10254,7 @@ class H3LongVideos:
             sampler_name=sampler_name, scheduler=scheduler, seed=seed,
             shift_audio=shift_audio, shift_video=shift_video,
             sigmas=sigmas, silence_nonspeech=silence_nonspeech,
-            speech_lead_seconds=speech_lead_seconds, staging_shots=staging_shots, steps=steps,
+            speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, tiled_decode=tiled_decode, trim_seam=trim_seam,
             upscale=upscale, upscale_batch=upscale_batch, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
@@ -10143,6 +10299,7 @@ class H3LongVideos:
         sigmas = prepared.sigmas
         silence_nonspeech = prepared.silence_nonspeech
         speech_lead_seconds = prepared.speech_lead_seconds
+        speech_tail_seconds = prepared.speech_tail_seconds
         staging_shots = prepared.staging_shots
         steps = prepared.steps
         stripped_shots = prepared.stripped_shots
@@ -10189,7 +10346,8 @@ class H3LongVideos:
             shot_prompt = shot.prompt
             _audio = ShotAudio(plan.shots[i].speech, plan.shots[i].sounded, plan.shots[i].voiced_only,
                                bool(silence_nonspeech), speech_lead_seconds,
-                               AUDIO_LATENT_FPS)
+                               AUDIO_LATENT_FPS, shot.line_seconds, speech_tail_seconds,
+                               shot.frame_count)
             silent = _audio.pinned
 
             # A shot that follows a removal starts FRESH. Every shot is anchored to
@@ -10314,7 +10472,8 @@ class H3LongVideos:
                 handoff=shot_handoff, refs=list(shot.refs) + _extra,
                 ref_noise_aug=ref_noise_aug, silent=silent,
                 handoff_as_ref=_handoff_ref,
-                speech_lead_seconds=(_audio.lead_frames / AUDIO_LATENT_FPS))
+                speech_lead_seconds=(_audio.lead_frames / AUDIO_LATENT_FPS),
+                speech_tail_frames=_audio.tail_frames)
             if (demoted and not _aug_warned and ref_noise_aug is not None
                     and float(ref_noise_aug) < KEYFRAME_SAFE_AUG):
                 _aug_warned = True

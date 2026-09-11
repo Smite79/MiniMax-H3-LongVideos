@@ -485,6 +485,21 @@ def test_extracted_planning_policies():
     check("dialogue gets a 20-frame lead", line.lead_frames == 20)
     effort = S.ShotAudio(False, True, True, True, 0.5, S.AUDIO_LATENT_FPS)
     check("effort accepts non-vocal foley", effort.accepts_built_foley)
+    # The tail mirrors the lead. 226 frames is 377 audio frames; lead 20 + a 2s line
+    # (80) + a 2s margin (80) leaves 197 to pin. Six positional arguments build a
+    # ShotAudio the old way, and the old way has no tail.
+    tail = S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS, 2.0, 2.0, 226)
+    check("a short line in a long shot gets a silent tail", tail.tail_frames == 197)
+    check("...and the tail alone asks for the silence latent", tail.needs_silence_latent)
+    check("a six-argument ShotAudio has no tail", line.tail_frames == 0)
+    check("no margin, no tail",
+          S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS, 2.0, 0.0, 226).tail_frames == 0)
+    check("a wordless shot has no line to pin behind",
+          S.ShotAudio(False, False, False, True, 0.5, S.AUDIO_LATENT_FPS, 0.0, 2.0, 226).tail_frames == 0)
+    check("a line that fills its shot leaves nothing to pin",
+          S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS, 2.0, 2.0, 90).tail_frames == 0)
+    check("a sliver under half a second is not worth clipping a word for",
+          S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS, 2.0, 1.5, 107).tail_frames == 0)
     check("a carried room cannot duplicate a tagged subject",
           not S._cond_module.may_carry_room(["Dan"], ["Dan", "Crystal"], {"Dan"}))
     check("an untagged room carry is safe when its cast remains",
@@ -4445,7 +4460,10 @@ def test_schema():
     # hold_scene_state.
     # A ceiling, not a target: every control must justify its place here.
     # Every one added since the rebuild answers a reported failure.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 38)
+    # speech_tail_seconds (2026-09-10) answers the node's own "dialogue headroom"
+    # report: a 2s line in a 9s shot left 7s of open branch after it, which the
+    # model filled with more speech. The lead-in pins the opening; this pins the close.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 39)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4453,11 +4471,11 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-12:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-13:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
                               "ambient_audio", "ambient_level", "foley_level",
-                              "speech_lead_seconds"])
+                              "speech_lead_seconds", "speech_tail_seconds"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",
