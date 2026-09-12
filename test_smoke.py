@@ -945,6 +945,59 @@ def test_a_plural_removal_still_comes_off():
         check(f"{label}: ...and stays gone", not _has_skirt(sh[2]), sh[2][:130])
 
 
+def test_a_removal_undresses_only_its_wearer():
+    print("\n=== one woman taking her shirt off leaves the other's on ===")
+    # Reported: shirts looking half missing. Two women in white shirts, one takes hers
+    # off, and the token "shirt" was scrubbed from the WHOLE text -- so the other one's
+    # entry lost her shirt while the keyframe still showed her wearing it. That is the
+    # contradiction this file already describes: "the shot then says it is not worn,
+    # take it off, and the thing under it is already showing. The model renders that
+    # contradiction as a garment half present -- open, or partly cut". The strip-bare
+    # path has been scoped to "THEIR OWN entry" since it was written; the prose-removal
+    # path was not.
+    MEM = ("McKenna: she, 22, a white shirt, a black bra, steel handcuffs.\n"
+           "Tess: she, 21, a white shirt, blue jeans.\nDan: he, 40, a work coat.")
+
+    def last_shot(beat):
+        sh = [" ".join(x.split()) for x in run_node(
+            f"A room.\n\nMcKenna, Tess and Dan stand by the window.\n\n{beat}\n\nThey wait.",
+            plan_only=True, character_memory=MEM, ref_noise_aug=0.999)[3].split("---")
+            if x.strip()]
+        return sh[-1]
+
+    def entry(shot, who):
+        m = re.search(who + r": [^.]*\.", shot)
+        return m.group(0) if m else ""
+
+    one = last_shot("McKenna takes off her shirt.")
+    check("the remover loses her shirt", "shirt" not in entry(one, "McKenna"), entry(one, "McKenna"))
+    check("...and the other woman keeps hers", "shirt" in entry(one, "Tess"), entry(one, "Tess"))
+    check("...and nothing else of the remover's goes",
+          "handcuff" in entry(one, "McKenna"), entry(one, "McKenna"))
+    both = last_shot("McKenna and Tess take off their shirts.")
+    check("a compound subject undresses both",
+          "shirt" not in entry(both, "McKenna") and "shirt" not in entry(both, "Tess"),
+          entry(both, "Tess"))
+    other = last_shot("Tess takes off her shirt while McKenna watches.")
+    check("the other way round too", "shirt" not in entry(other, "Tess")
+          and "shirt" in entry(other, "McKenna"), entry(other, "McKenna"))
+
+    # THE WEARER, NOT THE REMOVER. "Dan unlocks McKenna's handcuffs" is Dan removing
+    # HER hardware, so scoping to whoever the beat names would strand it on her for
+    # ever -- which is the regression the hardware tests caught when this was first
+    # scoped by the remover.
+    hw = last_shot("Dan unlocks McKenna's handcuffs.")
+    check("somebody else's removal still reaches the wearer",
+          "handcuff" not in entry(hw, "McKenna"), entry(hw, "McKenna"))
+    check("...and takes nothing else of hers", "shirt" in entry(hw, "McKenna"), entry(hw, "McKenna"))
+    check("the remover reader keeps a compound subject",
+          sorted(S.strippers_in("McKenna and Tess take off their shirts.", MEM))
+          == ["McKenna", "Tess"])
+    check("...and a new predicate after `and` is not a remover",
+          S.strippers_in("Dan holds the door and McKenna takes off her shirt.", MEM)
+          == ["McKenna"])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6851,6 +6904,7 @@ def main():
     test_a_feeling_belongs_to_the_face_the_beat_pins_it_on()
     test_a_bare_region_says_whose_body_it_is()
     test_a_plural_removal_still_comes_off()
+    test_a_removal_undresses_only_its_wearer()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

@@ -7030,6 +7030,27 @@ def hide_item(text, items):
     return "\n".join(out_lines)
 
 
+def strippers_in(beat, sheet):
+    """Who this beat says takes something off. [] when it does not say.
+
+    subjects_for with the compound subject vocal_sources_in already needed: "McKenna
+    and Tess take off their shirts" shares ONE verb between two names, and the
+    conjunction guard -- right about "Dan holds the door and McKenna undresses", where
+    `and` opens a new predicate -- cannot tell that apart on its own. Getting this
+    wrong in the narrowing direction would leave a garment on somebody who took it
+    off, so both names are kept."""
+    verbs = engine._STRIP_VERB + "|" + engine._UNDO_VERB
+    b = str(beat or "")
+    out = list(subjects_for(b, sheet, verbs))
+    for n, _ln in sheet_lines(sheet):
+        if not n or n in out:
+            continue
+        if re.search(r"\b" + re.escape(n) + r"\b(?:\s*,\s*[\w'\u2019-]+)*"
+                     r"\s+and\s+[\w'\u2019-]+\s+(?:" + verbs + r")\b", b, re.I):
+            out.append(n)
+    return out
+
+
 def scrub_removed(text, tokens):
     """Drop the parts of `text` that name a removed item.
 
@@ -8203,6 +8224,9 @@ class H3LongVideos:
         # start, and a description saying it is still worn is what puts it back.
         plan = ShotPlan()
         gone, shown = [], []
+        # token -> who took it off, so the scrub reaches their entry and nobody
+        # else's. A token with nobody recorded stays unscoped. See scrub_removed.
+        gone_by = {}
         # Of those, the ones open ONLY because the beat stages effort. The branch
         # is open on both, but for opposite reasons, and built sound has to tell
         # them apart -- see the foley mix.
@@ -8587,6 +8611,31 @@ class H3LongVideos:
             if toks:
                 stripped_shots.add(len(plan))
                 gone.extend(t for t in toks if t not in gone)
+                # WHOSE garment it was. Without this the scrub took "shirt" out of
+                # every entry that had one, so a second woman in the same shirt lost
+                # hers while still wearing it -- the text and the keyframe then
+                # disagree, which renders as a garment half present.
+                #
+                # THE WEARER, NOT THE REMOVER, and the difference is the whole rule:
+                # "Dan unlocks the chastity belt" is Dan removing McKenna's, so scoping
+                # to whoever the beat names would strand it on her for ever. The
+                # candidates are the entries that LIST the garment; the beat only picks
+                # between them when it names one of them, which is what tells
+                # self-undressing ("McKenna takes off her shirt", two shirts on the
+                # sheet) from somebody being undressed.
+                #
+                # Read off the WHOLE sheet, not this shot's: a shot describing only the
+                # person doing the unlocking has no entry for the one wearing it, which
+                # is the case the hardware path already had to solve.
+                _took = strippers_in(body, shot_sheet if shot_sheet else sheet)
+                for _t in toks:
+                    _wears = [n for n, _wl in sheet_lines(sheet)
+                              if n and re.search(r"\b" + re.escape(_t) + r"\b",
+                                                 _wl or "", re.I)]
+                    # No entry lists it -- it came out of the scene paragraph, and the
+                    # scrub stays unscoped, exactly as it was.
+                    gone_by.setdefault(_t, set()).update(
+                        [n for n in _took if n in _wears] or _wears)
                 # An added layer is subject to removal too: once the shirt comes off,
                 # the phrase that introduced it goes with it, or the scene keeps
                 # describing a garment that is no longer there. Retired HERE, at the
@@ -8870,9 +8919,38 @@ class H3LongVideos:
                            and (cover_owner.get(u) in _here
                                 or u not in cover_owner)]
             _hidden = [u for u in covered if u not in _worn_under]
-            shot_scene = scrub_removed(
-                "\n".join(terminate_lines(p) for p in (static, shot_sheet) if p.strip()),
-                visible + _hidden)
+            # A REMOVAL TAKES THE GARMENT OFF THE PERSON WHO REMOVED IT, AND NOBODY
+            # ELSE.
+            #
+            # Reported: shirts looking half missing. Two women in white shirts, one
+            # takes hers off, and the token "shirt" was scrubbed from the WHOLE text --
+            # so the other one's entry lost her shirt while the keyframe still showed
+            # her wearing it. That is the contradiction this file already describes:
+            # "the shot then says it is not worn, take it off, and the thing under it
+            # is already showing. The model renders that contradiction as a garment
+            # half present -- open, or partly cut". The strip-bare path has been scoped
+            # to "THEIR OWN entry" since it was written; the prose-removal path was not.
+            #
+            # Scoped HERE rather than inside scrub_removed: that function applies a
+            # second, whole-text sweep after its per-sentence pass, and threading an
+            # owner through both would mean restructuring 186 lines whose comments
+            # record a dozen separate fixes. Calling it once per entry gets the same
+            # answer and leaves it untouched.
+            #
+            # gone_by maps a token to who took it off. A token nobody is recorded for
+            # stays unscoped, which is what keeps every other removal behaving as it did.
+            _toks_all = visible + _hidden
+            _scrubbed = ([scrub_removed(terminate_lines(static), _toks_all)]
+                         if static.strip() else [])
+            for _ln in (terminate_lines(shot_sheet).split("\n")
+                        if shot_sheet.strip() else []):
+                _m = re.match(r"\s*([A-Za-z][\w'\u2019-]*)\s*:", _ln)
+                _who = _m.group(1).lower() if _m else ""
+                _allow = [t for t in _toks_all
+                          if not (_who and gone_by.get(t) and _who not in
+                                  {str(x).lower() for x in gone_by[t]})]
+                _scrubbed.append(scrub_removed(_ln, _allow))
+            shot_scene = "\n".join(p for p in _scrubbed if p.strip())
             # A NAMED CLOSE FRAME STOPS DESCRIBING WHAT IT CANNOT HOLD.
             #
             # Applied HERE, last, on the finished text: the layer, removal and
