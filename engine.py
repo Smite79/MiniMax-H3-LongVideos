@@ -118,8 +118,26 @@ PART_VARIES = frozenset({"chain", "rope", "straps", "tape"})
 # outlives the beat that caused it, and the clause that says so has to be
 # writable from any later shot.
 REGION_OF = (
+    # UNDERWEAR IS IN HERE TOO, on both halves of the body. The torso row has
+    # listed a bra since the day it was written -- that is the report it exists
+    # for, "a bra coming back on somebody topless" -- and the leg row never got
+    # its counterpart, so region_of("thong") answered "". A garment that cannot
+    # be placed latches no bare region, so underwear coming off said nothing
+    # about the hips in that shot or in any shot after it, and an unspecified
+    # region is filled by the model's own prior -- which for a hip is underwear.
+    #
+    # Worse, a beat saying somebody is NAKED looks each worn garment's region up
+    # to take it off the body, so the one garment it could not place stayed
+    # "worn" in the state while the text said she was nude. Reported as a thong
+    # restored a beat after she undressed to get in the shower.
+    #
+    # No hardware. A chastity belt is in the layering vocabulary, but it is a
+    # restraint: it is latched and held by its own mechanism, and a bare region
+    # read off it would argue with that.
     (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|tights|"
-     r"pantyhose|jeggings|culottes|tracksuit\s+bottoms", "legs",
+     r"pantyhose|jeggings|culottes|tracksuit\s+bottoms|"
+     r"panties|knickers|thong|g-?string|briefs|boxers|underwear|undies|"
+     r"jockstrap|loincloth", "legs",
      "The legs are bare from the hip down"),
     (r"socks|stockings|hold-?ups|boots|shoes|trainers|sneakers|sandals|heels",
      "feet", "The feet and ankles are bare"),
@@ -927,6 +945,20 @@ _UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
               r"undo(?:es)?|undid")
 
 
+# WHERE A GARMENT ENDS UP ONCE IT IS OFF. A thing on the floor is not on a body,
+# and this is how a beat says so -- by DESTINATION, not by verb. Two readers need
+# the same list, for opposite reasons: the removal reader to call it a removal,
+# the restore reader to stop calling it one. "Lets the skirt fall" drops a lifted
+# skirt back over her legs; "lets the thong fall to the floor" is the thong coming
+# off, and the only difference between those two sentences is this list.
+FLOOR = (r"floor|ground|tiles?|tiling|lino|mat|bath\s*mat|rug|carpet|deck|boards|"
+         r"concrete|grass|sand|bed|sofa|couch|chair|seat|stool|bench|basket|"
+         r"hamper|laundry|pile|heap")
+TO_THE_FLOOR = (r"(?:to|on|onto|into|in)\s+(?:the|a|an|her|his|their)?\s*"
+                r"(?:" + FLOOR + r")\b")
+_LANDS_OFF = _rx(r"\s*(?:fall(?:s|ing)?|drop(?:s|ping)?|land(?:s|ing)?)?\s*"
+                 + TO_THE_FLOOR)
+
 _DISPLACE_WAY = (r"back\s+up|back\s+down|down|up|aside|open|back|"
                  r"off\s+(?:one|her|his|their)\s+shoulders?")
 _DISPLACE = re.compile(
@@ -1084,8 +1116,25 @@ def restored_garments(beat, scene):
         return []
     out, low = [], scene.lower()
     for m in _PUT_BACK_NAMED.finditer(beat):
+        # ...UNLESS IT LANDS ON THE FLOOR. These verbs are the restore vocabulary
+        # because that is what people write for a lifted skirt -- let fall, drop,
+        # lower, let go of -- and the identical words take a garment OFF when the
+        # sentence says where it lands. "Lets the thong fall to the floor" was read
+        # as putting the thong back on: the author's removal, enacted backwards, and
+        # from there the sheet described it as worn for the rest of the film.
+        # Reported as a thong restored after she undressed. See FLOOR.
+        if _LANDS_OFF.match(beat[m.end():]):
+            continue
         thing = re.sub(r"\s+", " ", (m.group(1) or "")).strip().lower()
         if not thing:
+            continue
+        # ...AND THE CAPTURE CANNOT RUN THROUGH A PREPOSITION. The group takes
+        # spaces so a sheet's "long grey skirt" comes back whole, and on "drops the
+        # thong on the floor" it swallowed "thong on the floor" instead -- head
+        # "floor" -- so the restore was keyed to the ROOM. The scene named a wet
+        # floor, scene_name_for handed back "tiled bathroom with a wet floor", and
+        # the beat was recorded as putting the bathroom back on.
+        if re.search(r"\b(?:on|onto|to|into|in|at|over|under|from|with|and)\b", thing):
             continue
         head = thing.split()[-1]
         if len(head) < 3 or head not in low:

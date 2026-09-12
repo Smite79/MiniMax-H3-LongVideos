@@ -1095,7 +1095,8 @@ def test_one_person_undressing_is_one_person():
     check("one person in the shot is that person",
           S.strips_who("Somebody undresses.", ["Dan"]) == ["Dan"])
     # own_body names whose body it is, and only where there is more than one.
-    _bare = " The legs are bare from the hip down, with nothing else worn there."
+    _bare = (" The legs are bare from the hip down, the skin itself the outermost "
+             "surface there.")
     check("the body is attributed with two people",
           S.own_body(_bare, "McKenna", cast).startswith(" McKenna's legs are bare"))
     check("...and everyone else is pinned to their own entry",
@@ -4157,6 +4158,173 @@ def test_a_tagged_object_can_be_taken_off():
         check(f"not a removal: {_beat[:36]!r}", S.infer_removals(_beat, _b) == [])
 
 
+def test_underwear_is_a_garment_with_a_place_on_the_body():
+    """REPORTED: she undresses in the bathroom, gets in the shower, and her thong is
+    back in the next beat.
+
+    Three separate things had to be true for that, and all three were.
+
+    One: region_of could not place ANY lower-body underwear. The torso row of the
+    region table has listed a bra since the day it was written -- that is the report
+    it exists for, "a bra coming back on somebody topless" -- and the leg row never
+    got its counterpart. A garment with no region latches no bare region, so the
+    hips had no sentence in that shot or in any shot after it, and an unspecified
+    region is filled by the model's own prior.
+
+    Two: a beat saying somebody is NAKED takes each worn garment off by looking its
+    region up, so the one garment it could not place stayed "worn" in the state while
+    the text said she was nude.
+
+    Three: bare_hold went silent for any region the SHEET named a layer under --
+    whether or not that layer had come off as well. A full strip is the case it
+    matters most in, and it was the one case it could not speak in."""
+    print("\n=== underwear has a place on the body ===")
+    for _g in ("thong", "panties", "knickers", "a black g-string", "briefs",
+               "boxers", "boxer shorts", "underwear", "undies", "jockstrap"):
+        check(f"placed on the lower body: {_g!r}", S.region_of(_g) == "legs")
+    # The torso half, which already worked, stays where it was.
+    for _g in ("bra", "bralette", "camisole", "vest"):
+        check(f"...and the upper body is unchanged: {_g!r}", S.region_of(_g) == "torso")
+    # NO HARDWARE. A chastity belt is in the layering vocabulary, but it is latched
+    # and held by its own mechanism and a region read off it would argue with that.
+    check("a chastity belt is not given a region", S.region_of("chastity belt") == "")
+    # bare_hold: the suppression is about what is STILL THERE, not what the sheet
+    # happens to list. The sheet is never edited, so `covers` outlives the removal.
+    _covers = {"thong": "skirt"}
+    check("silent while the thong is still on",
+          S.bare_hold(["legs"], _covers, "", []) == "")
+    check("...and says so once the thong has come off too",
+          "legs are bare from the hip down" in S.bare_hold(["legs"], _covers, "",
+                                                           ["skirt", "thong"]))
+    check("a garment still WORN over the region keeps it quiet",
+          S.bare_hold(["legs"], {}, "denim skirt", ["thong"]) == "")
+    # The same line cost the bra half of the report it was written for: a sheet that
+    # layered the bra under a shirt suppressed the chest clause, so the fix only ever
+    # worked for a sheet that did not.
+    check("the bra half was suppressed the same way",
+          "chest, shoulders and arms are bare" in S.bare_hold(
+              ["torso"], {"bra": "shirt"}, "", ["shirt", "bra"]))
+    # POSITIVELY PHRASED to the last clause. This ended ", with nothing else worn
+    # there" -- a negation, in the sentence whose whole job is to stop the prior
+    # filling a region, and at cfg 1 there is no negative prompt to carry it.
+    _said = S.bare_hold(["legs"], {}, "", [], body="a woman's body")
+    check("the clause carries no negation",
+          not re.search(r"\b(?:no|nothing|not|never|without)\b", _said, re.I))
+    check("...and still names the body", "a woman's body" in _said)
+
+
+def test_how_underwear_actually_comes_off():
+    """The other half of the same report: the removal that was never read at all.
+
+    Eight of twenty ways people write underwear coming off did nothing -- the
+    garment stayed in the sheet, the sheet is re-stamped into every shot, so it
+    came back on and stayed on. One of them was worse than nothing: "lets the thong
+    fall to the floor" matched the RESTORE vocabulary, so the node read the author's
+    removal and enacted its opposite.
+
+    The verbs that carry these are kept out of _STRIP_VERB on purpose -- that list
+    also builds the displacement reader, where a bare "gets" or "pushes" reads "gets
+    down on her knees" and "pushes the door open" as garments being moved."""
+    print("\n=== how underwear actually comes off ===")
+    _sc = ("A tiled bathroom with a wet floor.\n"
+           "Kate: she, 28, a denim skirt, a black thong.")
+    for _b in (
+            # the object is a PRONOUN and the garment was named one clause earlier,
+            # which is how most undressing is written: the hands arrive first.
+            "Kate hooks her thumbs in the thong and steps out of it.",
+            "Kate tugs the thong down and steps clear of it.",
+            # verbs the sampler's reader never had, though the engine's state reader
+            # has had "gets out of" since it was written
+            "Kate gets out of the thong.",
+            "Kate shimmies out of the thong.",
+            "Kate wriggles out of the thong.",
+            # pushed or shoved off -- push lives in the displacement reader and in
+            # neither removal list
+            "Kate pushes the thong off her hips.",
+            # down PAST the hips. Down on its own is still a displacement.
+            "Kate hooks her thumbs into the waistband and pushes the thong down her legs.",
+            "Kate slides the thong down to the floor.",
+            # and onto the floor, whatever verb carried it there
+            "Kate drops the thong on the floor.",
+            "Kate lets the thong fall to the floor.",
+            # ...and the ones that already worked, which must keep working
+            "Kate takes off the thong.",
+            "Kate peels off the thong.",
+            "Kate steps out of her thong.",
+            "Kate slides the thong down and off.",
+            "Kate kicks the thong away.",
+            "Kate slips the thong off and drops it on the tiles."):
+        check(f"comes off: {_b[29:72]!r}", S.infer_removals(_b, _sc) == ["thong"])
+    # A REMOVAL IS NOT A RESTORE. "Lets the skirt fall" drops a lifted skirt back
+    # over her legs and "lets the thong fall to the floor" takes it off, and the only
+    # difference between those sentences is where the garment lands.
+    check("let fall to the floor is not a restore",
+          S.restored_garments("Kate lets the thong fall to the floor.", _sc) == [])
+    check("...and let fall on its own still puts a lifted skirt back",
+          S.puts_it_back("Kate lets it fall."))
+    check("...as does naming it",
+          S.restored_garments("Kate lets the skirt fall.", _sc) == ["denim skirt"])
+    # The capture behind that one could run THROUGH a preposition: "drops the thong
+    # on the floor" gave head "floor", and the scene's own wet floor came back as
+    # the garment -- the beat was recorded as putting the bathroom back on.
+    check("a restore is never keyed to the room",
+          S.restored_garments("Kate drops the thong on the floor.", _sc) == [])
+    # DOWN IS STILL A DISPLACEMENT. It leaves the garment on, around the thighs or
+    # the hips, and counting it as a removal scrubbed something still in the picture.
+    for _b in ("Kate pulls the skirt down.", "Kate eases the thong down her thighs.",
+               "Kate pushes the skirt down over her hips.",
+               "Kate lets the skirt fall back into place."):
+        check(f"not a removal: {_b[5:48]!r}", S.infer_removals(_b, _sc) == [])
+    check("...and pulling the skirt down is read as moved",
+          S.displaced_garments("Kate pulls the skirt down.", _sc)
+          == [("denim skirt", "pulled down")])
+    # A GARMENT IS RECOGNISED BY POSITION HERE, not by vocabulary, so that an author
+    # can write one this file has never heard of. The cost is that position cannot
+    # tell a shower from a shirt: "Kate steps out of the shower" is the same shape as
+    # "Kate steps out of the thong", and the scene paragraph lists a shower the way a
+    # sheet lists a skirt -- so the shower was taken off her and scrubbed out of
+    # every later shot. In a bathroom scene, which is a room that stops existing.
+    _room = ("A tiled bathroom. A glass shower, a bath, a wooden stool, a mirror.\n"
+             "Kate: she, 28, a denim skirt, a black thong.")
+    for _b in ("Kate steps out of the shower.", "Kate climbs out of the bath.",
+               "Kate gets off the stool.", "Kate kicks the stool away.",
+               "Kate drops her towel onto the stool."):
+        check(f"a fixture is not undressed: {_b[5:44]!r}",
+              S.infer_removals(_b, _room) == [])
+    check("...and the garment in the same room still comes off",
+          S.infer_removals("Kate steps out of the thong.", _room) == ["thong"])
+    # The pronoun is resolved only when there is exactly one thing it can mean, and
+    # only within its own SENTENCE -- reaching across a full stop is how a coat comes
+    # off in a beat about something else.
+    check("a pronoun with two garments in the clause is left alone",
+          S.infer_removals("Kate touches the skirt and the thong and steps out of it.",
+                           _sc) == [])
+    check("...and does not reach back past a full stop",
+          S.infer_removals("Kate hangs up the skirt. She picks up the brush and "
+                           "drops it on the floor.", _sc) == [])
+    # Named in full one clause, by head the next: one garment, taken off once.
+    _belt = "Nora: 34, a steel chastity belt, green jacket, boots."
+    check("the same garment is not taken off twice",
+          S.infer_removals("Dan unlocks the chastity belt and takes it off.",
+                           _belt) == ["belt"])
+    # A PRONOUN IS NOT A GARMENT, and this one destroyed the character entry. The
+    # object span runs to the next clause boundary and "and" is not one -- on purpose,
+    # so "unzips her jacket and pulls it off" is one removal -- which puts the SUBJECT
+    # of the next clause in the span. A sheet declares its pronoun exactly the way it
+    # lists a garment, so the positional entry-head test said yes to "she": the shot
+    # went out saying "The wool jumper and the she come off during this shot", and the
+    # scrub drops the whole entry it matched, so "Kate: she, 28, a wool jumper, a
+    # denim skirt." became "28, a denim skirt." from the next shot on. Name gone,
+    # pronoun gone, person gone.
+    _two = "Kate: she, 28, a wool jumper, a denim skirt.\nDan: he, 40, a blue shirt."
+    for _b, _want in (("Kate pulls off the jumper and she sits down.", ["jumper"]),
+                      ("Kate pulls off the jumper and he looks away.", ["jumper"]),
+                      ("Kate takes the skirt off and they both laugh.", ["skirt"]),
+                      ("Dan pulls off the shirt and throws it down.", ["shirt"])):
+        check(f"no pronoun comes off: {_b[5:46]!r}",
+              S.infer_removals(_b, _two) == _want)
+
+
 def test_a_written_sound_is_recognised():
     print("\n=== a sound you wrote, in the words people write it in ===")
     # Writing the sound into a beat is what opens that shot's audio branch, and it is
@@ -4734,6 +4902,8 @@ def main():
     test_hardware_belongs_to_somebody()
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
+    test_underwear_is_a_garment_with_a_place_on_the_body()
+    test_how_underwear_actually_comes_off()
     test_a_written_sound_is_recognised()
     test_the_upscale_path_does_not_hold_the_chain_twice()
     test_a_vae_that_tiles_itself_is_not_asked_to()

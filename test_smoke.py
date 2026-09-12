@@ -1750,6 +1750,114 @@ def _shots(P, **kw):
             if x.strip()]
 
 
+def test_what_comes_off_in_the_bathroom_stays_off():
+    """REPORTED: she undresses in the bathroom, steps into the shower, and her thong
+    is back in the next beat. It was supposed to stay off.
+
+    The thong really was scrubbed out of the text -- that part worked. What brought it
+    back was the SILENCE where it had been. The region table could not place any
+    lower-body underwear, so nothing latched the hips as bare; and bare_hold, which
+    says so on every shot after the removal, went quiet for any region the sheet named
+    a layer under -- whether or not that layer had come off as well. A full strip is
+    the case it matters most in, and it was the one case it could not speak in.
+
+    So the shot said the chest was bare, the feet were bare, and nothing at all about
+    the hips. An unspecified region is filled by the model's own prior, the prior for
+    a hip is underwear, and the keyframe carried the invention into every shot after
+    it. Nothing restored the thong. The prior drew one."""
+    print("\n=== what comes off in the bathroom stays off ===")
+    mem = "Kate: she, 28, a grey t-shirt, a denim skirt, a black thong, sandals."
+    P = ("A tiled bathroom, warm light.\n\n"
+         "Kate takes off her clothes and stands naked.\n\n"
+         "Kate steps into the shower and the water runs over her.\n\n"
+         "Kate turns under the water.\n\n"
+         "Kate runs her hands through her wet hair.")
+    sh = _shots(P, character_memory=mem)
+    check("every beat reaches rendering", len(sh) == 4, str(len(sh)))
+    # The text side, which already worked: the garment is out of the sheet.
+    for _i in range(1, 4):
+        check(f"shot {_i + 1} no longer describes the thong",
+              "thong" not in sh[_i].lower(), sh[_i][:120])
+    # ...and the half that did not: the space it left is SAID, on every shot after.
+    for _i in range(1, 4):
+        check(f"shot {_i + 1} says the hips and legs are bare",
+              "legs are bare from the hip down" in sh[_i], sh[_i][-160:])
+        check(f"...and the chest too", "chest, shoulders and arms are bare" in sh[_i],
+              sh[_i][-160:])
+    # Positively phrased, to the last clause: this sentence exists to keep the prior
+    # out of a region, and at cfg 1 a negation in it hands the prior the word back.
+    check("the bare clause names skin rather than what is absent",
+          all("outermost surface there" in s for s in sh[1:]), sh[1][-90:])
+    check("...and carries no negation",
+          all(not re.search(r"\bnothing\b|\bno longer\b", s.split("] ", 1)[1])
+              for s in sh[1:]), sh[1][-120:])
+    # THE BRA HALF OF THE SAME REPORT. bare_hold was written for "a bra coming back on
+    # somebody topless", and the suppression meant it only ever worked for a sheet
+    # that did not layer the bra under anything -- which is the commonest way to
+    # write one.
+    bra = "Kate: she, 28, a grey t-shirt, a black bra, jeans."
+    sh2 = _shots("A bedroom.\n\nKate pulls off the t-shirt and unhooks the bra.\n\n"
+                 "Kate sits on the end of the bed.\n\nKate looks at the window.",
+                 character_memory=bra)
+    for _i in (1, 2):
+        check(f"topless shot {_i + 1} says the chest is bare",
+              "chest, shoulders and arms are bare" in sh2[_i], sh2[_i][-160:])
+    # AND THE LAYER THAT IS STILL ON MUST NOT GET THIS. reveal_clause speaks when
+    # something is underneath; this clause speaks when nothing is, and the two may
+    # never both speak about one region.
+    sh3 = _shots("A bedroom.\n\nKate unzips the denim skirt and lets it fall.\n\n"
+                 "Kate sits down.\n\nKate looks up.",
+                 character_memory="Kate: she, 28, a denim skirt, a black thong.")
+    check("the uncovering shot says what shows there now",
+          "thong underneath is what shows" in sh3[0], sh3[0][-160:])
+    check("...and never also calls that region bare",
+          all("legs are bare from the hip down" not in s for s in sh3),
+          sh3[1][-160:])
+    check("...and the thong stays described, because it is still on",
+          all("thong" in s.lower() for s in sh3[1:]), sh3[1][:140])
+
+
+def test_the_thong_comes_off_however_it_is_written():
+    """The other half: eight of twenty ways people write underwear coming off did
+    nothing at all, so the garment stayed in the sheet -- and the sheet goes into
+    every shot, which is the garment back on and staying on.
+
+    Worst of them, "lets the thong fall to the floor", matched the RESTORE
+    vocabulary: the node read the author's removal and enacted its opposite."""
+    print("\n=== the thong comes off however the beat is written ===")
+    mem = "Kate: she, 28, a denim skirt, a black thong."
+    for _beat in ("Kate hooks her thumbs in the thong and steps out of it.",
+                  "Kate pushes the thong down her legs.",
+                  "Kate lets the thong fall to the floor.",
+                  "Kate shimmies out of the thong.",
+                  "Kate pushes the thong off her hips."):
+        # The skirt goes first, in a wording that always worked, so what is under
+        # test is the second beat alone. It matters that the skirt IS off: while it
+        # is on, the hips are covered by it and calling them bare would be a lie --
+        # which is the one thing the suppression this work relaxed was right about.
+        sh = _shots("A tiled bathroom with a wet floor.\n\n"
+                    "Kate unzips the denim skirt and steps out of it.\n\n" + _beat
+                    + "\n\nKate steps into the shower.\n\nKate turns under the water.",
+                    character_memory=mem)
+        check(f"off and stays off: {_beat[5:46]!r}",
+              all("thong" not in s.lower() for s in sh[2:]), sh[2][:130])
+        check(f"...and the hips are named instead: {_beat[5:34]!r}",
+              all("legs are bare from the hip down" in s for s in sh[2:]),
+              sh[2][-150:])
+    # A FIXTURE IS NOT A GARMENT. A removal is read by POSITION, not by vocabulary,
+    # so that an author can write a garment this file has never heard of -- and
+    # position cannot tell a shower from a shirt. "Kate steps out of the shower" is
+    # the same sentence shape as "Kate steps out of the thong", and the scene lists
+    # the shower the way a sheet lists a skirt, so the shower was undressed off her
+    # and scrubbed out of every later shot. In a bathroom scene.
+    room = ("A tiled bathroom. A glass shower, a bath, a wooden stool.\n\n"
+            "Kate steps out of the shower.\n\nKate reaches for the towel.\n\n"
+            "Kate looks in the mirror.")
+    sh4 = _shots(room, character_memory=mem)
+    for _i, _s in enumerate(sh4):
+        check(f"shot {_i + 1} still has its shower", "shower" in _s.lower(), _s[:130])
+
+
 def test_a_breath_does_not_hold_the_branch_open():
     """REPORTED: micro-babble at the start of a scene, as somebody goes to talk.
 
@@ -7251,6 +7359,8 @@ def main():
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
     test_a_squat_survives_speech_and_undressing()
+    test_what_comes_off_in_the_bathroom_stays_off()
+    test_the_thong_comes_off_however_it_is_written()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

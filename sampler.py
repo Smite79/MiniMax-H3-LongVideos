@@ -858,7 +858,22 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose="", body=""):
     inventing one, and the keyframe then carried the invention forward."""
     if not regions:
         return ""
-    under = {str(u).lower() for u in (covers or {})}
+    # ...AND ONLY WHILE IT IS STILL ON. `covers` is read off the SHEET, and the
+    # sheet is never edited, so a thong listed under a skirt went on suppressing
+    # this clause long after the thong had come off as well -- and a full strip is
+    # the one case this clause matters most in. The hips then had no sentence at
+    # all, an unspecified region is filled by the model's own prior, the prior for
+    # a hip is underwear, and the keyframe carried what it invented into every
+    # later shot. Reported as a thong restored a beat after she undressed.
+    #
+    # It cost the bra half too, which is the report this function was written for:
+    # a sheet that layered the bra under a shirt suppressed the chest clause by
+    # this same line, so the fix only ever worked for a sheet that did not.
+    #
+    # reveal_clause already filters itself the same way -- it is silent for an
+    # under-layer coming off in the same breath -- so the two still never both
+    # speak, which is the only thing this suppression was for.
+    under = {str(u).lower() for u in (covers or {}) if not names_any(u, gone)}
     said, out = set(), []
     for _region in regions:
         for rx, region, sentence in _REGION_OF:
@@ -899,8 +914,19 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose="", body=""):
             f"{whose}: " + joined
     # ...AND WHOSE BODY IT IS. A bare region with no body named is anatomy left to the
     # prior, and at cfg 1 nothing later takes back what the prior draws. See body_of.
+    # POSITIVELY PHRASED, to the last clause. This ended ", with nothing else worn
+    # there" -- a negation, in the one sentence whose whole purpose is to stop the
+    # model filling a region from its own prior, and at cfg 1 there is no negative
+    # prompt to carry it: "nothing else worn" offers the word worn and no picture.
+    # It went unnoticed because the clause could only reach a shot whose sheet put
+    # no layer under the garment, and the suite that checks every guard sentence for
+    # a negation had no such scene until the suppression was fixed.
+    #
+    # What replaces it says the same thing as a surface, which is what a model
+    # renders: the skin is the outermost thing on that part of the body. Same move
+    # under_clause made for the cover it describes.
     return " " + joined + (f", on {body}" if body else "") + \
-        ", with nothing else worn there."
+        ", the skin itself the outermost surface there."
 
 
 def defer_tag_for(text, items):
@@ -3208,6 +3234,16 @@ _TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
 # ...and verbs that are a removal on their own, needing no particle.
 # One definition, in the engine. See engine._UNDO_VERB.
 _UNDO_VERB = engine._UNDO_VERB
+# Verbs that only take a garment off with the preposition that says so. Kept apart
+# from _STRIP_VERB on purpose: that list also builds the DISPLACEMENT reader, and a
+# bare "gets" or "pushes" there reads "gets down on her knees" and "pushes the door
+# open" as garments being moved. Here they are only ever matched with "out of",
+# "clear of", "off" or a destination, which is where the meaning lives.
+_OUT_OF_VERB = (r"get(?:s|ting)?|got|shimm(?:y|ies|ied|ying)|squirm(?:s|ed|ing)?|"
+                r"climb(?:s|ed|ing)?|ease[sd]?|easing|back(?:s|ed|ing)?|"
+                r"step(?:s|ped|ping)?|wriggle[sd]?|wiggle[sd]?|struggle[sd]?")
+_PUSH_VERB = (r"push(?:es|ed|ing)?|shove[sd]?|skim(?:s|med|ming)?|ease[sd]?|"
+              r"easing|roll(?:s|ed|ing)?|work(?:s|ed|ing)?")
 
 _REMOVAL_PROSE = re.compile(
     r"\b(?:" + _UNDO_VERB + r")\b"
@@ -3225,7 +3261,41 @@ _REMOVAL_PROSE = re.compile(
     # the garment sits between the verb and the particle -- "lifts her top over her
     # head" -- and the object span is read forward from the end of the match.
     r"|\b(?:" + _STRIP_VERB + r")\b"
-    r"(?=[^.;!?]{0,40}?\bover\s+(?:her|his|their|the)\s+head\b)",
+    r"(?=[^.;!?]{0,40}?\bover\s+(?:her|his|their|the)\s+head\b)"
+    # OUT OF IT, CLEAR OF IT, FREE OF IT. These verbs say nothing on their own --
+    # "gets down", "eases back", "climbs up", "backs away" -- so they are kept out
+    # of _STRIP_VERB, which also feeds the DISPLACEMENT reader, where a bare "gets"
+    # would read every "gets down on her knees" as a garment being moved. With the
+    # preposition in front of a garment there is no second reading: you cannot get
+    # out of a thong and still have it on. The engine's own state reader has had
+    # `gets out of` since it was written; this one did not, so the state knew the
+    # garment was off while the text went on describing it as worn.
+    r"|\b(?:" + _OUT_OF_VERB + r")\s+(?:out|clear|free)\s+of\b"
+    # PUSHED OR SHOVED OFF. push and shove live in the displacement reader and not
+    # in the strip verbs, so "pushes the thong off her hips" was a displacement at
+    # best -- and in practice nothing at all, because the displacement pattern
+    # wants the direction word where this sentence puts a body part. The garment
+    # stayed described as worn in every later shot.
+    r"|\b(?:" + _PUSH_VERB + r")\s+(?:off|away)\b"
+    r"|\b(?:" + _PUSH_VERB + r")\b(?=[^.;!?]{0,40}?\b(?:off|away)\b)"
+    # DOWN PAST THE HIPS. "down" on its own stays a displacement, for exactly the
+    # reason the comment above gives: it leaves the garment ON, "around the thighs
+    # or the hips". Down her LEGS, her knees, her ankles, or down to the floor is
+    # the garment travelling past all of that, with nothing left holding it up.
+    # The two readings are separated by the part of the body named -- and the two
+    # positions this deliberately excludes are the two that comment names.
+    r"|\b(?:" + _STRIP_VERB + r"|" + _PUSH_VERB + r")\b"
+    r"(?=[^.;!?]{0,40}?\bdown\s+(?:(?:her|his|their|the)\s+"
+    r"(?:legs?|knees?|calves|shins?|ankles?|feet)\b|(?:and\s+)?(?:off|away)\b|"
+    + engine.TO_THE_FLOOR + r"))"
+    # ...AND ONTO THE FLOOR. A garment dropped, let fall, kicked or thrown onto the
+    # floor is off the body by the end of the sentence, whatever verb carried it
+    # there. `drop` and `let` are the RESTORE vocabulary as well -- that is the
+    # same ambiguity restored_garments resolves, and it resolves it the same way,
+    # on where the garment lands. See engine.FLOOR.
+    r"|\b(?:" + _STRIP_VERB + r"|" + _PUSH_VERB + r"|drop(?:s|ped|ping)?|"
+    r"let(?:s|ting)?|lob(?:s|bed)?|fling(?:s|ing)?|flung|discard(?:s|ed|ing)?)\b"
+    r"(?=[^.;!?]{0,40}?" + engine.TO_THE_FLOOR + r")",
     re.I)
 
 
@@ -6693,12 +6763,52 @@ _OBJECT_END = re.compile(r"(?:,|;|\.|\bexposing\b|\brevealing\b|\bshowing\b|\ble
 # taken off -- "the tight and the her and the back come off during this shot".
 _NOT_A_GARMENT = frozenset("""
 the a an and or her his its their our your this that these those
+"""
+# PRONOUNS, AND ONE OF THEM DESTROYED THE CHARACTER ENTRY. The object span runs to
+# the next clause boundary and "and" is not one -- deliberately, so that "unzips her
+# jacket and pulls it off" reads as one removal -- which puts the SUBJECT of the
+# next clause inside the span. "Kate pulls off the jumper and she sits down" offered
+# "she", and a sheet declares its pronoun exactly the way it lists a garment
+# ("Kate: she, 28, a wool jumper"), so the positional entry-head test said yes.
+#
+# The shot then said "The wool jumper and the she come off during this shot", and
+# the scrub drops the whole comma-separated entry it matched -- so "Kate: she, 28, a
+# wool jumper, a denim skirt." became "28, a denim skirt." in every later shot. Name
+# gone, pronoun gone, person gone: shots with nobody described in them, which is the
+# cost this file already records for scrubbing a sheet line.
+             """
+she he him them they us we you one both each either neither
+herself himself themselves myself yourself itself
+somebody someone anybody anyone nobody everybody everyone
 off from over under onto into out down up away through across behind
 front side left right rest way bit end edge
 back neck chest waist hips hip wrist wrists ankle ankles arm arms hand hands
 leg legs thigh thighs knee knees foot feet shoulder shoulders head face mouth
 lips hair skin body torso stomach belly chin jaw eyes ear ears
 floor ground wall room air
+"""
+# FIXTURES AND FURNITURE. A garment is recognised by POSITION here, not by
+# vocabulary -- see the note above infer_removals, and the reason is good: an
+# author writes garments this file has never heard of, and a vocabulary would
+# drop them silently. The cost is that position cannot tell a shower from a
+# shirt. "Kate steps out of the shower" is the same shape as "Kate steps out of
+# the thong", and the scene paragraph lists the shower the same way a sheet
+# lists a skirt -- so the shower was taken off her and scrubbed out of every
+# later shot, in a bathroom scene, which is a room that quietly stops existing.
+# "Kate kicks the stool away" took the stool.
+#
+# So the list is the other way round: not what a garment IS, but the handful of
+# things a person can step out of, get off, drop onto or kick away that are
+# plainly not worn. Anything not named here still reaches the positional test,
+# which is what keeps an unheard-of garment working.
+             """
+shower showers bath baths bathtub tub tubs basin sink sinks toilet loo cubicle
+stall stalls bed beds sofa sofas couch couches chair chairs stool stools bench
+seat seats armchair table tables desk desks counter shelf shelves cupboard
+cabinet drawer drawers door doors doorway window windows mirror curtain
+car cars cab taxi van truck lift elevator stairs step steps
+kitchen bathroom bedroom hallway corridor landing garden street pavement
+water pool puddle steam tiles tile mat mats rug rugs carpet basket hamper
 """.split())
 
 # Where a scene's wardrobe entry ENDS. A garment word is the HEAD of its phrase --
@@ -6863,6 +6973,22 @@ def _in_a_request(text, at):
     return at <= (start + stop.start() if stop else len(text or ""))
 
 
+# The object of a removal verb when the beat has already named the garment: "and
+# steps out of it". Anchored at the start of the object span, so a pronoun further
+# along the sentence is not mistaken for the object.
+_PRONOUN_OBJECT = re.compile(r"\s*(?:it|them|these|those)\b", re.I)
+_SENTENCE_BREAK = re.compile(r"[.;!?]\s+")
+
+
+def _sentence_before(beat, at):
+    """The sentence `at` is in, up to `at`. The pronoun's antecedent lives here.
+
+    A beat is a paragraph and can hold several sentences. "It" reaches back across
+    a comma or an "and", not across a full stop."""
+    cut = max((m.end() for m in _SENTENCE_BREAK.finditer(beat[:at])), default=0)
+    return beat[cut:at]
+
+
 def infer_removals(beat, scene):
     """Garments this beat takes off, read from its own prose. [] when none.
 
@@ -6881,6 +7007,7 @@ def infer_removals(beat, scene):
         # Asked for is not done. See _in_a_request.
         if _in_a_request(beat, m.start()):
             continue
+        _before = len(found)
         tail = beat[m.end():]
         cut = _OBJECT_END.search(tail)
         span = tail[:cut.start()] if cut else tail
@@ -6933,6 +7060,37 @@ def infer_removals(beat, scene):
                          scene, re.I):
                 continue
             found.append(low)
+        # "...AND STEPS OUT OF IT." The object is a pronoun, and the garment was
+        # named one clause earlier -- which is how most undressing is actually
+        # written: the hands arrive first ("hooks her thumbs in the thong"), the
+        # removal second, and by then the thing has a pronoun. The word loop above
+        # cannot see a pronoun at all; it skips anything under three letters. So the
+        # removal verb matched, the span held nothing it recognised, and NOTHING came
+        # off -- the sheet went on dressing her in the garment in every later shot,
+        # which is the author's removal silently reversed.
+        #
+        # Resolved the way the unnamed restore is: only when there is exactly one
+        # thing it can mean. The candidate has to be a garment by vocabulary AND an
+        # entry the sheet dresses somebody in, and it is read from THIS SENTENCE only
+        # -- a garment mentioned in an earlier sentence of the same beat is not what
+        # "it" refers to, and guessing across a full stop is how a coat comes off in
+        # a beat about a towel.
+        if len(found) == _before and _PRONOUN_OBJECT.match(span):
+            _near = []
+            for _g in garments_in(_sentence_before(beat, m.start())):
+                _low = engine.singular_garment(_g) or _g
+                if (_low in _NOT_A_GARMENT or _RESTRAINT_WORD.match(_low)
+                        or not _is_entry_head(_low, scene) or _low in _near):
+                    continue
+                _near.append(_low)
+            # Compared on the garment KEY, not the word. The earlier clause names
+            # the thing in full ("the chastity belt") while the word loop recorded
+            # its head ("belt"), so a plain membership test read them as two
+            # garments and took the same one off twice.
+            if len(_near) == 1 and not any(engine._garment_key(x)
+                                           == engine._garment_key(_near[0])
+                                           for x in found):
+                found.append(_near[0])
     # A garment the beat says is EXPOSED cannot also be one it takes off. "Pulls off
     # her coat to show the jumper underneath" ran the removal verb's object span past
     # "to show" and took the jumper with it -- so the one garment the beat exists to
@@ -9147,7 +9305,15 @@ class H3LongVideos:
                 _name_it = (len(_rows) > 1 or len(_who_here or []) > 1
                             or any(_n in _carried_on for _n, _r, _o in _rows))
                 _bare = "".join(
-                    bare_hold(_rg, covers, _on, whose=(_n if _name_it else ""),
+                    bare_hold(_rg, covers, _on,
+                              # WHAT HAS COME OFF, so a layer the sheet puts
+                              # underneath stops suppressing the clause once it
+                              # has come off too. Cumulative, not this beat's:
+                              # this path exists to speak on the shots AFTER the
+                              # removal. Minus anything an `add:` put back on,
+                              # which is worn again and is covering again.
+                              [g for g in gone if g not in restored],
+                              whose=(_n if _name_it else ""),
                               body=body_of(sheet_pronoun(
                                   dict(sheet_lines(shot_sheet)).get(_n, ""))))
                     for _n, _rg, _on in _rows)
