@@ -52,8 +52,6 @@ class ShotPlan:
 @dataclass
 class PreparedVideo:
     """Resolved inputs consumed by the render stage; model/tensor handles are shared."""
-    _mix_bed: object
-    _mix_room: object
     _placed_shots: object
     _returns: object
     _soft_landing: object

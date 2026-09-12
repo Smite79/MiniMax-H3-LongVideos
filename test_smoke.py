@@ -778,37 +778,6 @@ def test_a_pronoun_pointing_away_keeps_the_person_it_means():
           "handcuffs" in sh[-1] or "cuffs" in sh[-1], sh[-1][-150:])
 
 
-def test_one_object_has_one_voice_across_beats():
-    print("\n=== the same prop sounds like the same prop every beat ===")
-    # Reported: the sounds do not sound the same per beat. foley_for was seeded with
-    # the film's seed plus the SHOT INDEX, and that one seed drives the noise texture,
-    # the event jitter AND the room reverb -- so a chain named in three consecutive
-    # beats was built three times from three different generators and came back as
-    # three different chains in three different rooms. The room is a property of the
-    # PLACE, which the recipe's own comment says, and it was being re-rolled per shot.
-    _A = S._audio_module
-    sr = 44100
-    n3, n45 = sr * 3, int(sr * 4.5)
-    a = S.foley_for("chain links dragging", n3, sr, seed=7)
-    b = S.foley_for("chain links dragging", n3, sr, seed=7)
-    c = S.foley_for("cuffs knocking", n3, sr, seed=7)
-    d = S.foley_for("chain links dragging", n3, sr, seed=99)
-    e = S.foley_for("chain links dragging", n45, sr, seed=7)
-    check("one object, one voice: the same phrase is the same sound",
-          a is not None and b is not None and torch.equal(a, b))
-    check("...a different object is a different sound", not torch.equal(a, c))
-    check("...a different film seed is a different object", not torch.equal(a, d))
-    check("...and a longer beat lays its events out over the longer span",
-          e is not None and e.shape[-1] != a.shape[-1])
-    check("the phrase seed does not move between runs",
-          _A.phrase_seed("chain links dragging") == _A.phrase_seed("chain links dragging")
-          and _A.phrase_seed("cuffs knocking") != _A.phrase_seed("chain links dragging"))
-    check("...and it is not Python's salted hash",
-          _A.phrase_seed("chain links dragging") == _A.phrase_seed("chain links dragging"))
-    # A phrase with no recipe still builds nothing -- vocals are never synthesised.
-    check("a vocal has no recipe", S.foley_for("whimpering", n3, sr, seed=7) is None)
-
-
 def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
     print("\n=== one person's feeling is not worn by everybody in the shot ===")
     # Reported: actions performed by all the characters when that is not the case.
@@ -4555,6 +4524,88 @@ def test_a_tight_frame_drops_wardrobe_it_cannot_contain():
     check("a subjectless close-up changes nothing",
           "denim shorts" in bare.lower(), bare[:200])
 
+def test_the_soundtrack_is_the_models_own():
+    """REPORTED: "Just get rid of the ambient sounds all together. They sound horrid.
+    Go back to the model's natural audio."
+
+    The node used to build the non-vocal half of the soundtrack itself -- a room tone
+    shaped from the scene's own wording, and 21 foley recipes laid into the shots whose
+    audio branch is pinned to silence. The reasoning was sound: a pinned shot cannot
+    get audio from the model at all, because prompt text never opens a branch, so
+    auto_sound was writing sounds into prompts that could not make them.
+
+    It still did not pass. Reported first as footsteps sounding like heartbeats and a
+    bathroom that tapped; then, once both of those measured clean, as horrid anyway.
+    Synthesis that measures right and sounds wrong is the end of that road.
+
+    So the test is the absence: what comes out is what the model made, and neither
+    level widget may move a single sample of it."""
+    print("\n=== the soundtrack is the model's own ===")
+    P = ("A tiled bathroom. The shower runs and water moves in the pipes.\n\n"
+         "Kate walks across the tiles to the shower.\n\n"
+         "Kate stands under the water.")
+
+    def _run(**kw):
+        # The fake decoder draws unseeded noise, so two runs differ unless the global
+        # generator is pinned. Without this the comparison below cannot mean anything
+        # -- and it quietly did not, the first time it was written.
+        torch.manual_seed(12345)
+        return run_node(P, character_memory="Kate: she, 28, a towel.", **kw)[1]["waveform"]
+
+    base = _run(ambient_level=0.0, foley_level=0.0)
+    check("the run is reproducible with the seed pinned",
+          torch.equal(base, _run(ambient_level=0.0, foley_level=0.0)))
+    for _al, _fl in ((0.9, 0.9), (0.25, 0.35), (1.0, 0.0), (0.0, 1.0)):
+        check(f"ambient_level={_al} foley_level={_fl} changes not one sample",
+              torch.equal(base, _run(ambient_level=_al, foley_level=_fl)))
+    # THE BUILDERS ARE GONE, not merely unreachable. A dead synthesiser behind a
+    # level of 0 is a thing that comes back.
+    for _n in ("foley_for", "synth_ambient", "plain_bed", "_FOLEY", "phrase_seed",
+               "bed_recipe", "_BED_RECIPE", "_BED_EVENTFUL", "_BED_RMS", "_MODES",
+               "_band", "_hits", "_even", "_contact", "_flow", "_creak",
+               "_gait", "_walk", "_step_period", "_MOTION_TIMED", "motion_envelope"):
+        check(f"no builder named {_n!r} survives", not hasattr(S, _n))
+    check("ShotAudio no longer offers to accept built foley",
+          not hasattr(S.ShotAudio(False, True, False, True, 0.0, S.AUDIO_LATENT_FPS),
+                      "accepts_built_foley"))
+    # ...and no call site is left behind either. The same check test_verbatim makes on
+    # the guard text it banned: the source is the evidence.
+    _src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    for _gone in ("foley_for(", "synth_ambient(", "plain_bed(", "motion_envelope(",
+                  "_foley_on", "accepts_built_foley"):
+        check(f"no call site remains: {_gone!r}", _gone not in _src)
+    # WIDGET POSITIONS ARE UNTOUCHED. Both levels stay where they are even though one
+    # of them now does nothing: widgets are restored BY POSITION out of a saved
+    # workflow, so deleting one in the middle loads the wrong number into every widget
+    # after it -- here that would be four, ending at hold_levels.
+    _opt = list(S.H3LongVideos.INPUT_TYPES()["optional"].keys())
+    check("ambient_audio, ambient_level and foley_level keep their positions",
+          _opt[34:37] == ["ambient_audio", "ambient_level", "foley_level"])
+    check("...and the four after them have not shifted",
+          _opt[37:41] == ["speech_lead_seconds", "speech_tail_seconds", "beat_leads",
+                          "hold_levels"])
+    # A WIRED FILE STILL PLAYS. That is the user's own recording, which is a different
+    # thing from ambience the node invents: not synthesised, conditions nothing, and it
+    # cannot put a voice in a wordless shot. It is the path the info note points at.
+    _bed = {"waveform": torch.full((1, 2, 8000), 0.5), "sample_rate": 44100}
+    _mixed, _note = S.mix_ambient(torch.zeros((1, 2, 16000)), 44100, _bed, 0.5)
+    check("a wired bed reaches the soundtrack", float(_mixed.abs().max()) > 0.1)
+    check("a wired bed at level 0 is a no-op",
+          torch.equal(S.mix_ambient(torch.zeros((1, 2, 16000)), 44100, _bed, 0.0)[0],
+                      torch.zeros((1, 2, 16000))))
+    check("...as is no bed at all",
+          torch.equal(S.mix_ambient(torch.zeros((1, 2, 16000)), 44100, None, 0.9)[0],
+                      torch.zeros((1, 2, 16000))))
+    # THE CONSEQUENCE IS REPORTED rather than left to be discovered: a wordless shot is
+    # pinned to silence and is now silent, and the pin is deliberately untouched -- it
+    # is what stops a free branch filling itself with a voice.
+    _info = run_node(P, character_memory="Kate: she, 28.", foley_level=0.35)[2]
+    check("info says the level does nothing now", "does nothing any more" in _info)
+    check("...and says what that costs", "is SILENT" in _info)
+    check("...and how to get sound back",
+          "write the sound into that beat" in _info and "ambient_audio" in _info)
+
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -6145,142 +6196,6 @@ def test_a_garment_does_not_appear_at_the_first_frame():
     check("...and is described as worn in that shot", "Her blue shorts." in osh[3])
 
 
-def test_the_ambient_bed_reaches_the_soundtrack():
-    """END TO END, and testing the WIRING. The unit tests call mix_ambient directly,
-    which says nothing about whether the node ever calls it -- the same gap that let
-    the sound-clause budget test pass with its fix reverted.
-
-    It goes on ONCE, over the joined soundtrack, so the loop runs continuously
-    through the cuts instead of restarting at every one."""
-    print("\n=== the ambient bed reaches the soundtrack ===")
-    import math
-    P = ("A room.\n\nHe walks in.\n\nShe follows him and says: \"Wait.\"")
-    # THE FAKE MODEL IS RANDOM: two identical runs differ by 0.69 peak, so nothing
-    # here may compare one run's waveform against another's. An earlier version of
-    # this test did, and "the bed is not the dry one" passed on that alone. What is
-    # sound to assert is the node's own account -- the note comes from mix_ambient's
-    # return value and from nowhere else, so it is present exactly when the call is.
-    n = int(run_node(P)[1]["waveform"].shape[-1])
-    sr = 44100
-    tt = torch.arange(sr, dtype=torch.float32) / sr          # 1s, non-integer cycles
-    bed = {"waveform": (torch.sin(2 * math.pi * 97.3 * tt) * 0.4
-                        ).unsqueeze(0).repeat(2, 1).unsqueeze(0),
-           "sample_rate": sr}
-    wet_out = run_node(P, ambient_audio=bed, ambient_level=0.3)
-    wet, info = wet_out[1]["waveform"], wet_out[2]
-    check("the soundtrack keeps its length", int(wet.shape[-1]) == n)
-    check("the node actually mixes the bed", "ambient bed was laid under" in info)
-    check("...over the whole soundtrack", "under the whole soundtrack" in info)
-    check("...and loops the short one", "looped with a crossfade" in info)
-    # Level 0 is a wired bed that costs nothing until it is asked for.
-    off = run_node(P, ambient_audio=bed, ambient_level=0.0)
-    check("level 0 mixes nothing", "ambient bed was laid under" not in off[2])
-    check("...and still renders", int(off[1]["waveform"].shape[-1]) > 0)
-    # WITH NOTHING WIRED, the bed is BUILT from the scene -- no file, no second
-    # model pass. That is the default, so it is the path that has to work.
-    built = run_node("A tiled bathroom.\n\nHe walks in.\n\n"
-                     "She follows him and says: \"Wait.\"", ambient_level=0.25)
-    check("a bed is built with nothing wired", "built from the scene" in built[2])
-    check("...naming what it read", "tiled walls ringing" in built[2])
-    check("...and it is mixed", "ambient bed was laid under" in built[2])
-    # A wired file OVERRIDES the built one rather than stacking with it.
-    check("a wired bed is used instead of a built one",
-          "built from the scene" not in info)
-    # WHEN THE SHAPED BED WILL NOT BUILD, the plain one goes on instead -- never
-    # nothing, and never "go and wire a file". Forced, because it should not happen
-    # on its own.
-    _real = S.synth_ambient
-    try:
-        S.synth_ambient = lambda *a, **k: None
-        fb = run_node("A tiled bathroom.\n\nHe walks in.", ambient_level=0.25)[2]
-    finally:
-        S.synth_ambient = _real
-    check("a failed shape still gets a bed", "ambient bed was laid under" in fb)
-    check("...and says it fell back", "plain fallback" in fb)
-    check("...without telling anyone to wire a file", "Wire a recording there" not in fb)
-    # A description of EVENTS gets the room, and says so rather than disappointing.
-    ev = run_node("A garden in the morning.\n\nHe walks in.", ambient_level=0.25)[2]
-    check("an eventful description is honest about tone",
-          "names EVENTS" in ev, ev[-200:] if "built from" in ev else "no bed built")
-    # ...and the silent conditioning is untouched by any of it: the bed is a MIX and
-    # must not re-open an audio branch the way an inferred bed did.
-    check("wordless shots are still pinned",
-          "have no quoted line and no sound described" in info)
-
-
-def _foley_spans(prompt, n_shots_hint=None, **kw):
-    """Per-shot mean of ONLY the sound this node builds, isolated by subtraction.
-
-    These tests used to read `mean > 0.25` on the finished soundtrack, which is not
-    a measurement of the built sound: it is the built sound PLUS whatever else is in
-    that span, and room tone goes under every shot whose branch is already open. The
-    0.25 was tuned against a fixture that decoded every shot to the same inflated
-    length; on H3's real grid the same room tone fills a larger fraction of a shorter
-    shot, and the baseline crosses 0.25 with the node building nothing there. `info`
-    is unambiguous that it built nothing -- "sound built into the shot itself on shot
-    2", and no other -- so the threshold was reading the floor, not the signal.
-
-    Running the same prompt with foley_level=0 gives that floor, and the difference
-    is the built sound alone. foley_for is stubbed to a flat 1.0, so a span that
-    receives it moves by a wide margin and a span that does not moves by ~0."""
-    _real = S.foley_for
-    try:
-        S.foley_for = lambda phrase, n, sr, seed=0, **_kw: torch.ones(int(n))
-        on = run_node(prompt, **kw)
-    finally:
-        S.foley_for = _real
-    off = run_node(prompt, **dict(kw, foley_level=0.0))
-    wav_on, wav_off, n = on[1]["waveform"], off[1]["waveform"], on[6]
-    span_on = int(wav_on.shape[-1]) // max(n, 1)
-    span_off = int(wav_off.shape[-1]) // max(n, 1)
-    deltas = [float(wav_on[..., i * span_on:(i + 1) * span_on].mean())
-              - float(wav_off[..., i * span_off:(i + 1) * span_off].mean())
-              for i in range(n)]
-    return on, deltas, [i + 1 for i, d in enumerate(deltas) if d > 0.3]
-
-
-def test_built_sound_lands_in_the_right_shot():
-    """END TO END, and testing the PLACEMENT rather than the note. The note names the
-    shot from the same loop that does the mixing, so it would read correctly even if
-    the span arithmetic were wrong. foley_for is replaced with a flat marker, which
-    shows up as a DC offset in exactly the samples it was written to."""
-    print("\n=== built sound lands in the right shot ===")
-    mem = "Ana: she, 28, grey coat.\nGuard: he, 40, uniform."
-    P = ("A concrete room.\n\nAna stands by the table.\n\n"
-         "The guard closes the cuffs around her wrists.\n\n"
-         # The speaking shot STAGES A SOUND too, so leaving it alone is a real
-         # assertion: its branch is open and already making that sound from the
-         # same prose, and building over it would double every rattle.
-         "The guard drags the chain and says: \"Sit down.\"")
-    out, means, hot = _foley_spans(P, character_memory=mem, ambient_level=0.0,
-                                   foley_level=0.5, shot_length="fixed")
-    wav, info, per_shot = out[1]["waveform"], out[2], out[4]
-    check("info names the shot", "sound built into the shot itself" in info)
-    # The fake model is random with mean ~0, so a span carrying the marker has a
-    # mean near +0.5 and every other span sits near 0.
-    #
-    # EQUAL SPANS NEED EQUAL SHOTS, and shot_length="fixed" is what promises that.
-    # This read the soundtrack as n equal slices while the shots were sized "from
-    # the beat", i.e. each from its own line -- so the slice boundaries were not the
-    # shot boundaries and a marker in one shot bled into its neighbours' means. It
-    # passed only because the stub VAE decoded every shot to the same length
-    # regardless of what it was planned at (t*4), so the fixture was hiding the
-    # test's own arithmetic. With the stub on H3's real grid the shots differ, as
-    # they do in a render, and the assumption has to be stated rather than inherited.
-    n_shots = out[6]
-    check("shot 2 carries the built sound", 2 in hot, f"deltas {[round(m,2) for m in means]}")
-    check("the speaking shot does not", 3 not in hot,
-          f"means {[round(m,2) for m in means]}")
-    check("the shot with nothing to sound does not", 1 not in hot,
-          f"means {[round(m,2) for m in means]}")
-    # The switches that turn it off.
-    off = run_node(P, character_memory=mem, ambient_level=0.0, foley_level=0.0)[2]
-    check("foley_level 0 builds nothing", "sound built into the shot" not in off)
-    na = run_node(P, character_memory=mem, ambient_level=0.0, foley_level=0.5,
-                  auto_sound=False)[2]
-    check("auto_sound off builds nothing", "sound built into the shot" not in na)
-
-
 def test_one_picture_two_people_is_reported():
     """Reported: a scene written for two people rendered the same woman twice, and
     the second character was not recognised as a separate person.
@@ -6320,67 +6235,6 @@ def test_one_picture_two_people_is_reported():
                     plan_only=True, ref_image_1=img,
                     character_memory="Kristy: <Picture 1>, she, 26, blonde.")[2]
     check("a solo scene says nothing", "carry a reference picture for one" not in solo)
-
-
-def test_built_sound_reaches_an_effort_shot():
-    """Reported as hearing nothing, and it was self-inflicted.
-
-    The foley mix ran only on shots PINNED TO SILENCE -- right, while the only way a
-    branch opened was the author writing a sound, because then the branch is already
-    making that sound out of the same prose and building over it doubles every
-    footfall. Then the nine effort verbs were made _voiced. _voiced unpins the shot.
-    So the same commit that added "a bed frame working" and "restraints pulling
-    taut" stopped either of them ever being mixed, on precisely the beats they were
-    written for: read from the text, put in the prompt, dropped from the audio.
-
-    An effort branch opened to make a VOICE, and a voice is not a frame or a chain.
-    Tested end to end on the SPAN, not the note -- the note is written by the loop
-    that does the mixing and would read correctly even if the arithmetic were wrong."""
-    print("\n=== built sound reaches an effort shot ===")
-    P = ("A cell.\n\nShe sits on the bunk.\n\n"
-         "She strains against the cuffs.\n\n"
-         "They rock together on the bed.")
-    out, means, hot = _foley_spans(P, ambient_level=0.0, foley_level=0.5)
-    wav, info, n_shots = out[1]["waveform"], out[2], out[6]
-    shown = f"deltas {[round(m, 2) for m in means]}"
-    check("the restrained effort shot sounds", 2 in hot, shown)
-    check("the furniture effort shot sounds", 3 in hot, shown)
-    check("a shot with nothing to sound stays quiet", 1 not in hot, shown)
-    check("the note says why those two are different",
-          "stage effort, so their branch IS open" in info)
-    # The VOCAL phrase on those shots must not be built -- it has no recipe, and
-    # that is the whole reason a noise shaper may run on an open branch at all.
-    # Checked on the REAL builder: the stub above answers every phrase, including
-    # the vocal one, so asserting this against the stubbed run tests the stub.
-    check("the vocal phrase has no recipe and cannot be built",
-          S.foley_for("unsteady breathing, with gasps and moans of effort",
-                      44100, 44100, seed=0) is None)
-    check("...and no recipe in the table is a voice",
-          not [k for k in S._FOLEY if re.search(
-              r"breath|gasp|moan|voice|speak|whimper|cry|sob|scream|pant", k, re.I)])
-    real = run_node(P, ambient_level=0.0, foley_level=0.5)[2]
-    # Guarded: with the fix reverted there is no note at all, and an IndexError
-    # here reports as a crashed suite rather than as the failure it is.
-    built = (real.split("sound built into the shot")[1].split(". Shot(s)")[0]
-             if "sound built into the shot" in real else "(no foley note)")
-    check("the real note builds the frame", "a bed frame working" in built)
-    check("...and not the breathing beside it", "unsteady breathing" not in built)
-    # An author-written sound still opens the branch and still suppresses the mix:
-    # that shot's audio is already making it.
-    W = ("A cell.\n\nThe chain drags on the concrete, and she says: \"Wait.\"")
-    # Same subtraction as above: what is asserted is that NOTHING was built here,
-    # and the finished level cannot say that -- a shot whose branch is open carries
-    # room tone whether the node built anything or not.
-    _, m2, hot2 = _foley_spans(W, ambient_level=0.0, foley_level=0.5)
-    check("a written sound still suppresses the mix", not hot2,
-          f"deltas {[round(m, 2) for m in m2]}")
-    # Silencing OFF says "pin nothing, let the model sound every shot" -- and then
-    # there is no shot the model cannot make, which is the only reason anything is
-    # built here. The effort shots kept their built layer while the model was also
-    # sounding them from the same prose: the exact doubling the gate exists to stop.
-    off = run_node(P, ambient_level=0.0, foley_level=0.5, silence_nonspeech=False)[2]
-    check("nothing is built when the model sounds everything",
-          "sound built into the shot" not in off)
 
 
 def test_a_collar_chained_to_a_wall_stays_on():
@@ -7219,7 +7073,6 @@ def main():
     test_a_posture_denied_is_not_a_posture_taken()
     test_the_face_plays_the_feeling_the_author_named()
     test_a_pronoun_pointing_away_keeps_the_person_it_means()
-    test_one_object_has_one_voice_across_beats()
     test_a_feeling_belongs_to_the_face_the_beat_pins_it_on()
     test_a_bare_region_says_whose_body_it_is()
     test_a_plural_removal_still_comes_off()
@@ -7293,6 +7146,7 @@ def main():
     test_introducing_somebody_already_in_position()
     test_back_after_a_shot_away()
     test_a_name_with_no_entry_end_to_end()
+    test_the_soundtrack_is_the_models_own()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
@@ -7321,9 +7175,6 @@ def main():
     test_the_sound_clause_is_inside_the_budget()
     test_the_anchor_is_not_read_as_a_room()
     test_a_garment_does_not_appear_at_the_first_frame()
-    test_the_ambient_bed_reaches_the_soundtrack()
-    test_built_sound_lands_in_the_right_shot()
-    test_built_sound_reaches_an_effort_shot()
     test_one_picture_two_people_is_reported()
     test_a_collar_chained_to_a_wall_stays_on()
     test_every_way_of_chaining_a_collar_to_a_wall()

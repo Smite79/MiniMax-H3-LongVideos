@@ -101,8 +101,8 @@ depicts and it follows them; untagged, a reference goes on every shot.
 | `megapixels` | 1.0 is H3's native budget; lower is faster and leaner |
 | `shot_seconds` | the cap on each shot |
 | `shot_length` | `from the beat` sizes each shot from its own line; `fixed` gives every shot `shot_seconds` |
-| `ambient_level` | ambience under the whole soundtrack, built from your scene. 0 is off; 0.15–0.3 is a bed you notice only when it stops |
-| `ambient_audio` | optional — wire a recording to use instead of the built one |
+| `ambient_audio` | optional — wire a recording to play under the whole soundtrack. The node no longer builds one: the audio is the model's |
+| `ambient_level` | how loud that recording plays. 0 is off; 0.15–0.3 is a bed you notice only when it stops. Does nothing with nothing wired |
 
 Ambience is mixed, never prompted. Scoring a silent shot from text needs the audio
 branch left open, and an open branch on a joint model invents a voice for the face to

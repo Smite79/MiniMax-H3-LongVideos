@@ -51,9 +51,6 @@ ShotAudio = _audio_module.ShotAudio
 FrameAccumulator = _runtime_module.FrameAccumulator
 frame_levels = _runtime_module.frame_levels
 apply_levels = _runtime_module.apply_levels
-motion_envelope = _runtime_module.motion_envelope
-MOTION_POOL = _runtime_module.MOTION_POOL
-MOTION_CHUNK = _runtime_module.MOTION_CHUNK
 H3_FPS = _runtime_module.H3_FPS
 AUDIO_LATENT_FPS = _runtime_module.AUDIO_LATENT_FPS
 KEYFRAME_SAFE_AUG = _cond_module.KEYFRAME_SAFE_AUG
@@ -71,26 +68,6 @@ _empty_av_latent = _runtime_module._empty_av_latent
 _auto_tile_t = _runtime_module._auto_tile_t
 _decode_video = _runtime_module._decode_video
 _decode_audio = _runtime_module._decode_audio
-_BED_EVENTFUL = _audio_module._BED_EVENTFUL
-_BED_RMS = _audio_module._BED_RMS
-_BED_RECIPE = _audio_module._BED_RECIPE
-bed_recipe = _audio_module.bed_recipe
-synth_ambient = _audio_module.synth_ambient
-_MODES = _audio_module._MODES
-_band = _audio_module._band
-_hits = _audio_module._hits
-_room = _audio_module._room
-_even = _audio_module._even
-_contact = _audio_module._contact
-_flow = _audio_module._flow
-_creak = _audio_module._creak
-_gait = _audio_module._gait
-_walk = _audio_module._walk
-_step_period = _audio_module._step_period
-_MOTION_TIMED = _audio_module._MOTION_TIMED
-_FOLEY = _audio_module._FOLEY
-foley_for = _audio_module.foley_for
-plain_bed = _audio_module.plain_bed
 _seamless_loop = _audio_module._seamless_loop
 mix_ambient = _audio_module.mix_ambient
 _is_oom = _runtime_module._is_oom
@@ -1341,8 +1318,8 @@ _EFFORT_OBJ = (r"(?:her|his|their|the)\s+(?:backs?|hips?|thighs?|shoulders?|arms
 #
 # THE TRADE RUNS THE OTHER WAY FROM WHAT I ASSUMED. A wrong OPEN branch costs
 # moaning text, a free mouth and a babbling stream that drags the framing with it; a
-# wrong CLOSED one costs a silent shot, and built foley now covers part of even
-# that. So these must corroborate, never fire alone.
+# wrong CLOSED one costs a silent shot -- and that is the whole cost again now that
+# nothing is built to cover it. So these must corroborate, never fire alone.
 #
 # `clench` is gone except standing alone: a clenched jaw or fist is silent tension,
 # which is the opposite of a sound cue.
@@ -8214,78 +8191,51 @@ class H3LongVideos:
                 # APPENDED, like every widget before it. Saved workflows restore
                 # widget values by POSITION with no names stored.
                 "ambient_audio": ("AUDIO", {"tooltip":
-                    "OPTIONAL OVERRIDE. Leave it empty and the bed is BUILT from the "
-                    "scene -- the node has already read what the room sounds like, "
-                    "and room tone is physically shaped noise, so it can be made "
-                    "rather than fetched. No file needed and no second model pass.\n\n"
-                    "Wire a recording here only when you want that recording: a real "
-                    "location, or the events a synthesiser cannot make. Building "
-                    "produces TONE -- air, rumble, plant, a mains hum, water, a "
-                    "clock -- so a scene whose ambience is birdsong or a room full "
-                    "of cutlery gets the room those things are in, not the things. "
-                    "info says when that has happened.\n\n"
-                    "Either way this is a MIX, not conditioning: it plays under what "
-                    "the model generated, at the level you set. That is the "
-                    "difference that makes it work -- ambience has nothing to "
-                    "lip-sync to and asks nothing of the model, so it cannot put a "
-                    "voice in a wordless shot.\n\n"
-                    "Ambience derived in the prompt CANNOT do this. To score a "
-                    "silent shot from text, the audio branch has to be left open, "
-                    "and an open branch on a joint model fills itself -- at 4-8 "
-                    "steps the last audio step resolves 50%-30% of its denoising in "
-                    "one jump, and what it invents there is a voice. Wordless shots "
-                    "keep their silent conditioning and get this bed on top instead, "
-                    "which is what makes them sound like a room rather than a mute.\n\n"
-                    "Looped with a crossfade to the length of the video, resampled if "
-                    "it does not match, and downmixed or spread to match the "
-                    "channels. Anything shorter than the film is fine."}),
+                    "Wire a recording to play UNDER the finished soundtrack. Empty "
+                    "means no bed at all.\n\n"
+                    "This used to be an override on a bed the node BUILT out of the "
+                    "scene's own wording. That builder is gone -- reported as sounding "
+                    "horrid -- so the soundtrack is the model's, and this is the one "
+                    "way to put a room under it.\n\n"
+                    "It is PLAYED, not conditioned on, and that is the point: ambience "
+                    "needs no cooperation from a joint model, has nothing to lip-sync "
+                    "to, and so cannot put a voice in a wordless shot. It is resampled "
+                    "and looped with a crossfade to the length of the film. "
+                    "ambient_level sets how loud."}),
                 "ambient_level": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0,
                     "step": 0.01,
-                    "tooltip": "How loud the bed sits under everything, and the "
-                               "switch that turns it on: above 0 a bed is built "
-                               "from the scene even with nothing wired to "
-                               "ambient_audio. 0 turns it off entirely.\n\n"
-                               "A built bed is normalised to a fixed RMS first, so "
-                               "this means the same thing in every room -- the "
-                               "default 0.25 lands near -34 dBFS, present and well "
-                               "under a spoken line. 0.15-0.3 is a bed you notice "
-                               "only when it stops.\n\n"
+                    "tooltip": "How loud the recording wired to ambient_audio plays "
+                               "under the finished soundtrack. With nothing wired this "
+                               "does nothing -- the bed the node used to BUILD from "
+                               "the scene is gone, reported as sounding horrid, and "
+                               "the audio is the model's.\n\n"
+                               "0.15-0.3 is a bed you notice only when it stops.\n\n"
                                "If the sum would clip, the whole mix is scaled down "
                                "rather than clipped, because clipping distorts the "
                                "line, which is the part worth keeping."}),
                 # APPENDED. Saved workflows restore widget values by position.
                 "foley_level": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.0,
                     "step": 0.01,
-                    "tooltip": "Build the sound an action makes, on shots that have "
-                               "no line.\n\n"
-                               "auto_sound already reads those sounds out of the beat "
-                               "-- cuffs, a chain, a zip, footsteps -- but only as "
-                               "TEXT in the prompt, and text can never open a shot's "
-                               "audio branch, because an open branch on a joint model "
-                               "invents a voice. So a wordless shot staging cuffs "
-                               "going on was pinned to silence and the cue was "
-                               "dropped: the one shot whose point is a sound made "
-                               "none, and the only fix was writing the sound into the "
-                               "beat by hand.\n\n"
-                               "This builds it and mixes it into THAT SHOT'S span "
-                               "instead. It asks nothing of the model, so it cannot "
-                               "babble. Shots that already have a line, or a sound "
-                               "you wrote yourself, are left alone -- their branch is "
-                               "open and making that sound from the same prose, and "
-                               "building over it would double every footfall.\n\n"
-                               "A shot staging EFFORT is the exception and does get "
-                               "built sound, even though its branch is open. It "
-                               "opened to make a VOICE, and a voice is not a bed "
-                               "frame or a chain -- so what is built there is the "
-                               "non-vocal half the model will not make. Lower this "
-                               "if anything doubles.\n\n"
-                               "0.35 puts it about 37 dB below full scale: well clear "
-                               "on a silenced shot, which sits near -65, and about 23 "
-                               "dB under a spoken one. Raise it towards 0.6-0.7 if "
-                               "you want it audible under a voice.\n\n"
-                               "It is synthesis, not a recording: a click, a rattle, "
-                               "a rustle, in the right place. Nothing vocal is ever "
-                               "built. 0 turns it off; needs auto_sound on."}),
+                    "tooltip": "DOES NOTHING. Kept only so saved workflows keep "
+                               "loading: widget values are restored by POSITION with "
+                               "no names stored, so deleting this one would load the "
+                               "wrong number into the four widgets after it.\n\n"
+                               "It used to set how loud the sounds this node BUILT "
+                               "were -- a click, a rattle, a rustle, mixed into the "
+                               "shots whose audio branch is pinned to silence, which "
+                               "cannot get audio from the model at all because prompt "
+                               "text never opens a branch. Removed on the report that "
+                               "it sounded horrid; the soundtrack is the model's now, "
+                               "whole.\n\n"
+                               "WHAT THAT COSTS, said plainly: a shot with no line "
+                               "and no sound you described is pinned to silence and "
+                               "is SILENT. The pin stays -- it is what stops a free "
+                               "branch filling itself with a voice and the face "
+                               "lip-syncing to the babble. To put sound in such a "
+                               "shot, write the sound into that beat, which opens its "
+                               "branch on purpose and lets the model make it; or wire "
+                               "a track to ambient_audio; or lay one under the "
+                               "finished video outside the node."}),
                 # APPENDED. Saved workflows restore widget values by position.
                 "speech_lead_seconds": ("FLOAT", {"default": 0.5, "min": 0.0,
                     "max": 2.0, "step": 0.1,
@@ -8663,7 +8613,7 @@ class H3LongVideos:
         untracked_strip = []        # (shot, items) a group removal the sheet cannot hold
         # Of those, the ones open ONLY because the beat stages effort. The branch
         # is open on both, but for opposite reasons, and built sound has to tell
-        # them apart -- see the foley mix.
+        # them apart. (It used to matter for the foley mix as well, which is gone.)
         inferred_sound = []         # shots given one derived from their action
         restrained = posed = rigid_latched = False
         # Has any BEAT stated a posture yet? The scene fallback for the weight
@@ -8850,12 +8800,11 @@ class H3LongVideos:
         # paragraph, and an anchor describes the camera rather than the room.
         _room = room_tone(scene, _opening) if auto_sound else ""
         _room_src = "the scene" if room_tone(scene) else "the opening beat"
-        # The same two readings, kept for the MIX and not gated on auto_sound.
-        # auto_sound governs what goes in the PROMPT, which is a conditioning-side
-        # question -- the mixed bed conditions nothing, so turning the prompt-side
-        # inference off should not also silence the room.
-        _mix_bed = scene_ambient(anchor, scene) or scene_ambient(anchor, _opening)
-        _mix_room = room_tone(scene, _opening)
+        # The two readings that used to be kept for the MIX as well -- ungated by
+        # auto_sound, because the built bed conditioned nothing -- are gone with the
+        # builder that consumed them. The readings themselves still run for the
+        # PROMPT, a few lines down, which is the conditioning side and the only side
+        # left. See the note at the top of audio.py.
         if _room:
             notes.append(f"room tone read from {_room_src}: {_room}. It goes under the "
                          f"shots whose audio branch is already open -- ones with a line, "
@@ -11825,7 +11774,7 @@ class H3LongVideos:
                     lens[0], 0, len(plan), 0.0)
 
         return PreparedVideo(
-            _mix_bed=_mix_bed, _mix_room=_mix_room, _placed_shots=_placed_shots,
+            _placed_shots=_placed_shots,
             _returns=_returns, _soft_landing=_soft_landing, _tagged_names=_tagged_names,
             ambient_audio=ambient_audio, ambient_level=ambient_level, apply_model_sampling=apply_model_sampling,
             audio_vae=audio_vae, auto_sound=auto_sound, bared_shots=bared_shots,
@@ -11847,8 +11796,6 @@ class H3LongVideos:
 
     def _render(self, prepared):
         """Execute the prepared shots and assemble the video and soundtrack."""
-        _mix_bed = prepared._mix_bed
-        _mix_room = prepared._mix_room
         _placed_shots = prepared._placed_shots
         _returns = prepared._returns
         _soft_landing = prepared._soft_landing
@@ -11915,12 +11862,6 @@ class H3LongVideos:
         fresh = []
         t_start = time.perf_counter()
         aud_out, sr = [], 44100
-        # THE PICTURE'S OWN MOVEMENT, per shot, for the one built sound that has a
-        # sync point. Captured here rather than read back off the finished chain: the
-        # seam trim and the upscalers both change the frame indexing downstream, so a
-        # shot's frames can only be matched to its audio while they are still in hand.
-        # One small vector per shot -- a float per frame gap. See foley_for.
-        shot_motion = []
         # AN UPPER BOUND, NOT AN ESTIMATE. This used to subtract one frame per seam on
         # the assumption that trim_seam drops one from every shot after the first. It no
         # longer does: a shot that opens on no keyframe keeps its first frame, and a
@@ -12300,10 +12241,6 @@ class H3LongVideos:
                     shot_detail.append(frame_detail(imgs[-1]))
             except Exception:
                 pass
-            try:
-                shot_motion.append(motion_envelope(imgs))
-            except Exception:
-                shot_motion.append(None)
             frames.add(imgs)
             aud_out.append(wav["waveform"].to("cpu", copy=True) if cleanup_between_shots
                            else wav["waveform"])
@@ -12385,136 +12322,49 @@ class H3LongVideos:
         audio = torch.cat(aud_out, dim=-1)
         if audio.dtype != torch.float32:
             audio = audio.float()
-        # ...and the ambient bed goes on last, over the joined soundtrack rather than
-        # per shot, so the loop runs continuously through the cuts instead of
+        # ...and a wired ambient file goes on last, over the joined soundtrack rather
+        # than per shot, so it runs continuously through the cuts instead of
         # restarting at each one. A bed that resets every shot is a bed you can hear.
-        # THE BED IS BUILT, not fetched, unless something is wired to ambient_audio.
-        # The node has already read what the room sounds like off the scene -- that
-        # is what auto_sound puts in the prompt -- so the same phrase can be turned
-        # into the sound itself. No file, no second model pass, and shaped noise is
-        # the one source of ambience that physically cannot produce a voice.
+        #
+        # A WIRED FILE IS ALL THAT GOES ON NOW. The node used to BUILD this, out of
+        # the scene's own wording, and build the shot-by-shot foley too -- see the
+        # note at the top of audio.py for what that was and why it is gone. Removed
+        # on the report: "Just get rid of the ambient sounds all together. They sound
+        # horrid. Go back to the model's natural audio."
+        #
+        # What is played here is the user's own recording, which is a different thing
+        # from ambience the node invents: it is not synthesised, it conditions
+        # nothing, and it cannot put a voice in a wordless shot.
         _bed_in, _built = ambient_audio, ""
         if _bed_in is None and float(ambient_level or 0.0) > 0.0:
-            _phrase = " ".join(p for p in (_mix_bed, _mix_room) if p)
-            _synth = synth_ambient(_phrase, int(audio.shape[-1]), int(sr),
-                                   seed=seed, channels=int(audio.shape[1]))
-            _fell_back = False
-            if _synth is None:
-                # A shaped bed that will not build falls back to a plain one rather
-                # than to nothing. Wiring a file is NOT the remedy: the built bed is
-                # the feature and a file is only ever an override, so the floor has
-                # to be here.
-                _synth, _fell_back = plain_bed(int(audio.shape[-1]), int(sr), seed,
-                                               int(audio.shape[1])), True
-            if _synth is None:
-                # SAID, not swallowed. Both builders are defensive so a render never
-                # dies for a bed, and that would otherwise turn a failure into an
-                # output with no ambience and nothing anywhere saying why -- the
-                # exact hole _SILENCE_STATUS exists to close on the other branch.
-                notes.append(
-                    f"AMBIENT LEVEL IS {float(ambient_level):.2f} BUT NO BED WENT ON. "
-                    f"Both the shaped bed and the plain fallback failed to build, "
-                    f"which should not be possible on a soundtrack this node just "
-                    f"produced -- please report it")
-            else:
-                _bed_in = {"waveform": _synth.unsqueeze(0), "sample_rate": int(sr)}
-                _built = (f"built from the scene, not a file: \"{_phrase}\". "
-                          if _phrase else "built as a neutral room tone. ")
-                if _fell_back:
-                    _built += ("The SHAPED bed would not build, so this is the plain "
-                               "fallback -- a rumble rather than the acoustic the "
-                               "scene describes. Worth reporting: it should not "
-                               "happen. ")
-                # Said plainly rather than left to disappoint: this shapes TONE.
-                if any(w in _phrase for w in _BED_EVENTFUL):
-                    _built += ("That description names EVENTS, and this builds tone "
-                               "-- so what went under is the room those things are "
-                               "in, not the things themselves. Wire a recording to "
-                               "ambient_audio if you want the events. ")
-        # FOLEY, into each shot's own span. Only shots pinned to SILENCE: an open
-        # branch is already making its own sound from the same prose, and building
-        # over that would double every footfall. These are the shots that had
-        # nothing -- a wordless beat staging cuffs going on, silent because opening
-        # its branch is what babbles.
-        _foley_on = []
-        if auto_sound and float(foley_level or 0.0) > 0.0 and plan:
-            _at = 0
-            for _i, _w in enumerate(aud_out):
-                _len = int(_w.shape[-1])
-                _lo, _hi, _at = _at, _at + _len, _at + _len
-                if _i >= len(plan):
-                    continue
-                _audio = ShotAudio(
-                    plan.shots[_i].speech, plan.shots[_i].sounded,
-                    plan.shots[_i].voiced_only,
-                    bool(silence_nonspeech), speech_lead_seconds, AUDIO_LATENT_FPS)
-                # ...OR open only because the beat stages EFFORT. The skip above
-                # exists so built sound does not double what an open branch is
-                # already making out of the same prose. That is true when the
-                # AUTHOR wrote the sound, and false for effort: THAT branch opened
-                # to make a voice, and a voice is not a bed frame, a chain or a
-                # cuff. Every recipe here is non-vocal by construction, so on such
-                # a shot the vocal phrase simply has no recipe and drops out on its
-                # own -- what is left is exactly the half the model will not make.
-                #
-                # Missing this undid the recipes in the same commit that added
-                # them: the nine effort verbs became _voiced, _voiced unpins the
-                # shot, and an unpinned shot skips the mix. So "a bed frame
-                # working" and "restraints pulling taut" were read from the beat,
-                # written into the prompt, and then never built -- on precisely the
-                # beats they exist for. Reported as hearing nothing.
-                #
-                # Gated on silence_nonspeech with everything else. Turning that off
-                # says "pin nothing, let the model sound every shot" -- and then
-                # there is no shot the model cannot make, which is the entire reason
-                # anything is built here. Without this the effort shots kept their
-                # built layer while the model was also sounding them from the same
-                # prose, which is the doubling this whole gate exists to avoid.
-                if not _audio.accepts_built_foley or _len < 64:
-                    continue
-                _made = []
-                for _ph in plan.shots[_i].events:
-                    # NOT seed + shot. One object, one voice, every beat it is named
-                    # in -- and one room for the film. See foley_for.
-                    _fx = foley_for(_ph, _len, int(sr), seed=int(seed),
-                                    motion=(shot_motion[_i]
-                                            if _i < len(shot_motion) else None),
-                                    fps=H3_FPS)
-                    if _fx is None:
-                        continue
-                    audio[..., _lo:_hi] = (audio[..., _lo:_hi]
-                                           + _fx.to(audio.dtype).unsqueeze(0)
-                                           * float(foley_level))
-                    _made.append(_ph)
-                if _made:
-                    _foley_on.append((_i + 1, _made, _audio.voiced_only))
-        if _foley_on:
-            _eff = [n for n, _, v in _foley_on if v]
             notes.append(
-                "sound built into the shot itself on "
-                + "; ".join(f"shot {n}: {', '.join(m)}" for n, m, _v in _foley_on)
-                + (f". Shot(s) {', '.join(str(n) for n in _eff)} stage effort, so "
-                   f"their branch IS open and the model is making the voice -- what "
-                   f"is built there is only the non-vocal half it will not make, the "
-                   f"frame and the metal. Lower foley_level if it doubles anything. "
-                   if _eff else ". ")
-                + "The rest have no line, so their audio branch is pinned to "
-                  "silence and the model cannot make these -- auto_sound puts them in "
-                  "the prompt, and prompt text can never open a branch, so the cue was "
-                  "being dropped on exactly the shots whose point is a sound. Built and "
-                  "mixed instead, which asks nothing of the model and so cannot babble. "
-                  "It is synthesis, not a recording: it reads as a click, a rattle, a "
-                  "rustle, in the right place. Nothing vocal is ever built. "
-                  "FOOTSTEPS ARE TIMED OFF THE PICTURE, alone among these, because a "
-                  "footfall is the only one with a frame you can check it against: the "
-                  "shot's own frame-to-frame movement gives the cadence, and steps are "
-                  "dropped over any stretch where the picture is not moving -- so a beat "
-                  "that walks in and stops is not still walking. The cadence is measured; "
-                  "WHICH frame a heel lands on is inferred from the contact being where "
-                  "the swing leg has stopped, so it is right to within half a step rather "
-                  "than locked. Where the movement is not periodic enough to read, the "
-                  "gait is laid blind, which is what every sound here did before. "
-                  "foley_level sets how loud, 0 turns it off")
+                f"ambient_level is {float(ambient_level):.2f} and nothing is wired to "
+                f"ambient_audio, so no bed went under the soundtrack -- and that is "
+                f"now the only way to get one. The node used to BUILD a room tone out "
+                f"of the scene's wording, and a layer of foley into every shot pinned "
+                f"to silence; both are gone, because they were reported as sounding "
+                f"horrid and synthesis that measures right and sounds wrong is the end "
+                f"of that road. The audio is the model's, whole. This widget still "
+                f"sets the level for a recording you wire yourself, which is played "
+                f"under the finished track and conditions nothing")
+        if auto_sound and float(foley_level or 0.0) > 0.0:
+            notes.append(
+                f"foley_level is {float(foley_level):.2f} and does nothing any more. "
+                f"It set how loud the sounds this node BUILT were -- a click, a "
+                f"rattle, a rustle, mixed into the shots whose audio branch is pinned "
+                f"to silence, because prompt text can never open a branch and those "
+                f"shots could not make their own. That is removed: the soundtrack is "
+                f"the model's. The widget stays at this position because saved "
+                f"workflows restore values by position and shifting it would load the "
+                f"wrong number into every widget after it. "
+                f"THE CONSEQUENCE, said rather than left to be found: a shot with no "
+                f"line and no sound you described is pinned to silence and is SILENT. "
+                f"The pin is deliberate and untouched -- it is what stops a free "
+                f"branch filling itself with a voice and the face lip-syncing to the "
+                f"babble. To put sound in such a shot, write the sound into that beat, "
+                f"which opens its branch on purpose and lets the model make it; or "
+                f"wire a track to ambient_audio; or lay one under the finished video "
+                f"outside the node")
         audio, _bed_note = mix_ambient(audio, sr, _bed_in, ambient_level)
         if _bed_note:
             notes.append(_built + _bed_note if _built else _bed_note)
