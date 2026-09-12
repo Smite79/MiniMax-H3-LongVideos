@@ -1007,6 +1007,57 @@ def test_a_removal_undresses_only_its_wearer():
           == ["McKenna"])
 
 
+def test_a_pairing_the_beat_wrote_is_said_back():
+    print("\n=== who is with whom, where it could be read wrong ===")
+    # Reported: girls kissing each other when they should be kissing the boys. The beat
+    # said "Mia kisses Dan while Tess kisses Jon" and that was ALL the shot said about
+    # it -- one sentence among four appearance descriptions, and at cfg 1 the model
+    # reads the prompt as a bag of words and pairs by its own prior. This file names the
+    # owner of a gaze, a vocal, a feeling, a posture, a restraint and a body count;
+    # contact was the one relationship nothing restated.
+    CAST = ["Mia", "Tess", "Dan", "Jon"]
+    check("two pairs in one beat are both read",
+          S.contact_pairs("Mia kisses Dan while Tess kisses Jon.", CAST)
+          == [("Mia", "Dan"), ("Tess", "Jon")])
+    check("one pair is read", S.contact_pairs("Mia kisses Dan.", CAST) == [("Mia", "Dan")])
+    # THE OBJECT HAS TO BE A NAME, which is what makes the verb list safe: furniture is
+    # never a partner, so hold/pull/take can be in it.
+    check("furniture is not a partner",
+          S.contact_pairs("Dan holds the door while Mia kisses Jon.", CAST) == [("Mia", "Jon")])
+    check("...and a chain is not either", S.contact_pairs("Mia pulls the chain.", CAST) == [])
+    # NOTHING IS GUESSED where the beat names nobody -- guessing which two is the bug.
+    check("an unnamed pairing gets nothing", S.contact_pairs("They kiss.", CAST) == [])
+    for b, w in (("Mia dances with Dan.", ("Mia", "Dan")),
+                 ("Tess leans against Jon.", ("Tess", "Jon")),
+                 ("Mia undresses Dan.", ("Mia", "Dan"))):
+        check(f"read: {b[:26]!r}", S.contact_pairs(b, CAST) == [w])
+    check("the clause names both sides",
+          "Mia with Dan" in S.contact_hold([("Mia", "Dan")]))
+    check("...and both pairs when there are two",
+          "Mia with Dan" in S.contact_hold([("Mia", "Dan"), ("Tess", "Jon")])
+          and "Tess with Jon" in S.contact_hold([("Mia", "Dan"), ("Tess", "Jon")]))
+    check("no pair, no clause", S.contact_hold([]) == "")
+
+    mem = ("Mia: she, 20, a red dress.\nTess: she, 21, a blue dress.\n"
+           "Dan: he, 22, a work shirt.\nJon: he, 23, a hoodie.")
+    sh = [" ".join(x.split()) for x in run_node(
+        "A bar.\n\nMia, Tess, Dan and Jon stand together.\n\n"
+        "Mia kisses Dan while Tess kisses Jon.\n\nThey all talk.",
+        plan_only=True, character_memory=mem, ref_noise_aug=0.999)[3].split("---")
+        if x.strip()]
+    check("the contact shot names both pairs",
+          "Mia with Dan" in sh[1] and "Tess with Jon" in sh[1], sh[1][-130:])
+    check("...and a beat with no contact says nothing about it",
+          "The contact is" not in sh[2], sh[2][-110:])
+    # WITH TWO PEOPLE nothing is said: there is nobody else to pair with, and naming
+    # them again costs a mention each.
+    two = [" ".join(x.split()) for x in run_node(
+        "A bar.\n\nMia and Dan stand together.\n\nMia kisses Dan.",
+        plan_only=True, character_memory="Mia: she, 20, a red dress.\nDan: he, 22, a shirt.",
+        ref_noise_aug=0.999)[3].split("---") if x.strip()]
+    check("two in the shot need no pairing said", "The contact is" not in two[-1], two[-1][-110:])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6914,6 +6965,7 @@ def main():
     test_a_bare_region_says_whose_body_it_is()
     test_a_plural_removal_still_comes_off()
     test_a_removal_undresses_only_its_wearer()
+    test_a_pairing_the_beat_wrote_is_said_back()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

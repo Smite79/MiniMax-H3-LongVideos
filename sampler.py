@@ -4285,6 +4285,77 @@ def extras_dismissed(beat):
     return bool(_EXTRA_PEOPLE.search(b) and _NOT_STAGED.search(b))
 
 
+# WHO IS IN CONTACT WITH WHOM.
+#
+# Reported: girls kissing each other when they should be kissing boys. The beat said
+# "Mia kisses Dan while Tess kisses Jon" and that is ALL the shot said about it -- one
+# sentence among four appearance descriptions, and at cfg 1 the model reads the prompt
+# as a bag of words and pairs by its own prior. This file names the owner of a gaze, a
+# vocal, a feeling, a posture, a restraint and a body count; contact was the one
+# relationship nothing restated.
+#
+# THE OBJECT HAS TO BE A NAME ON THE SHEET, which is what makes the verb list safe to
+# be generous with: "holds the door" and "pulls the chain" name no person and yield no
+# pair, so hold, pull, grab and take can all be here without reading furniture as a
+# partner.
+_CONTACT_SRC = (
+    r"kiss(?:es|ed|ing)?|hug(?:s|ged|ging)?|embrac(?:e|es|ed|ing)|"
+    r"straddl(?:e|es|ed|ing)|mount(?:s|ed|ing)?|caress(?:es|ed|ing)?|"
+    r"strok(?:es|ed|ing)?|cuddl(?:e|es|ed|ing)|hold(?:s|ing)?|held|"
+    r"grab(?:s|bed|bing)?|touch(?:es|ed|ing)?|caught|catch(?:es|ing)?|"
+    r"pull(?:s|ed|ing)?|take[sn]?|took|taking|push(?:es|ed|ing)?|"
+    r"danc(?:e|es|ed|ing)\s+with|lean(?:s|ed|ing)?\s+(?:on|against|into)|"
+    r"press(?:es|ed|ing)?\s+(?:against|into)|sit(?:s|ting)?\s+on|"
+    r"wraps?\s+(?:her|his|their)\s+arms?\s+around|"
+    r"reach(?:es|ed|ing)?\s+for|undress(?:es|ed|ing)?")
+_CONTACT_VERB = re.compile(r"(?:" + _CONTACT_SRC + r")", re.I)
+# A clause boundary for contact: each pair gets its own, so "A kisses B while C kisses
+# D" is read as two pairs rather than one four-way.
+_CONTACT_SPLIT = re.compile(r"(?<=[.;!?])\s+|\s+\b(?:while|as|and|then)\b\s+|,\s+", re.I)
+
+
+def contact_pairs(beat, names):
+    """[(who, whom)] the beat puts in physical contact. Two at most.
+
+    Two, like the layering clause: a shot restating four pairings has stopped being
+    about its beat."""
+    b = _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", str(beat or "")))
+    people = [n for n in (names or []) if n]
+    out = []
+    for part in _CONTACT_SPLIT.split(b):
+        for a in people:
+            m = re.search(r"\b" + re.escape(a) + r"\b\s+(?:\w+\s+){0,2}?(?:"
+                          + _CONTACT_SRC + r")\b", part, re.I)
+            if not m:
+                continue
+            tail = part[m.end():]
+            for c in people:
+                if c == a:
+                    continue
+                if re.match(r"\W{0,14}(?:the\s+)?" + re.escape(c) + r"\b", tail, re.I):
+                    if not any({a, c} == set(p) for p in out):
+                        out.append((a, c))
+                    break
+        if len(out) >= 2:
+            break
+    return out[:2]
+
+
+def contact_hold(pairs):
+    """Say which body is with which. "" when the beat pairs nobody.
+
+    Positive, like every other clause here: it says what the pairing IS, never that
+    anybody is not paired. Naming both sides is the point -- an unnamed "they kiss" in
+    a shot with four people is the sentence that let the model choose."""
+    ps = [(a, b) for a, b in (pairs or []) if a and b]
+    if not ps:
+        return ""
+    if len(ps) == 1:
+        return f" The contact is {ps[0][0]} with {ps[0][1]}: those two bodies together."
+    return (f" The contact is {ps[0][0]} with {ps[0][1]}, and {ps[1][0]} with "
+            f"{ps[1][1]}: two pairs, each body with its own partner.")
+
+
 def cast_hold(names, beat="", extras=False):
     """A positive body-count constraint for a one- or two-person composition.
 
@@ -8371,6 +8442,7 @@ class H3LongVideos:
         _undescribed = []           # rooms the film enters that the prompt never describes
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
+        contact_shots = []          # shots told which body is with which
         led_shots = []              # shots whose beat was put ahead of the sheet
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
@@ -9714,6 +9786,14 @@ class H3LongVideos:
             # What the frame holds, where the beat and the anchor both leave it open.
             # An unstated frame becomes the prior, and the prior for a described
             # person is a portrait facing the lens. See frame_hold.
+            # WHO IS WITH WHOM. Only where it could be read wrong: with two people in
+            # the shot there is nobody else to pair with, and naming them again costs a
+            # mention each. Three or more and an unnamed pairing is the model's to
+            # choose -- reported as girls kissing each other instead of the boys.
+            _contact = (contact_hold(contact_pairs(body, _described))
+                        if len(_described or []) > 2 else "")
+            if _contact:
+                contact_shots.append(len(plan) + 1)
             _frame = frame_hold(body, anchor, len(_described or []) or 1)
             if _frame:
                 frame_shots.append(len(plan) + 1)
@@ -10092,6 +10172,11 @@ class H3LongVideos:
                 # about where the eyes go, and at rank 11 -- the staged look's rank
                 # -- it took the budget from "Only Dan speaks" on a seven-word beat.
                 # An inference is cut before anything the author's own words imply.
+                # WHO IS WITH WHOM, ranked with the holds rather than the inferences:
+                # it restates a pairing the author WROTE, the way the gaze clause
+                # restates a look they wrote, and a wrong pairing is a gross error
+                # rather than a missing nicety.
+                (3, "contact", _contact),
                 (15, "faces", _faces),
                 # The frame, where nothing else says what it is. Ranked with the
                 # other inferred picture guards and below everything the author's
@@ -10358,6 +10443,19 @@ class H3LongVideos:
                 f"words are identical and none are rewritten; only the order changed, which "
                 f"is the one thing about this that had never been tried. Off with beat_leads "
                 f"to compare the two in one render")
+        if contact_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in contact_shots)} have three or more "
+                f"people and a beat that puts two of them in contact, so the shot is told "
+                f"WHICH body is with which. Your beat already says it, and it was the only "
+                f"thing that did: one sentence among everyone's appearance, and at cfg 1 "
+                f"the model reads the prompt as a bag of words and pairs by its own prior. "
+                f"Reported as girls kissing each other when they should have been kissing "
+                f"the boys. Both sides are named, because an unnamed pairing in a shot with "
+                f"four people is the sentence that let it choose. Read from your own words "
+                f"only -- a beat that pairs nobody by name ('they kiss') gets nothing, "
+                f"because guessing which two is the bug. With two people in the shot "
+                f"nothing is said: there is nobody else to pair with")
         if frame_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in frame_shots)} stage something a "
