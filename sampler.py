@@ -11418,8 +11418,50 @@ class H3LongVideos:
             # the author's. See _voiced in the shot loop.
 
         if first_frame is None:
-            notes.append("no first_frame: shot 1 has nothing pinning its opening frame, so its "
-                         "starting pose and framing come from the text and any reference")
+            # SAID AS AN ASYMMETRY, because that is what it is and the old wording hid
+            # it. This used to read "shot 1 has nothing pinning its opening frame, so
+            # its starting pose and framing come from the text and any reference" --
+            # true, and it left out the half that matters: every OTHER shot IS pinned,
+            # by the previous shot's last frame, so shot 1 is the only shot in the film
+            # that is free. What that looks like from outside is not shot 1 drifting,
+            # it is shot 1 disagreeing with a chain that agrees with itself.
+            #
+            # Reported exactly that way -- "doesn't look the same from the first to
+            # last beat", "the remaining beats are fine" -- together with a hardware
+            # artefact in beat 1 alone, hair caught in a collar. Both are the same
+            # thing: an arrangement no picture settles is settled by the model, and
+            # from shot 2 on the keyframe settles it.
+            #
+            # And the note has to say which dial is NOT this one, because the report
+            # came with "I even have image reference strength set to 0.999". It cannot
+            # work. build_conditioning's own comment is plain about it: "the keyframe
+            # ANCHORS the first frame, which is what continuity needs, while a
+            # reference only supplies identity. They are not alternatives." Raising
+            # ref_noise_aug makes the reference cleaner; it does not give shot 1 a
+            # first frame, because there is no frame there to clean.
+            notes.append(
+                "NO first_frame IS WIRED, so shot 1 is the only shot in this film whose "
+                "opening frame is pinned by NOTHING. Every other shot opens on the "
+                "previous shot's last frame, which fixes its pose, its framing and the "
+                "arrangement of everything on the body; shot 1 has only the text and "
+                "any reference. So the chain agrees with itself and shot 1 is the one "
+                "that can disagree -- which from outside looks like the person changing "
+                "between the first beat and the rest, and is also where a one-shot-only "
+                "oddity comes from: hair sitting differently against a collar, a "
+                "garment hanging differently, a pose the beat did not ask for. "
+                "ref_noise_aug IS NOT THE DIAL FOR THIS and raising it cannot help: a "
+                "reference says WHO somebody is and a keyframe says what the opening "
+                "frame HOLDS, and they are not alternatives -- there is no frame on "
+                "shot 1 for a cleaner reference to sharpen. Wire first_frame to fix it"
+                + (", and see the ref_noise_aug note above for what to put in it -- it "
+                   "pins the WHOLE frame, so a composed frame of the shot you want and "
+                   "not an identity portrait"
+                   if refs_all else
+                   ". It pins the WHOLE frame, so give it a composed frame of the shot "
+                   "you want: subject, pose, framing, background. The last frame of a "
+                   "previous run, or any still matching how beat 1 should open")
+                + ". Leaving it empty is fine when beat 1 is meant to establish the "
+                  "look and the rest follow it -- which is what is happening now")
         # Text in the frame. H3 draws letterforms when the prompt names them, and at
         # cfg 1 there is no negative prompt to take them back -- adding "no watermark"
         # to the positive only names it again, which is how a mention becomes a

@@ -4606,6 +4606,97 @@ def test_the_soundtrack_is_the_models_own():
           "write the sound into that beat" in _info and "ambient_audio" in _info)
 
 
+def test_shot_one_is_the_only_unpinned_shot():
+    """REPORTED: "The girl doesn't look the same from the first to last beat... The
+    remaining beats are fine. I even have image reference strength set to 0.999", with
+    a hardware artefact in beat 1 alone -- her hair caught in a collar.
+
+    Both halves are one fact, and it is structural rather than a bug: shot 1 is the
+    only shot whose opening frame is pinned by nothing. Every later shot opens on the
+    previous shot's last frame, which fixes pose, framing and the arrangement of
+    everything on the body, so the chain agrees with itself and shot 1 is the one that
+    can disagree. An arrangement no picture settles -- how hair sits against a collar
+    -- is settled by the model, once, in the only shot with no picture.
+
+    And ref_noise_aug cannot reach it, which is the part the report turned on.
+    build_conditioning's own comment is plain: "the keyframe ANCHORS the first frame,
+    which is what continuity needs, while a reference only supplies identity. They are
+    not alternatives." A cleaner reference sharpens identity; there is no frame on
+    shot 1 for it to sharpen."""
+    print("\n=== shot 1 is the only unpinned shot ===")
+    mem = "Nora: <Picture 1>, she, 24, long dark hair, a steel collar, a grey dress."
+    P = ("A bare room, cold light.\n\nNora stands by the window.\n\n"
+         "Nora turns to look at the door.\n\nNora sits on the crate.")
+    ref = torch.rand((1, 64, 64, 3))
+
+    def _pins(**kw):
+        """What pins each shot's opening frame, as seen by build_conditioning."""
+        got, orig = [], S.build_conditioning
+        def spy(clip, vae, audio_vae, prompt, width, height, length,
+                handoff=None, refs=None, ref_noise_aug=0.999, **k):
+            got.append(("keyframe" if (handoff is not None and not k.get("handoff_as_ref"))
+                        else "reference" if handoff is not None else "nothing",
+                        len(refs or [])))
+            return orig(clip, vae, audio_vae, prompt, width, height, length,
+                        handoff=handoff, refs=refs, ref_noise_aug=ref_noise_aug, **k)
+        S.build_conditioning = spy
+        try:
+            run_node(P, character_memory=mem, **kw)
+        finally:
+            S.build_conditioning = orig
+        return got
+
+    bare = _pins(ref_image_1=ref, ref_noise_aug=0.999)
+    check(f"three shots measured: {[p for p, _ in bare]}", len(bare) == 3)
+    check("shot 1's opening frame is pinned by NOTHING", bare[0][0] == "nothing")
+    check("...while every later shot has a keyframe",
+          all(p == "keyframe" for p, _ in bare[1:]))
+    # The reference IS there on shot 1 -- it is not a missing input, it is the wrong
+    # kind of input for this job.
+    check("...and shot 1 does carry the reference anyway",
+          all(n == 1 for _p, n in bare))
+    # RAISING THE AUG CHANGES NOTHING ABOUT THE PINNING. This is the dial the report
+    # reached for, at the top of its range, and it cannot move this.
+    for _aug in (0.90, 0.95, 0.999, 1.0):
+        _p = _pins(ref_image_1=ref, ref_noise_aug=_aug)
+        check(f"at ref_noise_aug {_aug} shot 1 is still unpinned", _p[0][0] == "nothing")
+    # WIRING first_frame IS THE FIX, and it is the only input that is.
+    _ff = _pins(ref_image_1=ref, first_frame=ref, ref_noise_aug=0.999)
+    check("first_frame gives shot 1 a keyframe", _ff[0][0] == "keyframe")
+    check("...and every shot is then pinned the same way",
+          all(p == "keyframe" for p, _ in _ff))
+    # ...and info says all of that, including which dial is NOT this one.
+    _info = run_node(P, plan_only=True, character_memory=mem, ref_image_1=ref,
+                     ref_noise_aug=0.999)[2]
+    _n = [x for x in _info.split(" | ") if "NO first_frame" in x]
+    check("info reports the asymmetry", len(_n) == 1)
+    _n = _n[0] if _n else ""
+    check("...saying shot 1 alone is pinned by nothing",
+          "only shot in this film whose opening frame is pinned by NOTHING" in _n)
+    check("...that every other shot opens on the previous last frame",
+          "previous shot's last frame" in _n)
+    check("...that ref_noise_aug cannot fix it",
+          "ref_noise_aug IS NOT THE DIAL FOR THIS" in _n)
+    check("...naming the one-shot-only symptom that was reported",
+          "hair sitting differently against a collar" in _n)
+    check("...and first_frame as the fix", "Wire first_frame to fix it" in _n)
+    # It must go quiet once the fix is applied, or it is noise.
+    check("...and says nothing once first_frame is wired",
+          "NO first_frame" not in run_node(P, plan_only=True, character_memory=mem,
+                                          ref_image_1=ref, first_frame=ref)[2])
+    # NOT SAID TWICE. With a reference wired, the ref_noise_aug note already explains
+    # at length what to put in first_frame and why a portrait there is a trap; this one
+    # defers to it rather than repeating it. Two notes making the same point is the
+    # same vice as two clauses making it -- and info is already long.
+    check("with a reference wired it defers rather than repeating",
+          "see the ref_noise_aug note above" in _n
+          and "subject, pose, framing, background" not in _n)
+    _no_ref = [x for x in run_node(P, plan_only=True, character_memory=mem)[2].split(" | ")
+               if "NO first_frame" in x][0]
+    check("...and carries the advice itself when there is no reference note",
+          "subject, pose, framing, background" in _no_ref)
+
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -7147,6 +7238,7 @@ def main():
     test_back_after_a_shot_away()
     test_a_name_with_no_entry_end_to_end()
     test_the_soundtrack_is_the_models_own()
+    test_shot_one_is_the_only_unpinned_shot()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
