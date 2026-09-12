@@ -1561,6 +1561,25 @@ MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
 # and "thrashes" both fired and a shot came back listing "unsteady breathing, with
 # gasps and moans of effort AND breathing".
 _VOCAL_RETIRES = ("unsteady breathing, with gasps and moans of effort", "breathing")
+# WHAT IS HAPPENING BETWEEN THE MOANS.
+#
+# A named vocal opens the audio branch on purpose -- it is meant to be heard -- and
+# then sounds_for said nothing at all, because the vocal was the whole list and the
+# beat already carries it. Reported as babble between the moans, and that is exactly
+# where it came from: a moan is INTERMITTENT, the branch is open for the whole shot,
+# and nothing described the gaps. An open branch on a joint model fills itself, and
+# what it fills itself with, next to a face, is speech.
+#
+# There is no way to ask for the absence of speech -- cfg is 1, there is no negative
+# prompt, and naming it would ask for it. The only move is to say what IS there, and
+# between moans what is there is breath. It is continuous where the vocal is not,
+# which is the whole point: it gives the gaps something to be.
+#
+# This is why a lone vocal no longer returns nothing. The old reasoning was that the
+# node would be restating the author to the author -- true of the vocal, and the
+# vocal is still not restated for its own sake; what is added is the half the author
+# did not write and the branch cannot do without.
+_VOCAL_BETWEEN = "breathing"
 # The six above, as a set: see the tail of sounds_for for why they are special-cased.
 _NAMED_VOCALS = frozenset(("whimpering", "sobbing", "moaning", "groaning",
                            "screaming", "whining"))
@@ -10018,7 +10037,15 @@ class H3LongVideos:
             # this file infers. Silencing it says the person makes no sound, and a
             # person making no sound is rendered still: it is the flat, unreacting
             # face, and it is why a body under effort came out mute.
-            _voiced = exertion_in(body)
+            # A VOCAL THE BEAT NAMES IS ASKING FOR AUDIO, as much as an effort verb is.
+            # This was exertion_in alone, and four of the six vocals passed only by
+            # ACCIDENT -- whimper, sob, moan and scream happen to sit in the effort table
+            # too. groan and whine do not, so "She groans." was sound_described with
+            # nothing to keep it open: _mute_written fired, _will_silence fired, and the
+            # shot was pinned to silence. The groan the author wrote never happened, and
+            # the clause naming it was never emitted either. Reading the vocal directly
+            # makes all six behave the way the four already did.
+            _voiced = bool(exertion_in(body) or named_vocals_in(body))
             # A shot where nobody speaks but the author wrote a SOUND kept its branch
             # open, and an open branch invents a voice the face lip-syncs to. That is
             # the hole: "a low hum off the strip light" is nobody talking, and it was
@@ -10219,6 +10246,22 @@ class H3LongVideos:
             # different path and reports itself.
             if _own:
                 heard = [v for v in named_vocals_in(body) if v not in heard] + heard
+                # AND WHAT IS HAPPENING BETWEEN THEM. A vocal is intermittent and the
+                # branch is open for the whole shot, so a list naming nothing but vocals
+                # describes the peaks and leaves the troughs blank -- and a blank trough on
+                # a joint model, next to a face, fills itself with speech. Reported as
+                # babble between the moans.
+                #
+                # Room tone does not answer it, even though the bed appends two continuous
+                # phrases below: the gap is a PERSON's audio presence, and a soft room with
+                # little echo is not a person. Breath is -- non-verbal, continuous where
+                # the vocal is not, and true of anybody making any of these six sounds.
+                #
+                # Only when the list is ALL vocal. A beat whose sound is already part
+                # non-vocal has something in the troughs, and the sound budget exists to
+                # stop inventories.
+                if heard and all(v in _NAMED_VOCALS for v in heard):
+                    heard = heard + [_VOCAL_BETWEEN]
             if _will_silence:
                 # The audio is pinned to silence for this shot's whole length, so a
                 # sentence saying what it sounds like would describe an acoustic the

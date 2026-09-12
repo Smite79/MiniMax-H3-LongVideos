@@ -4653,6 +4653,61 @@ def test_the_decode_keeps_the_vae_it_is_about_to_use():
     check("no current_loaded_models at all is survivable", S._resident([model]) == [])
 
 
+def test_a_vocal_shot_says_what_fills_the_gaps():
+    print("\n=== between the moans ===")
+    # Reported as babble between the moans. A named vocal opens the audio branch on
+    # purpose -- it is meant to be heard -- and the clause then named nothing but the
+    # vocal. A moan is INTERMITTENT and the branch is open for the whole shot, so the
+    # list described the peaks and left the troughs blank; a blank trough on a joint
+    # model, next to a face, fills itself with speech.
+    #
+    # There is no way to ask for the absence of speech at cfg 1, so the fix is to say
+    # what IS in the troughs. Room tone does not answer it -- the ambient bed already
+    # appended two continuous phrases and the babble was reported anyway, because the
+    # gap is a PERSON's audio presence and a soft room is not a person. Breath is.
+    def _clause(_beat, _scene="Inside a van at night."):
+        _sh = run_node(f"{_scene}\n\n{_beat}", plan_only=True)[3]
+        _m = re.search(r"(The only sound[^.]*\.|It sounds like[^.]*\.)", _sh)
+        return _m.group(1) if _m else ""
+
+    for _beat, _word in (("She moans.", "moaning"),
+                         ("He thrusts into her, and she moans.", "moaning"),
+                         ("She whimpers and thrashes in her restraints.", "whimpering"),
+                         ("She sobs quietly.", "sobbing"),
+                         ("She screams.", "screaming"),
+                         ("She groans.", "groaning"),
+                         ("She whines.", "whining")):
+        _c = _clause(_beat)
+        check(f"the vocal is still named: {_word}", _word in _c, f"{_beat!r} -> {_c!r}")
+        check(f"...and the gaps between them are too: {_word}",
+              S._VOCAL_BETWEEN in _c, f"{_beat!r} -> {_c!r}")
+        check(f"...with the author's word first: {_word}",
+              _c.index(_word) < _c.index(S._VOCAL_BETWEEN), _c)
+    # The list stays CLOSED on a shot with no line -- that exclusivity is the only
+    # lever against speech this model has, and it is what the breath now backs up.
+    check("the clause is still exclusive with no line spoken",
+          _clause("She moans.").startswith("The only sound"), _clause("She moans."))
+    # A beat naming NO vocal must gain nothing. The node does not start inventing
+    # breath on shots that never opened a branch for a voice.
+    check("a beat with no vocal gains no breath", _clause("He walks in.") == "")
+    check("...nor does a written NON-vocal sound, which takes the muted path",
+          _clause("The chain rattles against the frame.") == "")
+    # A shot that also carries a LINE is not closed, and the breath rides along
+    # harmlessly -- the line is what occupies the branch there.
+    _both = _clause('McKenna moans, and Dan says: "Nearly there."')
+    check("a vocal beside a line keeps an open list",
+          _both.startswith("It sounds like"), _both)
+    check("...and still names both the vocal and the breath",
+          "moaning" in _both and S._VOCAL_BETWEEN in _both, _both)
+    # The breath is the node's own existing vocabulary, not a new word invented here.
+    check("the between-vocal sound is a phrase the node already used elsewhere",
+          S._VOCAL_BETWEEN in S._VOCAL_RETIRES, S._VOCAL_BETWEEN)
+    # And a pinned-silent shot must never gain a clause -- the conditioning says
+    # there is no sound at all, so describing one would contradict it.
+    _sil = run_node("A quiet room.\n\nShe stands by the window.", plan_only=True)[3]
+    check("a silenced shot gains no breath", S._VOCAL_BETWEEN not in _sil, _sil[-200:])
+
+
 def test_an_exclusive_sound_clause_never_denies_the_beat():
     print("\n=== the closed list names the sound the author wrote ===")
     # REPRODUCED, then fixed. sound_described("She screams.") is true, so _own zeroes
@@ -7135,6 +7190,7 @@ def main():
     test_room_tone_under_every_shot()
     test_the_decode_keeps_the_vae_it_is_about_to_use()
     test_an_exclusive_sound_clause_never_denies_the_beat()
+    test_a_vocal_shot_says_what_fills_the_gaps()
     test_the_chain_is_never_held_twice()
     test_the_position_may_only_be_written_once_in_the_scene()
     test_finished_shots_are_held_in_half_precision()
