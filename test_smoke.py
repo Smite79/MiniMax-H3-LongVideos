@@ -892,6 +892,59 @@ def test_a_bare_region_says_whose_body_it_is():
           nb[0][-120:])
 
 
+def test_a_plural_removal_still_comes_off():
+    print("\n=== skirts come off and stay off ===")
+    # Reported: a scene with the character and several unnamed women -- they take off
+    # their skirts and panties, and the garments are back in the next beat.
+    #
+    # Nothing to do with the unnamed women. "take off their skirtS" yields the token
+    # "skirts" while the sheet says "a denim skirt", and every reader downstream looks
+    # that token up in the sheet: the scrub by pattern, infer_removals by entry head. A
+    # plural garment matched nothing, so the removal did nothing at all, the sheet went
+    # on listing the skirt, and it was re-stamped into every later shot. One woman
+    # undressing wrote "her skirt" and worked; the moment the subject went plural so did
+    # the garment.
+    SC = "A changing room.\nMcKenna: she, 22, a grey vest, a denim skirt, a black thong."
+    for b in ("McKenna takes off her skirt.", "McKenna takes off her skirts.",
+              "McKenna and the other girls take off their skirts.",
+              "The other girls take off their skirts.", "They take off their skirts."):
+        check(f"read as coming off: {b[:40]!r}", S.infer_removals(b, SC) == ["skirt"],
+              str(S.infer_removals(b, SC)))
+    # INHERENTLY PLURAL GARMENTS KEEP THEIR "S". The vocabulary lists them only in the
+    # plural, so the stem is not a garment word and nothing is stripped.
+    SC2 = ("A room.\nDan: he, 40, brown boots, blue jeans, white socks, a grey top.")
+    for b, want in (("Dan kicks off his boots.", ["boots"]),
+                    ("Dan steps out of his jeans.", ["jeans"]),
+                    ("Dan peels off his socks.", ["socks"]),
+                    ("Dan and Mia take off their boots.", ["boots"]),
+                    ("Dan takes off his tops.", ["top"])):
+        check(f"kept as written: {b[:34]!r}", S.infer_removals(b, SC2) == want,
+              str(S.infer_removals(b, SC2)))
+    check("the normaliser is exact, not a guess",
+          S.engine.singular_garment("skirts") == "skirt"
+          and S.engine.singular_garment("boots") == "boots"
+          and S.engine.singular_garment("jeans") == "jeans"
+          and S.engine.singular_garment("panties") == "panties"
+          and S.engine.singular_garment("tops") == "top")
+    check("...and garment_words agrees with it, off the one owner",
+          S.engine.garment_words("take off their skirts") == ["skirt"]
+          and S.engine.garment_words("kicks off her boots") == ["boots"])
+
+    # END TO END: scrubbed from the sheet on the next shot and every shot after it.
+    mem = "McKenna: she, 22, a grey vest, a denim skirt, a black thong."
+    for label, beat in (("one woman", "McKenna takes off her skirt."),
+                        ("several", "McKenna and the other girls take off their skirts."),
+                        ("unnamed only", "The other girls take off their skirts.")):
+        sh = [" ".join(x.split()) for x in run_node(
+            f"A changing room.\n\n{beat}\n\nThey stand still.\n\nThey turn around.",
+            plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
+        def _has_skirt(shot):
+            m = re.search(r"McKenna: [^.]*\.", shot)
+            return "skirt" in (m.group(0) if m else "")
+        check(f"{label}: the skirt is gone from the next shot", not _has_skirt(sh[1]), sh[1][:130])
+        check(f"{label}: ...and stays gone", not _has_skirt(sh[2]), sh[2][:130])
+
+
 def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
@@ -6797,6 +6850,7 @@ def main():
     test_one_object_has_one_voice_across_beats()
     test_a_feeling_belongs_to_the_face_the_beat_pins_it_on()
     test_a_bare_region_says_whose_body_it_is()
+    test_a_plural_removal_still_comes_off()
     test_keyframe_handoff()
     test_references_and_silence()
     test_first_frame()

@@ -763,6 +763,32 @@ _NOT_CLOTHING = re.compile(
     r"straitjacket|spreader|hogtie|clamps?|clips?)$", re.I)
 _PHRASE_ONE = _rx(r"\b(?:" + GARMENT_PHRASES + r")\b")
 _WORD_ONE = _rx(r"^(?:" + GARMENT_WORDS + r")s?$")
+# The same list with NO optional plural, which is what says whether a trailing "s"
+# belongs to the word or was added to it. The vocabulary is clean on this: garments that
+# are inherently plural are listed only in the plural (boots, jeans, shorts, panties,
+# tights, leggings, socks, knickers, trousers, gloves) and the rest only in the singular
+# (skirt, vest, top), so "stem is itself a garment" is an exact test and not a guess.
+_WORD_EXACT = _rx(r"^(?:" + GARMENT_WORDS + r")$")
+
+
+def singular_garment(word):
+    """A garment word as the VOCABULARY spells it, so two readers cannot disagree.
+
+    Reported: several women take their skirts off and the skirts are back in the next
+    beat. "their skirts" yields the token "skirts" while the sheet says "a denim
+    skirt", and every reader downstream looks the token up in the sheet -- the scrub
+    by pattern, infer_removals by entry head -- so a plural garment matched nothing
+    and the removal silently did nothing at all. One woman undressing wrote "her
+    skirt" and worked; the moment the subject went plural so did the garment.
+
+    A trailing "s" comes off only when the stem is ITSELF a garment word, which is an
+    exact test here and not a guess: the vocabulary lists inherently plural garments
+    only in the plural (boots, jeans, shorts, panties, tights, leggings, socks,
+    knickers, trousers, gloves) and the rest only in the singular."""
+    low = str(word or "").lower().strip("-")
+    if low.endswith("s") and _WORD_EXACT.match(low[:-1]):
+        return low[:-1]
+    return low
 
 
 def garment_words(text):
@@ -784,9 +810,14 @@ def garment_words(text):
     text = _PHRASE_ONE.sub(" ", text)
     for word in re.findall(r"\b[\w-]{3,}\b", text):
         low = word.lower().strip("-")
-        if low in out or _NOT_CLOTHING.match(low):
+        if _NOT_CLOTHING.match(low):
             continue
-        if _WORD_ONE.match(low):
+        if not _WORD_ONE.match(low):
+            continue
+        # The token the sheet wrote, not the one the beat happened to inflect. See
+        # singular_garment -- shared with infer_removals so the two cannot disagree.
+        low = singular_garment(low)
+        if low not in out:
             out.append(low)
     return out
 

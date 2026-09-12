@@ -6687,7 +6687,12 @@ def infer_removals(beat, scene):
                     continue
                 span = span[:part.start()]
         for word in re.findall(r"\b[\w-]{3,}\b", span):
-            low = word.lower().strip("-")
+            # THE TOKEN THE SHEET WROTE. "take off their skirts" gives "skirts" and the
+            # sheet says "a denim skirt", so the entry-head test below found nothing and
+            # the removal did nothing -- on every beat where more than one person
+            # undressed. One owner for the normalisation, in the engine, because this
+            # reader and garment_words both look the token up in the same sheet.
+            low = engine.singular_garment(word)
             if not low or low in found:
                 continue
             # Grammar, prepositions and anatomy are not garments.
@@ -6698,7 +6703,7 @@ def infer_removals(beat, scene):
                 continue
             # It has to be worn: the HEAD of something the scene lists, not a
             # modifier inside it and not half of a hyphenated compound.
-            if not _is_entry_head(word, scene):
+            if not _is_entry_head(low, scene):
                 continue
             # "her jeans shorts" is ONE garment. "jeans" there is a modifier, but it
             # is also the head of Dan's own entry, so it matched his line and took
