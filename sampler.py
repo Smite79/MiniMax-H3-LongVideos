@@ -49,6 +49,8 @@ PreparedVideo = _plan_module.PreparedVideo
 # Internal helper exports retained for existing callers.
 ShotAudio = _audio_module.ShotAudio
 FrameAccumulator = _runtime_module.FrameAccumulator
+frame_levels = _runtime_module.frame_levels
+apply_levels = _runtime_module.apply_levels
 H3_FPS = _runtime_module.H3_FPS
 AUDIO_LATENT_FPS = _runtime_module.AUDIO_LATENT_FPS
 KEYFRAME_SAFE_AUG = _cond_module.KEYFRAME_SAFE_AUG
@@ -94,6 +96,7 @@ _SILENT_SECONDS = _audio_module._SILENT_SECONDS
 _SILENT_EDGE = _audio_module._SILENT_EDGE
 _silent_audio_latent = _audio_module._silent_audio_latent
 _pin_audio_silence = _audio_module._pin_audio_silence
+HandoffLevels = _cond_module.HandoffLevels
 _keyframe_latent = _cond_module._keyframe_latent
 _build_ref_images = _cond_module._build_ref_images
 _sample_on_sigmas = _runtime_module._sample_on_sigmas
@@ -2622,29 +2625,81 @@ def frame_detail(img):
     return float((gx + gy) * 0.5), float(x.std())
 
 
-def detail_report(per_shot):
-    """One line saying whether the chain is softening, and by how much.
+def levels_report(levels, shots):
+    """What hold_levels measured, and what it did about it.
 
-    per_shot is [(detail, contrast), ...] measured on each shot's last frame."""
-    vals = [d for d, _ in per_shot if d > 0]
-    if len(vals) < 2:
+    Worth printing even when it corrected nothing: the measurement is the evidence that
+    the chain is or is not cooking, and a run that measured a drift too small to act on
+    is a different thing from a run that never looked."""
+    if levels is None:
         return ""
-    first, last = vals[0], vals[-1]
-    drop = (first - last) / first * 100.0 if first else 0.0
-    trend = " ".join(f"{d:.4f}" for d, _ in per_shot)
-    line = f"detail per shot (last frame): {trend}"
+    g, o = levels.estimate()
+    if g is None:
+        return ""
+    pct = "/".join(f"{(float(torch.exp(v)) - 1.0) * 100.0:+.1f}%" for v in g)
+    lvl = "/".join(f"{float(v):+.4f}" for v in o)
+    line = (f"hold_levels: measured the chain drifting {pct} of contrast and {lvl} of level "
+            f"per boundary, per R/G/B channel, from {len(levels._bg)} boundary(ies)")
+    n = len(levels.applied)
+    if not n:
+        line += (" -- below the 8-bit floor a handoff is quantised to, so nothing was "
+                 "applied rather than claiming a correction that would be erased")
+    else:
+        last = levels.applied[-1][0]
+        line += (f", and took it back out of {n} handoff(s); the last gain applied was "
+                 f"{'/'.join(f'{float(v):.3f}' for v in last)}. The contrast line above is "
+                 f"measured on the corrected frames, so it is the residual, not the defect")
+    return line
+
+
+def detail_report(per_shot):
+    """Two lines: whether the chain is softening, and whether it is COOKING.
+
+    per_shot is [(detail, contrast), ...] measured on each shot's last frame.
+
+    Contrast used to be measured here and thrown away, which was the worst possible
+    arrangement: the surviving metric RISES with burn-in -- expanding contrast creates
+    neighbour differences -- so a chain visibly cooking printed "UP n%, so the chain is
+    not softening" and read as reassurance. The reported symptom was being measured on
+    exactly the right frame and never shown. Both trends are reported now, and the
+    detail line no longer pronounces on a rise it cannot explain by itself."""
+    ds = [d for d, _ in per_shot if d > 0]
+    cs = [c for _, c in per_shot if c > 0]
+    if len(ds) < 2:
+        return ""
+    out = []
+    drop = (ds[0] - ds[-1]) / ds[0] * 100.0 if ds[0] else 0.0
+    line = "detail per shot (last frame): " + " ".join(f"{d:.4f}" for d, _ in per_shot)
     if drop >= 10.0:
-        line += (f" -- DOWN {drop:.0f}% from shot 1 to shot {len(vals)}. Each boundary "
+        line += (f" -- DOWN {drop:.0f}% from shot 1 to shot {len(ds)}. Each boundary "
                  f"decodes a shot, takes its LAST frame and re-encodes it as the next "
                  f"shot's keyframe, so the loss of one round trip is carried into the "
                  f"next and compounds. Break the chain to stop it accumulating: "
                  f"restart_after_removal starts a shot from the text instead of the "
                  f"previous frame, at the cost of a visible cut there")
     elif drop <= -10.0:
-        line += f" -- UP {-drop:.0f}%, so the chain is not softening"
+        line += (f" -- UP {-drop:.0f}%. Read the contrast line before taking that as good "
+                 f"news: expanding contrast raises this number too")
     else:
         line += f" -- flat within {abs(drop):.0f}%"
-    return line
+    out.append(line)
+    if len(cs) >= 2:
+        rise = (cs[-1] - cs[0]) / cs[0] * 100.0 if cs[0] else 0.0
+        cl = "contrast per shot (last frame): " + " ".join(f"{c:.4f}" for _, c in per_shot)
+        if rise >= 10.0:
+            cl += (f" -- UP {rise:.0f}% from shot 1 to shot {len(cs)}, which is the chain "
+                   f"COOKING: every shot is sampled from the previous shot's last frame, "
+                   f"the model reproduces it with a little more contrast, and the VAE "
+                   f"clamps the result to 0..1 -- so the headroom each pass spends is "
+                   f"never given back, and it shows as crushed blacks and blown "
+                   f"highlights rather than merely as more contrast. hold_levels takes "
+                   f"the per-boundary part of it back out")
+        elif rise <= -10.0:
+            cl += f" -- DOWN {-rise:.0f}%, so the chain is flattening rather than cooking"
+        else:
+            cl += f" -- flat within {abs(rise):.0f}%"
+        out.append(cl)
+    return " | ".join(out)
 
 
 def _find_h3_sampling_node():
@@ -7502,6 +7557,7 @@ _WIDGET_RANGE = {
     "foley_level": (0.35, 0.0, 1.0, float),
     "speech_lead_seconds": (0.5, 0.0, 2.0, float),
     "speech_tail_seconds": (2.0, 0.0, 10.0, float),
+    "hold_levels": (0.8, 0.0, 1.0, float),
 }
 
 
@@ -8078,6 +8134,43 @@ class H3LongVideos:
                                "order changes.\n\n"
                                "Off restores the old order, so the two can be compared in "
                                "one render."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "hold_levels": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0,
+                    "step": 0.05,
+                    "tooltip": "Take the grade the chain adds to itself back out of each "
+                               "handoff.\n\n"
+                               "Every shot after the first is sampled from the previous "
+                               "shot's last frame. The model reproduces that frame "
+                               "faithfully -- which is what continuity needs -- so it "
+                               "inherits whatever is already in it, and it SYNTHESISES the "
+                               "opening frame rather than copying it, so its own bias lands "
+                               "on top. The VAE then clamps every decode to 0..1, which "
+                               "makes the expansion a ratchet: headroom spent is not given "
+                               "back. Eleven shots of that is crushed blacks, blown "
+                               "highlights and lurid colour, invisible shot to shot and "
+                               "obvious end to end.\n\n"
+                               "What makes this correctable without knowing anything about "
+                               "your scene: at every boundary the render holds two pictures "
+                               "that are supposed to be the SAME frame -- the handoff it "
+                               "gave the shot, and the opening frame that came back. "
+                               "Nothing was asked to change between them, so everything "
+                               "separating them is the chain's doing and none of it is "
+                               "yours. That difference is what is measured, per colour "
+                               "channel, per boundary, and the median across boundaries is "
+                               "what is taken back out.\n\n"
+                               "It does NOT aim at a target and never compares a shot to "
+                               "shot 1, so a beat that walks into a darker room stays "
+                               "darker: measured, a deliberate lighting step keeps about "
+                               "98% of its size. The correction is a capped fraction per "
+                               "boundary rather than a reset, because shot N's frames reach "
+                               "the video ungraded while N+1 is sampled from a corrected "
+                               "keyframe -- an uncapped correction would trade burn-in for "
+                               "a pop at every cut.\n\n"
+                               "1.0 flattens the trend hardest; lower leaves more of the "
+                               "look alone. 0 is off. Watch the contrast line in info: if "
+                               "it still says UP, raise this. It cannot undo clipping that "
+                               "earlier shots already baked in, and it corrects levels "
+                               "only -- not softening, and nothing spatial."}),
             },
         }
 
@@ -8105,6 +8198,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
+            hold_levels=0.8,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -8138,6 +8232,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
             speech_tail_seconds=speech_tail_seconds, beat_leads=beat_leads,
+            hold_levels=hold_levels,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             try:
@@ -8169,6 +8264,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
+            hold_levels=0.8,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -8196,7 +8292,7 @@ class H3LongVideos:
             upscale_batch=upscale_batch, pace=pace,
             ambient_level=ambient_level, foley_level=foley_level,
             speech_lead_seconds=speech_lead_seconds,
-            speech_tail_seconds=speech_tail_seconds))
+            speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels))
         megapixels, shot_seconds = _fixed["megapixels"], _fixed["shot_seconds"]
         steps, cfg = _fixed["steps"], _fixed["cfg"]
         shift_video, shift_audio = _fixed["shift_video"], _fixed["shift_audio"]
@@ -8207,6 +8303,7 @@ class H3LongVideos:
         ambient_level, foley_level = _fixed["ambient_level"], _fixed["foley_level"]
         speech_lead_seconds = _fixed["speech_lead_seconds"]
         speech_tail_seconds = _fixed["speech_tail_seconds"]
+        hold_levels = _fixed["hold_levels"]
         notes.extend(_fixnotes)
         # <Picture N> means ref_image_N, the socket. Everything downstream works on
         # the packed roster instead, so translate once, here, before anything has
@@ -11522,7 +11619,7 @@ class H3LongVideos:
             sampler_name=sampler_name, scheduler=scheduler, seed=seed,
             shift_audio=shift_audio, shift_video=shift_video,
             sigmas=sigmas, silence_nonspeech=silence_nonspeech,
-            speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, staging_shots=staging_shots, steps=steps,
+            speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, cut_shots=cut_shots,
             tiled_decode=tiled_decode, trim_seam=trim_seam,
             upscale=upscale, upscale_batch=upscale_batch, upscale_model=upscale_model,
@@ -11569,6 +11666,7 @@ class H3LongVideos:
         silence_nonspeech = prepared.silence_nonspeech
         speech_lead_seconds = prepared.speech_lead_seconds
         speech_tail_seconds = prepared.speech_tail_seconds
+        hold_levels = prepared.hold_levels
         staging_shots = prepared.staging_shots
         steps = prepared.steps
         stripped_shots = prepared.stripped_shots
@@ -11624,6 +11722,10 @@ class H3LongVideos:
         fresh_room = []             # shots cut because they open in another room
         _carried = []               # (shot, who was there, who joins) room carried on
         shot_detail = []            # (detail, contrast) per shot, on its last frame
+        # One per run, never reset at a chain break: the grade belongs to the FILM, and
+        # restarting it per segment would give a film one grade per segment, which is a
+        # worse-looking version of the same complaint.
+        _levels = HandoffLevels()
         _SILENCE_STATUS.update(asked=0, applied=0, why="")
         _deep_cleanup()
 
@@ -11838,6 +11940,32 @@ class H3LongVideos:
                         hand_src = tail
                 except Exception:
                     pass                  # fall back to the upscaled frames
+            # MEASURE FIRST, on the uncorrected frames. shot_handoff is the keyframe this
+            # shot was given and imgs[0] is what came back in its place -- two pictures of
+            # the same frame, so what separates them is the chain and not the author. The
+            # last two arguments put the pre-upscale handoff and the post-upscale output in
+            # one frame of reference; with latent_upscale off they are the same frame and
+            # the term is zero. A demoted handoff is skipped: it rode as a reference, so
+            # imgs[0] was never asked to reproduce it.
+            try:
+                if (shot_handoff is not None and not demoted and imgs is not None
+                        and imgs.shape[0] > 1 and hand_src is not None and hand_src.shape[0]):
+                    _levels.observe(shot_handoff, imgs[0], imgs[-1], hand_src[-1])
+            except Exception:
+                pass
+            # Then correct, on a REBINDING -- imgs itself is untouched, so the frames the
+            # viewer sees are the ones the model made. Everything that leaves this shot for
+            # a later one comes off hand_src, so the handoff and any captured face take the
+            # same grade from the same call.
+            _lv_note = ""
+            try:
+                if hold_levels > 0 and hand_src is not None and hand_src.shape[0]:
+                    _lg, _lo = _levels.gains(hold_levels)
+                    if _lg is not None:
+                        hand_src = apply_levels(hand_src, _lg, _lo)
+                        _lv_note = _levels.note(_lg, _lo)
+            except Exception:
+                pass
             # Clamp before it becomes a keyframe. A decode can land slightly outside
             # 0..1, and feeding that back in to be re-encoded every boundary is a
             # drift that accumulates rather than cancels.
@@ -11936,10 +12064,14 @@ class H3LongVideos:
                     [wav["waveform"], torch.zeros(shape, dtype=wav["waveform"].dtype,
                                                   device=wav["waveform"].device)], dim=-1)
             av_fix += have - want
-            # Measured on the frame that becomes the next shot's keyframe, because
-            # that is the one whose losses are inherited.
+            # Measured on the frame that becomes the next shot's keyframe, because that is
+            # the one whose losses are inherited -- which means the CORRECTED handoff, not
+            # imgs[-1]. Measured on imgs[-1] the line would report the defect for ever and
+            # never show whether the correction worked.
             try:
-                if imgs is not None and imgs.shape[0]:
+                if handoff is not None and handoff.shape[0]:
+                    shot_detail.append(frame_detail(handoff[0]))
+                elif imgs is not None and imgs.shape[0]:
                     shot_detail.append(frame_detail(imgs[-1]))
             except Exception:
                 pass
@@ -12214,6 +12346,9 @@ class H3LongVideos:
         _detail = detail_report(shot_detail)
         if _detail:
             notes.append(_detail)
+        _lvl = levels_report(_levels, len(plan.shots))
+        if _lvl:
+            notes.append(_lvl)
         if t_decode > t_sample:
             notes.append("decode is costing more than sampling here -- latent_upscale "
                          "trades cheaper sampling for a 4x more expensive decode, so it "

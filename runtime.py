@@ -669,3 +669,66 @@ def _invoke_node(cls, **kwargs):
     out = fn(**kwargs)
     out = getattr(out, "result", out)
     return out[0] if isinstance(out, (tuple, list)) else out
+
+
+# --- THE GRADE THE CHAIN ADDS TO ITSELF -------------------------------------
+# Every shot boundary decodes a shot, hands its LAST frame over, and re-encodes that as
+# the next shot's keyframe. The distill reproduces the keyframe faithfully enough to
+# inherit whatever is already in it and SYNTHESISES frame 0 rather than copying it, so
+# its own bias lands on top: S_next = a*S + b, a near 1, b above 0. Linear at best,
+# geometric at worst, invisible shot to shot. And the VAE hard-clips every decode to
+# 0..1, which makes the expansion a RATCHET -- headroom spent is not recoverable, so it
+# shows as crushed blacks and blown highlights rather than merely as more contrast.
+#
+# These two are the measurement and the correction. Both work per colour channel,
+# because the clip is per channel: the VAE un-whitens with ImageNet stds before it
+# clamps, so the 0..1 rails sit at different distances in each channel and the blue
+# floor and red ceiling bite first. A single luma number would miss the colour half.
+LEVEL_POOL = 64                # cells per axis the level statistics are measured on
+
+
+def frame_levels(img):
+    """(mean, std) per colour channel for one frame, as 3-vectors, or (None, None).
+
+    Area-pooled to LEVEL_POOL first, so a pre-upscale frame and an upscaled one can be
+    compared: pooling measures the PICTURE's levels rather than its resolution. Measured
+    across a 2x resize, std agrees to 0.28% on picture-like content -- and to only 15%
+    on pure noise, because pooling cannot preserve variance that lives entirely at the
+    pixel scale. Real frames are the former, and whatever residual there is cancels
+    anyway: the caller measures the same pipeline difference separately and subtracts it.
+
+    float32 throughout, deliberately: these frames are fp16 under
+    --fp16-intermediates, and an fp16 mean accumulated over a 1344x768 frame biases
+    badly enough to matter at the sizes being corrected here."""
+    x = img
+    if x.dim() == 4:
+        x = x[0]
+    if x.dim() != 3 or int(x.shape[-1]) < 3:
+        return None, None
+    if int(x.shape[0]) < 2 or int(x.shape[1]) < 2:
+        return None, None
+    x = x[..., :3].float().permute(2, 0, 1).unsqueeze(0)
+    p = torch.nn.functional.adaptive_avg_pool2d(x, LEVEL_POOL)[0].reshape(3, -1)
+    return p.mean(dim=1), p.std(dim=1)
+
+
+def apply_levels(img, gain, offset):
+    """Rescale a frame's contrast and level about its OWN per-channel mean.
+
+    The pivot is the frame's own mean and never a target. That is the whole reason this
+    can run on any scene: a beat that walks into a darker room keeps its darkness,
+    because nothing here knows or cares what the level is -- only how much the last
+    boundary expanded it. Anchoring to shot 1 instead would cancel every deliberate
+    lighting change in the film, which is the opposite failure.
+
+    Clamped into 0..1 because the next thing that happens to this frame is an 8-bit
+    quantisation (comfy.utils.common_upscale goes through a uint8 PIL round trip even
+    at the same size), so there is no headroom outside the range to borrow from."""
+    x = img.float()
+    c = min(3, int(x.shape[-1]))
+    m = x[..., :c].reshape(-1, c).mean(dim=0)
+    g = gain[:c].to(device=x.device, dtype=x.dtype)
+    o = offset[:c].to(device=x.device, dtype=x.dtype)
+    y = x.clone()
+    y[..., :c] = ((x[..., :c] - m) * g + m + o).clamp(0.0, 1.0)
+    return y.to(img.dtype)

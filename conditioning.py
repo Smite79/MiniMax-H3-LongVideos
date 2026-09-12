@@ -4,8 +4,10 @@
 # This notice may not be removed or altered. See LICENSE.
 """Decisions about which pictures may condition a shot."""
 
+import torch
 import node_helpers
-from h3_runtime import H3_FPS, AUDIO_LATENT_FPS, _empty_av_latent, _resize, ref_image_canvas
+from h3_runtime import (H3_FPS, AUDIO_LATENT_FPS, _empty_av_latent, _resize, ref_image_canvas,
+                        frame_levels, apply_levels)
 from h3_audio import _SILENCE_STATUS, _silent_audio_latent, _pin_audio_silence
 
 
@@ -30,6 +32,140 @@ def recoverable_subject(cast, tagged_names, returning_names, captured):
 
 
 KEYFRAME_SAFE_AUG = 0.99       # below this, a ref aug would soften the keyframe too
+
+# What ONE boundary is allowed to claim it measured. Wider than any real per-pass drift,
+# narrow enough that a bad frame -- a flash, a cut to black, a frame the model lost --
+# cannot swing the estimate. The median across boundaries does the real rejecting.
+LEVEL_GAIN_CAP = 0.12          # in log-gain, so +-12.7% of contrast
+LEVEL_OFFSET_CAP = 0.05
+# The within-shot term is believed only when boundaries AGREE on its sign, and even then
+# only this far: within-shot change is often the author's (a light switched off), so it is
+# the half of the signal that cannot be trusted on its own.
+LEVEL_SHOT_GAIN_CAP = 0.015
+LEVEL_SHOT_OFFSET_CAP = 0.010
+LEVEL_AGREE = 2.0 / 3.0
+LEVEL_MIN_OBS = 3
+# What the correction may do to one handoff, whatever it measured. A cut should not carry
+# a visible grade step: shot N's last frame reaches the video uncorrected while N+1 is
+# sampled from a corrected keyframe, so an uncapped correction trades burn-in for a pop at
+# every join -- the same class of complaint, differently shaped.
+LEVEL_GAIN_LO, LEVEL_GAIN_HI = 0.80, 1.25
+LEVEL_OFFSET_BOUND = 0.02
+# Below this a frame is too flat for a contrast RATIO to mean anything.
+LEVEL_MIN_SIGMA = 0.01
+
+
+class HandoffLevels:
+    """Takes the grade the chain adds to itself back out of the handoff.
+
+    THE MEASUREMENT, which is the whole reason this needs no scene list. At every
+    boundary the render holds two pictures that are SUPPOSED to be the same frame: K,
+    the handoff it gave the shot, and R, frame one of what came back -- the model's own
+    reproduction of K, from a keyframe labelled sigma 0.001. Nothing was asked to change
+    between them, so everything separating them is the chain's own doing and none of it
+    is the author's intent. That is the one difference in the loop that can be corrected
+    without guessing at anybody's lighting, and R costs nothing to look at: it is the
+    frame trim_seam throws away.
+
+    A beat that walks into a darker room moves K, and R follows it there. So the level is
+    never anchored, never compared to shot 1, and never compared to a target -- only K
+    against its own reproduction, boundary by boundary.
+
+    WHAT IT WILL NOT FIX. Clipping already baked into earlier shots, because the VAE
+    clamps every decode and headroom spent is gone. Softening, which is a different
+    measurement and a different cause. Anything spatial -- ghosting, local burn, identity
+    drift. A tone curve with a knee in it, since this is affine per channel; the residual
+    in the report is how that would show itself. The first boundary, which has nothing to
+    measure yet. And a deliberate monotone move -- a film that dims every single beat --
+    loses a bounded, reported fraction of itself."""
+
+    def __init__(self):
+        self._bg, self._bo = [], []      # per boundary: K -> R, the chain's own drift
+        self._sg, self._so = [], []      # per shot: R -> last frame, believed only on agreement
+        self.applied = []                # (gain, offset) actually used, for the report
+
+    def observe(self, given, repro, last=None, pre_up_last=None):
+        """Record one boundary. given is the keyframe this shot got, repro is frame one
+        of what it produced, last is its final frame, pre_up_last the handoff it hands on.
+
+        last/pre_up_last are how the pre-upscale handoff and the post-upscale output are
+        put in the same frame of reference: their difference IS the pipeline's own offset,
+        measured on one frame that went through both, so it can be subtracted from the
+        K->R reading instead of being mistaken for drift. With latent_upscale off they are
+        the same frame and the term is zero."""
+        gm, gs = frame_levels(given)
+        rm, rs = frame_levels(repro)
+        if gm is None or rm is None:
+            return False
+        if float(gs.min()) < LEVEL_MIN_SIGMA or float(rs.min()) < LEVEL_MIN_SIGMA:
+            return False
+        ug = torch.zeros(3)
+        uo = torch.zeros(3)
+        lm, ls = frame_levels(last) if last is not None else (None, None)
+        if pre_up_last is not None and lm is not None:
+            pm, ps = frame_levels(pre_up_last)
+            if pm is not None and float(ps.min()) >= LEVEL_MIN_SIGMA:
+                ug = torch.log(ls / ps)
+                uo = lm - pm
+        self._bg.append((torch.log(rs / gs) - ug).clamp(-LEVEL_GAIN_CAP, LEVEL_GAIN_CAP))
+        self._bo.append((rm - gm - uo).clamp(-LEVEL_OFFSET_CAP, LEVEL_OFFSET_CAP))
+        if lm is not None and float(ls.min()) >= LEVEL_MIN_SIGMA:
+            self._sg.append(torch.log(ls / rs))
+            self._so.append(lm - rm)
+        return True
+
+    def _agreed(self, rows, cap):
+        """The median of rows, but only per channel where at least LEVEL_AGREE of them
+        share its sign. A within-shot change the boundaries disagree about is content, not
+        drift, and content must not be corrected."""
+        out = torch.zeros(3)
+        if len(rows) < LEVEL_MIN_OBS:
+            return out
+        st = torch.stack(rows)
+        med = st.median(dim=0).values
+        agree = ((st * med.sign().unsqueeze(0)) > 0).float().mean(dim=0)
+        keep = agree >= LEVEL_AGREE
+        return torch.where(keep, med.clamp(-cap, cap), out)
+
+    def estimate(self):
+        """(gain_log, offset) the chain is drifting by per boundary, per channel."""
+        if not self._bg:
+            return None, None
+        g = torch.stack(self._bg).median(dim=0).values + self._agreed(self._sg, LEVEL_SHOT_GAIN_CAP)
+        o = torch.stack(self._bo).median(dim=0).values + self._agreed(self._so, LEVEL_SHOT_OFFSET_CAP)
+        return g, o
+
+    def gains(self, strength):
+        """(gain, offset) as 3-vectors, or (None, None) when there is nothing worth doing.
+
+        Separate from corrected() because more than one frame leaves a shot -- the handoff,
+        and any face captured for a return several shots later -- and they have to carry
+        the SAME grade. A recovered face arriving at a different exposure from the shot
+        around it would be a new bug of exactly the kind this is fixing."""
+        g, o = self.estimate()
+        if g is None or strength <= 0:
+            return None, None
+        gain = torch.exp(-float(strength) * g).clamp(LEVEL_GAIN_LO, LEVEL_GAIN_HI)
+        off = (-float(strength) * o).clamp(-LEVEL_OFFSET_BOUND, LEVEL_OFFSET_BOUND)
+        # The next thing this frame meets is an 8-bit quantisation, so a correction under
+        # 1/255 would be erased on the way there. Claiming it would be worse than silence.
+        if float((gain - 1.0).abs().max()) < 1e-3 and float(off.abs().max()) < 1.0 / 255.0:
+            return None, None
+        return gain, off
+
+    def note(self, gain, off):
+        """Record what was applied, and say it in one clause."""
+        self.applied.append((gain.clone(), off.clone()))
+        return (f"gain {'/'.join(f'{float(v):.3f}' for v in gain)} "
+                f"level {'/'.join(f'{float(v):+.4f}' for v in off)}")
+
+    def corrected(self, img, strength):
+        """(frame, note). The frame unchanged and an empty note until there is something
+        measured to act on -- the first boundary of every run included."""
+        gain, off = self.gains(strength)
+        if gain is None:
+            return img, ""
+        return apply_levels(img, gain, off), self.note(gain, off)
 
 
 def _keyframe_latent(vae, hand_img):

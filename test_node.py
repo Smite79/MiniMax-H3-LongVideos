@@ -4531,7 +4531,12 @@ def test_schema():
     # beat_leads (2026-09-11) answers a camera fixated on one character through a
     # reference image, a LoRA and a pinned first frame, none of which touched it: the
     # character sheet was LEADING every prompt, and what leads decides composition.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 40)
+    # hold_levels (2026-09-12) answers the chain cooking: every shot is sampled from the
+    # previous shot's last frame, the model reproduces it with a little more contrast, and
+    # the VAE clamps the result -- so headroom spent is never returned. It needs a strength,
+    # not a switch, because the correction trades flatness against how much of the look it
+    # leaves alone, and because 0 has to mean off.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 41)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4539,12 +4544,12 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-14:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-15:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
                               "ambient_audio", "ambient_level", "foley_level",
                               "speech_lead_seconds", "speech_tail_seconds",
-                              "beat_leads"])
+                              "beat_leads", "hold_levels"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",

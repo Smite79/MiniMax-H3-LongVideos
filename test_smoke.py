@@ -4844,6 +4844,102 @@ def test_finished_shots_are_held_in_half_precision():
         del _mm.intermediate_dtype
 
 
+class DriftVAE(FakeVAE):
+    """A VAE whose decode carries the grade of the last frame it was handed.
+
+    THE STOCK FAKE CANNOT SHOW THIS BUG AND THAT IS WHY IT REACHED A USER. FakeVAE.decode
+    returns fresh torch.rand, independent of anything encoded, so every shot's output is
+    statistically identical by construction and a compounding grade defect is invisible to
+    every test in this file. Closing the loop is the whole fixture: what the keyframe looked
+    like decides what comes back, and each pass expands contrast about mid grey the way a
+    4-step distill at cfg 1 does.
+
+    Keeps FakeVAE's frame-count formula, because the chain preallocates from sum(lens) and
+    a shot that decodes to the wrong length sends the whole suite down the overflow path."""
+
+    GAIN = 1.06
+
+    def __init__(self):
+        super().__init__()
+        self.seen = []           # (mean, std, clipped fraction) of every frame encoded
+        self._last = None
+
+    def encode(self, image):
+        x = image.float()
+        if x.dim() == 4:
+            x = x[0]
+        if x.dim() == 3 and int(x.shape[-1]) >= 3:
+            self.seen.append((float(x.mean()), float(x[..., :3].std()),
+                              float(((x <= 0.0) | (x >= 1.0)).float().mean())))
+            self._last = x[..., :3].clone()
+        return super().encode(image)
+
+    def decode(self, latent):
+        t = latent.shape[2] if latent.ndim == 5 else 1
+        n = max(1, (t - 2) // 5 * 17 + 5)
+        base = torch.rand(H, W, 3) if self._last is None else self._last
+        burned = ((base - 0.5) * self.GAIN + 0.5).clamp(0.0, 1.0)
+        return burned.unsqueeze(0).repeat(n, 1, 1, 1).to(_vae_out_dtype())
+
+
+def test_the_chain_does_not_burn_in():
+    print("\n=== the chain does not cook itself ===")
+    P = "\n\n".join(["A kitchen at night."]
+                     + [f"She takes a step to the left. Beat {i}." for i in range(1, 8)])
+
+    off = DriftVAE()
+    info_off = run_node(P, vae=off, hold_levels=0.0)[2]
+    on = DriftVAE()
+    info_on = run_node(P, vae=on, hold_levels=1.0)[2]
+
+    s_off = [s for _, s, _ in off.seen]
+    s_on = [s for _, s, _ in on.seen]
+    # THE DISABLE CHECK FIRST. Without it the rest could pass on a fixture incapable of
+    # producing the defect, which is the mistake FakeVAE.decode's own comment records.
+    check("the fixture really does cook the chain with the correction off",
+          len(s_off) >= 3 and s_off[-1] > s_off[0] * 1.10, f"{[round(v, 4) for v in s_off]}")
+    check("...and hold_levels holds it down",
+          s_on[-1] < s_off[-1], f"on={[round(v, 4) for v in s_on]} off={[round(v, 4) for v in s_off]}")
+    grow_off = s_off[-1] / s_off[0] if s_off[0] else 0.0
+    grow_on = s_on[-1] / s_on[0] if s_on[0] else 0.0
+    check("...by most of the growth, not a sliver of it",
+          grow_on < 1.0 + (grow_off - 1.0) * 0.6, f"off x{grow_off:.3f} on x{grow_on:.3f}")
+    c_off = [c for _, _, c in off.seen]
+    c_on = [c for _, _, c in on.seen]
+    check("clipping does not keep widening either",
+          max(c_on) <= max(c_off) + 1e-6,
+          f"on={max(c_on):.4f} off={max(c_off):.4f}")
+
+    check("the contrast trend is reported at all", "contrast per shot" in info_off,
+          info_off[-400:])
+    check("...and a climb is named as cooking", "COOKING" in info_off, info_off[-400:])
+    check("hold_levels says what it measured", "hold_levels:" in info_on, info_on[-400:])
+    check("...and off it never claims to have corrected anything",
+          "took it back out" not in info_off, info_off[-300:])
+
+    # pure functions, no render
+    lv = S.HandoffLevels()
+    flat = torch.full((H, W, 3), 0.5)
+    check("a flat frame is refused rather than divided by",
+          lv.observe(flat, flat) is False)
+    check("nothing measured means nothing applied",
+          S.HandoffLevels().gains(1.0) == (None, None))
+    g = S.HandoffLevels()
+    lo = torch.rand(H, W, 3) * 0.4 + 0.3
+    hi = ((lo - 0.5) * 1.08 + 0.5).clamp(0.0, 1.0)
+    for _ in range(4):
+        g.observe(lo, hi, hi, hi)
+    gain, off_v = g.gains(1.0)
+    check("a measured expansion comes back as a gain below 1",
+          gain is not None and float(gain.max()) < 1.0, f"{gain}")
+    check("...and strength 0 is off even with a measurement in hand",
+          g.gains(0.0) == (None, None))
+    rep = S.detail_report([(0.10, 0.08), (0.12, 0.10), (0.14, 0.13)])
+    check("a rising chain is no longer called 'not softening'",
+          "not softening" not in rep, rep)
+    check("...the rise is named as cooking instead", "COOKING" in rep, rep)
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
@@ -7043,6 +7139,7 @@ def main():
     test_the_position_may_only_be_written_once_in_the_scene()
     test_finished_shots_are_held_in_half_precision()
     test_detail_trend()
+    test_the_chain_does_not_burn_in()
     test_timing_report()
     test_no_garment_is_ever_invented()
     test_nothing_wearable_is_ever_added()

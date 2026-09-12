@@ -90,6 +90,7 @@ class PreparedVideo:
     silence_nonspeech: bool
     speech_lead_seconds: float
     speech_tail_seconds: float
+    hold_levels: float
     staging_shots: object
     steps: int
     stripped_shots: object
