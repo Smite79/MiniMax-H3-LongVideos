@@ -2571,6 +2571,44 @@ def test_layers():
     check("...and one that was not removed stays", S.names_any("a red coat", ["coat"]))
 
 
+def test_a_function_word_is_never_a_character():
+    print("\n=== 'The' is not somebody with no sheet entry ===")
+    # From a real job's info: "shot(s) 4, 7, 8, 9 name The, who has no entry in the
+    # character sheet. The is IN those shots and nothing describes them". The
+    # mid-sentence test was meant to make a stopword list unnecessary -- an ordinary
+    # word only OPENS a sentence, a name appears inside one -- and the commonest
+    # punctuation in a script defeats it:
+    #
+    #     "Nearly there," The guard says.
+    #
+    # "The" follows a comma, so it is mid-sentence, so it was reported as a character.
+    # Every pronoun reaches the same way out of a speech tag. The warning then sends
+    # the author hunting a person who does not exist, while saying nothing about the
+    # one who does.
+    sheet = "McKenna: she, 22, a vest.\nDana: she, 35, a coat."
+    for beats, label in (
+            (['McKenna pulls at the cuffs. "Nearly there," The guard says.'], "The"),
+            (['"Wait," She says. McKenna stops.'], "She"),
+            (['McKenna looks up, Then she stands.'], "Then"),
+            (['It is dark. "Go," It says.'], "It")):
+        check(f"a function word is not a person: {label!r}",
+              S.unknown_people(beats, sheet) == {})
+    # ...and a REAL unknown name is still reported, which is the whole point.
+    check("an unknown name is still named",
+          S.unknown_people(["Dana walks in with Nora behind her."], sheet) == {"Nora": [1]})
+    check("...including one that is also an ordinary word, once it is used as a name",
+          S.unknown_people(["Dana nods at Grace, then Grace leaves."], sheet) == {"Grace": [1]})
+    check("nobody unknown, nothing reported",
+          S.unknown_people(["McKenna and Dana talk."], sheet) == {})
+    # Grace, Will, Hope, Faith and May are NAMES and must not be in the stopword set --
+    # this file has already been bitten by matching "will" and "grace".
+    for _n in ("grace", "will", "hope", "faith", "may", "mark", "rose"):
+        check(f"{_n!r} stays available as a name", _n not in S._NEVER_A_NAME)
+    # The set is a real set, not a regex string: `in` on a string is a substring test
+    # and passes for any fragment, which is exactly how this first went wrong.
+    check("the stopword list is a set", isinstance(S._NEVER_A_NAME, frozenset))
+
+
 def test_thin_beats():
     print("\n=== a shot longer than its beat ===")
     # A shot that outlasts its action leaves the model seconds it was told
@@ -4634,6 +4672,7 @@ def main():
     test_falling_bound()
     test_turning_around()
     test_thin_beats()
+    test_a_function_word_is_never_a_character()
     test_auto_length()
     test_text_in_frame()
     test_reference_tags()

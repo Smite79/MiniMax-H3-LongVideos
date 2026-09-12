@@ -638,7 +638,34 @@ _PRONOUN = re.compile(r"\b(?:she|he|her|hers|his|him|they|them|their|theirs)\b",
 # A determiner in front means the capitalised word DESCRIBES something rather than
 # doing something: "her Nike leggings" names a garment, not somebody in the room.
 _DETERMINER = frozenset("a an the her his its their our my your this that".split())
-_CAPITALISED = re.compile(r"\b([A-Z][a-z’'-]{1,24})\b")
+_CAPITALISED = re.compile(r"\b([A-Z][a-z\u2019'-]{1,24})\b")
+# A WORD THAT IS NEVER SOMEBODY'S NAME, however it is capitalised.
+#
+# The mid-sentence test was supposed to make this list unnecessary -- an ordinary word
+# only opens a sentence, a name appears inside one -- and it is defeated by the
+# commonest punctuation in a script:
+#
+#     "Nearly there," The guard says.
+#
+# "The" follows a comma, so it IS mid-sentence, so it was reported as a character with
+# no sheet entry: "shot(s) 4, 7, 8, 9 name The, who has no entry in the character
+# sheet". Every pronoun reaches the same way out of a speech tag -- '"Wait," She says'
+# -- and the warning then sends the author looking for a person who does not exist
+# while saying nothing about the one who does.
+#
+# Only words that are never a name go in here. Grace, Will, Hope, Faith and May are
+# names and are deliberately absent: this file has already been bitten by matching
+# "will" and "grace" case-insensitively.
+_NEVER_A_NAME = _DETERMINER | frozenset("""
+i we you he she it they me him us them myself yourself himself herself itself
+themselves mine yours hers ours theirs
+and but or nor so yet then than as at in on of off to into onto from with without
+if when while because though although after before until once since
+there here what which who whom whose why how where whether
+no not now never always again also just only even still both each either neither
+one two three four five six seven eight nine ten first second next last another
+yes ok okay oh ah well right left up down out over under across back forward
+""".split())
 
 
 def unknown_people(beats, sheet):
@@ -668,6 +695,15 @@ def unknown_people(beats, sheet):
         for m in _CAPITALISED.finditer(beat or ""):
             # "Jon's kitchen" is Jon. The apostrophe is in the class for O'Neill.
             word = re.sub(r"['’]s$", "", m.group(1))
+            # Never a name, however the punctuation capitalised it.
+            #
+            # NAMED _NEVER_A_NAME, not _NOT_A_NAME: that one already exists further
+            # down as a regex STRING, and shadowing it turned this membership test into
+            # a silent substring match against a regex -- "one" passed because it
+            # appears inside the pattern and "the" failed because the pattern spells it
+            # "The". The test caught it; `in` on a string never raises.
+            if word.lower() in _NEVER_A_NAME:
+                continue
             before = (beat[:m.start()]).rstrip()
             prev = re.search(r"([\w’'-]+)\W*$", before)
             if prev and prev.group(1).lower() in _DETERMINER:
