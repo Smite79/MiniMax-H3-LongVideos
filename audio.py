@@ -84,8 +84,18 @@ _BED_RECIPE = (
     (r"\btraffic\b",         dict(tilt=1.7, cut=900,          mod=(0.07, 0.22))),
     (r"\bengine\b",          dict(tilt=1.5, cut=520, hum=(60.0, 0.30),
                                   mod=(0.09, 0.12))),
-    (r"\bpipes\b|\bwater\b", dict(tilt=1.3, cut=1250,         mod=(0.55, 0.45))),
-    (r"\bclock\b|\bticking", dict(tilt=1.6, cut=800, tick=(1.0, 0.22))),
+    # NOT 0.55 Hz AT 45% DEPTH. That is 33 swells a minute on the one bed a bathroom
+    # gets, and a bed that heaves at pulse rate is the same defect the footsteps had
+    # arriving from the other side -- the report heard both in the same scene. Water
+    # in pipes does not surge, it hisses, with fine turbulence in it. Faster and far
+    # shallower, and the cut opened up because 1250 Hz made it a rumble when the sound
+    # of a pipe is mostly above that.
+    (r"\bpipes\b|\bwater\b", dict(tilt=1.1, cut=3200,         mod=(2.70, 0.10))),
+    # A clock at exactly 1.00 Hz is 60 a minute, which is a resting pulse, and the
+    # tick was one soft click -- so the one bed in the table whose rate is RIGHT still
+    # landed on a heartbeat. A mechanical clock does not tick, it ticks and TOCKS: two
+    # unequal strikes to the second, which no pulse does.
+    (r"\bclock\b|\bticking", dict(tilt=1.6, cut=800, tick=(1.0, 0.22), tock=0.62)),
     # The hum family: a fridge, a fan, a strip light, a monitor. Tonal, not noise.
     (r"\bhum(?:ming|s)?\b|\bfan\b|\bfridge\b|\bstrip light\b|\bmonitor\b",
                              dict(tilt=1.4, cut=1500, hum=(100.0, 0.22))),
@@ -154,6 +164,12 @@ def synth_ambient(phrase, n, sr, seed=0, channels=2):
             click = torch.zeros(n)
             idx = torch.arange(0, n, step)
             click[idx] = 1.0
+            # TICK, TOCK. The offbeat strike, quieter than the beat, which is what
+            # makes an escapement an escapement rather than a metronome -- and what
+            # stops 60 strikes a minute reading as a pulse. See the recipe.
+            if rec.get("tock"):
+                off = idx[:-1] + step // 2
+                click[off[off < n]] = float(rec["tock"])
             decay = torch.exp(-torch.arange(min(step, int(sr * 0.05)),
                                             dtype=torch.float32) / (sr * 0.004))
             click = torch.nn.functional.conv1d(
@@ -294,6 +310,333 @@ def _even(start, count, gap, jitter, g):
     return [float(start + i * gap + j[i]) for i in range(int(count))]
 
 
+# ---------------------------------------------------------------------------
+# NOT EVERYTHING IS AN IMPACT, and for a long time everything here was.
+#
+# Every recipe in this file was _hits -- a train of decaying noise bursts -- sent
+# through one narrow resonator. That is exactly right for metal striking metal, and
+# the cuffs, the keys, the bolt and the lock all measure like the real thing. It is
+# wrong for three whole families, and measurement says how wrong:
+#
+#   footsteps            0.0% of their energy above 1.2 kHz, centroid 226 Hz
+#   something landing    0.0%, centroid 175 Hz
+#   a bed frame working  0.0%, centroid 395 Hz
+#   a door on its hinges 3.4%
+#   rope creaking        2.8%
+#   water                duty 0.41 -- no water at all for 59% of the time
+#
+# A footstep with NO high frequency in it is not a footstep. The bright part is the
+# contact -- sole against surface -- and it is the half that says what is stepping
+# on what. Strip it out and what is left is a soft low thump, and at the walking
+# cadence this recipe used (109 a minute) a soft low thump is a HEARTBEAT. Reported
+# exactly that way: "footsteps sound like heartbeats".
+#
+# Water is not 14 impacts a second either. It is continuous, and a sound that stops
+# 59% of the time is a tap: reported as "tapping sounds" in a bathroom.
+#
+# So there are three excitations now instead of one. _hits stays, unchanged, for the
+# things that genuinely are impacts.
+# ---------------------------------------------------------------------------
+
+
+def _contact(n, sr, g, times, body=120.0, bright=2600.0, decay=0.085, amp=1.0,
+             mix=0.55):
+    """Something striking a SURFACE: a bright contact over a low body.
+
+    Two bands at the same instants. The low one is the mass arriving, which is all
+    this used to be; the bright one is the contact itself -- sole on tile, a box on
+    boards -- and it is the half the ear identifies the sound by. A thump on its own
+    says only that something heavy happened, and the listener's own prior supplies
+    the rest: at a walking rate, from inside a body, that prior is a pulse.
+
+    The two calls to _hits roll their own per-hit level and decay, so the balance
+    between contact and body differs from step to step the way it does when a real
+    foot lands at a slightly different angle. That is wanted, not tolerated."""
+    low = _band(_hits(n, sr, g, times, decay, amp), sr, float(body), 1.6)
+    tap = _band(_hits(n, sr, g, times, float(decay) * 0.13, amp), sr, float(bright), 0.9)
+    lo_p, tp_p = float(low.abs().max()), float(tap.abs().max())
+    if lo_p > 0:
+        low = low / lo_p
+    if tp_p > 0:
+        tap = tap / tp_p
+    return low * (1.0 - float(mix)) + tap * float(mix)
+
+
+def _flow(n, sr, g, f0, q=1.1, rough=7.0, depth=0.5):
+    """A CONTINUOUS sound: water running, something scraping, cloth moving.
+
+    Band-limited noise whose level wanders, rather than a train of bursts with
+    silence between them. The level never reaches zero -- that is the whole point,
+    and it is what the duty measurement checks: water that stops is a tap, and a
+    scrape that stops is a knock.
+
+    Three incommensurate wander rates, at random phase, so the movement does not
+    settle into a pulse of its own -- which is the failure being fixed, and it would
+    be careless to rebuild it one layer up."""
+    y = _band(torch.randn(n, generator=g), sr, float(f0), float(q))
+    t = torch.arange(n, dtype=torch.float32) / sr
+    env = torch.zeros(n)
+    for hz, a in ((float(rough), float(depth)),
+                  (float(rough) * 0.37, float(depth) * 0.55),
+                  (float(rough) * 2.31, float(depth) * 0.30)):
+        env = env + a * torch.sin(2 * math.pi * hz * t
+                                  + float(torch.rand(1, generator=g)) * 6.2832)
+    return y * (1.0 + env).clamp(min=0.28)
+
+
+def _creak(n, sr, g, times, f0=420.0, secs=0.45, glide=1.7, slip=34.0, amp=1.0):
+    """Stick-slip: a pitched squeal that GLIDES, broken up by the slipping.
+
+    A hinge, a rope going tight, a bed frame taking weight. All of them were impulse
+    trains through a resonator, which is a knock -- and a knock is what they sounded
+    like. What makes a creak a creak is that the surfaces grip, release and grip
+    again dozens of times a second while the load changes, so the pitch RISES through
+    the event and the amplitude is chopped up at the slip rate.
+
+    Harmonics matter: a squeal is a rich tone, and a pure sine reads as a test
+    signal. The glide and the slip rate both vary per event for the same reason
+    every _hits burst does -- identical repeats are what gives synthesis away."""
+    x = torch.zeros(n)
+    rub = torch.zeros(n)
+    for t0 in times:
+        i = int(float(t0) * sr)
+        if i < 0 or i >= n:
+            continue
+        d = float(secs) * float(1.0 + (torch.rand(1, generator=g) - 0.5) * 0.5)
+        L = min(max(8, int(d * sr)), n - i)
+        if L < 8:
+            continue
+        t = torch.arange(L, dtype=torch.float32) / sr
+        gl = float(glide) * float(1.0 + (torch.rand(1, generator=g) - 0.5) * 0.3)
+        hz = float(f0) * (1.0 + (gl - 1.0) * (t / max(d, 1e-6)).clamp(max=1.0))
+        ph = 2 * math.pi * torch.cumsum(hz, dim=0) / sr
+        tone = torch.sin(ph) + 0.45 * torch.sin(2 * ph) + 0.22 * torch.sin(3 * ph)
+        # The slipping. A rounded square at the slip rate, so the tone is chopped
+        # rather than tremoloed -- a creak is intermittent contact, not vibrato.
+        sl = float(slip) * float(1.0 + (torch.rand(1, generator=g) - 0.5) * 0.4)
+        chop = (torch.sin(2 * math.pi * sl * t
+                          + float(torch.rand(1, generator=g)) * 6.2832) * 3.0)
+        chop = (0.55 + 0.45 * chop.clamp(-1.0, 1.0))
+        env = (1.0 - torch.exp(-t / 0.012)) * torch.exp(-t / max(d / 2.2, 1e-6))
+        a = float(amp) * float(torch.exp((torch.rand(1, generator=g) - 0.5) * 0.9))
+        # THE SLIPPING IS A MICRO-IMPACT, dozens a second, and it is where a creak
+        # gets its broadband content. Without it the sound is a tone and its two
+        # harmonics and nothing else -- measured at 0.0% of the energy above 1.2 kHz
+        # on the bed frame, which is the same empty high end that let a low thump at
+        # pulse rate read as a heartbeat. Gated by the same chop, because the grit
+        # happens AT the slip and nowhere between.
+        rub[i:i + L] += torch.randn(L, generator=g) * chop * env * a
+        x[i:i + L] += tone * chop * env * a
+    # ...BAND-LIMITED TO THE STRUCTURE'S OWN RESONANCES, and collected so it costs
+    # one pass rather than one per event. White grit made every creak measure at a
+    # 3.1 kHz centroid -- a hiss, with a wooden bed frame as bright as a steel hinge.
+    # A slip excites what it is slipping ON, so the grit sits a few multiples above
+    # the squeal and the wood stays wooden.
+    # Floored, because a low squeal's third harmonic is still low: at f0 205 the
+    # grit landed at 656 Hz and the bed frame came back with 0.2% of its energy above
+    # 1.2 kHz -- empty up top again. A slip is a tiny impact and a tiny impact is
+    # broad whatever it lands on.
+    return x + 0.55 * _band(rub, sr, max(float(f0) * 3.2, 850.0), 0.8)
+
+
+# A WALK IS NOT A METRONOME, and a metronome at walking speed is a pulse.
+#
+# The old footfall times came from _even: a fixed 0.55 s gap with +/-9% of jitter,
+# laid from 0.25 s to the end of the shot whatever the shot was doing. Three things
+# wrong with that, and the report named two of them -- "sound like heartbeats" and
+# "not properly timed with movement".
+#
+# A real gait is ASYMMETRIC. Left and right are not the same interval; one leg
+# carries slightly longer, and the difference is a few percent and consistent within
+# a walk. That alternation is most of what the ear uses to hear a walk as a walk
+# rather than as a pulse, and it is free to put back.
+def _gait(secs, g, step=0.52, start=0.18, count=None, asym=0.055, vary=0.045):
+    """Footfall times for a walk. Alternating, varied, and it STOPS.
+
+    `count` caps the number of steps; without it the walk fills `secs`, which is the
+    old behaviour and is right only when the beat really does walk the whole shot."""
+    secs = float(secs)
+    if secs <= 0 or step <= 0:
+        return []
+    n = int(count) if count else max(2, int(secs / float(step)))
+    out, t = [], float(start)
+    for i in range(n):
+        if t >= secs:
+            break
+        out.append(t)
+        # Left, then right: one interval slightly longer than the other, plus the
+        # step-to-step variation a real walk has from the floor and the stride.
+        side = float(asym) if i % 2 else -float(asym)
+        v = float((torch.rand(1, generator=g) - 0.5) * 2.0 * float(vary))
+        t += float(step) * (1.0 + side + v)
+    return out
+
+
+# THE ONLY THING IN THE TABLE WITH A VISIBLE SYNC POINT.
+#
+# A chain rattling or cloth moving has no frame the ear can check it against, so
+# building it blind costs nothing. A footfall does: the foot lands on screen, and a
+# footstep train laid at a fixed interval regardless is guaranteed to disagree with
+# the picture. That is the second half of the report -- "not properly timed with
+# movement" -- and it is why this set has one member rather than being a flag on
+# every recipe.
+_MOTION_TIMED = frozenset({"footsteps"})
+
+
+def _footfalls(n, sr, g, times):
+    """The footstep VOICE, given the times. One definition, because there are two
+    callers -- the blind recipe and the motion-timed path -- and a second copy of
+    these numbers would drift until the same film had two kinds of foot in it."""
+    return _contact(n, sr, g, times, body=125, bright=2200, decay=0.070, mix=0.62)
+
+# A step is between these, or it is not a step. Below is a run's cadence at best and
+# above is somebody stopping between paces; outside the range a peak in the motion
+# envelope is something else moving and must not be read as a gait.
+_STEP_MIN, _STEP_MAX = 0.26, 0.95
+
+
+def _step_period(env, fps):
+    """The step interval `env` implies, in seconds, or None when it is not periodic.
+
+    Autocorrelation over the plausible step lags. This part is a MEASUREMENT: a walk
+    is periodic, frame-to-frame change inherits that period, and the lag of the
+    strongest correlation is it. Rejected unless the peak is a real fraction of the
+    zero-lag energy, because noise autocorrelates too and a shot of somebody standing
+    still would otherwise produce a confident cadence out of nothing.
+
+    A full stride is two steps, so a dominant lag at twice the step rate is halved --
+    which happens when the two legs are not equally visible to the camera and only one
+    swing per stride shows up."""
+    try:
+        e = env.detach().to(torch.float32).flatten()
+        if e.numel() < 8:
+            return None
+        e = e - e.mean()
+        z = float(e.pow(2).sum())
+        if not (z > 0):
+            return None
+        lo = max(1, int(_STEP_MIN * fps))
+        # AT LEAST THREE CYCLES of whatever it claims to have found. One broad bump in
+        # a short shot correlates with itself at half its own width, and that is not a
+        # cadence -- it is a pan. Three is the fewest that distinguishes a repeating
+        # thing from a thing that happened.
+        hi = min(int(e.numel()) // 3, int(_STEP_MAX * 2.0 * fps))
+        if hi <= lo:
+            return None
+        r = [float((e[:-k] * e[k:]).sum()) / z for k in range(lo, hi + 1)]
+        best = max(r)
+        # 0.35, measured rather than guessed. At 0.18 a shot of pure noise came back
+        # with a confident 0.5 s cadence -- a short envelope has few lags, so noise
+        # autocorrelates well by chance, and inventing a gait out of grain is worse
+        # than laying one blind. A real walk correlates far above this: the ten test
+        # periods all land near 1.0, and with noise at 15% of the swing they do not
+        # move at all.
+        if best < 0.35:
+            return None
+        # THE SHORTEST STRONG LAG, NOT THE STRONGEST. A periodic signal correlates
+        # with itself at every multiple of its period, and the longer lags often
+        # correlate BETTER because they catch more cycles -- so taking the maximum
+        # picked multiples. Measured against known step periods it answered 0.875 s
+        # for a 0.35 s step (x2.5), 0.667 for 0.44 (x1.5) and 0.583 for 0.78 (x0.75):
+        # four of five wrong, all of them harmonically related to the truth.
+        #
+        # The fundamental is the first lag that is nearly as good as the best one, and
+        # it has to be a local peak -- the rising shoulder of a later peak is not a
+        # period. This is the standard remedy for the same error in pitch detection.
+        at = None
+        for i, v in enumerate(r):
+            if v < 0.85 * best:
+                continue
+            if (i == 0 or r[i - 1] <= v) and (i + 1 >= len(r) or r[i + 1] <= v):
+                at = lo + i
+                break
+        if at is None:
+            at = lo + r.index(best)
+        secs = at / float(fps)
+        if secs > _STEP_MAX:
+            secs = secs / 2.0            # the lag was a full stride, not a step
+        return secs if _STEP_MIN <= secs <= _STEP_MAX else None
+    except Exception:
+        return None
+
+
+def _walk(n, sr, g, env, fps, step=0.52):
+    """Footfall times placed against the picture's own movement.
+
+    Two different kinds of claim, and they are worth keeping apart:
+
+    MEASURED -- the cadence, from _step_period, and WHEN there is movement at all.
+    Both come straight out of the envelope.
+
+    INFERRED -- which phase of the cycle the foot lands on. Frame difference peaks
+    when a limb is travelling fastest, which is mid-swing, and falls at contact: the
+    swing leg has decelerated to nothing and the body is on both feet. So the steps
+    are placed on the envelope's MINIMA. That is a physical argument rather than a
+    measurement, and it is right up to half a step -- which is still the difference
+    between a gait that drifts against the picture all shot and one that does not.
+
+    The gate is RELATIVE to the shot's own movement, which is what makes it safe on
+    any scene: there is no absolute scale for "moving", and a shot where nobody moves
+    normalises its own noise up and keeps its steps rather than going silent. What it
+    catches is the case it was reported for -- walking in and then standing still --
+    where the still half really is far below the walking half."""
+    secs = n / float(sr)
+    if env is None or int(env.numel()) < 8:
+        return _gait(secs, g, step=step)
+    k = _step_period(env, fps)
+    e = env.detach().to(torch.float32).flatten()
+    span = float(e.max() - e.min())
+    if k is None or not (span > 0):
+        # No cadence to read. Still worth gating: an even train over a motionless
+        # stretch is the complaint, whatever the rate.
+        return [t for t in _gait(secs, g, step=step)
+                if _moving(e, t, fps, span, step)]
+    kf = max(2, int(round(k * fps)))
+    # The phase whose samples sit LOWEST in the envelope -- contact, see above.
+    best, off = None, 0
+    for p in range(kf):
+        idx = torch.arange(p, int(e.numel()), kf)
+        if idx.numel() < 2:
+            continue
+        v = float(e[idx].mean())
+        if best is None or v < best:
+            best, off = v, p
+    out = []
+    t = off / float(fps)
+    while t < secs:
+        if _moving(e, t, fps, span, k):
+            out.append(t)
+        t += k
+    return out
+
+
+def _moving(e, t, fps, span, period, gate=0.32):
+    """Is the picture moving at time `t`? Relative to this shot's own range.
+
+    THE WINDOW IS A FRACTION OF THE STEP, not a fixed slice of time, and that is not
+    a refinement -- with a fixed 0.12 s it deleted every footstep in a walk at a
+    half-second cadence, which is the commonest cadence there is.
+
+    The reason is that these two mechanisms pull against each other by construction.
+    Steps are placed on the envelope's MINIMA, because that is where the contact is;
+    the gate then asks whether the picture is moving there -- and at the bottom of a
+    trough it is not. A window narrow against the step period sees only the trough,
+    answers no, and drops the very step it was asked about. Scaled to the period it
+    always reaches the neighbouring peak, so the question it answers is the one
+    intended: is the body moving AROUND here, not at this instant.
+
+    The cost it could have is that a step just after somebody stops still sees the
+    walking it came out of, letting one leak past the stop. Measured at three
+    cadences, none leaks -- the window reaches backwards by half a step and the first
+    step after a halt is a whole one past it."""
+    i = int(t * fps)
+    w = max(1, int(max(0.10, 0.55 * float(period)) * fps))
+    lo, hi = max(0, i - w), min(int(e.numel()), i + w + 1)
+    if hi <= lo:
+        return True
+    return bool(float(e[lo:hi].max()) >= float(e.min()) + gate * span)
+
+
 _FOLEY = {
     "cuffs ratcheting closed":
         lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.33, 9, 0.030, 0.004, g),
@@ -305,12 +648,16 @@ _FOLEY = {
         lambda n, sr, g, secs: _band(_hits(n, sr, g,
                                            _even(0.05, max(4, int(secs * 11)), 0.09, 0.035, g),
                                            0.028), sr, 4200, 7.0),
+    # A LOAD COMING ON IS A CREAK, NOT A KNOCK. Both of these were impulse trains
+    # through a resonator and measured 2.7% of their energy above 1.2 kHz -- a dull
+    # thump where the sound is a rising squeal. Webbing and rope going tight grip and
+    # slip as the load builds, which is what _creak is.
     "restraints pulling taut":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 3, 0.35, 0.10, g),
-                                           0.30), sr, 700, 2.5),
+        lambda n, sr, g, secs: _creak(n, sr, g, _even(secs * 0.3, 3, 0.38, 0.10, g),
+                                      f0=540, secs=0.32, glide=1.9, slip=41.0),
     "rope creaking as it goes tight":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 4, 0.28, 0.09, g),
-                                           0.28), sr, 620, 2.5),
+        lambda n, sr, g, secs: _creak(n, sr, g, _even(secs * 0.3, 3, 0.34, 0.09, g),
+                                      f0=430, secs=0.38, glide=2.1, slip=29.0),
     "a lock snapping shut":
         lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.5], 0.045), sr, 2100, 5.0),
     "a metal bolt sliding":
@@ -328,38 +675,68 @@ _FOLEY = {
     "tape pulling off":
         lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 90, 0.007, 0.002, g),
                                            0.008), sr, 2400, 2.0),
+    # Cloth moving is continuous while it moves -- 3.3 bursts a second reads as
+    # somebody patting it. Rougher and faster than water, because a fold catches.
     "fabric rustling":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.1, max(3, int(secs * 3)), 0.30,
-                                                           0.12, g), 0.10), sr, 2800, 1.8),
+        lambda n, sr, g, secs: _flow(n, sr, g, 2900, q=0.85, rough=17.0, depth=0.75),
     "blades through fabric":
         lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 5, 0.18, 0.05, g),
                                            0.09), sr, 3600, 2.2),
     # A slow rhythm of frame creaks. Low and wooden, and the rate is deliberately
     # unhurried: the point is that the room is not silent, not that the shot has a
     # metronome in it.
+    #
+    # ...WHICH IS EXACTLY WHAT IT BECAME. An impulse train at 240 Hz with nothing
+    # above 1.2 kHz, 97 of them a minute: a soft low thump at pulse rate, which is
+    # the same defect the footsteps had and the same sound. The rate was never the
+    # problem and it is unchanged -- wood creaking is what this is, so it creaks.
     "a bed frame working":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g,
-                                           _even(0.15, max(3, int(secs * 1.6)), 0.62,
-                                                 0.05, g), 0.16), sr, 240, 3.0),
+        lambda n, sr, g, secs: _creak(n, sr, g,
+                                      _even(0.15, max(3, int(secs * 1.6)), 0.62,
+                                            0.09, g),
+                                      f0=205, secs=0.34, glide=1.45, slip=19.0),
+    # Both halves, because the phrase names both: the buckle is metal and strikes,
+    # the leather creaks. Built as one impact train it was all buckle.
     "a buckle and leather creaking":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 4, 0.20, 0.07, g),
-                                           0.12), sr, 1200, 3.0),
+        lambda n, sr, g, secs: (
+            _band(_hits(n, sr, g, _even(secs * 0.3, 3, 0.22, 0.07, g), 0.030),
+                  sr, 2800, 5.0) * 2.2
+            + _creak(n, sr, g, _even(secs * 0.32, 3, 0.24, 0.08, g),
+                     f0=330, secs=0.26, glide=1.5, slip=26.0)),
+    # THE ONE THE REPORT WAS ABOUT. 130 Hz, nothing above 1.2 kHz at all, 109 evenly
+    # spaced soft thumps a minute: every measurable property of a heartbeat. The
+    # contact is back (that is _contact), and the metronome is a gait (that is
+    # _gait). See both, and see _MOTION_TIMED for the timing half.
     "footsteps":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.25, max(2, int(secs / 0.55)),
-                                                           0.55, 0.05, g), 0.10), sr, 130, 1.6),
+        lambda n, sr, g, secs: _footfalls(n, sr, g, _gait(secs, g)),
+    # DRAGGING IS CONTINUOUS. Thirty-two bursts with gaps between them is something
+    # being bumped along, not slid: a scrape is unbroken contact, and the gaps were
+    # 63% of the sound.
     "something dragging on the floor":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.2, max(6, int(secs * 8)),
-                                                           0.12, 0.05, g), 0.14), sr, 420, 1.4),
+        lambda n, sr, g, secs: _flow(n, sr, g, 950, q=0.65, rough=9.0, depth=0.55),
+    # Landing is a contact too -- 110 Hz and nothing above 1.2 kHz was a thud with
+    # no floor in it. Less contact in the mix than a footstep: a dropped thing is
+    # mostly mass, where a shoe is mostly surface.
     "something landing":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.5], 0.14), sr, 110, 1.5),
+        lambda n, sr, g, secs: _contact(n, sr, g, [secs * 0.5], body=105, bright=1500,
+                                        decay=0.12, mix=0.40),
     "a sharp impact":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, [secs * 0.45], 0.07), sr, 900, 1.5),
+        lambda n, sr, g, secs: _contact(n, sr, g, [secs * 0.45], body=160, bright=2900,
+                                        decay=0.065, mix=0.62),
+    # A HINGE SQUEALS. Eight knocks at 780 Hz is a door being rapped, not one
+    # swinging: the sound of a hinge is one long rising tone for the length of the
+    # swing, and the metal gripping and releasing is what makes it waver.
     "a door on its hinges":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(secs * 0.3, 8, 0.09, 0.03, g),
-                                           0.13), sr, 780, 6.0),
+        lambda n, sr, g, secs: _creak(n, sr, g, [secs * 0.3], f0=620,
+                                      secs=min(0.9, max(0.35, secs * 0.32)),
+                                      glide=1.55, slip=23.0),
+    # THE OTHER ONE THE REPORT WAS ABOUT. 14 discrete bursts a second at 1.4 kHz,
+    # present only 41% of the time, with 43% jitter on the gaps: irregular mid-high
+    # clicks, which is tapping. Reported from a bathroom, where it was the shower.
+    # Water is a flow -- broad, bright and unbroken -- with the roughness of the
+    # spray in it rather than the gaps of a dripping tap.
     "water":
-        lambda n, sr, g, secs: _band(_hits(n, sr, g, _even(0.05, max(8, int(secs * 14)), 0.07,
-                                                           0.03, g), 0.06), sr, 1400, 1.5),
+        lambda n, sr, g, secs: _flow(n, sr, g, 2400, q=0.55, rough=13.0, depth=0.4),
 }
 
 
@@ -372,9 +749,14 @@ def phrase_seed(phrase):
     return h
 
 
-def foley_for(phrase, n, sr, seed=0):
+def foley_for(phrase, n, sr, seed=0, motion=None, fps=24.0):
     """Build the sound `phrase` names, `n` samples long. None when there is no
-    recipe -- which includes every vocal phrase, deliberately."""
+    recipe -- which includes every vocal phrase, deliberately.
+
+    `motion` is the shot's own movement envelope, one value per frame gap, from
+    runtime.motion_envelope. Only footsteps use it, and only footsteps have a sync
+    point worth the trouble -- see _MOTION_TIMED. Without it the gait is laid blind,
+    which is what every recipe here did before."""
     try:
         n, sr = int(n), int(sr)
         make = _FOLEY.get(str(phrase or ""))
@@ -395,7 +777,13 @@ def foley_for(phrase, n, sr, seed=0):
         # unless they are the same length doing the same thing -- which is the one
         # case where being identical is right.
         g = torch.Generator().manual_seed((int(seed) + phrase_seed(phrase)) & 0x7fffffff)
-        y = make(n, sr, g, n / float(sr))
+        if motion is not None and str(phrase) in _MOTION_TIMED:
+            times = _walk(n, sr, g, motion, float(fps) or 24.0)
+            if not times:
+                return None          # the picture never moves: no steps belong here
+            y = _footfalls(n, sr, g, times)
+        else:
+            y = make(n, sr, g, n / float(sr))
         # The room goes on LAST and on everything, which is what a room does: it is
         # a property of the place, not of the prop. Applied here rather than in the
         # recipes so all 21 get it and none can forget it.

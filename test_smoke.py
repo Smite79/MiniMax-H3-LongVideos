@@ -6225,7 +6225,7 @@ def _foley_spans(prompt, n_shots_hint=None, **kw):
     receives it moves by a wide margin and a span that does not moves by ~0."""
     _real = S.foley_for
     try:
-        S.foley_for = lambda phrase, n, sr, seed=0: torch.ones(int(n))
+        S.foley_for = lambda phrase, n, sr, seed=0, **_kw: torch.ones(int(n))
         on = run_node(prompt, **kw)
     finally:
         S.foley_for = _real

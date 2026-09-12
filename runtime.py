@@ -712,6 +712,63 @@ def frame_levels(img):
     return p.mean(dim=1), p.std(dim=1)
 
 
+# WHEN THE BODY IS ACTUALLY MOVING.
+#
+# Built foley is synthesised blind: foley_for is handed a phrase and a length and
+# nothing else, so footsteps were laid down at a fixed interval from 0.25 s to the end
+# of the shot whatever was on screen. Reported as footsteps "not properly timed with
+# movement", and they could not have been -- a shot where somebody walks in and stops
+# got the same even train over the standing still as over the walking.
+#
+# This is the one thing the picture can tell the soundtrack cheaply. Frame-to-frame
+# change says WHEN there is movement and, because a walk is periodic, at what rate --
+# both measurable. It does not say which frame a heel lands on; see _walk for what is
+# measured and what is inferred.
+MOTION_POOL = 32               # cells per axis the motion is measured on
+MOTION_CHUNK = 4               # frames cast to float at a time. See motion_envelope.
+
+
+def motion_envelope(imgs):
+    """Per-frame movement for one shot, as a 1-D float32 tensor, or None.
+
+    Mean absolute difference between consecutive frames, area-pooled to MOTION_POOL
+    first. Pooling is what makes this a measure of BODIES rather than of noise: at
+    full resolution the per-pixel grain of a diffusion frame swamps a limb, and the
+    envelope comes back flat. One value per frame gap, so the result is one shorter
+    than the shot.
+
+    POOLED IN CHUNKS, because the whole stack will not fit. These frames are fp16 and
+    a shot is 73 of them: casting [73, 768, 1344, 3] to float32 in one go asks for
+    900MB, at the exact moment in the render where the decode has just peaked -- on a
+    16GB card that is an OOM, traded for a refinement to a sound effect. Four frames
+    at a time is 50MB, and what is kept is the POOLED stack, which is 32x32 per frame
+    and fits in a few hundred kilobytes.
+
+    float32 for the same reason frame_levels is: a mean over a million fp16 elements
+    biases badly enough to matter.
+
+    Defensive like everything on the soundtrack path -- None means the caller falls
+    back to a blind gait, which is what it did before this existed."""
+    try:
+        x = imgs
+        if x is None or x.dim() != 4 or int(x.shape[0]) < 3:
+            return None
+        c = min(3, int(x.shape[-1]))
+        pooled = []
+        for i in range(0, int(x.shape[0]), MOTION_CHUNK):
+            blk = x[i:i + MOTION_CHUNK, ..., :c].float().permute(0, 3, 1, 2)
+            pooled.append(torch.nn.functional.adaptive_avg_pool2d(
+                blk, MOTION_POOL).detach().to("cpu", torch.float32))
+            del blk
+        p = torch.cat(pooled, dim=0)
+        e = (p[1:] - p[:-1]).abs().mean(dim=(1, 2, 3))
+        if not torch.isfinite(e).all():
+            return None
+        return e
+    except Exception:
+        return None
+
+
 def apply_levels(img, gain, offset):
     """Rescale a frame's contrast and level about its OWN per-channel mean.
 

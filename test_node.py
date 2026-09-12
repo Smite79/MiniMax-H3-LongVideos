@@ -9,6 +9,7 @@ Run: python test_node.py
 """
 
 import importlib.util
+import math
 import re
 import io
 import os
@@ -1259,6 +1260,29 @@ def _centroid(y, sr=44100):
     return float((X * f).sum() / X.sum())
 
 
+def _above(y, split=1200.0, sr=44100):
+    """Fraction of the ENERGY above `split`. The measure that tells a footstep from a
+    heartbeat: a pulse has none at all up there, and anything striking a real surface
+    has a contact transient that does. Measured against a synthesised heartbeat, and
+    against the old recipe, both of which came back at 0.000."""
+    m = y.mean(0) if y.dim() > 1 else y
+    P = torch.fft.rfft(m.float()).abs().pow(2)
+    f = torch.fft.rfftfreq(int(m.numel()), d=1.0 / sr)
+    tot = float(P.sum())
+    return float(P[f > split].sum()) / tot if tot > 0 else 0.0
+
+
+def _duty(y, sr=44100, rel=0.10, ms=5.0):
+    """Fraction of the time the sound is audibly present. ~1.0 is continuous; a train
+    of discrete events with gaps between them is low, and low is what reads as
+    tapping when the thing being built is water."""
+    m = y.mean(0) if y.dim() > 1 else y
+    w = max(1, int(sr * ms / 1000.0))
+    k = (int(m.numel()) // w) * w
+    fr = m[:k].reshape(-1, w).pow(2).mean(-1).sqrt()
+    return float((fr > rel * fr.max()).float().mean())
+
+
 def test_a_built_bed_always_goes_on():
     """There is a floor under the shaped bed. synth_ambient is defensive and can
     return None, and a built bed that comes back empty would leave the output with
@@ -1348,7 +1372,20 @@ def test_furniture_under_movement_is_built():
           "a bed frame working" not in S.sounds_for("They rock together."))
     y = S.foley_for("a bed frame working", 44100 * 2, 44100, seed=3)
     check("it builds", y is not None)
-    check("...low and wooden", 100 < _centroid(y.unsqueeze(0)) < 600)
+    # Low and wooden, and the band widened when this stopped being an impulse train:
+    # a creak's slipping is a string of micro-impacts, and they are broadband whatever
+    # they land on. Built as bare thumps at 240 Hz it had 0.0% of its energy above
+    # 1.2 kHz -- 97 soft low thumps a minute, which is a pulse, and the same defect
+    # the footsteps were reported for. See _creak.
+    check("...low and wooden", 250 < _centroid(y.unsqueeze(0)) < 1400)
+    # A CREAK SUSTAINS, and that -- not brightness -- is what separates this one from
+    # a pulse. Wood creaking really is dark, so a brightness floor would be a number
+    # bent to fit; measured instead, a synthesised heartbeat is present 10% of the
+    # time and the old impulse version 14%, against 24-37% here across five seeds. A
+    # heartbeat is two short thumps in a long gap. A frame taking weight groans for
+    # most of the interval.
+    check("...and sustains rather than striking, which a pulse does not",
+          _duty(y) > 0.20)
     check("...and does not clip", float(y.abs().max()) <= 0.701)
 
 
@@ -1374,16 +1411,40 @@ def test_the_sound_of_an_action_can_be_built():
     # A single resonator's skirt falls off as 1/f, and against noise enough survives
     # above the centre that footsteps aimed at 130 Hz measured 3.6 kHz. Order 3 is
     # what makes f0 mean anything.
-    want = {"footsteps": 130, "something landing": 110, "cuffs knocking": 2600,
-            "cuffs ratcheting closed": 3200, "chain links dragging": 4200,
-            "keys on a ring": 5200, "a zip running": 4800}
+    # FOOTSTEPS AND LANDING ARE NOT IN HERE ANY MORE, and removing them is a
+    # correction of this very test. It pinned them at 130 and 110 Hz -- a single
+    # narrow band, low, with nothing else in it -- and that is what a heartbeat is:
+    # measured against a synthesised one, the old footsteps and the heartbeat BOTH
+    # came back with 0.0% of their energy above 1.2 kHz and centroids 97 Hz apart.
+    # Reported as "footsteps sound like heartbeats".
+    #
+    # The reason this test was written is still right and still here: a leaky band
+    # left every recipe sounding like the same hiss, and f0 has to mean something.
+    # It was the application to a CONTACT sound that overshot. A foot striking a
+    # floor is two bands -- the mass arriving and the contact itself -- so a single
+    # centre is the wrong shape of question for it, and it gets its own check below.
+    want = {"cuffs knocking": 2600, "cuffs ratcheting closed": 3200,
+            "chain links dragging": 4200, "keys on a ring": 5200,
+            "a zip running": 4800}
     for phrase, f0 in want.items():
         c = _centroid(S.foley_for(phrase, n, sr, seed=3).unsqueeze(0))
         check(f"'{phrase}' sits near {f0} Hz", 0.45 * f0 <= c <= 2.4 * f0)
-    # ...and low things must actually be low, or a footstep is a hiss.
-    check("a footstep is far below a key",
-          _centroid(S.foley_for("footsteps", n, sr, 3).unsqueeze(0)) * 4
+    # A footstep is still below a key -- it is not a bright sound -- but it may never
+    # again be EMPTY above the contact, which is the half that says what is stepping
+    # on what. A heartbeat measures 0.0% there; anything striking a real surface
+    # cannot.
+    _fs = S.foley_for("footsteps", n, sr, 3)
+    check("a footstep is below a key",
+          _centroid(_fs.unsqueeze(0))
           < _centroid(S.foley_for("keys on a ring", n, sr, 3).unsqueeze(0)))
+    check("...and has a contact in it, which a pulse does not",
+          _above(_fs, 1200.0) > 0.05)
+    # A landing has a contact too, and is DULLER than a shoe: a dropped thing is
+    # mostly mass arriving, where a foot is mostly a hard surface being struck.
+    _land = S.foley_for("something landing", n, sr, 3)
+    check("a landing has its contact too", _above(_land, 1200.0) > 0.02)
+    check("...and is duller than a footstep",
+          _above(_land, 1200.0) < _above(_fs, 1200.0))
     check("nothing clips", float(S.foley_for("chain links dragging", n, sr, 3).abs().max())
           <= 0.701)
 
@@ -4325,6 +4386,298 @@ def test_how_underwear_actually_comes_off():
               S.infer_removals(_b, _two) == _want)
 
 
+def _heartbeat(n, sr=44100, bpm=72.0, seed=3):
+    """A reference heartbeat, for the tests that have to prove something is NOT one.
+
+    Lub-dub pairs, low, soft, near-perfectly regular -- built out of this file's own
+    primitives so the comparison is like for like. Measured: 0.0% of its energy above
+    1.2 kHz, present 10% of the time. The footstep recipe that was reported as
+    sounding like a heartbeat measured 0.0% and 9%."""
+    g = torch.Generator().manual_seed(seed)
+    per = 60.0 / bpm
+    times, t = [], 0.2
+    while t < n / sr:
+        times += [t, t + 0.30 * per]
+        t += per
+    y = S._band(S._hits(n, sr, g, times, 0.09), sr, 55, 1.4)
+    return y / y.abs().max()
+
+
+def test_a_footstep_is_not_a_heartbeat():
+    """REPORTED: "footsteps sound like heartbeats and are not properly timed with
+    movement".
+
+    They were a heartbeat, and not approximately -- by every property that can be
+    measured. 109 evenly spaced hits a minute, which is a pulse rate; a single
+    resonator at 130 Hz, which is the band a pulse occupies; 0.0% of the energy above
+    1.2 kHz, which is what a pulse has; +/-9% of jitter, which is as regular as one.
+
+    What was missing is the CONTACT. A footstep is a surface being struck, the bright
+    transient is sole against floor, and it is the half the ear names the sound by.
+    Strip it out and all that is left is a soft low thump, and the listener's own
+    prior fills in the rest: at walking rate, from inside a body, that is a pulse."""
+    print("\n=== a footstep is not a heartbeat ===")
+    n, sr = 44100 * 3, 44100
+    hb = _heartbeat(n, sr)
+    check(f"the reference heartbeat is empty above 1.2 kHz: {_above(hb):.3f}",
+          _above(hb) < 0.01)
+    # The old recipe, rebuilt here, so the comparison is not a claim about history.
+    g = torch.Generator().manual_seed(3)
+    was = S._band(S._hits(n, sr, g, S._even(0.25, max(2, int(3.0 / 0.55)), 0.55, 0.05, g),
+                          0.10), sr, 130, 1.6)
+    check(f"...and so was the old footstep recipe: {_above(was):.3f}",
+          _above(was) < 0.01)
+    now = S.foley_for("footsteps", n, sr, seed=3)
+    check(f"the footstep has a contact in it now: {_above(now):.3f}",
+          _above(now) > 0.04)
+    check("...on every seed",
+          all(_above(S.foley_for("footsteps", n, sr, seed=_s)) > 0.04
+              for _s in (1, 2, 4, 5, 9)))
+    # It must not have overshot into a click. A footstep is not a bright sound; it is
+    # a low sound with a bright edge, and it stays below metal.
+    check("...without becoming a key",
+          _above(now) < _above(S.foley_for("keys on a ring", n, sr, seed=3)))
+    # NOTHING ELSE IN THE TABLE MAY SIT WHERE A PULSE SITS EITHER. The bed frame had
+    # the identical defect at 97 a minute and was not reported only because nobody
+    # had rendered that beat. Every repeating recipe is checked, not just the two.
+    _pulsey = []
+    for _ph in S._FOLEY:
+        _y = S.foley_for(_ph, n, sr, seed=3)
+        if _y is None:
+            continue
+        # A pulse is dark AND percussive AND repeating. Any one of those alone is
+        # fine -- a lock snapping shut is percussive and dark and happens once.
+        if (_above(_y) < 0.01 and _duty(_y) < 0.20
+                and _centroid(_y.unsqueeze(0)) < 700):
+            _pulsey.append(_ph)
+    check(f"no recipe is dark, percussive and repeating at once: {_pulsey}",
+          not _pulsey)
+
+
+def test_a_walk_is_not_a_metronome():
+    """The gait, which is the other half of why it read as a pulse.
+
+    A real walk is ASYMMETRIC: left and right are not the same interval, one leg
+    carries slightly longer, and the step-to-step stride varies on top of that. The
+    old times came from _even -- one fixed gap with a little noise on it -- which is
+    a metronome, and a metronome at walking speed is exactly what a pulse is."""
+    print("\n=== a walk is not a metronome ===")
+    g = torch.Generator().manual_seed(1)
+    t = S._gait(4.0, g)
+    iois = [b - a for a, b in zip(t, t[1:])]
+    check(f"it walks for the whole shot: {len(t)} steps", len(t) >= 6)
+    # Alternating: every other interval is longer than its neighbours. That is the
+    # property _even cannot have however much jitter is put on it.
+    _alt = sum(1 for i in range(1, len(iois) - 1)
+               if (iois[i] > iois[i - 1]) == (iois[i] > iois[i + 1]))
+    check(f"the intervals alternate long and short: {_alt}/{max(1, len(iois) - 2)}",
+          _alt >= len(iois) - 2)
+    check("...and no two are the same", len(set(round(x, 4) for x in iois)) == len(iois))
+    # A gait with a step count STOPS, which is what a beat that walks in and halts
+    # needs. Filling the shot is the old behaviour and still the default.
+    check("a capped walk stops early", max(S._gait(8.0, g, count=3)) < 2.5)
+    check("an empty shot gets no steps", S._gait(0.0, g) == [])
+
+
+def test_footsteps_are_placed_against_the_picture():
+    """"...and are not properly timed with movement" -- they could not have been.
+
+    foley_for was handed a phrase and a length and nothing else, so the steps went
+    down at a fixed interval from 0.25 s to the end of the shot whether anybody was
+    walking or not. A shot where somebody walks in and stops got the same even train
+    over the standing still as over the walking.
+
+    Two different kinds of claim are being tested here, and they are worth keeping
+    apart. The CADENCE is measured -- a walk is periodic and frame-to-frame change
+    inherits the period. WHICH phase of the cycle the foot lands on is inferred, from
+    the contact being where the swing leg has decelerated to nothing."""
+    print("\n=== footsteps are placed against the picture ===")
+    fps = 24
+
+    def env(period, secs=4.0, noise=0.0, seed=0):
+        """A motion envelope with one peak per step at a known period."""
+        g = torch.Generator().manual_seed(seed)
+        t = torch.arange(int(secs * fps), dtype=torch.float32) / fps
+        e = (1.0 - torch.cos(2 * math.pi * t / period)) / 2.0 + 0.25
+        if noise:
+            e = e + torch.randn(e.numel(), generator=g) * noise
+        return e.clamp(min=0.0)
+
+    # THE CADENCE IS RECOVERED. 4.2% is one frame at 24 fps on a half-second step,
+    # which is the quantisation floor -- it cannot do better than the frame rate.
+    worst = 0.0
+    for _p in (0.28, 0.32, 0.38, 0.44, 0.50, 0.55, 0.62, 0.70, 0.80, 0.90):
+        for _nz in (0.0, 0.15):
+            _got = S._step_period(env(_p, noise=_nz, seed=3), fps)
+            check(f"step {_p:.2f}s at noise {_nz:.2f} -> {_got and round(_got, 3)}",
+                  _got is not None and abs(_got - _p) / _p <= 0.05)
+            if _got:
+                worst = max(worst, abs(_got - _p) / _p)
+    check(f"worst error across all of them is the frame floor: {worst:.1%}",
+          worst <= 0.05)
+    # ...AND IT REFUSES RATHER THAN INVENTING ONE. A short envelope has few lags, so
+    # noise autocorrelates well by chance: at the first threshold tried, 0.18, pure
+    # grain came back with a confident 0.5 s cadence. Inventing a gait out of noise
+    # is worse than laying one blind.
+    g = torch.Generator().manual_seed(9)
+    for _label, _e in (("pure noise", torch.rand(96, generator=g)),
+                       ("a flat envelope", torch.ones(96) * 0.4),
+                       ("one slow ramp", torch.linspace(0, 1, 96)),
+                       ("faster than any step", env(0.12)),
+                       ("a single bump", torch.exp(-((torch.arange(96.0) - 48) ** 2)
+                                                   / 200.0))):
+        check(f"refuses {_label}", S._step_period(_e, fps) is None)
+    # A CONTINUOUS WALK KEEPS EVERY STEP, and this is the regression that nearly
+    # shipped. The placement puts steps on the envelope's MINIMA, because that is
+    # where the contact is, and the gate then asks whether the picture is moving
+    # there -- at the bottom of a trough it is not. With the gate window a fixed
+    # 0.12 s it saw only the trough and deleted EVERY footstep in a walk at a
+    # half-second cadence, which is the commonest cadence there is. The window is a
+    # fraction of the step period for exactly this reason.
+    for _p in (0.28, 0.32, 0.38, 0.44, 0.50, 0.55, 0.62, 0.70, 0.80, 0.90):
+        for _nz in (0.0, 0.15):
+            _t = S._walk(44100 * 4, 44100, torch.Generator().manual_seed(1),
+                         env(_p, noise=_nz, seed=2), fps)
+            check(f"a 4s walk at {_p:.2f}s keeps its steps: {len(_t)} of ~{int(4.0 / _p)}",
+                  len(_t) >= int(4.0 / _p) - 1)
+    # WALKS IN, THEN STANDS STILL. The reported case. The gate is relative to the
+    # shot's OWN range, which is what makes it safe on any scene: there is no absolute
+    # scale for "moving".
+    e = torch.cat([env(0.5, secs=2.0), torch.ones(48) * 0.02])
+    g = torch.Generator().manual_seed(1)
+    times = S._walk(44100 * 4, 44100, g, e, fps)
+    check(f"steps while she walks: {len(times)}", len(times) >= 3)
+    check(f"...and none after she stops: {[round(t, 2) for t in times if t > 2.1]}",
+          not [t for t in times if t > 2.1])
+    check("...where a blind gait would have kept going",
+          len([t for t in S._gait(4.0, torch.Generator().manual_seed(1)) if t > 2.1]) >= 2)
+    # THE SAFE FAILURE. A shot where nothing moves normalises its own grain up and
+    # keeps its steps: auto_sound put the phrase there because the BEAT says walking,
+    # and going silent on a motionless render would lose a sound the author asked for.
+    g2 = torch.Generator().manual_seed(5)
+    check("a motionless shot keeps its steps rather than going silent",
+          len(S._walk(44100 * 4, 44100, g2, torch.rand(95, generator=g2) * 0.02 + 0.3,
+                      fps)) >= 3)
+    # No envelope at all -- an older path, or a capture that failed -- is the blind
+    # gait, exactly as before this existed.
+    check("no envelope falls back to the blind gait",
+          len(S._walk(44100 * 4, 44100, torch.Generator().manual_seed(1), None, fps)) >= 6)
+    # THE ENVELOPE ITSELF: it has to tell moving from still, and it has to fit.
+    still = torch.full((30, 64, 64, 3), 0.4)
+    both = torch.cat([still, torch.rand((30, 64, 64, 3))])
+    _e = S.motion_envelope(both)
+    check("the envelope is one shorter than the shot", _e is not None and _e.numel() == 59)
+    check("...reads nothing over a still stretch", float(_e[:28].mean()) < 1e-4)
+    check("...and reads movement over a moving one", float(_e[31:].mean()) > 0.05)
+    check("...and comes back on the CPU, where the audio is",
+          _e.device.type == "cpu" and _e.dtype == torch.float32)
+    check("a shot too short to difference is refused",
+          S.motion_envelope(torch.rand((2, 8, 8, 3))) is None)
+    check("...as is anything that is not a stack of frames",
+          S.motion_envelope(torch.rand((8, 8))) is None
+          and S.motion_envelope(None) is None)
+    # POOLED IN CHUNKS, and that is not a detail. A real shot is [73, 768, 1344, 3] in
+    # fp16; casting it to float32 in one go asks for 900MB at the moment in the render
+    # where the decode has just peaked, which on a 16GB card is an OOM traded for a
+    # refinement to a sound effect. Measured: four frames at a time grows peak RSS by
+    # nothing at all, because the blocks are reused.
+    check("the frames are not all cast at once",
+          S.MOTION_CHUNK * 768 * 1344 * 3 * 4 < 64 * 1024 * 1024)
+    # ONLY FOOTSTEPS. Everything else in the table has no sync point a listener can
+    # check, so timing it against the picture buys nothing and risks something.
+    check("only footsteps are motion-timed", S._MOTION_TIMED == frozenset({"footsteps"}))
+    _e = env(0.5)
+    for _ph in ("chain links dragging", "water", "a bed frame working"):
+        check(f"{_ph!r} ignores the envelope",
+              torch.allclose(S.foley_for(_ph, 44100 * 2, 44100, seed=3),
+                             S.foley_for(_ph, 44100 * 2, 44100, seed=3, motion=_e)))
+
+
+def test_a_continuous_sound_does_not_tap():
+    """REPORTED: "being in a bathroom where it sounds like there is tapping sounds".
+
+    Water was built as 14 discrete bursts a second at 1.4 kHz with 43% jitter on the
+    gaps -- present only 41% of the time. A sound that stops 59% of the time is not
+    water, it is tapping, and mid-high irregular bursts are exactly what a tap is.
+
+    Three recipes had it, for the same reason: every sound in this file was an impulse
+    train, because that is what _hits makes, and water, a scrape and cloth moving are
+    not impacts."""
+    print("\n=== a continuous sound does not tap ===")
+    n, sr = 44100 * 3, 44100
+    for _ph in ("water", "something dragging on the floor", "fabric rustling"):
+        _y = S.foley_for(_ph, n, sr, seed=3)
+        check(f"{_ph!r} is continuous: duty {_duty(_y):.2f}", _duty(_y) > 0.85)
+        # ...and still MOVES. A bed that sits perfectly still reads as a hiss, which
+        # is the failure on the other side of this one.
+        _f = _y.abs()
+        _w = int(sr * 0.05)
+        _fr = _f[:(_f.numel() // _w) * _w].reshape(-1, _w).mean(-1)
+        check(f"...and is not a static hiss: {float(_fr.std() / _fr.mean()):.2f}",
+              float(_fr.std() / _fr.mean()) > 0.08)
+    # The impacts stay impacts. Metal striking metal IS a train of bursts with gaps,
+    # and making those continuous would be the same mistake pointing the other way.
+    for _ph in ("cuffs ratcheting closed", "a lock snapping shut", "keys on a ring"):
+        check(f"{_ph!r} is still percussive", _duty(S.foley_for(_ph, n, sr, seed=3)) < 0.4)
+
+
+def test_the_room_tone_does_not_pulse():
+    """The ambient bed had the same defect arriving from the other side, and in the
+    same scene: a bathroom's bed is read from "water moving in the pipes", and that
+    recipe swelled at 0.55 Hz with 45% depth -- 33 heaves a minute at nearly half its
+    own level. Water in pipes hisses; it does not surge.
+
+    And the clock, whose rate is RIGHT -- a clock really does tick once a second --
+    still landed on a resting pulse, because one soft click a second is what a pulse
+    is. A mechanical clock ticks and TOCKS: two unequal strikes to the second, which
+    no pulse does."""
+    print("\n=== the room tone does not pulse ===")
+    for _pat, _rec in S._BED_RECIPE:
+        _mod = _rec.get("mod")
+        if not _mod:
+            continue
+        _hz, _depth = _mod
+        # Either slow enough to be weather, or fast enough to be texture -- never the
+        # band a pulse lives in at a depth anybody would notice.
+        check(f"{_pat[:28]!r} does not heave at pulse rate: {_hz:.2f} Hz @ {_depth:.0%}",
+              not (0.6 <= _hz <= 2.6 and _depth >= 0.25))
+    # ...and in the waveform, not only in the table. The envelope's component at a
+    # known rate, as a fraction of its mean, recovers the depth the recipe sets:
+    # measured against a bed with no modulation at all as the floor (0.3%), the old
+    # water bed sat at 4.5% at 0.55 Hz and the new one at 1.5%, with its movement
+    # moved up to 13.7% at 2.7 Hz -- turbulence instead of a heave.
+    def _depth_at(y, hz, sr=44100):
+        m = y.mean(0).abs()
+        w = int(sr * 0.01)
+        e = m[:(int(m.numel()) // w) * w].reshape(-1, w).mean(-1)
+        t = torch.arange(e.numel(), dtype=torch.float32) / (sr / w)
+        c = (e * torch.cos(2 * math.pi * hz * t)).mean()
+        q = (e * torch.sin(2 * math.pi * hz * t)).mean()
+        return float(2 * (c * c + q * q).sqrt() / e.mean())
+
+    _w = S.synth_ambient("water moving in the pipes", 44100 * 20, 44100, seed=2)
+    check("a water bed builds", _w is not None)
+    if _w is not None:
+        _throb, _own = _depth_at(_w, 0.55), _depth_at(_w, 2.70)
+        check(f"...and moves at its own rate, not at pulse rate: "
+              f"{_own:.1%} vs {_throb:.1%}", _own > 3.0 * _throb)
+    _clock = [r for p, r in S._BED_RECIPE if "clock" in p]
+    check("the clock has a tock as well as a tick",
+          bool(_clock) and _clock[0].get("tock"))
+    check("...quieter than the tick, as an escapement is",
+          0.0 < _clock[0]["tock"] < 1.0)
+    # ...and it is actually in the waveform, not just in the table.
+    _y = S.synth_ambient("a clock ticking", 44100 * 4, 44100, seed=2)
+    check("a ticking bed builds", _y is not None)
+    if _y is not None:
+        _m = _y.mean(0).abs()
+        _w = int(44100 * 0.02)
+        _fr = _m[:(_m.numel() // _w) * _w].reshape(-1, _w).max(-1).values
+        _pk = sorted(float(v) for v in _fr if v > 0.25 * float(_fr.max()))
+        check(f"...with strikes of two different weights: {len(_pk)} found",
+              len(_pk) >= 4 and _pk[-1] / max(_pk[0], 1e-9) > 1.25)
+
+
 def test_a_written_sound_is_recognised():
     print("\n=== a sound you wrote, in the words people write it in ===")
     # Writing the sound into a beat is what opens that shot's audio branch, and it is
@@ -4902,6 +5255,11 @@ def main():
     test_hardware_belongs_to_somebody()
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
+    test_a_footstep_is_not_a_heartbeat()
+    test_a_walk_is_not_a_metronome()
+    test_footsteps_are_placed_against_the_picture()
+    test_a_continuous_sound_does_not_tap()
+    test_the_room_tone_does_not_pulse()
     test_underwear_is_a_garment_with_a_place_on_the_body()
     test_how_underwear_actually_comes_off()
     test_a_written_sound_is_recognised()

@@ -51,6 +51,9 @@ ShotAudio = _audio_module.ShotAudio
 FrameAccumulator = _runtime_module.FrameAccumulator
 frame_levels = _runtime_module.frame_levels
 apply_levels = _runtime_module.apply_levels
+motion_envelope = _runtime_module.motion_envelope
+MOTION_POOL = _runtime_module.MOTION_POOL
+MOTION_CHUNK = _runtime_module.MOTION_CHUNK
 H3_FPS = _runtime_module.H3_FPS
 AUDIO_LATENT_FPS = _runtime_module.AUDIO_LATENT_FPS
 KEYFRAME_SAFE_AUG = _cond_module.KEYFRAME_SAFE_AUG
@@ -78,6 +81,13 @@ _band = _audio_module._band
 _hits = _audio_module._hits
 _room = _audio_module._room
 _even = _audio_module._even
+_contact = _audio_module._contact
+_flow = _audio_module._flow
+_creak = _audio_module._creak
+_gait = _audio_module._gait
+_walk = _audio_module._walk
+_step_period = _audio_module._step_period
+_MOTION_TIMED = _audio_module._MOTION_TIMED
 _FOLEY = _audio_module._FOLEY
 foley_for = _audio_module.foley_for
 plain_bed = _audio_module.plain_bed
@@ -11905,6 +11915,12 @@ class H3LongVideos:
         fresh = []
         t_start = time.perf_counter()
         aud_out, sr = [], 44100
+        # THE PICTURE'S OWN MOVEMENT, per shot, for the one built sound that has a
+        # sync point. Captured here rather than read back off the finished chain: the
+        # seam trim and the upscalers both change the frame indexing downstream, so a
+        # shot's frames can only be matched to its audio while they are still in hand.
+        # One small vector per shot -- a float per frame gap. See foley_for.
+        shot_motion = []
         # AN UPPER BOUND, NOT AN ESTIMATE. This used to subtract one frame per seam on
         # the assumption that trim_seam drops one from every shot after the first. It no
         # longer does: a shot that opens on no keyframe keeps its first frame, and a
@@ -12284,6 +12300,10 @@ class H3LongVideos:
                     shot_detail.append(frame_detail(imgs[-1]))
             except Exception:
                 pass
+            try:
+                shot_motion.append(motion_envelope(imgs))
+            except Exception:
+                shot_motion.append(None)
             frames.add(imgs)
             aud_out.append(wav["waveform"].to("cpu", copy=True) if cleanup_between_shots
                            else wav["waveform"])
@@ -12456,7 +12476,10 @@ class H3LongVideos:
                 for _ph in plan.shots[_i].events:
                     # NOT seed + shot. One object, one voice, every beat it is named
                     # in -- and one room for the film. See foley_for.
-                    _fx = foley_for(_ph, _len, int(sr), seed=int(seed))
+                    _fx = foley_for(_ph, _len, int(sr), seed=int(seed),
+                                    motion=(shot_motion[_i]
+                                            if _i < len(shot_motion) else None),
+                                    fps=H3_FPS)
                     if _fx is None:
                         continue
                     audio[..., _lo:_hi] = (audio[..., _lo:_hi]
@@ -12482,6 +12505,15 @@ class H3LongVideos:
                   "mixed instead, which asks nothing of the model and so cannot babble. "
                   "It is synthesis, not a recording: it reads as a click, a rattle, a "
                   "rustle, in the right place. Nothing vocal is ever built. "
+                  "FOOTSTEPS ARE TIMED OFF THE PICTURE, alone among these, because a "
+                  "footfall is the only one with a frame you can check it against: the "
+                  "shot's own frame-to-frame movement gives the cadence, and steps are "
+                  "dropped over any stretch where the picture is not moving -- so a beat "
+                  "that walks in and stops is not still walking. The cadence is measured; "
+                  "WHICH frame a heel lands on is inferred from the contact being where "
+                  "the swing leg has stopped, so it is right to within half a step rather "
+                  "than locked. Where the movement is not periodic enough to read, the "
+                  "gait is laid blind, which is what every sound here did before. "
                   "foley_level sets how loud, 0 turns it off")
         audio, _bed_note = mix_ambient(audio, sr, _bed_in, ambient_level)
         if _bed_note:
