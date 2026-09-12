@@ -106,8 +106,6 @@ def _detect(model):
     counts = {}
     if hasattr(dm, "modules"):
         for m in dm.modules():
-            if getattr(m, "_h3lv_vsa_gate", False):
-                continue        # injected by inject_vsa_gate; not part of the checkpoint
             fmt = getattr(m, "quant_format", None)
             if fmt is not None:
                 # distinguish int8 convrot via the packed weight's params

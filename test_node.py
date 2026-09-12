@@ -4531,11 +4531,7 @@ def test_schema():
     # beat_leads (2026-09-11) answers a camera fixated on one character through a
     # reference image, a LoRA and a pinned first frame, none of which touched it: the
     # character sheet was LEADING every prompt, and what leads decides composition.
-    # vsa_gate_lora (2026-09-11) answers the FastVideo FastH3 LoRA dropping all 50 of its
-    # to_gate_compress keys: ComfyUI cannot build a layer the base checkpoint does not
-    # declare, and the LoRA loader runs before this node, so only this node can attach
-    # them. It has to name a file, so it cannot ride an existing switch.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 41)
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 40)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4543,12 +4539,12 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-15:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-14:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
                               "ambient_audio", "ambient_level", "foley_level",
                               "speech_lead_seconds", "speech_tail_seconds",
-                              "beat_leads", "vsa_gate_lora"])
+                              "beat_leads"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",
@@ -4578,278 +4574,53 @@ def test_schema():
           and all(v is S.H3LongVideos for v in S.NODE_CLASS_MAPPINGS.values()))
 
 
-# --- the VSA gate the checkpoint does not carry -----------------------------
-# FastH3 LoRAs ship 50 blocks.N.attn.to_gate_compress.set_weight tensors that ComfyUI
-# drops, because it only builds that layer when the BASE checkpoint declares it and the
-# LoRA loader runs before this node. inject_vsa_gate reads them off disk and attaches
-# them as object patches. What is asserted here is mostly the REFUSALS: it is an
-# optimisation, so every way it can fail has to leave the render exactly as it was.
-
-class _GateAttn:
-    def __init__(self, heads, head_dim, gate=None):
-        self.heads, self.head_dim, self.to_gate_compress = heads, head_dim, gate
-
-
-class _GateBlock:
-    def __init__(self, hidden, heads, head_dim, gate=None):
-        self.attn = _GateAttn(heads, head_dim, gate)
-        self.norm1 = types.SimpleNamespace(weight=torch.zeros(hidden))
-
-
-class _GatePatcher:
-    """Just enough ModelPatcher: clone() hands back a NEW object sharing the DiT, which
-    is what makes an object patch the right mechanism and a direct assignment a leak."""
-
-    def __init__(self, dit, size=4096, model_options=None):
-        self.model = types.SimpleNamespace(diffusion_model=dit)
-        self.size, self.patches = size, {}
-        if model_options is not None:
-            self.model_options = model_options
-
-    def clone(self):
-        n = _GatePatcher(self.model.diffusion_model, self.size,
-                         getattr(self, "model_options", None))
-        return n
-
-    def model_size(self):
-        return self.size
-
-    def add_object_patch(self, key, obj):
-        self.patches[key] = obj
-
-
-def _gate_model(n_blocks=2, hidden=6, heads=2, head_dim=4, gate=None, model_options=None):
-    dit = types.SimpleNamespace(
-        blocks=[_GateBlock(hidden, heads, head_dim, gate) for _ in range(n_blocks)])
-    return _GatePatcher(dit, model_options=model_options)
-
-
-def _gate_left_behind():
-    """A gate tagged the way inject_vsa_gate tags its own, i.e. one an earlier render left."""
-    g = torch.nn.Linear(6, 8, bias=False)
-    g._h3lv_vsa_gate = True
-    return g
-
+# --- the allocator that aborts instead of raising ---------------------------
+# cudaMallocAsync plus a sparse-attention patch does not raise, it core-dumps the process
+# from inside a tensor destructor, taking the server and the queue with it. The node cannot
+# fix a CUDA allocator, so it refuses that pair before sampling. What is asserted here is
+# mostly that it refuses ONLY that pair: every other combination has to pass, or a flag
+# nobody set would block renders that work.
 
 _SPARSE_ON = {"transformer_options": {"patches_replace": {"dit": {("double_block", 0): None}}}}
 _SPARSE_OFF = {"transformer_options": {}}
 
 
-def _with_gate_stubs(fn):
-    """Install the three deferred imports inject_vsa_gate makes, run fn, restore."""
-    import tempfile
-    from safetensors.torch import save_file
-    saved = {k: sys.modules.get(k) for k in ("comfy.ops", "folder_paths")}
-    had_ops = getattr(sys.modules["comfy"], "ops", None)
-    ops = types.ModuleType("comfy.ops")
-    ops.manual_cast = type("manual_cast", (), {"Linear": torch.nn.Linear})
-    sys.modules["comfy.ops"] = ops
-    setattr(sys.modules["comfy"], "ops", ops)
+def _alloc_model(model_options=None):
+    m = types.SimpleNamespace(model=types.SimpleNamespace(diffusion_model=None))
+    if model_options is not None:
+        m.model_options = model_options
+    return m
+
+
+def test_the_allocator_that_aborts_is_refused_before_sampling():
+    print("\n=== the allocator that aborts instead of raising ===")
+    saved = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
     try:
-        with tempfile.TemporaryDirectory() as d:
-            fp = types.ModuleType("folder_paths")
-            fp._dir = d
-            fp.get_filename_list = lambda folder: sorted(os.listdir(d))
-            fp.get_full_path = lambda folder, name: (
-                os.path.join(d, name) if os.path.exists(os.path.join(d, name)) else None)
-            sys.modules["folder_paths"] = fp
-            return fn(d, save_file)
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:cudaMallocAsync"
+        why = S.sparse_attention_allocator_abort(_alloc_model(_SPARSE_ON))
+        check("cudaMallocAsync WITH a sparse DiT patch is refused", "ABORT" in why)
+        check("...naming the flag that fixes it", "--disable-cuda-malloc" in why)
+        check("...and saying where the allocator came from, since nobody picked it",
+              "CUDA 13" in why)
+        check("the allocator alone is not refused -- it is only lethal with the patch",
+              S.sparse_attention_allocator_abort(_alloc_model(_SPARSE_OFF)) == "")
+        check("a model that cannot say is never refused on a guess",
+              S.sparse_attention_allocator_abort(_alloc_model()) == "")
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        check("another allocator config with the same patch is left alone",
+              S.sparse_attention_allocator_abort(_alloc_model(_SPARSE_ON)) == "")
+        del os.environ["PYTORCH_CUDA_ALLOC_CONF"]
+        check("no allocator config at all is left alone",
+              S.sparse_attention_allocator_abort(_alloc_model(_SPARSE_ON)) == "")
     finally:
-        S._VSA_GATE_CLS = None
-        for k, v in saved.items():
-            if v is None:
-                sys.modules.pop(k, None)
-            else:
-                sys.modules[k] = v
-        if had_ops is None:
-            if hasattr(sys.modules["comfy"], "ops"):
-                delattr(sys.modules["comfy"], "ops")
+        if saved is None:
+            os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         else:
-            setattr(sys.modules["comfy"], "ops", had_ops)
-
-
-def test_the_vsa_gate_is_attached_from_the_file_or_nothing_changes():
-    print("\n=== the VSA gate the checkpoint does not carry ===")
-
-    # OFF, and off is the default: the same object back, and not one word of info.
-    m = _gate_model()
-    same, note = S.inject_vsa_gate(m, "none")
-    check("off by name returns the very same model", same is m and note == "")
-    same, note = S.inject_vsa_gate(m, "")
-    check("...and so does an empty name", same is m and note == "")
-    opt = S.H3LongVideos.INPUT_TYPES()["optional"]
-    check("the widget is offered and defaults to off",
-          opt["vsa_gate_lora"][1]["default"] == "none")
-    check("...and 'none' is its first option, so a missing loras folder cannot empty it",
-          opt["vsa_gate_lora"][0][0] == "none")
-
-    # A model with no DiT -- which is every smoke-test FakeModel -- is not an error.
-    stub = types.SimpleNamespace(model=types.SimpleNamespace())
-    same, note = S.inject_vsa_gate(stub, "anything.safetensors")
-    check("a model with no diffusion_model is left alone, silently",
-          same is stub and note == "")
-
-    # A checkpoint that HAS its own gates: ComfyUI's own loader fills those, so this
-    # must not fight it.
-    own = _gate_model(gate=torch.nn.Linear(6, 8, bias=False))
-    same, note = S.inject_vsa_gate(own, "anything.safetensors")
-    check("a checkpoint carrying its own gates is left to ComfyUI's loader",
-          same is own and "already fills them" in note)
-
-    def body(d, save_file):
-        out = {}
-        # 1. the real path: two blocks, two gates, attached.
-        save_file({S._VSA_GATE_KEY.format(i): torch.zeros(8, 6, dtype=torch.bfloat16)
-                   for i in range(2)}, os.path.join(d, "good.safetensors"))
-        m = _gate_model()
-        out["good"] = S.inject_vsa_gate(m, "good.safetensors")
-        out["good_src"] = m
-        # 2. a gate built for a different H3.
-        save_file({S._VSA_GATE_KEY.format(0): torch.zeros(99, 6, dtype=torch.bfloat16)},
-                  os.path.join(d, "wrong.safetensors"))
-        out["wrong"] = S.inject_vsa_gate(_gate_model(), "wrong.safetensors")
-        # 3. a LoRA with no gate in it at all -- an SLA or plain turbo file.
-        save_file({"blocks.0.attn.qkv_proj.lora_A.weight": torch.zeros(2, 6)},
-                  os.path.join(d, "nogate.safetensors"))
-        out["nogate"] = S.inject_vsa_gate(_gate_model(), "nogate.safetensors")
-        # 4. only SOME blocks covered: attach what is there, and say how many.
-        save_file({S._VSA_GATE_KEY.format(0): torch.zeros(8, 6, dtype=torch.bfloat16)},
-                  os.path.join(d, "partial.safetensors"))
-        out["partial"] = S.inject_vsa_gate(_gate_model(n_blocks=3), "partial.safetensors")
-        # 5. a name that is not on disk.
-        out["absent"] = S.inject_vsa_gate(_gate_model(), "not_here.safetensors")
-        # 6. THE SECOND RENDER of the same workflow: our own gate from the first is still
-        # materialised on the shared DiT. It must not be read as a checkpoint that came
-        # with gates, or the feature switches itself off after one render.
-        mine = torch.nn.Linear(6, 8, bias=False)
-        mine._h3lv_vsa_gate = True
-        out["again"] = S.inject_vsa_gate(_gate_model(gate=mine), "good.safetensors")
-        # 7. the widget switched back OFF while an earlier render's gates are still on the
-        # shared DiT: they are not free, so off has to take them down.
-        out["off_stale"] = S.inject_vsa_gate(
-            _gate_model(n_blocks=3, gate=_gate_left_behind()), "none")
-        # 8. a refusal must clear them too, not just say no.
-        out["refuse_stale"] = S.inject_vsa_gate(
-            _gate_model(gate=_gate_left_behind()), "not_here.safetensors")
-        # 9. no Model Sparse Attention node in the graph -> nothing would ever call the
-        # gate, so attaching 3.59 GiB would be waste, not caution.
-        out["no_sparse"] = S.inject_vsa_gate(
-            _gate_model(model_options=_SPARSE_OFF), "good.safetensors")
-        # 10. ...and with the node present it goes on as normal.
-        out["sparse_on"] = S.inject_vsa_gate(
-            _gate_model(model_options=_SPARSE_ON), "good.safetensors")
-        return out
-
-    r = _with_gate_stubs(body)
-
-    patched, note = r["good"]
-    check("both gates are attached", len(patched.patches) == 2)
-    check("...to the keys the VSA path reads, rooted at the BaseModel",
-          sorted(patched.patches) == ["diffusion_model.blocks.0.attn.to_gate_compress",
-                                      "diffusion_model.blocks.1.attn.to_gate_compress"])
-    g = patched.patches["diffusion_model.blocks.0.attn.to_gate_compress"]
-    check("...shaped hidden -> heads*head_dim", tuple(g.weight.shape) == (8, 6))
-    check("...with no bias, because that is how comfy builds the layer it stands in for",
-          g.bias is None)
-    check("...carrying the file's own bf16, uncast", g.weight.dtype == torch.bfloat16)
-    check("...tagged so model_fingerprint can ignore it",
-          getattr(g, "_h3lv_vsa_gate", False) is True)
-    check("the patch went on a CLONE, never the model handed in",
-          patched is not r["good_src"] and r["good_src"].patches == {})
-    check("the source model's own gates are still None, so nothing leaked onto the DiT",
-          r["good_src"].model.diffusion_model.blocks[0].attn.to_gate_compress is None)
-    check("the patcher's cached size grew by the bytes it added",
-          patched.size == 4096 + 2 * 8 * 6 * 2)
-    check("the note counts what it attached, of how many", "2 of 2" in note)
-    check("...and says the upstream 'no to_gate_compress' warning is stale",
-          "stale" in note)
-
-    same, note = r["wrong"]
-    check("a gate built for another H3 is refused, model untouched", same.patches == {})
-    check("...and the note names both shapes",
-          "(99, 6)" in note and "(8, 6)" in note)
-    same, note = r["nogate"]
-    check("a LoRA with no gate in it is refused", same.patches == {})
-    check("...and says which kind of LoRA does carry one", "FastH3" in note)
-    part, note = r["partial"]
-    check("a partial set attaches what is there", len(part.patches) == 1)
-    check("...and reports both numbers so the gap is visible", "1 of 3" in note)
-    same, note = r["absent"]
-    check("a name that is not in models/loras is refused", same.patches == {})
-    check("...by saying where it looked", "models/loras" in note)
-    again, note = r["again"]
-    check("a second render re-attaches over the gate the first one left behind",
-          len(again.patches) == 2 and "2 of 2" in note)
-
-    off, note = r["off_stale"]
-    check("switching off clears the gates an earlier render left on the model",
-          len(off.patches) == 3 and set(off.patches.values()) == {None})
-    check("...patching them to None so the clear is owned by a patcher, not a mutation",
-          off.patches["diffusion_model.blocks.1.attn.to_gate_compress"] is None)
-    check("...and says so, since 'off' silently costing 3.59 GiB is the bug",
-          "3 VSA gate layer(s)" in note and "cleared" in note)
-    ref, note = r["refuse_stale"]
-    check("a refusal clears them as well as refusing",
-          len(ref.patches) == 2 and set(ref.patches.values()) == {None})
-    check("...and the note carries both halves", "not in models/loras" in note
-          and "cleared" in note)
-    nos, note = r["no_sparse"]
-    check("with no Model Sparse Attention node in the graph, nothing is attached",
-          nos.patches == {})
-    check("...and the note names the node to add",
-          "Model Sparse Attention" in note and "'vsa'" in note)
-    # The allocator that aborts instead of raising.
-    import os as _os
-    _saved = _os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
-    try:
-        _os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:cudaMallocAsync"
-        check("cudaMallocAsync WITH a sparse DiT patch is refused before sampling",
-              "ABORT" in S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)))
-        check("...naming the flag that fixes it",
-              "--disable-cuda-malloc" in
-              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)))
-        check("...but WITHOUT the sparse patch the allocator alone is left alone",
-              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_OFF)) == "")
-        check("...and a model that cannot say is never refused on a guess",
-              S.sparse_attention_allocator_abort(_gate_model()) == "")
-        _os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-        check("a different allocator config with the same patch is fine",
-              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)) == "")
-        del _os.environ["PYTORCH_CUDA_ALLOC_CONF"]
-        check("no allocator config at all is fine",
-              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)) == "")
-    finally:
-        if _saved is None:
-            _os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
-        else:
-            _os.environ["PYTORCH_CUDA_ALLOC_CONF"] = _saved
-    check("the sparse probe tells 'absent' apart from 'cannot tell'",
-          S.sparse_dit_patched(_gate_model(model_options=_SPARSE_OFF)) is False
-          and S.sparse_dit_patched(_gate_model()) is None
-          and S.sparse_dit_patched(_gate_model(model_options=_SPARSE_ON)) is True)
-
-    son, note = r["sparse_on"]
-    check("with the sparse patch present it attaches normally",
-          len(son.patches) == 2 and "2 of 2" in note)
-    check("the note prices the coarse branch's VRAM buffer per token, not just the weights",
-          "KB of VRAM per token" in note)
-
-    # The fingerprint must not see them, or every run after the first would look like a
-    # different checkpoint and flush the whole model.
-    dit = types.SimpleNamespace(blocks=[])
-    plain = types.SimpleNamespace(model=types.SimpleNamespace(diffusion_model=dit),
-                                 model_size=lambda: 1)
-    dit.modules = lambda: [dit]
-    before = S.model_fingerprint(plain)
-    gate = torch.nn.Linear(6, 8, bias=False)
-    gate._h3lv_vsa_gate = True
-    dit.modules = lambda: [dit, gate]
-    check("model_fingerprint is unchanged by an attached gate",
-          S.model_fingerprint(plain) == before)
-    plain_extra = torch.nn.Linear(6, 8, bias=False)
-    dit.modules = lambda: [dit, plain_extra]
-    check("...but still notices any OTHER new module",
-          S.model_fingerprint(plain) != before)
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = saved
+    check("the patch probe tells 'absent' apart from 'cannot tell'",
+          S.sparse_dit_patched(_alloc_model(_SPARSE_OFF)) is False
+          and S.sparse_dit_patched(_alloc_model()) is None
+          and S.sparse_dit_patched(_alloc_model(_SPARSE_ON)) is True)
 
 
 def main():
@@ -4966,7 +4737,7 @@ def main():
     test_a_bound_body_lying_down_has_something_under_it()
     test_a_body_under_effort_has_a_voice()
     test_widget_values_are_usable()
-    test_the_vsa_gate_is_attached_from_the_file_or_nothing_changes()
+    test_the_allocator_that_aborts_is_refused_before_sampling()
     test_schema()
     print()
     if _fails:
