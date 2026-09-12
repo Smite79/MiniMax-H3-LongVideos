@@ -2456,6 +2456,15 @@ def model_fingerprint(model):
         fmts, n = {}, 0
         if dm is not None and hasattr(dm, "modules"):
             for mod in dm.modules():
+                if getattr(mod, "_h3lv_vsa_gate", False):
+                    # Attached by inject_vsa_gate, and NOT part of the checkpoint's
+                    # identity. ComfyUI materialises object patches onto the LIVE DiT and
+                    # leaves them there between queue runs, so counting them would make
+                    # every run after the first disagree with the one before it -- and a
+                    # changed fingerprint hard-unloads every resident model and deep-cleans
+                    # VRAM. That is a full checkpoint reload per render, which would be
+                    # reported as a mysterious slowdown rather than as this.
+                    continue
                 n += 1
                 f = getattr(mod, "quant_format", None)
                 if f:
@@ -2958,6 +2967,156 @@ def apply_h3_model_sampling(model, shift_video, shift_audio):
                    "on ComfyUI 0.30+ the model already defaults to the correct schedule, so this is "
                    "usually harmless -- only set shift_video/audio explicitly if you're on a low-step "
                    "MXFP8/turbo profile and the audio sounds wrong")
+
+
+# THE GATE THE CHECKPOINT DOES NOT CARRY.
+#
+# FastVideo's FastH3 distill is trained with Video Sparse Attention, and VSA's coarse
+# branch reads a per-block Linear called to_gate_compress. ComfyUI builds that layer
+# only when the BASE checkpoint already holds blocks.0.attn.to_gate_compress.weight
+# (comfy/model_detection.py, dit_config["gate_compress"]). No H3 checkpoint on offer
+# holds it, so Attention.to_gate_compress stays None -- and the 50 tensors the LoRA
+# ships for exactly that layer are dropped with "lora key not loaded", once per block.
+# The loader is not wrong: it maps keys against model.state_dict(), and the destination
+# does not exist to be mapped. Nor can the layer be made upstream, because the LoRA
+# loader runs BEFORE this node and the model was built before the loader.
+#
+# So the file is read here, and the layers are attached as OBJECT patches. That is the
+# only mechanism with the right lifetime: ModelPatcher.clone copies object patches, the
+# patcher materialises them at load and reverts them on unpatch. Direct assignment would
+# be a leak -- the DiT is SHARED by every clone of a patcher and cached across queue
+# runs, so gigabytes of gates would ride along into every other workflow using the same
+# checkpoint for the rest of the session.
+_VSA_GATE_KEY = "blocks.{}.attn.to_gate_compress.set_weight"
+
+
+def _vsa_gate_lora_list():
+    """Filenames in models/loras, plus 'none'. Read fresh at INPUT_TYPES time so a LoRA
+    downloaded since the last graph load shows up. The sentinel comes first and the list
+    is never empty, for the reason _latent_upscale_model_list gives: a combo whose
+    options vanish with their folder costs every saved workflow its widget positions."""
+    try:
+        import folder_paths
+        return ["none"] + list(folder_paths.get_filename_list("loras"))
+    except Exception:
+        return ["none"]
+
+
+def inject_vsa_gate(model, name):
+    """Attach FastH3's to_gate_compress layers, read out of the LoRA that carries them.
+
+    Returns (model, note). Never raises and never returns a changed model unless it
+    actually attached something: a file that is not there, a shape built for another
+    checkpoint, a stub model with no DiT -- each leaves the model exactly as it arrived
+    and says why. A render that would have worked must not die over an optimisation."""
+    if not name or name == "none":
+        return model, ""
+    # The MODEL is inspected before anything is imported, so that a model this cannot
+    # apply to is silent rather than noisy. A stub or non-H3 model is not a misconfigured
+    # render -- it is simply not one of these -- and it must not collect a complaint about
+    # missing imports on the way past.
+    dm = getattr(getattr(model, "model", None), "diffusion_model", None)
+    blocks = getattr(dm, "blocks", None)
+    try:
+        n_blocks = len(blocks)
+    except Exception:
+        n_blocks = 0
+    if not n_blocks:
+        return model, ""
+    attn = getattr(blocks[0], "attn", None)
+    if attn is None or getattr(attn, "heads", None) is None:
+        return model, ""
+    # "Already has one" has to mean the CHECKPOINT has one, not that a previous render
+    # of this same workflow left ours behind. Object patches are materialised onto the
+    # shared DiT and are not necessarily reverted between queue runs, so the second
+    # render reads back the gate the FIRST one attached -- and without the tag test this
+    # branch would fire, silently turn the feature off after exactly one render, and say
+    # something untrue about the checkpoint while doing it. Re-attaching is safe: the
+    # keys are the same, and set_attr drops the old layer when it writes the new one.
+    _have = getattr(attn, "to_gate_compress", None)
+    if _have is not None and not getattr(_have, "_h3lv_vsa_gate", False):
+        return model, ("vsa_gate_lora skipped: this checkpoint carries to_gate_compress layers "
+                       "of its own, so ComfyUI's LoRA loader already fills them")
+    try:
+        import folder_paths
+        import comfy.ops
+        from safetensors import safe_open
+    except Exception:
+        return model, ("vsa_gate_lora needs safetensors, comfy.ops and folder_paths, and at "
+                       "least one of them is not importable here -- no gate layers attached")
+    inner = int(attn.heads) * int(attn.head_dim)
+    hidden = 0
+    try:
+        hidden = int(blocks[0].norm1.weight.numel())
+    except Exception:
+        pass
+    try:
+        path = folder_paths.get_full_path("loras", name)
+    except Exception:
+        path = None
+    if not path:
+        return model, (f"vsa_gate_lora '{name}' is not in models/loras -- no gate layers "
+                       f"attached")
+    gates, wrong = {}, ""
+    try:
+        with safe_open(str(path), framework="pt", device="cpu") as f:
+            have = set(f.keys())
+            for i in range(n_blocks):
+                k = _VSA_GATE_KEY.format(i)
+                if k not in have:
+                    continue
+                w = f.get_tensor(k)
+                want = (inner, hidden) if hidden else (inner, int(w.shape[-1]))
+                if tuple(w.shape) != want:
+                    wrong = (f"vsa_gate_lora '{name}' holds a to_gate_compress of "
+                             f"{tuple(w.shape)} where this checkpoint needs {want}: it was "
+                             f"built for a different H3 -- no gate layers attached")
+                    break
+                gates[i] = w
+    except Exception as e:
+        return model, (f"vsa_gate_lora '{name}' could not be read ({type(e).__name__}) -- no "
+                       f"gate layers attached")
+    if wrong:
+        return model, wrong
+    if not gates:
+        return model, (f"vsa_gate_lora '{name}' carries no to_gate_compress weights, so there "
+                       f"is no VSA gate in it to recover. That key is what a FastVideo/FastH3 "
+                       f"VSA distill ships and what an SLA or a plain turbo LoRA does not")
+    m = model.clone()
+    nbytes = 0
+    try:
+        for i, w in gates.items():
+            # manual_cast, NOT type(attn.out_proj). On a quantised checkpoint the block's
+            # own Linear class is a closure-local MixedPrecisionOps.Linear carrying another
+            # model's quant config and no plain `weight` at all. manual_cast casts the
+            # weight to the activation's dtype and device at forward time, which is what
+            # lets the weight stay in host RAM and be streamed in with its block instead of
+            # sitting resident -- it is too big to sit resident next to the checkpoint.
+            # device="meta" so the unused weight this allocates is never really allocated.
+            # bias=False is load-bearing, not tidiness: VSA pads its cube grid with all-zero
+            # rows and the coarse branch has to gate those to zero, which a bias would undo.
+            g = comfy.ops.manual_cast.Linear(int(w.shape[-1]), inner, bias=False,
+                                            device="meta", dtype=w.dtype)
+            g.weight = torch.nn.Parameter(w, requires_grad=False)
+            g._h3lv_vsa_gate = True      # model_fingerprint must not count these
+            m.add_object_patch(f"diffusion_model.blocks.{i}.attn.to_gate_compress", g)
+            nbytes += w.numel() * w.element_size()
+    except Exception as e:
+        return model, (f"vsa_gate_lora '{name}' could not be attached ({type(e).__name__}) -- "
+                       f"no gate layers attached")
+    try:
+        # ModelPatcher caches its own size the first time it is asked, so these layers are
+        # invisible to the VRAM ComfyUI reserves before a load: it would under-reserve by
+        # exactly this much and then OOM somewhere that looks unrelated. Over-reporting
+        # only frees more than strictly needed, which is the safe direction.
+        m.size = int(m.model_size()) + nbytes
+    except Exception:
+        pass
+    return m, (f"VSA gate: {len(gates)} of {n_blocks} to_gate_compress layer(s) attached from "
+               f"{os.path.basename(str(path))} ({nbytes / float(1 << 30):.2f} GiB, held in host "
+               f"RAM and streamed per block). Add ComfyUI's Model Sparse Attention node set to "
+               f"'vsa' to use them; that node logs 'the model has no to_gate_compress layers' "
+               f"before this runs, which is stale -- the gate is re-read every forward pass")
 
 
 def sampling_oom_help(w, h, frames, fps, megapixels=0.0):
@@ -8023,6 +8182,32 @@ class H3LongVideos:
                                "order changes.\n\n"
                                "Off restores the old order, so the two can be compared in "
                                "one render."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "vsa_gate_lora": (_vsa_gate_lora_list(), {"default": "none",
+                    "tooltip": "Name a FastVideo/FastH3 LoRA here to recover the 50 VSA gate "
+                               "layers ComfyUI drops when it loads one.\n\n"
+                               "Those LoRAs are distilled with Video Sparse Attention, whose "
+                               "coarse branch needs a per-block layer called to_gate_compress. "
+                               "ComfyUI only builds that layer when the BASE checkpoint already "
+                               "contains it, and no H3 checkpoint does -- so the 50 tensors the "
+                               "LoRA carries for it have nowhere to go, and the loader says "
+                               "'lora key not loaded: blocks.N.attn.to_gate_compress.set_weight' "
+                               "once per block. The rest of the LoRA loads normally; what is "
+                               "lost is the coarse half of VSA.\n\n"
+                               "This reads those tensors out of the file and attaches them, "
+                               "which cannot be done upstream: the LoRA loader runs before this "
+                               "node, and the model was built before the loader.\n\n"
+                               "It does NOT switch sparse attention on. Add ComfyUI's 'Model "
+                               "Sparse Attention' node with method 'vsa' for that -- "
+                               "keep_percent 10 is what FastH3 is trained at. That node logs "
+                               "'the model has no to_gate_compress layers' when it runs, which "
+                               "is stale: it looks before this node has attached anything, and "
+                               "the gate is re-read on every forward pass.\n\n"
+                               "About 3.6 GiB, kept in host RAM and streamed in with each "
+                               "block, and it adds roughly a third of the attention "
+                               "projection's arithmetic. On a card that is already tight the "
+                               "sparse saving may not pay for it, so time one shot each way. "
+                               "'none' is off and costs nothing."}),
             },
         }
 
@@ -8050,6 +8235,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
+            vsa_gate_lora="none",
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -8083,6 +8269,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
             speech_tail_seconds=speech_tail_seconds, beat_leads=beat_leads,
+            vsa_gate_lora=vsa_gate_lora,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             try:
@@ -8114,6 +8301,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
+            vsa_gate_lora="none",
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -8126,7 +8314,7 @@ class H3LongVideos:
         _bad = misaligned_widgets(
             dict(resolution=resolution, sampler_name=sampler_name, scheduler=scheduler,
                  shot_length=shot_length, upscale=upscale, latent_upscale=latent_upscale,
-                 upscale_model=upscale_model),
+                 upscale_model=upscale_model, vsa_gate_lora=vsa_gate_lora),
             combo_options(self.INPUT_TYPES()))
         if _bad:
             raise RuntimeError(alignment_error(_bad))
@@ -8181,6 +8369,12 @@ class H3LongVideos:
         swap = flush_for_model_change(model)
         if swap:
             notes.append(swap)
+        # AFTER the fingerprint above, deliberately: the gates go on as object patches,
+        # and patching before the model that is about to be compared against would read
+        # as a different checkpoint.
+        model, _gate_note = inject_vsa_gate(model, vsa_gate_lora)
+        if _gate_note:
+            notes.append(_gate_note)
         check_vae_wiring(vae, audio_vae)
 
         prompt, n_legacy = strip_legacy_fields(prompt)

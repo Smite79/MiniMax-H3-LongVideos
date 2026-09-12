@@ -3027,8 +3027,8 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...in one sentence", cl.count(".") == 1, cl)
 
     # THE SWITCH IS hold_gaze, not one of its own. Every inference in this file has
-    # an off switch, but the widget count is capped at 37 by a test whose comment
-    # says the old node had 38 and nobody could find anything -- so this rides the
+    # an off switch, but the widget count is capped by a test whose comment says the
+    # old node had 38 and nobody could find anything -- so this rides the
     # switch that already exists for the same prior. hold_gaze is the portrait's
     # POSE; this is the portrait's EXPRESSION.
     off = face("McKenna lies against the wheel arch.", hold_gaze=False)
