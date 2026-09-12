@@ -6627,6 +6627,29 @@ def room_claim(n, present, joining):
     return said
 
 
+def _join_names(names):
+    """"Nora", "Nora and Dan", "Nora, Dan and Mara" -- a list a reader can read."""
+    names = [str(n) for n in (names or []) if str(n).strip()]
+    if len(names) < 2:
+        return names[0] if names else ""
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def plate_claim(n):
+    """Claim shot 1's first_frame when it is carried as the SET rather than frame one.
+
+    room_claim cannot serve here and saying so is the point: it calls the picture
+    "this room a moment earlier" and names who was standing in it, and on shot 1
+    there is no earlier and nobody was. A plate is a picture of a place with no
+    people in it, and the claim has to say exactly that -- an unclaimed picture is
+    read as another subject, and a picture of an empty room claimed as a person is
+    how a figure gets invented to stand in it."""
+    return (f" <Picture {n}> is the set this shot takes place in: the same walls, "
+            f"floor, furniture and light, from the same camera. It is a picture of "
+            f"the place only, with nobody in it -- the people in this shot are the "
+            f"ones named above, standing where the text puts them.")
+
+
 def state_hold(pairs):
     """One sentence putting those states at the first frame instead of in the action.
 
@@ -7878,7 +7901,18 @@ class H3LongVideos:
                     "It pins the WHOLE frame, so give it a composed frame of the shot you want: "
                     "subject, pose, framing, background. A head-and-shoulders portrait wired here "
                     "makes shot 1 a head-and-shoulders portrait. An identity portrait belongs on "
-                    "ref_image_1, which says who the person is without dictating the frame."}),
+                    "ref_image_1, which says who the person is without dictating the frame.\n\n"
+                    "OR GIVE IT THE SET, with nobody in it, and the node will read it that way: "
+                    "when beat 1 PLACES the cast rather than staging an entrance, and every one of "
+                    "them already has a <Picture N> reference of their own, this picture carries "
+                    "the room, the light and the furniture as a reference and never becomes frame "
+                    "one. That is the difference between a set and an opening frame -- pinned as "
+                    "frame one, a picture with nobody in it makes the cast appear out of nothing "
+                    "during shot 1, which is the same reason a later shot refuses the previous "
+                    "frame when it introduces somebody in position.\n\n"
+                    "Both readings are reported in info, so you can see which one you got. To "
+                    "force the pinned reading, put the cast in the frame and drop their "
+                    "<Picture N> tags, or write the entrance into beat 1."}),
                 "ref_image_1": ("IMAGE", {"tooltip":
                     "Identity reference, applied to every shot unless the prompt places it with a "
                     "<Picture 1> tag. Kept on every shot on purpose: it is the only fixed anchor a "
@@ -8822,6 +8856,16 @@ class H3LongVideos:
         _seen_before = set()        # everyone a shot has described so far
         _returns = []               # (shot, names back after a shot away)
         _placed_shots = {}          # 0-based shot -> who it introduces in position
+        # WHOSE FACE IS ALREADY COVERED BY A PICTURE OF THEIR OWN. A sheet line
+        # carrying <Picture N> for a slot that actually has an image connected -- a
+        # tag pointing at an empty socket covers nobody.
+        _have_slot = {_i + 1 for _i, _r in enumerate(
+            (ref_image_1, ref_image_2, ref_image_3, ref_image_4)) if _r is not None}
+        _portrait_of = {_n for _n, _ln in sheet_lines(sheet)
+                        if _n and (set(picture_tags(_ln)) & _have_slot)}
+        # ...and whether shot 1's first_frame is a SET rather than an opening frame.
+        # See the decision below.
+        _first_is_plate = False
         guard_words = beat_words = total_words = sound_words = 0
         # THE PROMPT ENGINE. One state, read beat by beat, rendered once per shot.
         # It replaces the continuity guards that used to be derived independently
@@ -8900,6 +8944,58 @@ class H3LongVideos:
                 # First appearance, with the beat saying where they ARE rather than
                 # staging them arriving. See the handoff decision in the render loop.
                 _new = [n for n in active if n not in _seen_before]
+                # SHOT 1 HAS THE SAME PROBLEM AND COULD NOT REACH THE SAME ANSWER.
+                #
+                # The branch below is the one that matters here, and for years it
+                # carried `and plan` -- which excludes the FIRST shot, because there
+                # is no previous frame to demote. True, until first_frame exists: wire
+                # one and shot 1 has a keyframe like any other, and if that picture is
+                # a SET rather than a composed opening frame then nobody in the script
+                # is in it. Which is this branch's whole subject: "that frame does not
+                # have them in it, and a keyframe is a picture, so they would have to
+                # appear out of nothing and travel to the spot the beat describes".
+                #
+                # Measured, with a plate wired and beat 1 placing her in position:
+                # shot 1 took it as a HARD KEYFRAME, while the identical case one beat
+                # later was correctly refused. Reported as the girl not looking the
+                # same in the first beat and fine in the rest -- she is inserted into a
+                # frame that lacks her during shot 1, and shot 2 onward inherits the
+                # settled version from its handoff, which is why only the first is off.
+                #
+                # A PLATE IS TOLD FROM AN OPENING FRAME BY THE SCRIPT, not by looking
+                # at the pixels. Two conditions, both required:
+                #   * the beat PLACES the cast rather than staging an entrance. An
+                #     entrance genuinely wants a frame they are absent from.
+                #   * every one of them already has a portrait of their own. Their
+                #     appearance is carried by that picture, so this one has nothing
+                #     left to contribute but the room -- and an author who gives both a
+                #     composed opening frame AND a portrait of the same person has
+                #     described that person twice, which is its own hazard here.
+                # Without portraits the frame is the only picture of them there is, and
+                # it stays frame one.
+                if (_new and not arrives_in(body) and not plan
+                        and first_frame is not None
+                        and all(_n in _portrait_of for _n in _new)):
+                    _first_is_plate = True
+                    notes.append(
+                        f"first_frame is being read as the SET, not as shot 1's opening "
+                        f"frame, so it carries the room while "
+                        f"{_join_names(_new)} {'are' if len(_new) > 1 else 'is'} placed by "
+                        f"the text and held by "
+                        f"{'their own reference images' if len(_new) > 1 else 'a reference image of their own'}"
+                        f". Beat 1 puts "
+                        f"{'them' if len(_new) > 1 else _new[0]} "
+                        f"in position rather than staging an entrance, and every one of "
+                        f"them already has a <Picture N> of their own -- so this picture "
+                        f"has nothing left to say about who they are, only about where "
+                        f"they are. Pinned as frame one it would be a picture they are "
+                        f"not in, and they would have to appear out of nothing during "
+                        f"shot 1: that is the same reason a later shot refuses the "
+                        f"previous frame when it introduces somebody in position. It is "
+                        f"NOT discarded -- the room, the light and the furniture come "
+                        f"with it as a reference. To pin frame one exactly instead, put "
+                        f"the cast IN that frame and take their <Picture N> tags off the "
+                        f"sheet, or write the entrance into beat 1")
                 if _new and not arrives_in(body) and plan:
                     _placed_shots[len(plan)] = list(_new)
                     notes.append(
@@ -11816,7 +11912,7 @@ class H3LongVideos:
                     lens[0], 0, len(plan), 0.0)
 
         return PreparedVideo(
-            _placed_shots=_placed_shots,
+            _placed_shots=_placed_shots, _first_is_plate=_first_is_plate,
             _returns=_returns, _soft_landing=_soft_landing, _tagged_names=_tagged_names,
             ambient_audio=ambient_audio, ambient_level=ambient_level, apply_model_sampling=apply_model_sampling,
             audio_vae=audio_vae, auto_sound=auto_sound, bared_shots=bared_shots,
@@ -11839,6 +11935,7 @@ class H3LongVideos:
     def _render(self, prepared):
         """Execute the prepared shots and assemble the video and soundtrack."""
         _placed_shots = prepared._placed_shots
+        _first_is_plate = prepared._first_is_plate
         _returns = prepared._returns
         _soft_landing = prepared._soft_landing
         _tagged_names = prepared._tagged_names
@@ -11928,6 +12025,7 @@ class H3LongVideos:
         _handoff_claimed = []       # shots whose demoted handoff was named in the text
         _untrimmed = []             # shots that opened on no keyframe, so kept frame one
         fresh_room = []             # shots cut because they open in another room
+        _plate_on = 0               # the shot whose first_frame rides as the SET
         _carried = []               # (shot, who was there, who joins) room carried on
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         # One per run, never reset at a chain break: the grade belongs to the FILM, and
@@ -11964,6 +12062,13 @@ class H3LongVideos:
             elif i in cut_shots:
                 shot_handoff = None
                 fresh_room.append(i + 1)
+            # SHOT 1'S first_frame, READ AS THE SET. Same answer as the branch below
+            # and for the same reason -- a keyframe is a picture, and the people the
+            # beat places are not in this one -- reached separately because shot 1 has
+            # no previous shot to ask about. See where _first_is_plate is decided.
+            elif i == 0 and _first_is_plate and shot_handoff is not None:
+                _handoff_ref = True
+                _plate_on = i + 1
             # ...and so does a shot that INTRODUCES somebody already in position.
             #
             # Same reasoning, same evidence. The keyframe is the previous shot's last
@@ -12056,7 +12161,11 @@ class H3LongVideos:
             # here rather than inside build_conditioning because the claim is text,
             # and the text is assembled up here.
             _shot_refs = list(shot.refs) + _extra
-            if _handoff_ref:
+            if _handoff_ref and _plate_on == i + 1:
+                # A SET, not a room a moment earlier. See plate_claim.
+                shot_prompt = shot_prompt + plate_claim(len(_shot_refs) + 1)
+                _handoff_claimed.append(i + 1)
+            elif _handoff_ref:
                 # Carried for the ROOM, with somebody new in the shot -- so the
                 # standing claim is exactly wrong here ("joined by anybody new") and
                 # this one names the room, who was in it, and who is also here.

@@ -4640,8 +4640,9 @@ def test_shot_one_is_the_only_unpinned_shot():
             return orig(clip, vae, audio_vae, prompt, width, height, length,
                         handoff=handoff, refs=refs, ref_noise_aug=ref_noise_aug, **k)
         S.build_conditioning = spy
+        _p = kw.pop("prompt_override", P)
         try:
-            run_node(P, character_memory=mem, **kw)
+            run_node(_p, character_memory=mem, **kw)
         finally:
             S.build_conditioning = orig
         return got
@@ -4660,11 +4661,20 @@ def test_shot_one_is_the_only_unpinned_shot():
     for _aug in (0.90, 0.95, 0.999, 1.0):
         _p = _pins(ref_image_1=ref, ref_noise_aug=_aug)
         check(f"at ref_noise_aug {_aug} shot 1 is still unpinned", _p[0][0] == "nothing")
-    # WIRING first_frame IS THE FIX, and it is the only input that is.
+    # WIRING first_frame IS WHAT REACHES SHOT 1 -- but what it then does depends on
+    # whether the script reads it as an opening frame or as the SET. This beat places
+    # her and she has a portrait, so it is the set: see
+    # test_a_first_frame_can_be_the_set_instead_of_frame_one. An entrance in beat 1
+    # leaves it as the hard keyframe it always was.
     _ff = _pins(ref_image_1=ref, first_frame=ref, ref_noise_aug=0.999)
-    check("first_frame gives shot 1 a keyframe", _ff[0][0] == "keyframe")
-    check("...and every shot is then pinned the same way",
-          all(p == "keyframe" for p, _ in _ff))
+    check("first_frame reaches shot 1 either way", _ff[0][0] != "nothing")
+    _ent = _pins(ref_image_1=ref, first_frame=ref, ref_noise_aug=0.999,
+                 prompt_override=("A bare room, cold light.\n\n"
+                                  "Nora walks in through the side door.\n\n"
+                                  "Nora turns to look at the door.\n\n"
+                                  "Nora sits on the crate."))
+    check("...and pins frame one when beat 1 stages an entrance",
+          _ent[0][0] == "keyframe")
     # ...and info says all of that, including which dial is NOT this one.
     _info = run_node(P, plan_only=True, character_memory=mem, ref_image_1=ref,
                      ref_noise_aug=0.999)[2]
@@ -4695,6 +4705,106 @@ def test_shot_one_is_the_only_unpinned_shot():
                if "NO first_frame" in x][0]
     check("...and carries the advice itself when there is no reference note",
           "subject, pose, framing, background" in _no_ref)
+
+
+def test_a_first_frame_can_be_the_set_instead_of_frame_one():
+    """REPORTED, after being told to wire first_frame: "No, this should be fixed using
+    reference images from the start. I only use first_frame for the scene."
+
+    Which is a workflow the node could not serve. first_frame was always taken as
+    shot 1's opening frame, pinned whole -- and a picture of a SET has nobody in it,
+    so the cast the beat places there has to appear out of nothing during shot 1. That
+    is the reported artefact: beat 1 wrong, every later beat fine, because beat 2
+    inherits the settled version from its handoff.
+
+    The node already refuses exactly this on every OTHER shot, with its own reasoning
+    written down -- "that frame does not have them in it, and a keyframe is a picture,
+    so they would have to appear out of nothing and travel to the spot the beat
+    describes". Shot 1 could not reach it: the guard read `and plan`, which is empty on
+    the first shot. True before first_frame could supply a keyframe; wrong after.
+
+    The set is told from an opening frame BY THE SCRIPT, never by looking at pixels:
+    the beat has to place the cast rather than stage an entrance, and every one of them
+    has to already have a portrait of their own. Then this picture has nothing left to
+    say about who they are, only about where they are."""
+    print("\n=== a first_frame can be the set instead of frame one ===")
+    plate = torch.rand((1, 256, 256, 3))
+    ref = torch.rand((1, 256, 256, 3))
+    TAG = "Nora: <Picture 1>, she, 24, long dark hair, a steel collar."
+    BARE = "Nora: she, 24, long dark hair, a steel collar."
+    PLACED = "A bare room.\n\nNora stands by the window.\n\nNora turns to the door."
+    ARRIVES = ("A bare room.\n\nNora walks in through the side door.\n\n"
+               "Nora turns to the door.")
+
+    def _first(mem, P, **kw):
+        """(how shot 1's first_frame is used, refs passed, shot 1's prompt)."""
+        got, orig = [], S.build_conditioning
+        def spy(clip, vae, audio_vae, prompt, width, height, length,
+                handoff=None, refs=None, ref_noise_aug=0.999, **k):
+            got.append(("set" if (handoff is not None and k.get("handoff_as_ref"))
+                        else "keyframe" if handoff is not None else "nothing",
+                        len(refs or []), prompt))
+            return orig(clip, vae, audio_vae, prompt, width, height, length,
+                        handoff=handoff, refs=refs, ref_noise_aug=ref_noise_aug, **k)
+        S.build_conditioning = spy
+        try:
+            run_node(P, character_memory=mem, **kw)
+        finally:
+            S.build_conditioning = orig
+        return got[0]
+
+    # THE REPORTED CASE. A plate, a beat that places her, a portrait of her.
+    _how, _n, _pr = _first(TAG, PLACED, first_frame=plate, ref_image_1=ref)
+    check("a plate with the cast placed and portrayed rides as the SET", _how == "set")
+    # BOTH pictures are there and both are claimed. Her portrait keeps slot 1 -- which
+    # is what her sheet tag points at -- and the plate is appended after it, so the
+    # numbering the author wrote still lands on the author's image.
+    check("...her portrait keeps <Picture 1>", "<Picture 1>, she, 24" in _pr)
+    check("...the plate is claimed as the set, after her",
+          "<Picture 2> is the set this shot takes place in" in _pr)
+    check("...and claimed as having nobody in it",
+          "a picture of the place only, with nobody in it" in _pr)
+    # An unclaimed picture is another subject, which is this file's oldest bug. A plate
+    # claimed with room_claim's wording would be worse than unclaimed: it says "this
+    # room a moment earlier" and names who was standing in it, and on shot 1 there is
+    # no earlier and nobody was.
+    check("...and not as a room a moment earlier", "a moment earlier" not in _pr)
+
+    # THE THREE CASES THAT MUST NOT CHANGE.
+    # An entrance WANTS a frame she is absent from -- walking in is the one case where
+    # starting from a picture without her is right.
+    check("an entrance in beat 1 still pins frame one",
+          _first(TAG, ARRIVES, first_frame=plate, ref_image_1=ref)[0] == "keyframe")
+    check("no portrait means the frame is her only picture, so it stays frame one",
+          _first(BARE, PLACED, first_frame=plate)[0] == "keyframe")
+    check("...and a tag pointing at an empty socket portrays nobody",
+          _first(TAG, PLACED, first_frame=plate)[0] == "keyframe")
+    check("no first_frame at all is unchanged",
+          _first(TAG, PLACED, ref_image_1=ref)[0] == "nothing")
+
+    # TWO PEOPLE: every one of them has to be covered, not just the first.
+    _two = ("Nora: <Picture 1>, she, 24, long dark hair.\n"
+            "Dan: <Picture 2>, he, 41, a grey coat.")
+    _one = "Nora: <Picture 1>, she, 24, long dark hair.\nDan: he, 41, a grey coat."
+    _P2 = ("A bare room.\n\nNora stands by the window and Dan sits on the crate.\n\n"
+           "Nora turns to the door.")
+    check("both portrayed -> the plate is the set",
+          _first(_two, _P2, first_frame=plate, ref_image_1=ref,
+                 ref_image_2=ref)[0] == "set")
+    check("one of them unportrayed -> it stays frame one",
+          _first(_one, _P2, first_frame=plate, ref_image_1=ref)[0] == "keyframe")
+
+    # ...and it is REPORTED, with what to do if the reading is wrong.
+    _info = run_node(PLACED, plan_only=True, character_memory=TAG,
+                     first_frame=plate, ref_image_1=ref)[2]
+    check("info says the frame was read as the set",
+          "first_frame is being read as the SET" in _info)
+    check("...and that it is not discarded", "NOT discarded" in _info)
+    check("...and how to pin frame one instead",
+          "put the cast IN that frame" in _info and "write the entrance" in _info)
+    check("...and says nothing when the frame is taken as frame one",
+          "read as the SET" not in run_node(ARRIVES, plan_only=True, character_memory=TAG,
+                                           first_frame=plate, ref_image_1=ref)[2])
 
 
 def test_sound_survives_silencing():
@@ -7239,6 +7349,7 @@ def main():
     test_a_name_with_no_entry_end_to_end()
     test_the_soundtrack_is_the_models_own()
     test_shot_one_is_the_only_unpinned_shot()
+    test_a_first_frame_can_be_the_set_instead_of_frame_one()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()

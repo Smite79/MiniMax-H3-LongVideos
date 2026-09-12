@@ -53,6 +53,7 @@ class ShotPlan:
 class PreparedVideo:
     """Resolved inputs consumed by the render stage; model/tensor handles are shared."""
     _placed_shots: object
+    _first_is_plate: object
     _returns: object
     _soft_landing: object
     _tagged_names: object
