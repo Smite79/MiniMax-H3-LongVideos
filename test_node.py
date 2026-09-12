@@ -4798,6 +4798,36 @@ def test_the_vsa_gate_is_attached_from_the_file_or_nothing_changes():
           nos.patches == {})
     check("...and the note names the node to add",
           "Model Sparse Attention" in note and "'vsa'" in note)
+    # The allocator that aborts instead of raising.
+    import os as _os
+    _saved = _os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+    try:
+        _os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:cudaMallocAsync"
+        check("cudaMallocAsync WITH a sparse DiT patch is refused before sampling",
+              "ABORT" in S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)))
+        check("...naming the flag that fixes it",
+              "--disable-cuda-malloc" in
+              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)))
+        check("...but WITHOUT the sparse patch the allocator alone is left alone",
+              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_OFF)) == "")
+        check("...and a model that cannot say is never refused on a guess",
+              S.sparse_attention_allocator_abort(_gate_model()) == "")
+        _os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        check("a different allocator config with the same patch is fine",
+              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)) == "")
+        del _os.environ["PYTORCH_CUDA_ALLOC_CONF"]
+        check("no allocator config at all is fine",
+              S.sparse_attention_allocator_abort(_gate_model(model_options=_SPARSE_ON)) == "")
+    finally:
+        if _saved is None:
+            _os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+        else:
+            _os.environ["PYTORCH_CUDA_ALLOC_CONF"] = _saved
+    check("the sparse probe tells 'absent' apart from 'cannot tell'",
+          S.sparse_dit_patched(_gate_model(model_options=_SPARSE_OFF)) is False
+          and S.sparse_dit_patched(_gate_model()) is None
+          and S.sparse_dit_patched(_gate_model(model_options=_SPARSE_ON)) is True)
+
     son, note = r["sparse_on"]
     check("with the sparse patch present it attaches normally",
           len(son.patches) == 2 and "2 of 2" in note)

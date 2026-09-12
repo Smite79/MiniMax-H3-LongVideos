@@ -3046,6 +3046,61 @@ def _vsa_gate_class():
     return _VSA_GATE_CLS
 
 
+def sparse_dit_patched(model):
+    """True when something upstream installed a per-block DiT replace patch, False when it
+    provably did not, None when this model cannot say.
+
+    That patch is how ComfyUI's Model Sparse Attention node registers itself
+    (set_model_patch_replace -> model_options["transformer_options"]["patches_replace"]
+    ["dit"]), and it is the only thing that ever calls a to_gate_compress gate. None is
+    distinct from False on purpose: a stub or hand-built model carries no model_options at
+    all, and "cannot tell" must never be read as "not there"."""
+    opts = getattr(model, "model_options", None)
+    if not isinstance(opts, dict):
+        return None
+    tops = opts.get("transformer_options") or {}
+    if not isinstance(tops, dict):
+        return None
+    return bool((tops.get("patches_replace") or {}).get("dit"))
+
+
+def sparse_attention_allocator_abort(model):
+    """The one configuration that does not raise, it ABORTS. Returns why, or "".
+
+    cudaMallocAsync is stream-ordered: a block allocated on one CUDA stream must be freed
+    consistently with that stream. comfy_kitchen's chunked sparse-attention producer is a
+    GENERATOR consumed from inside the kernel call, across the stream boundary that
+    --enable-dynamic-vram's prefetch machinery sets up, and freeing its per-chunk tensor
+    there returns CUDA_ERROR_INVALID_VALUE from cuMemFreeAsync. That throws out of a tensor
+    DESTRUCTOR, where there is no Python frame to catch it, so the process calls
+    std::terminate: a core dump, not an exception, taking the server and the rest of the
+    queue with it.
+
+    Worth refusing rather than warning for exactly that reason -- there is nothing to
+    recover from an abort, and nothing downstream gets the chance to try. Losing one render
+    to a readable error is the better trade.
+
+    Nobody chooses this, either. ComfyUI force-enables the allocator on any CUDA 13 torch
+    build and does not consult its own card blacklist on that path (cuda_malloc.py), so a
+    current install arrives here by default."""
+    conf = str(os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "") or "")
+    if "cudamallocasync" not in conf.lower():
+        return ""
+    if sparse_dit_patched(model) is not True:
+        return ""
+    return ("this render would ABORT the ComfyUI process rather than fail: a sparse-attention "
+            "patch is on the model AND torch is using the cudaMallocAsync allocator "
+            f"(PYTORCH_CUDA_ALLOC_CONF={conf}). Freeing the attention producer's per-chunk "
+            "tensor under that allocator returns CUDA_ERROR_INVALID_VALUE from cuMemFreeAsync, "
+            "inside a tensor destructor where nothing can catch it -- so the process "
+            "core-dumps and the queue goes with it, which is why this stops here instead.\n\n"
+            "Either restart ComfyUI with --disable-cuda-malloc, which is the flag ComfyUI's "
+            "own cuda_malloc.py names for this failure, or take the Model Sparse Attention "
+            "node out of the graph. ComfyUI turns that allocator on by itself on every CUDA 13 "
+            "torch build without checking whether the card supports it, so this is the default "
+            "rather than anything you picked.")
+
+
 def vsa_gates_left_behind(blocks, n_blocks):
     """Blocks still carrying a gate THIS node attached on an earlier render.
 
@@ -3119,14 +3174,11 @@ def inject_vsa_gate(model, name):
     # (set_model_patch_replace -> model_options["transformer_options"]["patches_replace"]
     # ["dit"]). "Cannot tell" counts as present: a model carrying no model_options at all
     # is never refused on this ground.
-    _opts = getattr(model, "model_options", None)
-    if isinstance(_opts, dict):
-        _tops = _opts.get("transformer_options") or {}
-        if isinstance(_tops, dict) and not ((_tops.get("patches_replace") or {}).get("dit")):
-            return _vsa_drop_gates(model, stale, (
-                f"vsa_gate_lora '{name}' NOT attached: nothing in this graph would call the "
-                f"gate, so the weights would be dead. Put ComfyUI's Model Sparse Attention "
-                f"node with method 'vsa' ahead of this node"))
+    if sparse_dit_patched(model) is False:
+        return _vsa_drop_gates(model, stale, (
+            f"vsa_gate_lora '{name}' NOT attached: nothing in this graph would call the "
+            f"gate, so the weights would be dead. Put ComfyUI's Model Sparse Attention "
+            f"node with method 'vsa' ahead of this node"))
     try:
         import folder_paths
         import comfy.ops
@@ -8473,6 +8525,11 @@ class H3LongVideos:
         model, _gate_note = inject_vsa_gate(model, vsa_gate_lora)
         if _gate_note:
             notes.append(_gate_note)
+        # Before anything is sampled, because the failure mode is an abort and an abort
+        # cannot be reported from inside the render.
+        _abort = sparse_attention_allocator_abort(model)
+        if _abort:
+            raise RuntimeError(_abort)
         check_vae_wiring(vae, audio_vae)
 
         prompt, n_legacy = strip_legacy_fields(prompt)
