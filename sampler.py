@@ -4260,12 +4260,29 @@ _NOT_STAGED = re.compile(
     r"remembers?|imagines?|thinks?\s+of|expects?|waits?\s+for)\b", re.I)
 
 
+# ...and what says they have GONE. The latch below needs an explicit way out, the way
+# every other state in this file has one: a garment comes off, a restraint is unlocked,
+# a room is left. Without it, extras staged once would suppress the body count for the
+# rest of the film even after the script empties the room.
+_ALONE = re.compile(
+    r"\b(?:alone|by\s+(?:her|him|them)self|on\s+(?:her|his|their)\s+own|"
+    r"empty|deserted|to\s+(?:her|him|them)self)\b", re.I)
+
+
 def extras_in(beat):
     """Does this beat stage people beyond the ones the sheet names, IN the frame?"""
     b = str(beat or "")
     if not _EXTRA_PEOPLE.search(b):
         return False
     return not _NOT_STAGED.search(b)
+
+
+def extras_dismissed(beat):
+    """Does this beat say the people the sheet does not name are no longer there?"""
+    b = str(beat or "")
+    if _ALONE.search(b):
+        return True
+    return bool(_EXTRA_PEOPLE.search(b) and _NOT_STAGED.search(b))
 
 
 def cast_hold(names, beat="", extras=False):
@@ -8227,6 +8244,8 @@ class H3LongVideos:
         # token -> who took it off, so the scrub reaches their entry and nobody
         # else's. A token with nobody recorded stays unscoped. See scrub_removed.
         gone_by = {}
+        _extras_seen = False        # the film has staged people the sheet does not name
+        untracked_strip = []        # (shot, items) a group removal the sheet cannot hold
         # Of those, the ones open ONLY because the beat stages effort. The branch
         # is open on both, but for opposite reasons, and built sound has to tell
         # them apart -- see the foley mix.
@@ -8627,6 +8646,14 @@ class H3LongVideos:
                 # Read off the WHOLE sheet, not this shot's: a shot describing only the
                 # person doing the unlocking has no entry for the one wearing it, which
                 # is the case the hardware path already had to solve.
+                # A REMOVAL THAT INCLUDES PEOPLE THE SHEET DOES NOT NAME reaches only
+                # the ones it does. There is no entry to scrub for an unnamed woman and
+                # no state to carry her bare region, so her skirt persists on the
+                # keyframe alone and comes back the moment the keyframe stops showing
+                # it off. Reported as some of the skirts still being on when all of
+                # them should have come off. Said rather than left to be discovered.
+                if extras_in(body):
+                    untracked_strip.append((len(plan) + 1, list(toks)))
                 _took = strippers_in(body, shot_sheet if shot_sheet else sheet)
                 for _t in toks:
                     _wears = [n for n, _wl in sheet_lines(sheet)
@@ -9609,17 +9636,27 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
-            # PER BEAT, NOT LATCHED FOR THE FILM.
+            # LATCHED, WITH AN EXPLICIT WAY OUT.
             #
-            # The latch was mine and it was too big: one plural word anywhere -- even
-            # "the others have gone" -- stood the body-count clause down for every
-            # shot that followed, and that clause is what keeps a duplicate or a
-            # stranger out of the frame. Reported as randoms showing up again with
-            # character_guard on. A returning body count can suppress an extra on a
-            # beat that does not mention them, which is a smaller fault than losing
-            # the guard for the rest of the film: write the extras into the beats they
-            # are in and they keep.
-            _cast_hold = cast_hold(_described, body)
+            # This went both ways before settling here. Latched on any plural word it
+            # stood the body count down for the whole film -- "the others have gone"
+            # included -- and that clause is what keeps a duplicate or a stranger out
+            # of the frame. Read per beat instead, a shot whose beat simply stops
+            # mentioning the extras got "There is one person in the shot: one body,
+            # one face" while five women were standing in it, which asserts four of
+            # them out of existence.
+            #
+            # Both faults were the same missing piece: extras are STATE, and state
+            # needs a transition out. extras_in is now absence-aware, so the latch no
+            # longer fires on a sentence saying they left, and extras_dismissed is the
+            # way out -- "she is alone now", "the others have gone". Background people
+            # do not leave because a sentence stopped mentioning them, and they do not
+            # stay for ever either.
+            if extras_in(body):
+                _extras_seen = True
+            elif extras_dismissed(body):
+                _extras_seen = False
+            _cast_hold = cast_hold(_described, body, _extras_seen)
 
             # Where the beat says somebody is looking, said once more as a fact
             # about the eyes and the head. One mention in the beat loses to a
@@ -10350,6 +10387,22 @@ class H3LongVideos:
                   "room state, no acoustic, no cut decision -- so a dungeon, a cargo bay or a "
                   "stable all work without being listed anywhere. Anything that is furniture, "
                   "a body part, a vehicle or a person is left alone")
+        if untracked_strip:
+            _items = sorted({t for _n, ts in untracked_strip for t in ts})
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n, _ in untracked_strip)} take "
+                f"{', '.join(_items)} off PEOPLE THE SHEET DOES NOT NAME, and the "
+                f"removal reaches only the ones it does name. A character sheet entry is "
+                f"what a removal scrubs and what carries the bare region into every later "
+                f"shot; an unnamed woman has neither, so her own words come off in the "
+                f"beat that says so and nothing holds them off afterwards -- the next shot "
+                f"says nothing about her, and what it opens on is a keyframe taken while "
+                f"she was still half in them. Reported as some of the skirts still being "
+                f"on when all of them should have come off. Give each of them an entry, "
+                f"however short -- 'Girl 1: she, 20, a denim skirt.' -- and their removals "
+                f"hold exactly like the named character's. Your words are never rewritten "
+                f"either way; this is about what the node can keep saying after the beat "
+                f"that said it")
         if _undescribed:
             _them = "them" if len(_undescribed) > 1 else "it"
             notes.append(

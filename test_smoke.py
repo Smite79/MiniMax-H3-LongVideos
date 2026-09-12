@@ -419,14 +419,23 @@ def test_a_walk_into_an_unlisted_room_is_still_walked():
           and "every step in frame" in sh[1], sh[1][-150:])
     check("the extras are not forbidden on the shot that stages them",
           "one body for each person" not in sh[0], sh[0][-110:])
-    # AND THE BODY COUNT COMES BACK on a beat that mentions nobody but the sheet.
-    # It used to latch for the whole film, and that stood down the one clause keeping
-    # a duplicate or a stranger out of the frame -- reported as randoms showing up
-    # again with character_guard on. Suppressing an extra on a beat that does not
-    # mention them is the smaller fault, and the remedy is to write them into the
-    # beats they are in.
-    check("...and the count returns where the beat names nobody else",
-          "one body for each person" in sh[1], sh[1][-110:])
+    # THE LATCH HOLDS past a beat that simply stops mentioning them. Read per beat,
+    # a shot whose beat said nothing about the extras got "There is one person in the
+    # shot: one body, one face" while five women stood in it -- asserting four of them
+    # out of existence. Background people do not leave because a sentence stopped
+    # mentioning them.
+    check("...and the count stays down while they are still there",
+          "one body for each person" not in sh[1]
+          and "one person in the shot" not in sh[1], sh[1][-110:])
+    # ...and it comes back when the script says they have gone, which is the explicit
+    # transition every other state in this file has.
+    _SH = "Dan: he, 40, a work coat.\nCrystal: she, 26, a red dress."
+    back = [" ".join(x.split()) for x in run_node(
+        "A bar.\n\nDan and Crystal sit with two women dancing behind them.\n\n"
+        "The two women have gone.\n\nDan and Crystal sit at the bar together.",
+        plan_only=True, character_memory=_SH)[3].split("---") if x.strip()]
+    check("the count returns once the extras are dismissed",
+          "one body for each person" in back[-1], back[-1][-110:])
     check("the room is reported by its real name",
           "enters locker room" in out[2] or "locker room" in out[2], "")
     check("...and not as bare 'room'", "the film enters room," not in out[2], "")
