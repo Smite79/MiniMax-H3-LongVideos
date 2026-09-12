@@ -2988,6 +2988,7 @@ def apply_h3_model_sampling(model, shift_video, shift_audio):
 # runs, so gigabytes of gates would ride along into every other workflow using the same
 # checkpoint for the rest of the session.
 _VSA_GATE_KEY = "blocks.{}.attn.to_gate_compress.set_weight"
+_VSA_GATE_CLS = None
 
 
 def _vsa_gate_lora_list():
@@ -3002,61 +3003,145 @@ def _vsa_gate_lora_list():
         return ["none"]
 
 
+def _vsa_gate_class():
+    """A manual_cast.Linear that casts its weight in once per BLOCK, not once per chunk.
+
+    The VSA producer calls the gate once per PRODUCER_CHUNK of 4096 rows, and comfy's cast
+    caches nothing -- so the 77 MB weight was crossing PCIe ~18 times per block per step.
+    Measured on this machine: ~277 GB of host-to-device traffic per 4-step shot, about
+    3 ms of it EXPOSED per call because a file-mapped weight is pageable and the copy
+    cannot hide behind the queued matmul. Blocks run in order and a block's chunks are
+    consecutive, so one cached device copy serves all of them and the next block replaces
+    it.
+
+    Two things make this safe in a hot loop. The cache is skipped entirely when the weight
+    is already on the compute device, because comfy's cast_to returns it untouched in that
+    case and there is nothing to save. And the allocation pattern is identical for every
+    block and every step -- one copy on a block's first chunk, none on the rest -- which is
+    what the allocation graph this runs under compares between blocks.
+
+    The cost is one 77 MB device tensor held until the next gate asks, including after a
+    render ends. That is the price of not re-sending 3.59 GiB every step."""
+    global _VSA_GATE_CLS
+    if _VSA_GATE_CLS is not None:
+        return _VSA_GATE_CLS
+    import comfy.ops
+
+    class _VsaGate(comfy.ops.manual_cast.Linear):
+        _live = (None, None)        # (the module the copy belongs to, the copy)
+
+        def forward_comfy_cast_weights(self, input):
+            w = self.weight
+            if w.device != input.device or w.dtype != input.dtype:
+                who, cached = _VsaGate._live
+                # identity, not id(): a recycled id() would silently hand one block's
+                # gate to another, and every gate is held alive by the patcher anyway.
+                if who is not self:
+                    cached = w.to(device=input.device, dtype=input.dtype)
+                    _VsaGate._live = (self, cached)
+                w = cached
+            return torch.nn.functional.linear(input, w, None)
+
+    _VSA_GATE_CLS = _VsaGate
+    return _VSA_GATE_CLS
+
+
+def vsa_gates_left_behind(blocks, n_blocks):
+    """Blocks still carrying a gate THIS node attached on an earlier render.
+
+    Object patches are materialised onto the shared DiT and are not necessarily reverted
+    between queue runs, so they outlive the render that made them. That is why switching
+    the widget off has to take them down on purpose instead of just doing nothing: left
+    alone they keep 3.59 GiB attached, they put a weight into model.state_dict() that the
+    checkpoint does not have -- which the LoRA loader would then start mapping -- and
+    nothing in the new render owns them."""
+    out = []
+    for i in range(n_blocks):
+        g = getattr(getattr(blocks[i], "attn", None), "to_gate_compress", None)
+        if g is not None and getattr(g, "_h3lv_vsa_gate", False):
+            out.append(i)
+    return out
+
+
+def _vsa_drop_gates(model, idx, why):
+    """Patch gates an earlier render left behind back to None, so the clear is owned by a
+    patcher and reverted with it like any other object patch."""
+    if not idx:
+        return model, why
+    try:
+        m = model.clone()
+        for i in idx:
+            m.add_object_patch(f"diffusion_model.blocks.{i}.attn.to_gate_compress", None)
+    except Exception:
+        return model, why
+    cleared = f"{len(idx)} VSA gate layer(s) left on the model by an earlier render: cleared"
+    return m, (cleared if not why else why + "; " + cleared)
+
+
 def inject_vsa_gate(model, name):
     """Attach FastH3's to_gate_compress layers, read out of the LoRA that carries them.
 
-    Returns (model, note). Never raises and never returns a changed model unless it
-    actually attached something: a file that is not there, a shape built for another
-    checkpoint, a stub model with no DiT -- each leaves the model exactly as it arrived
-    and says why. A render that would have worked must not die over an optimisation."""
-    if not name or name == "none":
-        return model, ""
-    # The MODEL is inspected before anything is imported, so that a model this cannot
-    # apply to is silent rather than noisy. A stub or non-H3 model is not a misconfigured
-    # render -- it is simply not one of these -- and it must not collect a complaint about
-    # missing imports on the way past.
-    dm = getattr(getattr(model, "model", None), "diffusion_model", None)
-    blocks = getattr(dm, "blocks", None)
+    Returns (model, note). Never raises: a file that is not there, a shape built for
+    another checkpoint, a model with no DiT -- each leaves the render exactly as it would
+    have been and says why. A render that would have worked must not die over an
+    optimisation. The one thing it does even when switched OFF is take down gates an
+    earlier render left behind, because those are not free."""
+    # Every shape read is inside the try, not just the calls that obviously throw. A model
+    # that is not one of these is not a misconfigured render -- it is simply not one -- so
+    # it passes in silence, and "passes" has to mean returns, never raises.
     try:
+        dm = getattr(getattr(model, "model", None), "diffusion_model", None)
+        blocks = getattr(dm, "blocks", None)
         n_blocks = len(blocks)
+        attn = getattr(blocks[0], "attn", None)
+        inner = int(attn.heads) * int(attn.head_dim)
     except Exception:
-        n_blocks = 0
-    if not n_blocks:
         return model, ""
-    attn = getattr(blocks[0], "attn", None)
-    if attn is None or getattr(attn, "heads", None) is None:
-        return model, ""
-    # "Already has one" has to mean the CHECKPOINT has one, not that a previous render
-    # of this same workflow left ours behind. Object patches are materialised onto the
-    # shared DiT and are not necessarily reverted between queue runs, so the second
-    # render reads back the gate the FIRST one attached -- and without the tag test this
-    # branch would fire, silently turn the feature off after exactly one render, and say
-    # something untrue about the checkpoint while doing it. Re-attaching is safe: the
-    # keys are the same, and set_attr drops the old layer when it writes the new one.
-    _have = getattr(attn, "to_gate_compress", None)
-    if _have is not None and not getattr(_have, "_h3lv_vsa_gate", False):
-        return model, ("vsa_gate_lora skipped: this checkpoint carries to_gate_compress layers "
-                       "of its own, so ComfyUI's LoRA loader already fills them")
-    try:
-        import folder_paths
-        import comfy.ops
-        from safetensors import safe_open
-    except Exception:
-        return model, ("vsa_gate_lora needs safetensors, comfy.ops and folder_paths, and at "
-                       "least one of them is not importable here -- no gate layers attached")
-    inner = int(attn.heads) * int(attn.head_dim)
     hidden = 0
     try:
         hidden = int(blocks[0].norm1.weight.numel())
     except Exception:
         pass
+    stale = vsa_gates_left_behind(blocks, n_blocks)
+    if not name or name == "none":
+        return _vsa_drop_gates(model, stale, "")
+    # "Already has one" has to mean the CHECKPOINT has one, not that an earlier render of
+    # this same workflow left ours behind. Without the tag test this branch would read back
+    # the gate the previous render attached, switch the feature off after exactly one
+    # render, and say something untrue about the checkpoint while doing it.
+    _have = getattr(attn, "to_gate_compress", None)
+    if _have is not None and not getattr(_have, "_h3lv_vsa_gate", False):
+        return model, ("vsa_gate_lora skipped: this checkpoint carries to_gate_compress layers "
+                       "of its own, so ComfyUI's LoRA loader already fills them")
+    # Attaching 3.59 GiB for a layer nothing will call is the same mistake as leaving the
+    # widget on by accident, so it is refused the same way. The only thing that ever calls
+    # the gate is the per-block replace patch the Model Sparse Attention node registers
+    # (set_model_patch_replace -> model_options["transformer_options"]["patches_replace"]
+    # ["dit"]). "Cannot tell" counts as present: a model carrying no model_options at all
+    # is never refused on this ground.
+    _opts = getattr(model, "model_options", None)
+    if isinstance(_opts, dict):
+        _tops = _opts.get("transformer_options") or {}
+        if isinstance(_tops, dict) and not ((_tops.get("patches_replace") or {}).get("dit")):
+            return _vsa_drop_gates(model, stale, (
+                f"vsa_gate_lora '{name}' NOT attached: nothing in this graph would call the "
+                f"gate, so the weights would be dead. Put ComfyUI's Model Sparse Attention "
+                f"node with method 'vsa' ahead of this node"))
+    try:
+        import folder_paths
+        import comfy.ops
+        from safetensors import safe_open
+    except Exception:
+        return _vsa_drop_gates(model, stale, (
+            "vsa_gate_lora needs safetensors, comfy.ops and folder_paths, and at least one "
+            "of them is not importable here -- no gate layers attached"))
     try:
         path = folder_paths.get_full_path("loras", name)
     except Exception:
         path = None
     if not path:
-        return model, (f"vsa_gate_lora '{name}' is not in models/loras -- no gate layers "
-                       f"attached")
+        return _vsa_drop_gates(model, stale, (
+            f"vsa_gate_lora '{name}' is not in models/loras -- no gate layers attached"))
     gates, wrong = {}, ""
     try:
         with safe_open(str(path), framework="pt", device="cpu") as f:
@@ -3074,36 +3159,38 @@ def inject_vsa_gate(model, name):
                     break
                 gates[i] = w
     except Exception as e:
-        return model, (f"vsa_gate_lora '{name}' could not be read ({type(e).__name__}) -- no "
-                       f"gate layers attached")
+        return _vsa_drop_gates(model, stale, (
+            f"vsa_gate_lora '{name}' could not be read ({type(e).__name__}) -- no gate "
+            f"layers attached"))
     if wrong:
-        return model, wrong
+        return _vsa_drop_gates(model, stale, wrong)
     if not gates:
-        return model, (f"vsa_gate_lora '{name}' carries no to_gate_compress weights, so there "
-                       f"is no VSA gate in it to recover. That key is what a FastVideo/FastH3 "
-                       f"VSA distill ships and what an SLA or a plain turbo LoRA does not")
+        return _vsa_drop_gates(model, stale, (
+            f"vsa_gate_lora '{name}' carries no to_gate_compress weights, so there is no VSA "
+            f"gate in it to recover. That key is what a FastVideo/FastH3 VSA distill ships "
+            f"and what an SLA or a plain turbo LoRA does not"))
     m = model.clone()
     nbytes = 0
     try:
+        cls = _vsa_gate_class()
         for i, w in gates.items():
-            # manual_cast, NOT type(attn.out_proj). On a quantised checkpoint the block's
-            # own Linear class is a closure-local MixedPrecisionOps.Linear carrying another
-            # model's quant config and no plain `weight` at all. manual_cast casts the
-            # weight to the activation's dtype and device at forward time, which is what
-            # lets the weight stay in host RAM and be streamed in with its block instead of
-            # sitting resident -- it is too big to sit resident next to the checkpoint.
-            # device="meta" so the unused weight this allocates is never really allocated.
-            # bias=False is load-bearing, not tidiness: VSA pads its cube grid with all-zero
-            # rows and the coarse branch has to gate those to zero, which a bias would undo.
-            g = comfy.ops.manual_cast.Linear(int(w.shape[-1]), inner, bias=False,
-                                            device="meta", dtype=w.dtype)
+            # NOT type(attn.out_proj). On a quantised checkpoint the block's own Linear is
+            # a closure-local MixedPrecisionOps.Linear carrying another model's quant config
+            # and no plain `weight` at all. A manual_cast subclass is what lets the weight
+            # live on the CPU and be cast in when it has to be.
+            # device="meta" so the weight this is about to replace is never really
+            # allocated -- without aimdo, Linear.__init__ would allocate it for real.
+            # bias=False because that is how comfy builds the layer it is standing in for
+            # (ldm/minimax/model.py) and the LoRA ships no bias tensor for it.
+            g = cls(int(w.shape[-1]), inner, bias=False, device="meta", dtype=w.dtype)
             g.weight = torch.nn.Parameter(w, requires_grad=False)
-            g._h3lv_vsa_gate = True      # model_fingerprint must not count these
+            g._h3lv_vsa_gate = True      # model_fingerprint and inspector must not count these
             m.add_object_patch(f"diffusion_model.blocks.{i}.attn.to_gate_compress", g)
             nbytes += w.numel() * w.element_size()
     except Exception as e:
-        return model, (f"vsa_gate_lora '{name}' could not be attached ({type(e).__name__}) -- "
-                       f"no gate layers attached")
+        return _vsa_drop_gates(model, stale, (
+            f"vsa_gate_lora '{name}' could not be attached ({type(e).__name__}) -- no gate "
+            f"layers attached"))
     try:
         # ModelPatcher caches its own size the first time it is asked, so these layers are
         # invisible to the VRAM ComfyUI reserves before a load: it would under-reserve by
@@ -3113,10 +3200,12 @@ def inject_vsa_gate(model, name):
     except Exception:
         pass
     return m, (f"VSA gate: {len(gates)} of {n_blocks} to_gate_compress layer(s) attached from "
-               f"{os.path.basename(str(path))} ({nbytes / float(1 << 30):.2f} GiB, held in host "
-               f"RAM and streamed per block). Add ComfyUI's Model Sparse Attention node set to "
-               f"'vsa' to use them; that node logs 'the model has no to_gate_compress layers' "
-               f"before this runs, which is stale -- the gate is re-read every forward pass")
+               f"{os.path.basename(str(path))} -- {nbytes / float(1 << 30):.2f} GiB mapped from "
+               f"the file, made resident if the card has room and cast in per block if not, "
+               f"plus {inner * 2 // 1024} KB of VRAM per token while sampling for the coarse "
+               f"branch's own buffer. The Model Sparse Attention node logs 'the model has no "
+               f"to_gate_compress layers' before this runs, which is stale -- the gate is "
+               f"re-read every forward pass")
 
 
 def sampling_oom_help(w, h, frames, fps, megapixels=0.0):
@@ -8203,11 +8292,20 @@ class H3LongVideos:
                                "'the model has no to_gate_compress layers' when it runs, which "
                                "is stale: it looks before this node has attached anything, and "
                                "the gate is re-read on every forward pass.\n\n"
-                               "About 3.6 GiB, kept in host RAM and streamed in with each "
-                               "block, and it adds roughly a third of the attention "
-                               "projection's arithmetic. On a card that is already tight the "
-                               "sparse saving may not pay for it, so time one shot each way. "
-                               "'none' is off and costs nothing."}),
+                               "What it costs, measured rather than guessed: 3.59 GiB of "
+                               "weights mapped from the file, which ComfyUI makes resident if "
+                               "the card has room and otherwise casts in per block; about a "
+                               "third of the attention projection's arithmetic on top; and -- "
+                               "the one that can end a render -- roughly 14 KB of VRAM per "
+                               "token for the coarse branch's own activation buffer, which is "
+                               "about 1 GiB at these defaults and near 3 GiB at megapixels 2 "
+                               "with long shots. That buffer exists ONLY when a gate is "
+                               "attached, so a shot that fit before can OOM after.\n\n"
+                               "On a card that is already tight the sparse saving may not pay "
+                               "for any of that: time one shot each way. Off is off -- and if "
+                               "an earlier render in this session attached gates, switching "
+                               "back to 'none' takes them down again rather than leaving them "
+                               "on the model."}),
             },
         }
 

@@ -4600,12 +4600,15 @@ class _GatePatcher:
     """Just enough ModelPatcher: clone() hands back a NEW object sharing the DiT, which
     is what makes an object patch the right mechanism and a direct assignment a leak."""
 
-    def __init__(self, dit, size=4096):
+    def __init__(self, dit, size=4096, model_options=None):
         self.model = types.SimpleNamespace(diffusion_model=dit)
         self.size, self.patches = size, {}
+        if model_options is not None:
+            self.model_options = model_options
 
     def clone(self):
-        n = _GatePatcher(self.model.diffusion_model, self.size)
+        n = _GatePatcher(self.model.diffusion_model, self.size,
+                         getattr(self, "model_options", None))
         return n
 
     def model_size(self):
@@ -4615,10 +4618,21 @@ class _GatePatcher:
         self.patches[key] = obj
 
 
-def _gate_model(n_blocks=2, hidden=6, heads=2, head_dim=4, gate=None):
+def _gate_model(n_blocks=2, hidden=6, heads=2, head_dim=4, gate=None, model_options=None):
     dit = types.SimpleNamespace(
         blocks=[_GateBlock(hidden, heads, head_dim, gate) for _ in range(n_blocks)])
-    return _GatePatcher(dit)
+    return _GatePatcher(dit, model_options=model_options)
+
+
+def _gate_left_behind():
+    """A gate tagged the way inject_vsa_gate tags its own, i.e. one an earlier render left."""
+    g = torch.nn.Linear(6, 8, bias=False)
+    g._h3lv_vsa_gate = True
+    return g
+
+
+_SPARSE_ON = {"transformer_options": {"patches_replace": {"dit": {("double_block", 0): None}}}}
+_SPARSE_OFF = {"transformer_options": {}}
 
 
 def _with_gate_stubs(fn):
@@ -4641,6 +4655,7 @@ def _with_gate_stubs(fn):
             sys.modules["folder_paths"] = fp
             return fn(d, save_file)
     finally:
+        S._VSA_GATE_CLS = None
         for k, v in saved.items():
             if v is None:
                 sys.modules.pop(k, None)
@@ -4709,6 +4724,20 @@ def test_the_vsa_gate_is_attached_from_the_file_or_nothing_changes():
         mine = torch.nn.Linear(6, 8, bias=False)
         mine._h3lv_vsa_gate = True
         out["again"] = S.inject_vsa_gate(_gate_model(gate=mine), "good.safetensors")
+        # 7. the widget switched back OFF while an earlier render's gates are still on the
+        # shared DiT: they are not free, so off has to take them down.
+        out["off_stale"] = S.inject_vsa_gate(
+            _gate_model(n_blocks=3, gate=_gate_left_behind()), "none")
+        # 8. a refusal must clear them too, not just say no.
+        out["refuse_stale"] = S.inject_vsa_gate(
+            _gate_model(gate=_gate_left_behind()), "not_here.safetensors")
+        # 9. no Model Sparse Attention node in the graph -> nothing would ever call the
+        # gate, so attaching 3.59 GiB would be waste, not caution.
+        out["no_sparse"] = S.inject_vsa_gate(
+            _gate_model(model_options=_SPARSE_OFF), "good.safetensors")
+        # 10. ...and with the node present it goes on as normal.
+        out["sparse_on"] = S.inject_vsa_gate(
+            _gate_model(model_options=_SPARSE_ON), "good.safetensors")
         return out
 
     r = _with_gate_stubs(body)
@@ -4720,7 +4749,7 @@ def test_the_vsa_gate_is_attached_from_the_file_or_nothing_changes():
                                       "diffusion_model.blocks.1.attn.to_gate_compress"])
     g = patched.patches["diffusion_model.blocks.0.attn.to_gate_compress"]
     check("...shaped hidden -> heads*head_dim", tuple(g.weight.shape) == (8, 6))
-    check("...with no bias, because VSA's zero pad rows must gate to zero",
+    check("...with no bias, because that is how comfy builds the layer it stands in for",
           g.bias is None)
     check("...carrying the file's own bf16, uncast", g.weight.dtype == torch.bfloat16)
     check("...tagged so model_fingerprint can ignore it",
@@ -4751,6 +4780,29 @@ def test_the_vsa_gate_is_attached_from_the_file_or_nothing_changes():
     again, note = r["again"]
     check("a second render re-attaches over the gate the first one left behind",
           len(again.patches) == 2 and "2 of 2" in note)
+
+    off, note = r["off_stale"]
+    check("switching off clears the gates an earlier render left on the model",
+          len(off.patches) == 3 and set(off.patches.values()) == {None})
+    check("...patching them to None so the clear is owned by a patcher, not a mutation",
+          off.patches["diffusion_model.blocks.1.attn.to_gate_compress"] is None)
+    check("...and says so, since 'off' silently costing 3.59 GiB is the bug",
+          "3 VSA gate layer(s)" in note and "cleared" in note)
+    ref, note = r["refuse_stale"]
+    check("a refusal clears them as well as refusing",
+          len(ref.patches) == 2 and set(ref.patches.values()) == {None})
+    check("...and the note carries both halves", "not in models/loras" in note
+          and "cleared" in note)
+    nos, note = r["no_sparse"]
+    check("with no Model Sparse Attention node in the graph, nothing is attached",
+          nos.patches == {})
+    check("...and the note names the node to add",
+          "Model Sparse Attention" in note and "'vsa'" in note)
+    son, note = r["sparse_on"]
+    check("with the sparse patch present it attaches normally",
+          len(son.patches) == 2 and "2 of 2" in note)
+    check("the note prices the coarse branch's VRAM buffer per token, not just the weights",
+          "KB of VRAM per token" in note)
 
     # The fingerprint must not see them, or every run after the first would look like a
     # different checkpoint and flush the whole model.
