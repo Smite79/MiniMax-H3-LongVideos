@@ -11132,6 +11132,22 @@ class H3LongVideos:
                 f"'{_who[0]}: <Picture 2>, ...' -- so every shot with both of them "
                 f"carries both faces. No wording fixes this: nothing in the text "
                 f"outranks a photograph")
+        if not character_guard and len([n for n, _ in sheet_lines(sheet) if n]) > 1:
+            _wardrobes = [f"{n} ({', '.join(garments_in(ln)[:3])})"
+                          for n, ln in sheet_lines(sheet) if n and garments_in(ln)]
+            notes.append(
+                f"character_guard is OFF, so EVERY sheet line is in EVERY shot -- "
+                f"including the wardrobe of everyone the beat does not involve. "
+                + ("With " + "; ".join(_wardrobes[:4]) + ", " if _wardrobes else "")
+                + f"a shot about one person is also describing what the others have on, "
+                f"and at cfg 1 the model reads the prompt as a bag of words before it "
+                f"reads a label: a garment listed for one character lands on whichever "
+                f"body is in frame. Reported as boys wearing stockings. Measured: with "
+                f"the guard ON, a shot that names only the men carries no word of the "
+                f"women's clothing at all, because only the people a beat involves are "
+                f"described. Turn it on. For extras nobody has an entry for, write them "
+                f"into the beat instead -- your words reach the model verbatim and an "
+                f"unnamed person needs no entry, though a removal cannot be held for one")
         if refs_all and _tagged and not character_guard:
             notes.append(
                 f"character_guard is OFF and {len(refs_all)} reference image(s) are tagged -- "
