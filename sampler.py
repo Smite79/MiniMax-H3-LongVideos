@@ -622,6 +622,66 @@ def sheet_pronoun(line):
     return None
 
 
+ADULT_AGE = 18                 # below this the node describes no body at all
+
+# HOW OLD THE SHEET SAYS SOMEBODY IS. Inert text until now: the age went to the model
+# inside the author's own words and nothing here read it, so every clause this file
+# writes about a body said only "a woman's body" -- and an attribute a prompt does not
+# state is not left to the model, it is left to the model's PRIOR. The prior for an
+# adult woman is a woman in her twenties whatever the sheet says, which is how a
+# character written as 45 renders as 22.
+#
+# DELIBERATELY NARROW. A number is an age only where it stands as its own attribute in
+# the list, or where an age word is attached to it. A sheet says "size 10 boots" and
+# "5'7" and "a 9mm" and a <Picture 2> tag, and reading any of those as an age would
+# describe a body nobody asked for -- worse than describing none.
+_AGE_WORD = r"(?:y\.?o\.?|yrs?|years?(?:\s+old)?|year-old)"
+_AGE_AT = re.compile(
+    # "aged 24", "age 24", "24yo", "24 years old", "24-year-old"
+    r"\bage[d]?\s+(\d{1,3})\b"
+    r"|\b(\d{1,3})\s*-?\s*" + _AGE_WORD + r"\b"
+    # ...or a bare number alone between the commas of the attribute list. The list can
+    # END on it -- "Kate: she, 28." is how most entries are written -- so a full stop or
+    # a semicolon closes the attribute as well as a comma does. Requiring a comma read
+    # that entry as having no age at all, which is silent twice over: no body named, and
+    # the refusal below never fired either.
+    r"|(?:^|,)\s*(\d{1,3})\s*(?=[,;.]|$)", re.I)
+# "in her forties", "early thirties", "mid-50s", "late 20s". The decade's MIDDLE,
+# except where the qualifier says otherwise -- and it is read as an age only for the
+# decades an adult has, because a bare "teens" names no single year and is not a
+# licence to guess one.
+_DECADE = {"twenties": 20, "thirties": 30, "forties": 40, "fifties": 50,
+           "sixties": 60, "seventies": 70, "eighties": 80}
+_DECADE_AT = re.compile(
+    r"\b(early|mid|middle|late)?\s*-?\s*"
+    r"(?:(twenties|thirties|forties|fifties|sixties|seventies|eighties)"
+    r"|(\d0)\s*s)\b", re.I)
+
+
+def age_in(line):
+    """The age this sheet entry declares, or 0 when it declares none.
+
+    Read off the attribute list, never off a beat: a beat saying "twenty years later"
+    is not somebody's age, and the sheet is where the author states what is true of a
+    person for the whole film."""
+    body = str(line or "").split(":", 1)[-1]
+    # The tag carries digits of its own, and they are a slot number.
+    body = re.sub(r"<\s*picture[\s_]*\d+\s*>", " ", body, flags=re.I)
+    m = _AGE_AT.search(body)
+    if m:
+        got = int(next(g for g in m.groups() if g))
+        return got if 1 <= got <= 120 else 0
+    m = _DECADE_AT.search(body)
+    if m:
+        base = _DECADE.get((m.group(2) or "").lower())
+        if base is None and m.group(3):
+            base = int(m.group(3))
+        if base in _DECADE.values():
+            q = (m.group(1) or "").lower()
+            return base + (2 if q == "early" else 8 if q == "late" else 5)
+    return 0
+
+
 _PRONOUN = re.compile(r"\b(?:she|he|her|hers|his|him|they|them|their|theirs)\b", re.I)
 
 
@@ -786,8 +846,8 @@ def revealed_by(covers, gone):
 _REGION_OF = engine._REGION_RX
 
 
-def body_of(pronoun):
-    """The body the sheet's declared pronoun means. "" where nothing is declared.
+def body_of(pronoun, age=0):
+    """The body the sheet's declared pronoun and age mean. "" where nothing is declared.
 
     AN UNSPECIFIED BODY IS FILLED FROM THE PRIOR, which is the lesson this file
     already recorded for the chest -- "this said 'The arms and shoulders are bare' and
@@ -799,12 +859,128 @@ def body_of(pronoun):
 
     Read from the pronoun the author DECLARED, which the README already requires for
     every entry, so this asserts nothing the sheet does not already say. `they` returns
-    nothing: an undeclared body is not a licence to guess one."""
-    return {"she": "a woman's body", "he": "a man's body"}.get(
-        str(pronoun or "").strip().lower(), "")
+    nothing: an undeclared body is not a licence to guess one.
+
+    ...AND THE AGE THEY DECLARED, for the same reason one step further on. "A woman's
+    body" is true of a woman of 22 and a woman of 62, so it settles nothing between
+    them, and what fills the gap is the prior -- which is a woman in her twenties
+    whatever the sheet says. Reported as a character written at one age rendering at
+    another. The age is the author's own word, already in the sheet and already going
+    to the model inside it; this only stops it being the one attribute nothing here
+    reads.
+
+    NO BODY IS DESCRIBED FOR A DECLARED AGE UNDER 18. Not a softer description -- none,
+    and this returns "" so every clause built on it stays silent. An age the author
+    states is the one fact here that is not a guess, and a generator has no business
+    composing anatomy for a child. See also the refusal in _prepare: a script that
+    declares a minor and stages nudity or sex does not render at all."""
+    who = {"she": "woman", "he": "man"}.get(str(pronoun or "").strip().lower(), "")
+    if not who:
+        return ""
+    age = int(age or 0)
+    if age and age < ADULT_AGE:
+        return ""
+    return f"a {who}'s body" if not age else f"the body of a {who} of {age}"
 
 
-def bare_clause(gone, covers=None, worn="", body=""):
+# HOW AN ADULT CHEST DIFFERS WITH AGE. Plain physical description -- fullness, where it
+# sits, how firm, what the skin does -- because those are the facts that separate one
+# adult decade from another, and the prior collapses all of them onto the twenties.
+#
+# Asked for directly: "Breast development should also be correct, given the age of a
+# person." The clause is scoped hard. It is said only where the chest is ALREADY being
+# described as bare, so it adds nothing to a clothed shot; only for a declared age of
+# 18 or over, with no entry below that; and only for a sheet that declares "she",
+# because the request was about breasts and a pronoun this file was not given is not a
+# licence to guess an anatomy.
+_FIGURE = (
+    (18, 24, "grown and firm, sitting high on the chest"),
+    (25, 34, "fully grown and full, sitting a little lower than in her early twenties"),
+    (35, 44, "full and softer, settled lower with the weight of middle age"),
+    # No "skin" in these two: the sentence they join already ends on "the skin itself
+    # the outermost surface there", and the word arriving twice in one clause reads as
+    # two different things being described.
+    (45, 54, "mature and heavier, softened and lower again, with less tension in them"),
+    (55, 120, "older and slacker, hanging low and soft, loose and lined"),
+)
+
+
+# A SHEET THAT DECLARES A CHILD AND A SCRIPT THAT STAGES SEX DO NOT RENDER TOGETHER.
+#
+# This file reads an age now, and the age drives anatomy -- see body_of and figure_of,
+# which describe no body at all below ADULT_AGE. That floor is necessary and it is not
+# sufficient: withholding the node's own clauses does nothing about a script whose own
+# words stage nudity or sex, and those words reach the model verbatim. So the two
+# together are refused outright, before anything is sampled.
+#
+# Read off the SHEET for the age, because that is where an author states a person's
+# age, and off the whole script for the staging. Deliberately blunt: no attempt to work
+# out who the nudity is about. A film that declares a minor anywhere and stages this
+# anywhere is refused whole, and a legitimate scene with a child in it -- which this
+# node will render, with no body described for them -- does not contain either.
+_SEXUAL_STAGING = re.compile(
+    r"\b(?:sex|sexual|fucks?|fucking|fucked|intercourse|penetrat\w*|blow\s?job|"
+    r"handjob|masturbat\w*|orgasms?|orgasmic|climax(?:es|ed|ing)?|cums?|cumming|"
+    r"aroused|arousal|horny|erotic\w*|nipples?|genitals?|vagina\w*|penis\w*|"
+    r"cocks?|dicks?|pussy|clit\w*|erections?|foreplay|straddl\w*|"
+    r"topless|bottomless|naked|nude|nudity|undress\w*|strips?\s+(?:off|naked|bare)|"
+    r"moans?|moaning|moaned)\b", re.I)
+
+
+def minor_with_sexual_staging(sheet, script):
+    """A refusal message when a sheet declares a minor and the script stages sex. "" otherwise.
+
+    Both halves required. An age under 18 on its own renders -- children exist in
+    films -- and gets no body described for them by anything here. Sexual staging on
+    its own renders, which is what this node is for."""
+    named = [(n, age_in(ln)) for n, ln in sheet_lines(sheet or "") if n]
+    minors = sorted({n for n, a in named if 0 < a < ADULT_AGE})
+    if not minors:
+        return ""
+    m = _SEXUAL_STAGING.search(str(script or ""))
+    if not m:
+        return ""
+    return (f"REFUSED, and nothing was rendered. The character sheet declares "
+            f"{_join_names(minors)} as under {ADULT_AGE}, and the script stages sexual "
+            f"or nude content -- it contains {m.group(0)!r}. This node will not "
+            f"generate that combination, whichever character the wording is about and "
+            f"whatever was intended by it. Nothing here tried to work out who: a film "
+            f"holding both is refused whole.\n\n"
+            f"If an age is a typo, fix the sheet and run again -- an adult age renders "
+            f"normally. If the character is an adult, state an adult age. A scene with "
+            f"a child in it and no sexual or nude content renders as it always did, "
+            f"and no body is described for them by this node.")
+
+
+def _pron_age(sheet, name):
+    """(pronoun, age) off one person's own sheet entry. ("" , 0) when it has neither."""
+    line = dict(sheet_lines(sheet)).get(name, "")
+    return sheet_pronoun(line), age_in(line)
+
+
+def figure_of(pronoun, age=0):
+    """Age-consistent adult chest description, or "". See _FIGURE and body_of.
+
+    Returns nothing at all without BOTH a declared "she" and a declared adult age:
+    with no age there is nothing to be consistent with, and the old silence is better
+    than a guess."""
+    if str(pronoun or "").strip().lower() != "she":
+        return ""
+    age = int(age or 0)
+    if age < ADULT_AGE:
+        return ""
+    for lo, hi, said in _FIGURE:
+        if lo <= age <= hi:
+            # THE AGE IS NOT REPEATED HERE. body_of already states it in the same
+            # sentence, and "the breasts those of a woman of 45 ... on the body of a
+            # woman of 45" says one fact twice -- which is the vice this file spends
+            # most of its comments on. figure_of is only ever reached through a
+            # declared "she", so the body phrase is always there to carry it.
+            return f"the breasts {said}"
+    return ""
+
+
+def bare_clause(gone, covers=None, worn="", body="", figure=""):
     """Say the uncovered region is BARE, when the sheet names nothing under it.
 
     A removal clause is emphatic -- off the body, dropped out of frame -- and then
@@ -827,10 +1003,10 @@ def bare_clause(gone, covers=None, worn="", body=""):
         r = engine.region_of(item)
         if r and r not in regions:
             regions.append(r)
-    return bare_hold(regions, covers, worn, gone, body=body)
+    return bare_hold(regions, covers, worn, gone, body=body, figure=figure)
 
 
-def bare_hold(regions, covers=None, worn="", gone=(), whose="", body=""):
+def bare_hold(regions, covers=None, worn="", gone=(), whose="", body="", figure=""):
     """Say those regions are bare -- from STATE, so it outlives its beat.
 
     The same suppression as the removal beat, because it is the same sentence:
@@ -845,6 +1021,7 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose="", body=""):
     inventing one, and the keyframe then carried the invention forward."""
     if not regions:
         return ""
+    spoke = []                     # the regions this clause actually speaks about
     # ...AND ONLY WHILE IT IS STILL ON. `covers` is read off the SHEET, and the
     # sheet is never edited, so a thong listed under a skirt went on suppressing
     # this clause long after the thong had come off as well -- and a full strip is
@@ -884,6 +1061,7 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose="", body=""):
                 break
             said.add(region)
             out.append(sentence)
+            spoke.append(region)
             break
     if not out:
         return ""
@@ -912,7 +1090,16 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose="", body=""):
     # What replaces it says the same thing as a surface, which is what a model
     # renders: the skin is the outermost thing on that part of the body. Same move
     # under_clause made for the cover it describes.
-    return " " + joined + (f", on {body}" if body else "") + \
+    # ...AND WHAT THAT PART OF THE BODY IS LIKE AT THE AGE THE SHEET STATES, but only
+    # where the chest is one of the regions this sentence actually reached. A clause
+    # about bare legs that describes a chest is describing a region it was not asked
+    # about, and `out` is capped at two, so "torso was in `regions`" is not the same
+    # question as "torso got said". See figure_of.
+    # AFTER the body, not before it: the body phrase is what the figure is a fact
+    # about, and "the breasts ..., on the body of a woman of 45" puts the attribute
+    # ahead of the thing it belongs to.
+    said_fig = f", {figure}" if (figure and "torso" in spoke[:2]) else ""
+    return " " + joined + (f", on {body}" if body else "") + said_fig + \
         ", the skin itself the outermost surface there."
 
 
@@ -8510,6 +8697,13 @@ class H3LongVideos:
         if _abort:
             raise RuntimeError(_abort)
         check_vae_wiring(vae, audio_vae)
+        # Before anything else reads the script, for the same reason the abort above is
+        # here: the answer is a refusal, and a refusal has to happen before work does.
+        _refuse = minor_with_sexual_staging(
+            "\n".join([(character_memory or ""), (prompt or "")]), "\n".join(
+                [(prompt or ""), (anchor or ""), (character_memory or "")]))
+        if _refuse:
+            raise RuntimeError(_refuse)
 
         prompt, n_legacy = strip_legacy_fields(prompt)
         if n_legacy:
@@ -8538,6 +8732,25 @@ class H3LongVideos:
         # -- that is where the wrists usually are. A shot of the captor alone is grim
         # on account of what the sheet says three beats ago, so this cannot be a
         # per-shot question. See film_stages_duress.
+        # A DECLARED AGE UNDER 18 GETS NO BODY DESCRIBED FOR IT, and the author is told
+        # so rather than left to wonder why one entry reads differently from the rest.
+        # The scene itself renders: children are in films. What is withheld is this
+        # node's own anatomy clauses, every one of them. See body_of and figure_of, and
+        # minor_with_sexual_staging for the case that does not render at all.
+        _minors = sorted({_n for _n, _ln in sheet_lines(sheet)
+                          if _n and 0 < age_in(_ln) < ADULT_AGE})
+        if _minors:
+            notes.append(
+                f"{_join_names(_minors)} "
+                f"{'are' if len(_minors) > 1 else 'is'} declared under {ADULT_AGE} on "
+                f"the sheet, so NO body is described for "
+                f"{'them' if len(_minors) > 1 else _minors[0]} by this node -- not a "
+                f"softer description, none. Every clause that would name a body, a bare "
+                f"region's anatomy or a figure stays silent for that entry, and the rest "
+                f"of the film is unaffected. The scene renders. Had the script also "
+                f"staged nudity or sex anywhere in it, nothing would have rendered at "
+                f"all. If the age is a typo, fix it and the entry behaves like any other"
+            )
         _film_mood = mood_declared(anchor)
         _film_duress = film_stages_duress(beats, sheet, anchor)
         if _dupes:
@@ -9303,10 +9516,16 @@ class H3LongVideos:
             # one person is described -- with two, bare_hold's per-person path below
             # carries it and naming it here would attach it to whichever of them the
             # reader reached first.
-            _one_body = (body_of(sheet_pronoun(dict(sheet_lines(shot_sheet)).get(
-                (active or [""])[0], ""))) if len(active or []) == 1 else "")
+            # ...and the AGE off the same entry, so the body named is the age the sheet
+            # states rather than whatever the prior supplies. See body_of and figure_of.
+            _one_line = dict(sheet_lines(shot_sheet)).get((active or [""])[0], "")
+            _one_pron = sheet_pronoun(_one_line)
+            _one_age = age_in(_one_line)
+            _one_body = (body_of(_one_pron, _one_age) if len(active or []) == 1 else "")
+            _one_fig = (figure_of(_one_pron, _one_age) if len(active or []) == 1 else "")
             _bare = ("" if (_revealed or bare)
-                     else bare_clause(toks, covers, shot_sheet, body=_one_body))
+                     else bare_clause(toks, covers, shot_sheet, body=_one_body,
+                                      figure=_one_fig))
             # ...and on EVERY shot after it, from state, for as long as the
             # region has nothing on it. Said only on the uncovering beat, the
             # region went unspecified from the next shot on -- and the model
@@ -9369,8 +9588,13 @@ class H3LongVideos:
                               # which is worn again and is covering again.
                               [g for g in gone if g not in restored],
                               whose=(_n if _name_it else ""),
-                              body=body_of(sheet_pronoun(
-                                  dict(sheet_lines(shot_sheet)).get(_n, ""))))
+                              # PER PERSON here, unlike the single-cast path above:
+                              # this loop already runs once for each of them, so each
+                              # body and each figure is read off that person's OWN
+                              # entry. One age applied to two people is the bug the
+                              # `whose` argument exists to prevent, one attribute over.
+                              body=body_of(*_pron_age(shot_sheet, _n)),
+                              figure=figure_of(*_pron_age(shot_sheet, _n)))
                     for _n, _rg, _on in _rows)
                 if _bare:
                     bare_held.append(len(plan) + 1)

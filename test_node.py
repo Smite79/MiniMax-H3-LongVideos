@@ -4060,6 +4060,128 @@ def test_how_underwear_actually_comes_off():
               S.infer_removals(_b, _two) == _want)
 
 
+def test_the_age_on_the_sheet_reaches_the_body():
+    """REPORTED: "Breast development should also be correct, given the age of a person."
+
+    The age was inert. It went to the model inside the author's own words and nothing
+    here read it, so every clause this file writes about a body said "a woman's body" --
+    true of a woman of 22 and a woman of 62, which settles nothing between them. An
+    attribute a prompt does not state is left to the PRIOR, and the prior is a woman in
+    her twenties whatever the sheet says."""
+    print("\n=== the age on the sheet reaches the body ===")
+    for _line, _want in (
+            ("Nora: <Picture 1>, she, 24, long dark hair.", 24),
+            ("Maya: 27, silver hair, grey coat.", 27),
+            ("Dan: he, aged 41, a grey coat.", 41),
+            ("Sam: she, 38yo, red hair.", 38),
+            ("Ana: she, 52 years old.", 52),
+            ("Mara: she, a 29-year-old nurse.", 29),
+            ("Eve: she, in her forties, dark hair.", 45),
+            ("Liz: she, early thirties, freckles.", 32),
+            ("Jo: she, late 20s, tattoos.", 28),
+            ("Ivy: she, mid-50s, grey bob.", 55),
+            # The attribute list can END on the age. "Kate: she, 28." is how most
+            # entries are written, and requiring a comma after it read that as no age
+            # at all -- silent twice over, because the refusal below never fired either.
+            ("Kate: she, 28.", 28),
+            ("Jo: she, 33;", 33),
+            ("Dan: he, 41", 41)):
+        check(f"age read: {_line[:42]!r} -> {_want}", S.age_in(_line) == _want)
+    # A NUMBER IS NOT AN AGE just because it is a number. Reading any of these as one
+    # would describe a body nobody asked for, which is worse than describing none.
+    for _line in ("Nora: <Picture 2>, she, long dark hair, size 10 boots.",
+                  "Dan: he, 5'7\", a grey coat.", "Tess: she, tall, blue eyes.",
+                  "Ann: she, a 9mm in her belt.", "Zoe: she, wears a number 7 shirt."):
+        check(f"not an age: {_line[:44]!r}", S.age_in(_line) == 0)
+    # THE BODY NAMES THE AGE, where one is declared, and keeps the old phrasing where
+    # none is -- a sheet with no age has nothing to be consistent with.
+    check("no age keeps the plain phrasing",
+          S.body_of("she") == "a woman's body" and S.body_of("he") == "a man's body")
+    check("an age is named", S.body_of("she", 45) == "the body of a woman of 45"
+          and S.body_of("he", 41) == "the body of a man of 41")
+    check("an undeclared pronoun still names nothing",
+          S.body_of("they", 30) == "" and S.body_of("", 30) == "")
+    # THE CHEST, which is what was asked for. Adult decades have to come out different
+    # from each other, or the clause is doing nothing the prior was not already doing.
+    _said = {a: S.figure_of("she", a) for a in (19, 24, 31, 42, 48, 63)}
+    check(f"every adult decade says something", all(_said.values()))
+    check("...and they differ from each other", len(set(_said.values())) >= 5)
+    check("...each naming the age it was given",
+          all(str(a) not in v for a, v in _said.items()))   # the body phrase carries it
+    check("no age means no figure", S.figure_of("she") == "")
+    check("a sheet that declares no 'she' gets none",
+          S.figure_of("he", 41) == "" and S.figure_of("they", 30) == "")
+    # SCOPED TO THE CHEST. A clause about bare legs that describes a chest is describing
+    # a region it was not asked about -- and `out` is capped at two, so "torso was in
+    # regions" is not the same question as "torso got said".
+    _f, _b = S.figure_of("she", 45), S.body_of("she", 45)
+    check("the chest clause rides a chest sentence",
+          "the breasts" in S.bare_hold(["torso"], {}, "", [], body=_b, figure=_f))
+    check("...and not a legs-only one",
+          "the breasts" not in S.bare_hold(["legs"], {}, "", [], body=_b, figure=_f))
+    check("...nor one where the chest was capped out",
+          "the breasts" not in S.bare_hold(["legs", "feet", "torso"], {}, "", [],
+                                           body=_b, figure=_f))
+    check("...and it comes after the body it is a fact about",
+          S.bare_hold(["torso"], {}, "", [], body=_b, figure=_f).index(_b)
+          < S.bare_hold(["torso"], {}, "", [], body=_b, figure=_f).index("the breasts"))
+    # The sentence ends on "the skin itself the outermost surface there", so a figure
+    # phrase using the word again reads as two different things being described.
+    for _a in (19, 24, 31, 42, 48, 63):
+        check(f"the figure at {_a} does not say 'skin' twice",
+              "skin" not in S.figure_of("she", _a))
+
+
+def test_no_body_is_described_for_a_declared_minor():
+    """The floor under the age reader, and it is not a softer description -- none.
+
+    Reading an age to drive anatomy means the reader has to answer for the ages it was
+    not meant for. A generator has no business composing a body for a child, so every
+    clause built on body_of and figure_of goes silent below 18, and a film that declares
+    a minor AND stages nudity or sex does not render at all."""
+    print("\n=== no body is described for a declared minor ===")
+    for _a in (0, 1, 9, 13, 16, 17):
+        if _a:
+            check(f"no body at {_a}", S.body_of("she", _a) == ""
+                  and S.body_of("he", _a) == "")
+            check(f"...and no figure at {_a}", S.figure_of("she", _a) == "")
+    check(f"{S.ADULT_AGE} is where a body starts being named",
+          S.body_of("she", S.ADULT_AGE) != ""
+          and S.body_of("she", S.ADULT_AGE - 1) == "")
+    # ...and nothing downstream can put one back: the clause builders take the empty
+    # string and say nothing, rather than falling back to a default body.
+    check("the bare clause names no body for a minor",
+          "body" not in S.bare_hold(["torso"], {}, "", [],
+                                    body=S.body_of("she", 15),
+                                    figure=S.figure_of("she", 15)))
+    # THE REFUSAL. Both halves required: a declared minor alone renders, because
+    # children are in films, and sexual staging alone renders, which is what this node
+    # is for. Together, nothing renders.
+    _adult = "Kate: she, 28, long hair."
+    _child = "Kate: she, 28.\nSam: she, 15."
+    _sexual = "A bedroom.\n\nKate undresses and lies down.\n\nShe moans."
+    _plain = "A kitchen.\n\nSam eats breakfast.\n\nKate reads the paper."
+    check("an adult film with sexual staging is not refused",
+          S.minor_with_sexual_staging(_adult, _sexual) == "")
+    check("a declared minor in an ordinary scene is not refused",
+          S.minor_with_sexual_staging(_child, _plain) == "")
+    _msg = S.minor_with_sexual_staging(_child, _sexual)
+    check("a declared minor with sexual staging IS refused", _msg != "")
+    check("...naming who was declared under age", "Sam" in _msg)
+    check("...and saying nothing rendered", "nothing was rendered" in _msg)
+    check("...and what to do if the age is a typo", "typo" in _msg)
+    # It does not try to work out WHO the staging is about, and says so: a film holding
+    # both is refused whole.
+    check("...and does not claim to know who it was about", "whichever" in _msg)
+    for _word in ("naked", "nude", "sex", "fucking", "orgasm", "moans", "topless",
+                  "undresses", "masturbating", "aroused", "nipples"):
+        check(f"staging recognised: {_word!r}",
+              S.minor_with_sexual_staging(_child, f"A room.\n\nShe is {_word}.") != "")
+    # An age that is not declared cannot trip it -- there is nothing to read.
+    check("no age declared anywhere is not refused",
+          S.minor_with_sexual_staging("Kate: she, long hair.", _sexual) == "")
+
+
 def test_a_written_sound_is_recognised():
     print("\n=== a sound you wrote, in the words people write it in ===")
     # Writing the sound into a beat is what opens that shot's audio branch, and it is
@@ -4631,6 +4753,8 @@ def main():
     test_hardware_belongs_to_somebody()
     test_one_pronoun_is_one_person()
     test_a_tagged_object_can_be_taken_off()
+    test_the_age_on_the_sheet_reaches_the_body()
+    test_no_body_is_described_for_a_declared_minor()
     test_underwear_is_a_garment_with_a_place_on_the_body()
     test_how_underwear_actually_comes_off()
     test_a_written_sound_is_recognised()

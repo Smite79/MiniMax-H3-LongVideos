@@ -83,6 +83,11 @@ Mike: he, 41, dark hair, navy overalls.
 
 - **Declare a pronoun.** It is what lets *"he takes her coat off"* find the right two
   people.
+- **Declare an age.** Where a shot describes a bare region, the body named is the age
+  the sheet states — without one, an unstated attribute is filled from the model's prior,
+  which is a twenty-something whatever you wrote. A declared age under 18 gets **no body
+  described for it at all**, and a sheet declaring a minor alongside a script that stages
+  nudity or sex refuses to render.
 - **One name per person.** `Dan` in some beats and `Mike` in others reads as two.
 - **Every name needs an entry**, or the model invents that person differently each shot.
 

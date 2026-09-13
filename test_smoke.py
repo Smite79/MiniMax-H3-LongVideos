@@ -847,11 +847,16 @@ def test_a_bare_region_says_whose_body_it_is():
     check("...and says nothing extra without it",
           "body" not in S.bare_hold(["legs"]).replace("nothing else worn", ""))
 
+    # THE AGE IS PART OF THE BODY NAMED, where the sheet states one. "A woman's body"
+    # is true of a woman of 22 and a woman of 62, so it settles nothing between them
+    # and the prior settles it instead -- always the twenties. These sheets declare an
+    # age, so that is what comes out; the bare phrases above are what a sheet with no
+    # age still gets. See body_of.
     for mem, beat, want in (
             ("McKenna: she, 22, a grey vest, denim shorts.",
-             "McKenna takes off her shorts.\nremove: shorts", "a woman's body"),
+             "McKenna takes off her shorts.\nremove: shorts", "the body of a woman of 22"),
             ("Dan: he, 40, a work coat, jeans.",
-             "Dan takes off his jeans.\nremove: jeans", "a man's body")):
+             "Dan takes off his jeans.\nremove: jeans", "the body of a man of 40")):
         sh = [" ".join(x.split()) for x in run_node(
             f"A bare room.\n\n{beat}\n\nThey stand still.",
             plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
@@ -866,7 +871,8 @@ def test_a_bare_region_says_whose_body_it_is():
     # bare "body" substring would pass or fail on the wrong sentence.
     check("an undeclared pronoun gets the region without a body",
           "bare from the hip down" in nb[0]
-          and "on a woman's body" not in nb[0] and "on a man's body" not in nb[0],
+          and "on a woman" not in nb[0] and "on a man" not in nb[0]
+          and "the body of a" not in nb[0],
           nb[0][-120:])
 
 
@@ -4807,6 +4813,72 @@ def test_a_first_frame_can_be_the_set_instead_of_frame_one():
                                            first_frame=plate, ref_image_1=ref)[2])
 
 
+def test_the_age_reaches_the_shot_and_the_floor_holds():
+    """End to end for "Breast development should also be correct, given the age of a
+    person" -- and for the floor that request makes necessary.
+
+    An age driving anatomy has to answer for the ages it was not meant for, so the same
+    reader that names a woman of 45 names nothing at all below 18."""
+    print("\n=== the age reaches the shot, and the floor holds ===")
+    P = "A bare room.\n\nKate takes off her vest.\nremove: vest\n\nKate stands still."
+
+    def _chest(mem):
+        sh = [" ".join(x.split()) for x in
+              run_node(P, plan_only=True, character_memory=mem)[3].split("---")
+              if x.strip()]
+        m = re.search(r"(The chest[^.]*\.)", sh[1])
+        return m.group(1) if m else ""
+
+    _22 = _chest("Kate: she, 22, a grey vest, denim shorts.")
+    _58 = _chest("Kate: she, 58, a grey vest, denim shorts.")
+    _none = _chest("Kate: she, a grey vest, denim shorts.")
+    check("the age reaches the shot", "the body of a woman of 22" in _22, _22[-90:])
+    check("...and so does the chest at that age", "sitting high on the chest" in _22)
+    check("a different age says something different",
+          "the body of a woman of 58" in _58 and "hanging low" in _58, _58[-90:])
+    check("...so two ages are not one description", _22 != _58)
+    # A sheet with no age keeps exactly what it had: there is nothing to be consistent
+    # with, and the old silence beats a guess.
+    check("no age keeps the plain phrasing",
+          "on a woman's body" in _none and "the breasts" not in _none, _none[-90:])
+    # THE FLOOR, end to end. The scene renders -- children are in films -- and not one
+    # clause names a body for the entry that declares one.
+    mem = "Kate: she, 38, a grey vest, denim shorts.\nSam: he, 9, a school jumper."
+    info, script = run_node(
+        "A kitchen.\n\nSam eats breakfast.\n\nKate reads the paper.",
+        plan_only=True, character_memory=mem)[2:4]
+    check("a scene with a child in it still renders", "[Shot 1]" in script)
+    check("...and no body is named for them anywhere",
+          "the body of a man of 9" not in script and "a man's body" not in script)
+    check("...and info says so rather than leaving it to be noticed",
+          "declared under 18 on the sheet" in info and "NO body is described" in info)
+    check("...and says the scene itself renders", "The scene renders" in info)
+    check("...and that it would not have with sex staged in it",
+          "nothing would have rendered at all" in info)
+    check("a film with no minor says none of that",
+          "declared under 18" not in run_node(
+              P, plan_only=True,
+              character_memory="Kate: she, 38, a grey vest, denim shorts.")[2])
+    # ...AND THE REFUSAL IS A REFUSAL: it raises before anything is sampled, so there is
+    # no half-rendered output and no quietly-softened one either.
+    _raised = ""
+    try:
+        run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
+                 character_memory="Kate: she, 28.\nSam: she, 15.")
+    except RuntimeError as _e:
+        _raised = str(_e)
+    check("a declared minor plus sexual staging renders nothing", _raised != "")
+    check("...saying so plainly", "REFUSED" in _raised and "nothing was rendered" in _raised)
+    check("...and naming the entry that tripped it", "Sam" in _raised)
+    # Both halves of that really are required, end to end.
+    _ok = run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
+                   plan_only=True, character_memory="Kate: she, 28.")
+    check("the same script with no minor declared renders", "[Shot 1]" in _ok[3])
+    _ok2 = run_node("A kitchen.\n\nSam eats breakfast.\n\nKate reads.",
+                    plan_only=True, character_memory="Kate: she, 38.\nSam: she, 15.")
+    check("a declared minor in an ordinary scene renders", "[Shot 1]" in _ok2[3])
+
+
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
     # No space named, so no room tone -- this test is about the SILENCE path, and a
@@ -7350,6 +7422,7 @@ def main():
     test_the_soundtrack_is_the_models_own()
     test_shot_one_is_the_only_unpinned_shot()
     test_a_first_frame_can_be_the_set_instead_of_frame_one()
+    test_the_age_reaches_the_shot_and_the_floor_holds()
     test_sound_survives_silencing()
     test_auto_sound_end_to_end()
     test_room_tone_under_every_shot()
