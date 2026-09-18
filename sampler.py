@@ -4914,16 +4914,38 @@ def restraint_wearers(sheet):
 # Bound continuity text so it cannot overwhelm the authored beat. Clauses are
 # ranked by the caller; the floor preserves essential guards for very short beats.
 GUARD_FLOOR_WORDS = 90
+# WHAT A RESTRAINED SHOT COSTS, and why it is allowed to cost it.
+#
+# Reported: a body chained wrist-to-ankle, and the moment a garment is pulled down
+# the chain breaks and the legs drop back. The clauses that hold a restraint shut
+# and say where the limbs are fastened were being DROPPED FOR ROOM on exactly that
+# shot -- the removal sentence and the two bare-region sentences it brings with it
+# rank above them and fill a 90-word budget on their own, so the one shot where the
+# body is handled is the one shot that says nothing about the hardware holding it.
+#
+# Dropping them there is not a saving. Every later shot opens on this shot's last
+# frame, so a restraint that came off in it is off for the rest of the film, and the
+# legs stay where they fell -- the same reasoning restart_after_removal is built on,
+# from the other side. A shot carrying hardware gets the room to say so.
+# 200, measured rather than chosen: the removal sentence and the two bare-region
+# sentences it brings cost about 75 words together, the hardware hold about 35, and
+# where the arms AND the legs are held about 50. A hogtie on a shot that takes a
+# garment off needs all of it, and that is the shot this was reported on.
+RESTRAINT_FLOOR_WORDS = 200
 GUARD_WORDS_PER_BEAT_WORD = 5
 
 
-def fit_guards(clauses, beat_words):
+def fit_guards(clauses, beat_words, floor=None):
     """(kept text, dropped names) for continuity clauses, ranked, within a budget.
 
     `clauses` is [(priority, name, text)] with 1 the most important. Order in the
     OUTPUT follows the list as given, not the priority -- the ranking decides what
-    survives, not where it sits in the sentence."""
-    budget = max(GUARD_FLOOR_WORDS, int(beat_words) * GUARD_WORDS_PER_BEAT_WORD)
+    survives, not where it sits in the sentence.
+
+    `floor` raises the minimum for a shot that cannot afford to lose what it is
+    carrying. See RESTRAINT_FLOOR_WORDS."""
+    budget = max(int(floor or GUARD_FLOOR_WORDS), GUARD_FLOOR_WORDS,
+                 int(beat_words) * GUARD_WORDS_PER_BEAT_WORD)
     spent, keep = 0, set()
     for _, name, text in sorted(clauses, key=lambda c: c[0]):
         if not text:
@@ -5248,17 +5270,100 @@ _POSE_OF_POSITION = {
 POSE_LYING_WEIGHT = "The shoulder and the hip take the weight of the body"
 
 
-def pose_clause(position, lying=False):
+# WHERE THE LEGS ARE, which nothing here ever said.
+#
+# Reported: a body chained wrist-to-ankle, and the moment a garment is pulled down
+# the legs drop back into place. The limb table above is entirely about ARMS -- the
+# wrists behind the back, above the head, out to the sides -- so a hogtie was told
+# where its arms were and NOTHING about its legs, and a leg the text does not place
+# is a leg the model straightens. The hardware clause does not cover it either: it
+# says the metal stays shut and drawn to its length, never which limbs it folds.
+#
+# Each entry carries its own evidence, the rule the arm table keeps: a leg word, or a
+# fastening word beside one. Without it "spread wide" is scenery and "drawn back" is
+# a curtain.
+_LEG_WORD = r"(?:ankles?|legs?|feet|knees?|thighs?|calves)"
+_LEG_TIE = (r"(?:cuffed|shackled|chained|tied|bound|strapped|secured|fastened|locked|"
+            r"linked|clipped|hooked|lashed|drawn|pulled|folded|bent)")
+_LEG_ANCHOR = (
+    # A HOGTIE, by its name or by what it does: the ankles held to the wrists.
+    (r"\bhog-?(?:tie|ties|tied|tying|cuff|cuffs|cuffed|chains?|chained|bound)\b"
+     r"|\btruss(?:es|ed|ing)?\s+(?:\w+\s+){0,2}?up\b|\btrussed\b"
+     r"|" + _LEG_WORD + r"\s+(?:\w+\s+){0,4}?" + _LEG_TIE + r"\s+(?:\w+\s+){0,3}?"
+     r"to\s+(?:her|his|their|the)\s+(?:wrists?|hands?|arms?|cuffs?)"
+     r"|(?:wrists?|hands?|cuffs?)\s+(?:\w+\s+){0,4}?" + _LEG_TIE +
+     r"\s+(?:\w+\s+){0,3}?to\s+(?:her|his|their|the)\s+" + _LEG_WORD,
+     "ankles to the wrists"),
+    # Held apart, which is what a bar between them is for.
+    (r"\bspreader\s+bars?\b"
+     r"|" + _LEG_WORD + r"\s+(?:\w+\s+){0,3}?(?:held\s+)?(?:apart|spread\s+(?:wide|apart))"
+     r"|" + _LEG_TIE + r"\s+(?:\w+\s+){0,2}?" + _LEG_WORD + r"\s+(?:\w+\s+){0,2}?apart",
+     "held apart"),
+    # ...or to each other. A bare "ankles together" counts here, where it would not in
+    # the arm table: legs_anchor runs only on a shot that already holds a restraint,
+    # so the sentence is about a fastened body rather than about somebody standing
+    # with their feet together.
+    (_LEG_WORD + r"\s+(?:\w+\s+){0,3}?" + _LEG_TIE + r"\s+(?:\w+\s+){0,2}?together"
+     r"|" + _LEG_TIE + r"\s+" + _LEG_WORD + r"\s+together"
+     r"|" + _LEG_WORD + r"\s+crossed\s+and\s+" + _LEG_TIE,
+     "ankles together"),
+    # THE BARE FORM, which needs the rest of the sentence to carry the evidence: on a
+    # shot that holds a restraint "her ankles together" is a fastening, and "she
+    # stands with her feet together" is a way of standing. See legs_anchor.
+    (_LEG_WORD + r"\s+(?:\w+\s+){0,2}?(?:together|crossed)\b", "ankles together", True),
+    # ...or back under the body, which is the kneeling half of a hogtie.
+    (_LEG_WORD + r"\s+(?:\w+\s+){0,3}?" + _LEG_TIE + r"\s+(?:\w+\s+){0,2}?"
+     r"(?:(?:back|up)\s+)?behind\s+(?:her|his|their)\b",
+     "drawn back"),
+)
+_POSE_OF_LEGS = {
+    "ankles to the wrists": ("Both legs are bent back at the knee, the ankles drawn up "
+                             "behind the body and held there with the wrists, the feet "
+                             "off the floor and the knees taking the weight"),
+    "held apart": ("Both legs are held apart at the ankle, each foot fixed where it is, "
+                   "the gap between them the same from the first frame to the last"),
+    "ankles together": "Both ankles are together, fastened one against the other",
+    "drawn back": ("Both legs are folded back under the body, the ankles behind and the "
+                   "knees bent double"),
+}
+
+
+# A fastening said anywhere in the same text, which is what a bare position needs
+# before it counts as one. The hardware words live in the engine, so a restraint it
+# knows about and this file does not cannot fall through the gap between them.
+_FASTENING_NEAR = re.compile(
+    _LEG_TIE + r"|\b(?:" + "|".join(p for p, _n, _pt in engine.HARDWARE) + r")\b", re.I)
+
+
+def legs_anchor(text):
+    """Where fastened LEGS are being held, as a phrase. '' when the text says none."""
+    body = text or ""
+    for entry in _LEG_ANCHOR:
+        pat, phrase = entry[0], entry[1]
+        weak = len(entry) > 2 and entry[2]
+        if not re.search(pat, body, re.I):
+            continue
+        if weak and not _FASTENING_NEAR.search(body):
+            continue
+        return phrase
+    return ""
+
+
+def pose_clause(position, lying=False, legs=""):
     """One sentence describing the BODY a limb position makes. "" when unknown.
 
-    `lying` adds what is under it -- see POSE_LYING_WEIGHT."""
+    `lying` adds what is under it -- see POSE_LYING_WEIGHT. `legs` adds where the
+    legs are held, which is a second fact and not an alternative: a hogtie has its
+    arms behind the back AND its ankles drawn to them, and the one this file knew
+    how to say was the arms."""
     key = str(position or "").strip().lower()
     said = _POSE_OF_POSITION.get(key, "")
-    if not said:
+    legs_said = _POSE_OF_LEGS.get(str(legs or "").strip().lower(), "")
+    if not said and not legs_said:
         return ""
-    if lying and key == "behind the back":
+    if said and lying and key == "behind the back":
         said = f"{said}. {POSE_LYING_WEIGHT}"
-    return f" {said}."
+    return "".join(f" {part}." for part in (said, legs_said) if part)
 
 
 def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False,
@@ -5421,7 +5526,27 @@ def own_hold(hold, wearers, described):
 
 # Hardware that means restraint on its own.
 _RESTRAINT_PLAIN = re.compile(
-    r"\b(?:handcuff(?:s|ed)?|cuffed|shackle[sd]?|manacle[sd]?|hogtied|hog-?tied|"
+    # KEPT IN STEP WITH engine.HARDWARE, which is the other half of this node's
+    # vocabulary. They had drifted: irons of every kind, a tether, a spreader bar, a
+    # steel cable, a chastity belt -- the engine knew them and this reader did not, so
+    # the hardware was tracked while the HOLD that keeps it fastened never fired.
+    # Reported as restraints that simply do not work. test_smoke walks the engine's
+    # table and fails if a word is in one list and not the other.
+    r"\b(?:(?:leg|ankle|wrist)\s?irons?|tethers?|spreader\s+bars?|hobbles?|"
+    r"(?:braided\s+)?(?:steel|wire)\s+cables?|(?:bike|bicycle)\s+locks?|[ud]-?locks?|"
+    # A CHASTITY BELT IS NOT HERE ON PURPOSE. Every other belt is clothing, and this
+    # reader's own tests pin that: "chastity belt, shorts" beside "sits with her legs
+    # crossed" must NOT arm the restraint rule, while "chastity belt locked on her
+    # hips" must. It is ambiguous hardware, and the rule for ambiguous hardware is a
+    # binding verb or a body part in the same clause. The engine names it either way.
+    r"cling\s?film|plastic\s+wrap|straitjackets?|leash(?:es)?|"
+    # THE VERB FORMS TOO. "Mara hogties her" was invisible to this reader while the
+    # engine read it perfectly well, so nothing was restrained as far as the text was
+    # concerned: no hold, no limb position, no legs. The two vocabularies have to be
+    # walked together, which test_smoke now does.
+    r"hog-?(?:tie|ties|tying|cuffs|cuffing)|truss(?:es|ing)|hobbl(?:es|ing)|"
+    r"zip[-\s]?(?:ties?|tied|tying)|cable[-\s]?(?:ties?|tied|tying)|"
+    r"handcuff(?:s|ed|ing)?|cuffed|shackle[sd]?|manacle[sd]?|hogtied|hog-?tied|"
     r"hogcuffed|hog-?cuffed|gag(?:ged|s)?|blindfold(?:ed|s)?|zip[- ]ties?|"
     r"cable[- ]ties?|restrain(?:t|ts|ed)|bound|bindings?|straitjacket|"
     r"collared|leashed|tethered|manacled|fettered|chained\s+up|"
@@ -9769,6 +9894,7 @@ class H3LongVideos:
         _undescribed = []           # rooms the film enters that the prompt never describes
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
+        legs_held = ""              # where a beat or the sheet fastened the legs
         exact_shots = []            # shots carrying an exact: line of the author's
         camera_shots = []           # shots told the camera holds still
         named_often = []            # (shot, name, times named, times this node named them)
@@ -10746,7 +10872,15 @@ class H3LongVideos:
                     # that was the original fault, where the man alone checking the
                     # cuffs was marked as wearing them.
                     if not _was_restrained or restraint_going_on(body):
-                        _new = restrained_by_beat(body, active)
+                        # THE ENGINE READS THE WEARER FIRST, even where the beat names
+                        # no hardware for the state to record -- "Mara hogties her". The
+                        # reader below answers that sentence with Mara, because she is
+                        # the only name in it and it does not ask who the pronoun is;
+                        # the engine does ask, and refuses where a scene leaves two
+                        # candidates. Reported as the hold appearing on the captor's
+                        # shots and never on the captive's.
+                        _w = engine.wearer_of(body, [n for n, _ in sheet_lines(sheet) if n])
+                        _new = {_w} if _w else restrained_by_beat(body, active)
                         restrained_who |= (_new if _new else set(active))
             # The shot where the hardware GOES ON. Newly restrained -- so it was not on
             # before -- and the beat stages the act rather than describing it worn. On
@@ -10975,6 +11109,11 @@ class H3LongVideos:
             _anchor_now = limb_anchor(body) if restrained else ""
             if _anchor_now:
                 anchored = _anchor_now
+            # The legs, latched the same way and for the same reason: stated once in
+            # the sheet or the beat that ties them, and carried by nothing else after.
+            _legs_now = legs_anchor(body) if restrained else ""
+            if _legs_now:
+                legs_held = _legs_now
             # Said only on the shots AFTER the one that staged it. The staging shot
             # has the author's own words for this and does not need a second
             # sentence arguing beside them.
@@ -11172,8 +11311,17 @@ class H3LongVideos:
             # _holding keys off to tell a staging shot from the ones after it.
             _pose_pos = (_anchor_now or anchored
                          or (limb_anchor(_scene_for_state) if restrained else ""))
-            _pose = pose_clause(_pose_pos.split(", at the")[0].strip(),
-                                lying=_lying_now)
+            _legs_pos = (_legs_now or legs_held
+                         or (legs_anchor(_scene_for_state) if restrained else ""))
+            # A HOGTIE PUTS THE ARMS BEHIND THE BACK. That is what the word means --
+            # the ankles are drawn to the WRISTS -- so a beat that says nothing else
+            # about the arms has still said where they are. Without this the shot was
+            # told where the legs were held and left the arms to the model, which
+            # draws them where hands usually are: out in front.
+            _arms_pos = _pose_pos.split(", at the")[0].strip()
+            if not _arms_pos and _legs_pos == "ankles to the wrists":
+                _arms_pos = "behind the back"
+            _pose = pose_clause(_arms_pos, lying=_lying_now, legs=_legs_pos)
             hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
@@ -11350,8 +11498,13 @@ class H3LongVideos:
             # ONLY where somebody wearing it is in this shot. Otherwise the hold
             # describes cuffs on wrists belonging to nobody the text mentions,
             # and the model draws the person that sentence implies.
+            # ...and a shot that names NOBODY cannot be naming the wrong person. A
+            # script written without a character sheet describes its one body as "her",
+            # so the wearer is never in the described cast and the hold was suppressed
+            # on every shot of the film -- the restraint simply never held.
             _wearer_here = (not restrained_who
                             or not character_guard
+                            or not (_described or [])
                             or bool(restrained_who & set(_described or [])))
             if not _wearer_here:
                 # Nobody in this shot is wearing it. The hold would describe cuffs
@@ -11784,7 +11937,12 @@ class H3LongVideos:
                 # read, and only the ranking was in question.
                 (14, "sound", _sound),
             ]
-            _kept, _dropped = fit_guards(_guards, len(body.split()))
+            # A shot with hardware on a body in it is allowed more room: see
+            # RESTRAINT_FLOOR_WORDS. Only when it HAS hardware to hold -- an ordinary
+            # shot keeps the budget that stops guards drowning the beat.
+            _kept, _dropped = fit_guards(
+                _guards, len(body.split()),
+                floor=RESTRAINT_FLOOR_WORDS if (hold or _pose or anchors) else None)
             if _dropped:
                 crowded.append((len(plan) + 1, _dropped))
             # Body count is a composition invariant, not a continuity detail. It

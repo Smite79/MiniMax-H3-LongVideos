@@ -2056,6 +2056,139 @@ class LoraCLIP(FakeCLIP):
         return twin
 
 
+def test_any_restraint_holds_from_shot_to_shot():
+    """VALIDATION: a person can be restrained any way the author writes it, with any
+    hardware, and it holds from shot to shot.
+
+    Walked as a matrix rather than a case, because the gaps were not in the ideas but
+    in the vocabularies: this node keeps its own list of restraint words and the
+    engine keeps another, and they had drifted. Irons of every kind, a tether, a
+    steel cable, a bike lock, cling film -- the engine knew them and the node's own
+    reader did not, so the hardware was tracked while the HOLD that keeps it fastened
+    never fired."""
+    print("\n=== any restraint, any way, shot to shot ===")
+    HOLD = re.compile(r"stays?\s+(?:closed and fastened|tied and holding|shut)", re.I)
+    HARDWARE = ["steel handcuffs", "zip ties", "rope", "duct tape", "a steel chain",
+                "a steel braided tether", "leather cuffs", "shackles", "manacles",
+                "a spreader bar", "a leather collar and leash", "a straitjacket",
+                "thumb cuffs", "ankle irons", "wrist irons", "leg irons", "a bike lock",
+                "a canvas strap", "cling film", "a hobble"]
+    bad = []
+    for hw in HARDWARE:
+        mem = (f"Ana: she, 30, a grey t-shirt, {hw} holding her wrists behind her back."
+               "\nMara: she, 41, overalls.")
+        shots = _shots_of(run_node("A workshop.\n\nAna kneels on the floor.\n\n"
+                                   "Mara looks at her.\n\nAna breathes.",
+                                   character_memory=mem, plan_only=True))
+        for i, sh in enumerate(shots, 1):
+            if not HOLD.search(sh) or "Both arms are" not in sh:
+                bad.append(f"{hw} shot {i}")
+    check(f"every kind of hardware holds on every shot ({len(HARDWARE)} kinds)",
+          not bad, "; ".join(bad[:4]))
+
+    # THE TWO VOCABULARIES WALKED TOGETHER. Anything the engine names as hardware must
+    # arm this file's restraint reader too -- ambiguous items ("belt") with the
+    # binding context they need, the rest on their own.
+    missed = [n for _p, n, _pt in S.engine.HARDWARE
+              if not S.restraint_present(f"Ana: she, 30, {n} locked on her wrists.")]
+    check("the engine's hardware is hardware to this file too", not missed, str(missed))
+
+    # APPLIED MID-SCENE, by any of the ways a beat writes it, and the hold follows the
+    # person WEARING it rather than the person doing the tying.
+    mem = "Ana: she, 30, a grey t-shirt.\nMara: she, 41, overalls."
+    for beat, legs in (("Mara hogties her with a steel cable.", True),
+                       ("Mara cuffs her wrists behind her back.", False),
+                       ("Mara zip ties Ana's wrists behind her back.", False),
+                       ("Mara hogties her.", True),
+                       ("Mara trusses Ana up with rope.", True)):
+        P = f"A workshop.\n\nAna stands.\n\n{beat}\n\nAna strains.\n\nAna breathes."
+        shots = _shots_of(run_node(P, character_memory=mem, plan_only=True))
+        check(f"holds after {beat[:34]!r}",
+              all(HOLD.search(sh) for sh in shots[2:]), shots[-1][-140:])
+        if legs:
+            check(f"...and the legs are placed by {beat[:26]!r}",
+                  all("Both legs are" in sh for sh in shots[2:]), shots[-1][-140:])
+
+    # WHO IS WEARING IT, which is what decides whose shots carry the hold. A beat
+    # naming only the person DOING it recorded the restraint on them, so every shot
+    # about the person actually in it was told the hold belonged to nobody present.
+    for beat, cast, want in (("Mara hogties her with a steel cable.", ["Ana", "Mara"], "Ana"),
+                             ("Mara cuffs her to the bed frame.", ["Ana", "Mara"], "Ana"),
+                             ("The guard handcuffs Ana's wrists.", ["Ana", "Guard"], "Ana"),
+                             ("Ana is cuffed by the guard.", ["Ana", "Guard"], "Ana"),
+                             ("Mara runs for the door. Dan catches her and cuffs her wrists.",
+                              ["Mara", "Dan"], "Mara"),
+                             ("Ana unlocks Bea's handcuffs.", ["Ana", "Bea"], "Bea")):
+        check(f"wearer of {beat[:34]!r}", S.engine.wearer_of(beat, cast) == want,
+              S.engine.wearer_of(beat, cast))
+    # ...and no guess where the scene leaves two candidates, or where the pronoun is
+    # the subject's own.
+    check("three people and a pronoun is not guessed at",
+          S.engine.wearer_of("Mara hogties her.", ["Ana", "Mara", "Vic"]) in ("", "Mara"))
+    check("a belt locked on her own hips stays hers",
+          S.engine.wearer_of("Nora stands by the bench, the steel belt locked on her hips.",
+                             ["Nora", "Victor"]) == "Nora")
+
+
+def test_a_restraint_survives_the_shot_that_undresses_it():
+    """REPORTED: a body chained wrist-to-ankle, and the moment the trousers are pulled
+    down the chain breaks and the legs drop back into place.
+
+    Two causes, both in this file. The clauses that hold a restraint shut and say
+    where the limbs are fastened were DROPPED FOR ROOM on exactly that shot -- the
+    removal sentence and the two bare-region sentences it brings rank above them and
+    fill a 90-word budget on their own. And the limb table only ever described ARMS,
+    so a hogtie was told where its wrists were and nothing about its legs; a leg the
+    text does not place is a leg the model straightens."""
+    print("\n=== a restraint survives the shot that undresses the body ===")
+    mem = ("Ana: she, 30, grey t-shirt, black trousers, a steel chain linking her wrists "
+           "and ankles behind her back.\nMara: she, 41, navy overalls.")
+    P = ("A workshop.\n\nAna lies hogtied on the floor.\n\nMara kneels beside her.\n\n"
+         "Mara pulls Ana's trousers down to her knees.\nremove: trousers\n\n"
+         "Ana pulls against the chain.")
+    out = run_node(P, character_memory=mem, plan_only=True)
+    shots = _shots_of(out)
+    for i, sh in enumerate(shots, 1):
+        check(f"shot {i} keeps the hardware shut", "stays closed and fastened" in sh, sh[-160:])
+        check(f"shot {i} says where the arms are held", "behind the body" in sh, sh[-160:])
+        check(f"shot {i} says where the legs are held", "Both legs are bent back" in sh, sh[-160:])
+    check("the removal still happens on the shot that stages it",
+          "away by the last frame" in shots[2], shots[2][-200:])
+    check("...and what it uncovers is still said", "bare from the hip down" in shots[2].lower()
+          or "legs are bare" in shots[2].lower(), shots[2][-200:])
+
+    # THE LEGS, read the ways people write them -- and not read off the scenery.
+    for text, want in (("Ana is hogtied on the floor", "ankles to the wrists"),
+                       ("hog-tied on the mat", "ankles to the wrists"),
+                       ("her ankles chained to her wrists", "ankles to the wrists"),
+                       ("her wrists and ankles chained behind her back", "drawn back"),
+                       ("her ankles cuffed together", "ankles together"),
+                       ("a spreader bar between her ankles", "held apart"),
+                       ("her legs spread wide", "held apart"),
+                       ("the curtains are drawn back", ""),
+                       ("he stands behind her", ""),
+                       ("the crates are stacked to the sides", ""),
+                       ("she walks to the bed", "")):
+        check(f"legs_anchor {text[:34]!r}", S.legs_anchor(text) == want, S.legs_anchor(text))
+    # The arms and the legs are two facts, not alternatives.
+    both = S.pose_clause("behind the back", legs="ankles to the wrists")
+    check("a hogtie is told both halves",
+          "Both arms are behind the body" in both and "Both legs are bent back" in both, both)
+    check("...and a plain cuffing is unchanged",
+          S.pose_clause("behind the back") ==
+          " Both arms are behind the body, wrists together at the small of the back.")
+
+    # THE BUDGET is what dropped them, so a shot with hardware gets the room for it.
+    check("an ordinary shot keeps the ordinary floor",
+          S.fit_guards([(1, "a", "one two three " * 40)], 4)[1] == [],
+          str(S.fit_guards([(1, "a", "one two three " * 40)], 4)[1]))
+    kept, dropped = S.fit_guards([(1, "a", "word " * 100), (3, "hold", "word " * 60)], 4)
+    check("...and drops what will not fit in it", dropped == ["hold"], str(dropped))
+    kept, dropped = S.fit_guards([(1, "a", "word " * 100), (3, "hold", "word " * 60)], 4,
+                                 floor=S.RESTRAINT_FLOOR_WORDS)
+    check("a restrained shot has room for both", dropped == [], str(dropped))
+
+
 def test_one_photographed_face_and_two_people():
     """REPORTED: duplicates that happen when a picture was NOT used for a character.
 
@@ -8361,6 +8494,8 @@ def main():
     test_verbatim_sends_your_text_and_nothing_else()
     test_an_untagged_reference_is_claimed_or_held()
     test_one_photographed_face_and_two_people()
+    test_a_restraint_survives_the_shot_that_undresses_it()
+    test_any_restraint_holds_from_shot_to_shot()
     test_a_shared_pose_names_nobody()
     test_a_lora_is_reported()
     test_the_camera_is_held_where_nothing_places_it()

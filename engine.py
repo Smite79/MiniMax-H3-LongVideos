@@ -49,6 +49,23 @@ import re
 HARDWARE = (
     (r"hand\s?cuffs?|handcuffed", "handcuffs", "wrists"),
     (r"leg\s?irons?", "leg irons", "ankles"),
+    # ANKLE AND WRIST IRONS were not here while LEG irons were, so half the words for
+    # the same object read as no restraint at all. A tether was in no list either, and
+    # a script that says "steel braided tether" was asking for hardware the node did
+    # not believe existed: no hold, no limb position, nothing carried shot to shot.
+    (r"ankle\s?irons?", "ankle irons", "ankles"),
+    (r"wrist\s?irons?", "wrist irons", "wrists"),
+    (r"tethers?|tethered", "tether", "wrists"),
+    # A bare "cable" is scenery in half the rooms anybody writes, so it needs a
+    # material in front of it. "cable tie" is matched above and is a different thing.
+    (r"(?:braided\s+)?(?:steel|wire)\s+cables?|(?:steel|baling)\s+wire", "steel cable", "wrists"),
+    (r"hobbles?|hobbled", "hobble", "ankles"),
+    (r"(?:bike|bicycle)\s+locks?|[ud]-?locks?", "bike lock", "wrists"),
+    (r"cling\s?film|plastic\s+wrap", "cling film", "wrists"),
+    # A chastity belt is a restraint. This file's own note beside the layering table
+    # says so -- it was kept OUT of the under-garment list for exactly that reason --
+    # and it was in no hardware list either, so nothing held it on.
+    (r"chastity\s+belts?", "chastity belt", "hips"),
     (r"ankle\s+(?:cuffs?|chains?|straps?)", "ankle cuffs", "ankles"),
     (r"shackles?|shackled", "shackles", "ankles"),
     (r"manacles?|manacled", "manacles", "wrists"),
@@ -191,6 +208,15 @@ APPLY_VERB = (
     r"secured|tethered|bound|tied|strapped|clipped|hooked|bolted|attached|"
     r"anchored|leashed|roped|gagged|blindfolded|collared|taped|trussed|lashed|"
     r"buckled|fettered|"
+    # THE HARDWARE USED AS A VERB, which is how half of these are written. "Mara
+    # hogties her", "Mara zip ties Ana's wrists", "Mara hobbles her" recorded NO
+    # hardware on anybody: the state never learned who was wearing it, so every
+    # later shot was told the restraint belonged to nobody it described and the
+    # hold was left out. Reported as restraints that simply stop working.
+    r"hog-?(?:ties|tie|tied|tying|cuffs|cuffed|chains|chained)|"
+    r"truss(?:es|ing)|zip[-\s]?(?:ties?|tied|tying)|cable[-\s]?(?:ties?|tied|tying)|"
+    r"manacles|hobbl(?:es|ed|ing)|fetters|pinion(?:s|ed|ing)?|"
+    r"restrain(?:s|ed|ing)|immobili[sz]e[sd]?|"
     r"handcuffing|cuffing|chaining|locking|fastening|securing|tethering|tying|"
     r"strapping|clipping|bolting|attaching|gagging|blindfolding|collaring|"
     r"taping|buckling|binding|shackling|"
@@ -1628,7 +1654,7 @@ class SceneState:
                 if apply_at < 0 and release_at < 0:
                     continue
                 local_who = names_in(clause, cast)
-                wearer = _wearer(clause, local_who or who, subject)
+                wearer = _wearer(clause, local_who or who, subject, cast)
                 p = self.person(wearer)
                 if release_at >= 0:
                     keys = [k for k in list(p.hardware) if k[0] == canon]
@@ -1873,7 +1899,23 @@ def _nearest(mods, at, spans):
     return mine
 
 
-def _wearer(beat, who, fallback):
+# "hogties HER", "cuffs HIM", "ties THEM to the rail" -- the one being restrained,
+# written as a pronoun, which is how a beat writes the second mention of somebody.
+# The hardware used as a bare verb belongs here too. APPLY_VERB only takes those
+# with a determiner in front -- "the cuffs" is a noun and "she cuffs" is not -- and
+# that guard is right for deciding whether a beat APPLIES anything. It is not needed
+# here: a name in front and a pronoun behind is what makes this a sentence about one
+# person doing it to another.
+_HARDWARE_VERB = (r"cuffs|ties|chains|straps|tapes|binds|locks|padlocks|shackles|"
+                  r"manacles|hobbles|leashes|collars|gags|blindfolds|trusses|"
+                  r"hog-?ties|restrains|fetters|pinions")
+_APPLY_ANY = re.compile(r"\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b", re.I)
+_APPLIED_TO_PRONOUN = re.compile(
+    r"\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b"
+    r"(?:\s+\S+){0,3}?\s+(?:her|him|them)\b", re.I)
+
+
+def _wearer(beat, who, fallback, cast=()):
     """Who the hardware goes ON. The agent is not the wearer.
 
     "The guard cuffs Ana" puts them on Ana; "Ana is cuffed by the guard" puts
@@ -1882,6 +1924,34 @@ def _wearer(beat, who, fallback):
     wrists belonging to nobody, which is how a second figure gets invented to
     own them."""
     if len(who) < 2:
+        # ONE NAME AND A PRONOUN. "Mara hogties her with a steel cable" names only
+        # the person DOING it, and the wearer is the pronoun -- so the hardware was
+        # going onto the captor. Every later shot then described the restraint as
+        # hers, and the shots describing the person actually in it were told the
+        # hold belonged to nobody present and left it out. Reported as restraints
+        # that stop working from one shot to the next.
+        #
+        # Only where the scene leaves exactly one candidate: with two other people
+        # in the cast, which of them "her" is is a guess, and the guard's rule is
+        # that a guess about who wears a restraint is not worth making.
+        # ...and only when the name is the one DOING it. "The guard handcuffs Ana's
+        # wrists" names only the wearer -- the agent is a role, not a name -- and
+        # reading that sentence the other way round put the cuffs on the guard. So the
+        # name has to sit in FRONT of the verb, with the pronoun behind it.
+        # ...and only where the name is the SUBJECT of that verb: close in front of it,
+        # with no comma between. "Nora stands by the bench, the steel belt locked on
+        # her hips" has a name, a fastening and a pronoun, and the pronoun is Nora
+        # herself -- read as somebody doing it to somebody else it moved her own belt
+        # onto the other person in the room.
+        hit = _APPLIED_TO_PRONOUN.search(beat or "") if who else None
+        if hit:
+            name = re.search(r"\b" + re.escape(who[0]) + r"\b", beat or "")
+            between = (beat or "")[name.end():hit.start()] if name else ""
+            if (name and name.start() < hit.start()
+                    and len(between.split()) <= 4 and not re.search(r"[,;:]", between)):
+                others = [n for n in (cast or []) if n and n != who[0]]
+                if len(others) == 1:
+                    return others[0]
         return who[0] if who else fallback
     passive = re.search(r"\bby\s+(?:the\s+)?(\w+)", beat or "", re.I)
     agent = None
@@ -1889,8 +1959,44 @@ def _wearer(beat, who, fallback):
         agent = next((n for n in who
                       if n.lower() == passive.group(1).lower()), None)
     if agent is None:
-        agent = who[0]          # active voice: the one doing it comes first
+        # ACTIVE VOICE: the one doing it comes first -- before the FASTENING, not
+        # before the paragraph. "Mara runs for the door. Dan catches her and cuffs her
+        # wrists" names Mara first and Dan is the one cuffing, so reading name order
+        # alone put the cuffs on him. The name nearest in front of the verb is the
+        # agent; with none in front of it, first is the best answer there is.
+        # The VERB, not the noun. "Bea's handcuffs" matches the hardware list as
+        # readily as "cuffs her" does, and counting it as the fastening put the agent
+        # on the wrong side of it -- the beat that unlocks Bea's cuffs released Ana's.
+        # A possessive or a determiner in front is what tells them apart.
+        hit = None
+        for m in _APPLY_ANY.finditer(beat or ""):
+            before = (beat or "")[:m.start()].rstrip().split()
+            if before and re.fullmatch(r"(?:\w+'s|her|his|their|its|our|my|your|the|a|an)",
+                                       before[-1], re.I):
+                continue
+            hit = m
+            break
+        nearest = None
+        if hit:
+            for name in who:
+                for m in re.finditer(r"\b" + re.escape(name) + r"\b", beat or ""):
+                    if m.start() < hit.start() and (nearest is None or m.start() > nearest[0]):
+                        nearest = (m.start(), name)
+        agent = nearest[1] if nearest else who[0]
     return next((n for n in who if n != agent), fallback)
+
+
+def wearer_of(beat, cast=()):
+    """Who this beat puts hardware ON, by the same reading the state uses.
+
+    "" when the sentence does not settle it. Exposed because the sampler has its own
+    reading of who is restrained, and the two disagreed: a beat naming only the person
+    DOING it recorded the restraint on them, so every shot about the person actually
+    in it was told the hold belonged to nobody present. See _wearer."""
+    who = names_in(beat or "", cast)
+    if not who:
+        return ""
+    return _wearer(beat or "", who, who[0], cast)
 
 
 def held_part_of(items):
