@@ -8707,6 +8707,162 @@ def test_the_shot_that_puts_it_on_says_so():
     check("...and what is already on is not put on again", not already, str(already))
 
 
+def test_one_person_gets_one_picture():
+    """Two pictures of one person in one shot is what draws a second copy of her.
+
+    Every picture path checks the others -- except the frame sent to EVEN UP a
+    two-hander, which was invisible to all of them. A shot went out carrying Mara's
+    solo frame as one picture AND a returning room frame as another, both taken from
+    the same earlier shot, with the text claiming her in both: "Mara: <Picture 2>"
+    and "<Picture 3> is the kitchen ... Mara is the person in it"."""
+    print("\n=== one person, one picture ===")
+    img = lambda: torch.rand(1, H, W, 3)
+    mem = ("Ana: <Picture 1>, she, 30, a grey apron.\nMara: she, 34, a blue shirt.\n"
+           "Nils: he, 40, a brown coat.")
+    P = ("A kitchen with white tiles.\n\nMara measures a dowel.\n\n"
+         "In the yard, Nils stacks crates.\n\n"
+         "In the kitchen, Ana is at the counter with Mara.")
+    rows = _encoded_refs(P, character_memory=mem, ref_image_1=img())
+    text, count = rows[2]
+    check("two people in the shot are sent two pictures", count == 2, str(count))
+    check("...one each, and Mara is claimed once",
+          text.count("Mara is the person in") == 0 and "Mara: <Picture 2>" in text,
+          " ".join(text.split())[-200:])
+    check("...and no third picture rides with them",
+          "<Picture 3>" not in text, " ".join(text.split())[-200:])
+
+
+def test_an_untagged_picture_is_not_a_stranger():
+    """A picture the prompt never mentions is read as ANOTHER person standing beside
+    the ones it describes, and no sentence here can argue with a photograph.
+
+    The claim-or-hold decision read the per-shot CAST LIST, which is empty in every
+    shot when character_guard is off -- and the text still carries the whole sheet.
+    So the picture rode untagged through the entire film in one of the two commonest
+    setups there is."""
+    print("\n=== an untagged picture is not a stranger ===")
+    img = lambda: torch.rand(1, H, W, 3)
+    mem = "Ana: she, 30, a grey apron.\nMara: she, 34, a blue shirt."
+    P = "A kitchen.\n\nAna pours coffee.\n\nAna and Mara wash the cups.\n\nMara dries them."
+    rows = _encoded_refs(P, character_memory=mem, character_guard=False,
+                         ref_image_1=img())
+    for i, (text, count) in enumerate(rows, 1):
+        check(f"guard off, shot {i}: no picture rides unnamed",
+              count == 0 or "<Picture" in text, f"encoded={count}")
+    # A script with nobody described still keeps its plate, and is told why.
+    plate = [n for _p, n in _encoded_refs(
+        "A kitchen with white tiles.\n\nThe kettle boils.\n\nSteam rises from the spout.",
+        ref_image_1=img())]
+    check("a script with nobody in it still keeps its reference", plate == [1, 1],
+          str(plate))
+    info = str(run_node("A kitchen.\n\nAna pours coffee.\n\nAna sits down.",
+                        plan_only=True, ref_image_1=img())[2])
+    check("...and a sheetless script is told what an untagged picture costs",
+          "riding with nothing in the text naming it" in info)
+
+
+def test_a_beat_that_moves_a_garment_keeps_the_cast():
+    """`_was` is the previous shot's cast. A loop moving a garment reused the name for
+    the garment's old STATE, inside the same per-beat pass, and two clauses further
+    down still read it as a list of names.
+
+    So on any beat that displaces a garment, the carried gaze and the carried mouth
+    guard iterated a STRING: either "" -- and a person standing in the keyframe lost
+    the clause that keeps her mouth shut -- or the letters of "pulled up", a cast of
+    p, u, l, l, e, d. Names invented out of a garment's state."""
+    print("\n=== a garment moving does not eat the cast ===")
+    mem = "Ana: she, 30, a grey t-shirt, blue jeans.\nMara: she, 41, navy overalls."
+    shots = _shots_of(run_node(
+        "A workshop.\n\nAna and Mara stand at the bench.\n\nAna looks at the window.\n\n"
+        "Mara pulls her overalls down.\n\nMara says: \"Hold this.\"",
+        character_memory=mem, plan_only=True))
+    check("the person the frame carries is still counted",
+          "two people" in shots[2], shots[2][:170])
+    check("...and her latched look survives the beat",
+          "Ana's eyes and head are turned to the window" in shots[2], shots[2][:200])
+    check("...and the garment still moves", "pulled down" in shots[3], shots[3][-140:])
+
+
+def test_a_carried_clause_and_the_count_agree():
+    """Two shots carrying the same sentence must not be given opposite counts.
+
+    The count is drawn from the people this shot's own words NAME -- but presence was
+    read off the PREVIOUS shot's cast, one shot of memory, while a latched clause goes
+    on naming somebody for as long as it holds. So two consecutive shots carried "The
+    eyes and the head are turned to Mara." word for word and were told first that
+    there are two bodies and then that there is one. The second names a person the
+    same breath says is not there."""
+    print("\n=== a carried clause and the count agree ===")
+    mem = "Ana: she, 30, a grey t-shirt.\nMara: she, 27, a blue apron."
+    shots = _shots_of(run_node(
+        "A workshop.\n\nAna looks at Mara.\n\nAna sits down.\n\nAna stands up.",
+        character_memory=mem, plan_only=True))
+    for i, sh in enumerate(shots, 1):
+        if "turned to Mara" in sh:
+            check(f"shot {i} names Mara and counts her",
+                  "two people" in sh, sh[:170])
+    # ...and a look at somebody who LEAVES stops being said at all.
+    gone = _shots_of(run_node(
+        "A kitchen.\n\nAna looks at Mara.\n\nMara walks out.\n\nAna pours coffee.",
+        character_memory=mem, plan_only=True))
+    check("a look at somebody who left is dropped",
+          not any("turned to Mara" in sh for sh in gone[2:]), gone[-1][:170])
+    check("...and she is not counted either",
+          "one person" in gone[2], gone[2][:170])
+
+
+def test_a_pronoun_object_keeps_the_person_it_means():
+    """"Mara hugs her" needs two bodies, and kept one.
+
+    The rule read a pronoun after a PREPOSITION -- "kneels beside her" was right --
+    and had nothing for a direct object, which is the commoner half. The woman "her"
+    refers to lost her sheet line, and the shot was then told "There is one person in
+    the shot: one body, one face" beside a verb whose own meaning needs two. A person
+    in frame with no description is a person the model dresses out of nothing."""
+    print("\n=== a pronoun object keeps its person ===")
+    mem = "Ana: she, 30, a grey t-shirt.\nMara: she, 27, a blue apron."
+    for beat in ("Mara hugs her.", "Mara joins her.", "Mara follows her.",
+                 "Mara watches her.", "Mara hands her the tin.",
+                 "Mara passes her the wrench.", "Mara kneels beside her.",
+                 "Mara told her the news."):
+        check(f"both women are kept by {beat!r}",
+              len(S.sheet_for_beat(mem, beat, ["Ana", "Mara"])[1]) == 2,
+              str(S.sheet_for_beat(mem, beat, ["Ana", "Mara"])[1]))
+    # ...and a POSSESSIVE is still the subject's own.
+    for beat in ("Mara takes her jacket off.", "Mara washes her hands.",
+                 "Mara shuts the door behind her.", "Mara pulls her hair back."):
+        check(f"...while {beat!r} stays one person",
+              S.sheet_for_beat(mem, beat, ["Ana", "Mara"])[1] == ["Mara"],
+              str(S.sheet_for_beat(mem, beat, ["Ana", "Mara"])[1]))
+
+
+def test_a_people_word_is_not_always_a_crowd():
+    """Staging extras stands the body-count guard down for the REST OF THE FILM, so a
+    people-word used as a modifier cost the duplicate guard everywhere.
+
+    "the staff room", "the men's overalls", "the women's section", "the customers'
+    invoices", "the figures in the ledger" all read as crowds. And the release was as
+    loose as the latch: "Ana picks up the empty box" dismissed a crowd staged one beat
+    earlier, while the crowd is still in the keyframe the shot opens on -- and the
+    same word clears the carried frame, so an empty box was emptying the room."""
+    print("\n=== a people-word is not always a crowd ===")
+    for beat in ("Ana walks into the staff room.", "Ana folds the men's overalls.",
+                 "Ana checks the women's section.", "Ana files the customers' invoices.",
+                 "Ana reads the figures in the ledger.", "The others have gone.",
+                 "Ana hears people outside."):
+        check(f"no crowd in {beat[:38]!r}", not S.extras_in(beat))
+    for beat in ("Students fill the yard.", "A crowd of students waits.",
+                 "The staff room fills with students.", "Two men wait by the van.",
+                 "Onlookers press against the barrier.", "Dark figures wait by the gate."):
+        check(f"a crowd in {beat[:38]!r}", S.extras_in(beat))
+    for beat in ("Ana picks up the empty box.", "Ana empties the bin.",
+                 "The crowd leaves."):
+        check(f"{beat[:34]!r} dismisses nobody", not S.extras_dismissed(beat))
+    for beat in ("The yard is empty.", "Ana is alone now.",
+                 "Ana stands in the empty hall.", "Ana is by herself."):
+        check(f"{beat[:34]!r} does dismiss them", S.extras_dismissed(beat))
+
+
 def test_a_garment_set_down_is_not_a_garment_put_on():
     """Taking something off, and putting it down, is not putting it back on.
 
@@ -9187,6 +9343,12 @@ def main():
     test_hardware_in_a_hand_is_not_hardware_on_a_body()
     test_a_length_reaches_only_what_it_is_taken_around()
     test_the_shot_that_puts_it_on_says_so()
+    test_one_person_gets_one_picture()
+    test_an_untagged_picture_is_not_a_stranger()
+    test_a_beat_that_moves_a_garment_keeps_the_cast()
+    test_a_carried_clause_and_the_count_agree()
+    test_a_pronoun_object_keeps_the_person_it_means()
+    test_a_people_word_is_not_always_a_crowd()
     test_a_garment_set_down_is_not_a_garment_put_on()
     test_what_a_removal_uncovers_is_said_on_every_later_shot()
     test_a_full_stop_ends_a_clause()

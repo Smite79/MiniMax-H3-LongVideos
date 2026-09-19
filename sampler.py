@@ -406,9 +406,37 @@ _PRONOUN_AT = re.compile(
     r"(?=\s*[.,;:!?]|\s+(?:and|but|then|while|as|so|who|before|after)\b|\s*$)", re.I)
 
 
+# ...AND AS A DIRECT OBJECT, which is the commoner half and was missing. The rule
+# above reads a pronoun after a PREPOSITION, so "Mara kneels beside her" kept both
+# women while "Mara hugs her" kept only Mara -- and the shot was then told "There is
+# one person in the shot: one body, one face" beside a verb whose own meaning needs
+# two bodies in contact. The woman "her" refers to lost her sheet line, and a person
+# in frame with no description is a person the model dresses out of nothing:
+# reported as hair changing between shots and a body that is not the same size twice.
+#
+# Verbs that take a PERSON, with the same narrowness as above. The pronoun has to end
+# its phrase -- or be the first object of a ditransitive, where a DETERMINER after it
+# is what separates an object from a possessive: "hands her the tin" is two people,
+# "takes her jacket off" is one.
+_PRONOUN_DOES_TO = re.compile(
+    r"\b(?:hugs?|hugged|hugging|embrace[sd]?|embracing|kiss(?:es|ed|ing)?|"
+    r"joins?|joined|joining|follows?|followed|following|"
+    r"watch(?:es|ed|ing)?|greets?|greeted|greeting|thanks?|thanked|thanking|"
+    r"comforts?|comforted|comforting|grabs?|grabbed|grabbing|"
+    r"catch(?:es|ing)?|caught|shov(?:es|ed|ing)|push(?:es|ed|ing)?|"
+    r"drags?|dragged|dragging|escorts?|escorted|escorting|"
+    r"helps?|helped|helping|leads?|leading|led|guid(?:es|ed|ing)|"
+    r"hands?|handed|handing|pass(?:es|ed|ing)?|giv(?:es|ing)|gave|"
+    r"shows?|showed|showing|tells?|telling|told|asks?|asked|asking)"
+    r"\s+(her|him|them)\b"
+    r"(?=\s*[.,;:!?]|\s+(?:and|but|then|while|as|so|who|before|after)\b|\s*$"
+    r"|\s+(?:a|an|the|another|his|her|their|its|some|one|two)\b)", re.I)
+
+
 def pronoun_points_away(beat):
     """Does this beat aim a pronoun at somebody OTHER than the person it names?"""
-    return bool(_PRONOUN_AT.search(str(beat or "")))
+    b = str(beat or "")
+    return bool(_PRONOUN_AT.search(b) or _PRONOUN_DOES_TO.search(b))
 
 
 def sheet_for_beat(sheet, beat, previous=None):
@@ -5140,11 +5168,11 @@ def fit_guards(clauses, beat_words, floor=None):
 # "they" or "the two of them" -- those are group cues about the NAMED cast and
 # group_beat already owns them. A singular "someone" is not here either: one more
 # person is what the cast clause is already counting.
-_EXTRA_PEOPLE = re.compile(
-    r"\b(?:crowds?|groups?|others|onlookers|bystanders|passers-?by|spectators|"
-    r"people|dancers|guests|customers|patrons|strangers|students|staff|tourists|"
-    r"girls|women|men|boys|guys|ladies|blondes|brunettes|figures|silhouettes)\b",
-    re.I)
+_EXTRA_WORDS = (r"crowds?|groups?|others|onlookers|bystanders|passers-?by|spectators|"
+                r"people|dancers|guests|customers|patrons|strangers|students|staff|"
+                r"tourists|girls|women|men|boys|guys|ladies|blondes|brunettes|"
+                r"figures|silhouettes")
+_EXTRA_PEOPLE = re.compile(r"\b(?:" + _EXTRA_WORDS + r")\b", re.I)
 
 
 # PEOPLE MENTIONED ARE NOT PEOPLE STAGED. "They hear people outside" puts nobody in
@@ -5155,22 +5183,73 @@ _NOT_STAGED = re.compile(
     r"\b(?:gone|left|leaving|went|departed|vanished|absent|empty|alone|"
     r"outside|elsewhere|away|upstairs|downstairs|next\s+door|beyond|"
     r"no\s+one|no[- ]?body|none|without|hears?|heard|hearing|listens?|"
-    r"remembers?|imagines?|thinks?\s+of|expects?|waits?\s+for)\b", re.I)
+    r"remembers?|imagines?|thinks?\s+of|expects?|waits?\s+for|"
+    # ...and a plural noun that is a DOCUMENT'S CONTENTS is not a crowd either.
+    # "Ana reads the figures in the ledger" staged a crowd of figures and stood the
+    # body count down for the rest of the film.
+    r"ledgers?|invoices?|accounts|spreadsheets?|columns?|receipts?|payroll|"
+    r"balance\s+sheets?|paperwork)\b", re.I)
 
 
 # ...and what says they have GONE. The latch below needs an explicit way out, the way
 # every other state in this file has one: a garment comes off, a restraint is unlocked,
 # a room is left. Without it, extras staged once would suppress the body count for the
 # rest of the film even after the script empties the room.
+# EMPTY OF PEOPLE, not an empty THING. Bare "empty" matched "Ana picks up the empty
+# box", which dismissed a crowd staged one beat earlier -- the shot was told "There is
+# one person in the shot: one body, one face" while the keyframe it opens on is still
+# full of students. This also clears the carried frame, so an empty box was emptying
+# the room. A place is what can be empty of people, so a place has to be in it.
+_A_PLACE = (r"(?:room|rooms|yard|street|road|hall|hallway|corridor|house|flat|"
+            r"place|space|building|shop|store|bar|cafe|kitchen|office|garage|"
+            r"platform|station|carriage|car\s*park|lot|field|beach|park|"
+            r"church|theatre|theater|hangar|warehouse|workshop|studio|"
+            r"landing|stairwell|lobby|foyer|courtyard|square|market|"
+            r"pool|deck|garden|barn|shed|cell|ward|dorm|gym|pitch|court)")
 _ALONE = re.compile(
     r"\b(?:alone|by\s+(?:her|him|them)self|on\s+(?:her|his|their)\s+own|"
-    r"empty|deserted|to\s+(?:her|him|them)self)\b", re.I)
+    r"deserted|to\s+(?:her|him|them)self)\b"
+    r"|\bempty\s+" + _A_PLACE + r"\b"
+    r"|\b(?:the\s+)?" + _A_PLACE + r"\s+(?:is|was|looks|stands|sits|feels|lies)\s+"
+    r"(?:quite\s+|completely\s+|totally\s+)?empty\b"
+    r"|\b(?:it|everything|everywhere|the\s+place)\s+(?:is|was)\s+empty\b", re.I)
+
+
+# A PEOPLE-WORD USED AS A MODIFIER IS NOT A CROWD. "the staff room", "the men's
+# overalls", "the women's section", "the customers' invoices" all matched the
+# vocabulary above -- and staging extras stands the body-count clause down for the
+# REST OF THE FILM, so the duplicate guard was there on shot 1 and gone from every
+# shot after it, with nothing in the script staging a single extra. Reported as
+# randoms appearing.
+#
+# Two shapes, both of them grammar rather than meaning: an apostrophe makes it a
+# possessive, and a noun straight after it makes it the first half of a compound.
+# The compounds are conventional and few, which is why they can be listed; a crowd
+# word standing as the head of its own phrase is not in here at all.
+_PEOPLE_MODIFIER = re.compile(
+    r"\b(?:" + _EXTRA_WORDS + r")"
+    # A PLURAL possessive ends in an apostrophe and nothing else -- "the customers'
+    # invoices" -- so there is no word boundary after it to require.
+    r"(?:['’]s?(?!\w)"
+    r"|\s+(?:rooms?|areas?|sections?|quarters|entrances?|exits?|canteens?|"
+    r"kitchens?|lounges?|toilets?|washrooms?|lockers?|cloakrooms?|"
+    r"car\s*parks?|carriers?|lists?|registers?|ledgers?|books?|"
+    r"invoices?|records?|files?|accounts?|columns?|reports?|receipts?|"
+    r"departments?|desks?|meetings?|notices?|boards?|rotas?|shifts?|"
+    r"uniforms?|overalls|clothing|clothes|wear|shoes|aisles?|"
+    r"unions?|clubs?|nights?|members?|badges?|handbooks?|policy|policies)\b)", re.I)
 
 
 def extras_in(beat):
     """Does this beat stage people beyond the ones the sheet names, IN the frame?"""
     b = str(beat or "")
-    if not _EXTRA_PEOPLE.search(b):
+    hits = list(_EXTRA_PEOPLE.finditer(b))
+    if not hits:
+        return False
+    # ...and at least one of them has to be a crowd rather than a modifier. Checked
+    # per occurrence, so "the staff room fills with students" still stages the
+    # students while the staff room stays a room.
+    if all(_PEOPLE_MODIFIER.match(b, m.start()) for m in hits):
         return False
     return not _NOT_STAGED.search(b)
 
@@ -11725,9 +11804,17 @@ class H3LongVideos:
                 # a subject reference from it: moved_shots starts the shot AFTER.
                 staging_shots.add(len(plan) + 1)
             for _g, _how in _staged_here:
-                _was = displaced.get(_g, "")
+                # NOT `_was`, which is this beat's PREVIOUS CAST and is read further
+                # down by two clauses that expect a list of names. This loop was
+                # overwriting it with a garment's old state -- "" or "pulled down" --
+                # so on any beat that moved a garment the carried gaze and the
+                # carried mouth guard iterated a STRING: either nothing at all, so a
+                # person standing in the keyframe lost the clause that keeps her
+                # mouth shut, or the letters of "pulled up", which is a cast of
+                # p, u, l, l, e, d. Names invented out of a garment's state.
+                _prev_state = displaced.get(_g, "")
                 # Put back up again is a restore, not a new displacement.
-                if _was == "pulled down" and _how in ("pulled up", "pulled back"):
+                if _prev_state == "pulled down" and _how in ("pulled up", "pulled back"):
                     displaced.pop(_g, None)
                 else:
                     displaced[_g] = _how
@@ -12398,7 +12485,20 @@ class H3LongVideos:
             # stranger arrives. Between the two is the honest line: the people this
             # shot's own words name, whether they are named by their sheet entry or by
             # a clause that kept their state while the beat was about somebody else.
-            _also_named = [n for n in dict.fromkeys(list(_carried_on) + list(_carried))
+            # ...AND THE FRAME IS WHAT SAYS WHO IS STILL THERE, not one shot of
+            # memory. `_carried_on` reads the PREVIOUS shot's cast, so a latched
+            # clause that goes on naming somebody outlived the only evidence that she
+            # is present: two consecutive shots carried the same sentence, word for
+            # word -- "The eyes and the head are turned to Mara." -- and were given
+            # opposite counts, two bodies and then one, because Mara happened to be
+            # in one shot's predecessor and not the other's. The second of them names
+            # a person the same breath says is not there.
+            #
+            # The rule below is unchanged and is the honest one: a body is counted
+            # for somebody this shot's own words NAME. This only widens where the
+            # answer about presence comes from.
+            _also_named = [n for n in dict.fromkeys(
+                               list(_in_frame or []) + list(_carried_on) + list(_carried))
                            if n not in (_described or [])
                            and re.search(r"\b" + re.escape(n) + r"\b", _kept)]
             _cast_hold = cast_hold(list(_described or []) + _also_named, body, _extras_seen)
@@ -13526,6 +13626,25 @@ class H3LongVideos:
                 # A reference that does not ride costs likeness; one that rides
                 # unclaimed costs a second person, and the author is told to tag it.
                 _here = [n for n in plan.shots[_i].cast if n]
+                # THE CAST LIST IS NOT THE SAME QUESTION AS WHO THE SHOT NAMES. It is
+                # empty in every shot of a film written with NO character sheet, and
+                # in every shot when character_guard is off -- and the text still
+                # names people, and with the guard off it carries the whole sheet. So
+                # the branch below read "nobody to duplicate" off an empty list and
+                # rode the picture untagged through the entire film, which is this
+                # rule broken in the two commonest setups there are.
+                if not _here:
+                    _here = [n for n, _ln in sheet_lines(sheet)
+                             if n and re.search(r"\b" + re.escape(n) + r"\b", _s)]
+                # WITH NO SHEET AT ALL there is no way to tell a person from a thing:
+                # "Ana pours coffee" and "Steam rises from the spout" are the same
+                # sentence to a reader with no cast list, and both open their own
+                # sentence, so capitalisation says nothing either. Guessing would
+                # either drop a location plate that has always ridden, or keep
+                # riding an unclaimed face. The picture rides, as it always has, and
+                # the author is told once -- see the note below, which is written
+                # whether or not anybody is named, because that is the part this
+                # node genuinely does not know.
                 if not _here:
                     # NOBODY TO DUPLICATE. A shot with no person described in it cannot
                     # grow a second character, whatever the picture is of, so a look or
@@ -13551,6 +13670,15 @@ class H3LongVideos:
                 f"shot(s) {', '.join(str(n) for n in _claimed_untagged)} had the untagged "
                 f"reference claimed on the one person they describe, so the picture has a "
                 f"subject in the text instead of arriving as a stranger")
+        if not sheet_lines(sheet) and refs_all:
+            notes.append(
+                "a picture is riding with nothing in the text naming it, and there is "
+                "no character sheet to write a tag onto. If that picture is a PERSON, "
+                "the prompt never says who it is -- and a picture the prompt does not "
+                "mention is read as ANOTHER person standing beside the ones described, "
+                "which no sentence here can argue with. Give them an entry and tag it: "
+                "'Ana: <Picture 1>, she, 30, a grey apron'. If it is a location or a "
+                "look, nothing needs doing")
         if _held_untagged:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in _held_untagged)} were sent NO "
@@ -14093,6 +14221,7 @@ class H3LongVideos:
             # travels into every shot they are named in, and a second picture of the
             # same person is just a second picture.
             _extra = []
+            _evened_who = ""            # who the evening-up frame below pictures
             _cast = plan.shots[i].cast
             _returning = {w for n, ws in _returns if n == i + 1 for w in ws}
             # ...and only a frame of what they wear NOW. A face captured before
@@ -14149,6 +14278,7 @@ class H3LongVideos:
                           and _captured_gen.get(n) == _wardrobe_gen]
                 if len(_short) == 1 and f"{_short[0]}:" in shot_prompt:
                     _extra = [_captured[_short[0]]]
+                    _evened_who = _short[0]
                     _evened.append((i + 1, _short[0], _captured_from.get(_short[0], 0)))
                     _tag = f"<Picture {len(shot.refs) + 1}>"
                     shot_prompt = shot_prompt.replace(
@@ -14172,6 +14302,8 @@ class H3LongVideos:
             # of one person is how a second one gets drawn). And a frame taken before
             # anybody changed clothes or hardware is a picture of the old wardrobe,
             # which a reference would put back: any such change since retires it.
+            # Everybody this shot already sends a picture of, whichever path sent it.
+            _pictured_here = {n for n in (_who, _evened_who) if n}
             _opens, _ends = shot_rooms.get(i, ("", ""))
             _prev_end = shot_rooms.get(i - 1, ("", ""))[1] if i else ""
             _back, _arriving = "", False
@@ -14195,7 +14327,17 @@ class H3LongVideos:
                             and all(n in _cast_now for n in _in_it)
                             and not any(n in _tagged_names for n in _in_it)
                             and not any(n in _in_keyframe for n in _in_it)
-                            and not (_who and _who in _in_it)
+                            # ...NOR ANYBODY ELSE THIS SHOT ALREADY HAS A PICTURE OF.
+                            # This tested the recovered face alone, so the frame sent
+                            # to EVEN UP a two-hander was invisible here: a shot went
+                            # out carrying Mara's solo frame as one picture and a
+                            # returning room frame as another, both taken from the
+                            # same earlier shot, with the text claiming her in both --
+                            # "Mara: <Picture 2>" and "<Picture 3> ... Mara is the
+                            # person in it". Two pictures of one person is what this
+                            # file says draws a second copy of her, and the evening-up
+                            # frame exists to stop exactly that.
+                            and not any(n in _pictured_here for n in _in_it)
                             # With the previous frame carried as a reference, only a
                             # room frame showing ALL of its people -- which then carries
                             # the room and them, and replaces it -- or none of them.
