@@ -5289,8 +5289,11 @@ POSE_LYING_WEIGHT = "The shoulder and the hip take the weight of the body"
 # fastening word beside one. Without it "spread wide" is scenery and "drawn back" is
 # a curtain.
 _LEG_WORD = r"(?:ankles?|legs?|feet|knees?|thighs?|calves)"
+# ...and the ways a LENGTH of something holds a leg, which is not a fastening verb
+# at all: it goes AROUND. A cable around the ankles placed no legs, so they dropped.
 _LEG_TIE = (r"(?:cuffed|shackled|chained|tied|bound|strapped|secured|fastened|locked|"
-            r"linked|clipped|hooked|lashed|drawn|pulled|folded|bent)")
+            r"linked|clipped|hooked|lashed|drawn|pulled|folded|bent|looped|wrapped|"
+            r"wound|coiled|threaded|passed|slung|knotted|cinched|around|round)")
 _LEG_ANCHOR = (
     # A HOGTIE, by its name or by what it does: the ankles held to the wrists.
     (r"\bhog-?(?:tie|ties|tied|tying|cuff|cuffs|cuffed|chains?|chained|bound)\b"
@@ -5317,6 +5320,15 @@ _LEG_ANCHOR = (
     # shot that holds a restraint "her ankles together" is a fastening, and "she
     # stands with her feet together" is a way of standing. See legs_anchor.
     (_LEG_WORD + r"\s+(?:\w+\s+){0,2}?(?:together|crossed)\b", "ankles together", True),
+    # ...and the same length run from the NECK to them, which is what holds the legs
+    # up behind the body rather than merely together.
+    (r"(?:neck|throat)\b[^.]{0,60}?" + _LEG_WORD
+     + r"|" + _LEG_WORD + r"\b[^.]{0,60}?(?:neck|throat)", "ankles to the neck"),
+    # A LENGTH ROUND THE ANKLES, written the way a length is written: the thing comes
+    # first and the part after it. Every entry above expects the leg word in front,
+    # so "a steel cable around her ankles" placed no legs at all and they dropped.
+    (r"(?:" + _LEG_TIE + r")\s+(?:\w+\s+){0,2}?(?:her|his|their|the)\s+"
+     r"(?:\w+\s+){0,2}?" + _LEG_WORD, "ankles together"),
     # ...or back under the body, which is the kneeling half of a hogtie.
     (_LEG_WORD + r"\s+(?:\w+\s+){0,3}?" + _LEG_TIE + r"\s+(?:\w+\s+){0,2}?"
      r"(?:(?:back|up)\s+)?behind\s+(?:her|his|their)\b",
@@ -5329,6 +5341,9 @@ _POSE_OF_LEGS = {
     "held apart": ("Both legs are held apart at the ankle, each foot fixed where it is, "
                    "the gap between them the same from the first frame to the last"),
     "ankles together": "Both ankles are together, fastened one against the other",
+    "ankles to the neck": ("Both legs are bent back at the knee, the ankles drawn up "
+                           "behind the body and held there by the line running to the "
+                           "neck, the feet off the floor and the knees bent"),
     "drawn back": ("Both legs are folded back under the body, the ankles behind and the "
                    "knees bent double"),
 }
@@ -10066,6 +10081,10 @@ class H3LongVideos:
             # still carries, and that has nothing to do with the guard being on.
             _was = list(active)
             _back_cands = []
+            # Who a latched clause speaks about while the beat is about somebody else:
+            # filled by the bare-region and gaze paths below, read by the body count,
+            # which counts the people this shot's text NAMES.
+            _carried_on, _carried = [], []
             if character_guard:
                 shot_sheet, active = sheet_for_beat(sheet, body, active)
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
@@ -10557,7 +10576,13 @@ class H3LongVideos:
                 # entry, and the alternative is the region the model fills in by
                 # itself. If a duplicate of the UNDRESSED character ever shows up,
                 # this is the first thing to look at.
-                _carried_on = [n for n in (_was or []) if n not in (_who_here or [])]
+                # CARRIED BY THE FRAME, not by the previous shot's cast list. Read
+                # from _was, a person who walked out in the previous beat still had
+                # their bare region described in the next shot -- a name, and a body
+                # in the count, for somebody the film had just removed.
+                _still_here = shot_frames.get(len(plan) - 1, ([], []))[1] if plan else []
+                _carried_on = [n for n in (_was or [])
+                               if n not in (_who_here or []) and n in _still_here]
                 _rows = []
                 for _n in list(_who_here or []) + _carried_on:
                     _q = _state.people.get(_n)
@@ -11412,12 +11437,20 @@ class H3LongVideos:
                 _extras_seen = True
             elif extras_dismissed(body):
                 _extras_seen = False
-            # COUNTED FROM THE PICTURE, not only the text. "Crystal laughs" opening on a
-            # frame with Dan beside her was told there is one person in the shot: one
-            # body, one face -- a sentence against a keyframe with two people in it,
-            # which the model can only reconcile by merging them. The same reason the
-            # count stands down while extras are still in the room. See shot_frames.
-            _cast_hold = cast_hold(list(_described or []) + _carry, body, _extras_seen)
+            # COUNTED FROM THE TEXT, which is the only thing that can also IDENTIFY
+            # them. Counting the people the frame carries as well was tried and
+            # reverted: it asserts a body the shot does not describe, and a body with
+            # no identity in the text is one the model fills in for itself -- reported,
+            # immediately, as randoms turning up in the scene again. The node's own
+            # reading of the same hazard is written beside the reference guards: more
+            # subjects than identities, and the identity that exists gets used twice.
+            #
+            # The keyframe still carries whoever else is there, and it outvotes this
+            # sentence anyway -- a picture always does. What the count is FOR is
+            # stopping a duplicate of the people the text describes.
+            # The count is built where the whole shot is known -- see below, at the
+            # assembly: it has to count the people the TEXT names, and some of them are
+            # named by clauses that are decided after this point.
 
             # Where the beat says somebody is looking, said once more as a fact
             # about the eyes and the head. One mention in the beat loses to a
@@ -11460,6 +11493,21 @@ class H3LongVideos:
                          or subjects_for(body, shot_sheet, _MOVES_OFF_SRC))
                 for _n in (_ends or list(looking_at)):
                     looking_at.pop(_n, None)
+            # A LOOK AT A PERSON ENDS WHEN THAT PERSON GOES. The branch above clears
+            # the entries of whoever MOVED; this clears the entries that point AT
+            # them. "Ana looks at Mara", Mara walks out, and five shots later the
+            # text still said the eyes are turned to Mara -- a name in a shot she is
+            # not in, which is a body for the model to draw to own it.
+            _gone_now = (set(leaves_in(body, sheet, _shows))
+                         | set(subjects_for(body, shot_sheet, _MOVES_OFF_SRC)))
+            if _gone_now:
+                for _n, (_t, _is_person) in list(looking_at.items()):
+                    if _is_person and _t in _gone_now:
+                        looking_at.pop(_n, None)
+            # ...and a beat that says somebody is ALONE ends every look in the shot:
+            # the person it was aimed at is, by that sentence, not there.
+            if _ALONE.search(engine.staged_text(body)):
+                looking_at.clear()
             # ...and said for people this shot describes, PLUS anybody who was in
             # the previous shot and whom this beat has not moved off. She is still
             # in the van when the beat is about him: the next shot starts from a
@@ -11517,6 +11565,20 @@ class H3LongVideos:
                 # draws the person that sentence implies -- which is the duplicate.
                 # It latches, so the shot they come back in has it again.
                 hold = ""
+                # ...AND SO DOES THE POSE THE HARDWARE HOLDS THEM IN, which is the
+                # same sentence said about a body instead of about metal. The hold
+                # was withheld here for years while "Both arms are behind the body,
+                # wrists together at the small of the back" went out on the very
+                # same shots -- landing on the one person the shot DOES describe,
+                # who is not in the cuffs. A shot describing only the captor was
+                # told to put her arms behind her back, and the count in the same
+                # breath says one body, so there is no other body it could mean.
+                # The legs half goes with it, for the same reason.
+                _pose = ""
+                # The note must not claim a position was held on a shot that never
+                # got the sentence: it keys off the latch, which is still true.
+                if (len(plan) + 1) in anchored_shots:
+                    anchored_shots.remove(len(plan) + 1)
                 absent_hold.append(len(plan) + 1)
             elif not _applying and restrained:
                 hold = restraint_sentence(
@@ -11960,6 +12022,18 @@ class H3LongVideos:
             # WORKED OUT -- info reports what each shot would have been told, which is
             # what makes this switch worth having as a diagnostic -- they are simply not
             # sent. See the widget's tooltip for what comes back with them.
+            # COUNT WHAT THE TEXT NAMES. Counting only the described cast left a shot
+            # saying "one person" while a clause in it named a second -- "Ana's legs are
+            # bare" in a shot about Ben -- and a name with no body to own it is a body
+            # the model adds. Counting the people the FRAME carries was worse: it
+            # asserted bodies the text could not identify at all, and that is how a
+            # stranger arrives. Between the two is the honest line: the people this
+            # shot's own words name, whether they are named by their sheet entry or by
+            # a clause that kept their state while the beat was about somebody else.
+            _also_named = [n for n in dict.fromkeys(list(_carried_on) + list(_carried))
+                           if n not in (_described or [])
+                           and re.search(r"\b" + re.escape(n) + r"\b", _kept)]
+            _cast_hold = cast_hold(list(_described or []) + _also_named, body, _extras_seen)
             shot_text = ((line + _exact).strip() if verbatim
                          else (line + _exact + _cast_hold + _kept).strip())
             # HOW OFTEN ONE PERSON IS NAMED IN ONE SHOT, counted where the shot is

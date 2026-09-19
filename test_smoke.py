@@ -2056,6 +2056,116 @@ class LoraCLIP(FakeCLIP):
         return twin
 
 
+def test_the_count_counts_who_the_text_names():
+    """REPORTED: randoms turning up in the scene again.
+
+    A shot said "There is one person in the shot: one body, one face" while a clause
+    inside it named a second person -- "Ana's legs are bare from the hip down" in a
+    shot describing Ben. Those clauses are deliberate: a latched state goes on being
+    said while the beat is about somebody else, because the keyframe still shows her
+    and silence lets the prior re-dress her. But a name with no body to own it is a
+    body the model adds.
+
+    Counting the people the FRAME carries instead was tried and reverted: that
+    asserts bodies the text cannot identify at all, which is worse. The line between
+    them is what the shot's own words NAME."""
+    print("\n=== the body count counts the people the text names ===")
+    mem = "Ana: she, 30, a grey t-shirt, blue jeans.\nBen: he, 35, a black coat."
+    for label, script, clause in (
+            ("a look held past its owner's shot",
+             "A workshop.\n\nAna looks at the window.\n\nBen walks in and puts a box down.",
+             "Ana's eyes and head are turned"),
+            ("a bare region held past its owner's shot",
+             "A room.\n\nAna takes off her jeans.\nremove: jeans\n\nBen walks in.",
+             "Ana's legs are bare")):
+        shots = _shots_of(run_node(script, character_memory=mem, plan_only=True))
+        second = " ".join(shots[1].split())
+        check(f"{label}: the clause still speaks", clause in second, second[:200])
+        check(f"...and the count includes her",
+              "There are two people in the shot" in second, second[:200])
+        check(f"...without describing her", "Ana:" not in second, second[:200])
+
+    # A shot that names nobody extra counts what it describes, as before.
+    plain = _shots_of(run_node("A kitchen.\n\nAna pours coffee.\n\nAna drinks it.",
+                               character_memory=mem, plan_only=True))
+    check("a solo shot still counts one",
+          all("There is one person in the shot" in sh for sh in plain), plain[-1][-120:])
+    pair = _shots_of(run_node("A kitchen.\n\nAna and Ben sit at the table.\n\nThey talk.",
+                              character_memory=mem, plan_only=True))
+    check("a two-hander still counts two",
+          "There are two people in the shot" in pair[0], pair[0][-120:])
+    # ...and a person the frame merely carries, with nothing said about them, is not
+    # counted: a body the text cannot identify is the one the model fills in.
+    carried = _shots_of(run_node("A kitchen.\n\nAna and Ben sit at the table.\n\nBen drinks.",
+                                 character_memory=mem, plan_only=True))
+    check("a carried person nothing says anything about is not counted",
+          "There is one person in the shot" in carried[1], carried[1][-160:])
+
+
+def test_a_length_goes_where_it_is_put():
+    """REPORTED: a steel cable put round the neck and then round the ankles breaks and
+    lets the legs drop, and the handcuffs sometimes vanish and are replaced by the
+    cable.
+
+    Three causes, all in the readers. A length goes on by being put AROUND -- loop,
+    wrap, wind, thread, run -- and none of those were fastening verbs, so the cable
+    was recorded on nobody and only the beat that staged it ever mentioned it: from
+    the next shot on there was no cable in the text at all. The part it holds was
+    read from a table that says a cable holds wrists, not from the neck and ankles
+    the beat names. And one length named at two places recorded one of them."""
+    print("\n=== a length goes where it is put, and stays there ===")
+    E = S.engine
+    def state(beat, sheet="Ana: she, 30, a grey t-shirt."):
+        st = E.SceneState(place="workshop")
+        st.declare("Ana", sheet)
+        st.declare("Mara", "Mara: she, 41, overalls.")
+        st.read(beat, cast=["Ana", "Mara"], shot=1)
+        return {n: sorted((r.item, r.part) for r in p.hardware.values())
+                for n, p in st.people.items() if p.hardware}
+
+    got = state("Mara loops a steel cable around Ana's neck and down around her ankles.")
+    check("one length at two places is recorded at both",
+          got == {"Ana": [("steel cable", "ankles"), ("steel cable", "neck")]}, str(got))
+    got = state("Mara tapes her wrists and her ankles.")
+    check("...and the tape too, by its own name",
+          got == {"Ana": [("tape", "ankles"), ("tape", "wrists")]}, str(got))
+    for beat in ("Mara wraps a chain around her ankles.", "Mara winds rope around her wrists.",
+                 "Mara threads a cable through her cuffs.", "Mara slings a strap around her waist."):
+        check(f"put on by being put around: {beat[:38]!r}", bool(state(beat)), str(state(beat)))
+    # ...and none of that reads an ordinary sentence as a restraint.
+    for beat in ("She runs to the door.", "The cuffs are on the table.",
+                 "The cable runs along the wall."):
+        check(f"not a restraint: {beat!r}", not state(beat), str(state(beat)))
+
+    # THE LEGS, held by a length rather than by a fastening verb.
+    for text, want in (("a steel cable around her ankles", "ankles together"),
+                       ("a cable looped around her ankles", "ankles together"),
+                       ("Mara loops a steel cable around Ana's neck and down around her ankles.",
+                        "ankles to the neck"),
+                       ("a cable from her neck to her ankles", "ankles to the neck"),
+                       ("she runs to the door", ""),
+                       ("the lamp above her head", "")):
+        check(f"legs_anchor {text[:40]!r}", S.legs_anchor(text) == want, S.legs_anchor(text))
+
+    # END TO END: the cuffs do not go anywhere when the cable arrives, and the legs
+    # are held on every shot after it.
+    mem = ("Ana: she, 30, a grey t-shirt, steel handcuffs on her wrists behind her back.\n"
+           "Mara: she, 41, overalls.")
+    P = ("A workshop.\n\nAna kneels on the floor.\n\n"
+         "Mara loops a steel cable around Ana's neck and down around her ankles.\n\n"
+         "Ana strains against the cable.\n\nAna breathes.")
+    shots = _shots_of(run_node(P, character_memory=mem, plan_only=True))
+    check("the cuffs are still named once the cable is on",
+          all("handcuff" in sh for sh in shots), "")
+    check("...and the cable is named on every shot after it goes on",
+          all("cable" in sh for sh in shots[1:]), shots[-1][-160:])
+    check("...both in one hold sentence",
+          "steel handcuffs and steel cable" in shots[-1], shots[-1][-200:])
+    check("...and the legs are held up by the line to the neck",
+          all("held there by the line running to the neck" in sh for sh in shots[1:]),
+          shots[-1][-200:])
+
+
 def test_any_restraint_holds_from_shot_to_shot():
     """VALIDATION: a person can be restrained any way the author writes it, with any
     hardware, and it holds from shot to shot.
@@ -2600,10 +2710,10 @@ def test_somebody_still_in_the_frame_is_not_back():
     check("...and nothing is recovered", "recovered a face" not in info)
     shots = _shots("A kitchen.\n\nDan pours coffee.\n\nCrystal sits down opposite Dan.\n\n"
                    "Crystal laughs.", character_memory=mem)
-    check("the reaction shot counts the person the frame still carries",
-          "There are two people in the shot" in shots[2]
-          and "There is one person" not in shots[2], shots[2][-160:])
-    check("...without describing him", "Dan:" not in shots[2], shots[2][:120])
+    check("the reaction shot counts the one person it describes",
+          "There is one person in the shot" in shots[2]
+          and "two people" not in shots[2], shots[2][-160:])
+    check("...and does not describe the other", "Dan:" not in shots[2], shots[2][:120])
 
     # Control: a real exit, and the return gets its picture.
     refs, info, _ = pictures("A kitchen.\n\nDan pours coffee.\n\nCrystal sits down opposite Dan.\n\n"
@@ -4844,8 +4954,11 @@ def test_introducing_somebody_already_in_position():
           "carries the previous frame as a REFERENCE" in _run3[2])
     check("...claimed with everyone in it", "Nora and Ada are the people there" in _s3,
           _s3[-220:])
-    check("...and counted", "There is one person" not in _s3
-          and "There are two people" not in _s3, _s3[-220:])
+    # The count is about the people the shot DESCRIBES -- Dan and Ada here. Nora is in
+    # the carried frame and claimed by its own sentence, which is what accounts for
+    # her without asserting a body the text cannot identify.
+    check("...and counted as the two it describes",
+          "There are two people in the shot" in _s3, _s3[-220:])
     # NOT claimable: somebody in that frame has a portrait riding this shot, so the
     # frame would be a second picture of her. The old fresh start stands.
     _info4 = run_node(
@@ -8116,9 +8229,11 @@ def test_a_sheet_written_first_is_a_sheet():
                                plan_only=True))
     check("the sheet is not a shot of its own", len(shots) == 2)
     check("Owen's shot does not describe Maya", "Maya:" not in shots[1] and "Owen:" in shots[1])
-    # Maya is still on the bench: counted, not described.
-    check("...and counts Maya, who is still there", "There are two people in the shot" in shots[1],
-          shots[1][-160:])
+    # Maya is still on the bench, and the keyframe carries her. The COUNT is about
+    # what the text describes: asserting a second body it cannot identify is how a
+    # stranger gets drawn to own it.
+    check("...and counts the one person it describes",
+          "There is one person in the shot" in shots[1], shots[1][-160:])
     check("the park is still the scene", all(sh.startswith("A park.") for sh in shots))
     # Control: a heading with a colon is not a person and stays the scene.
     shots = _shots_of(run_node("Interior: a kitchen at night.\n\nMaya: she, 38, green sweater.\n\n"
@@ -8499,6 +8614,8 @@ def main():
     test_one_photographed_face_and_two_people()
     test_a_restraint_survives_the_shot_that_undresses_it()
     test_any_restraint_holds_from_shot_to_shot()
+    test_a_length_goes_where_it_is_put()
+    test_the_count_counts_who_the_text_names()
     test_a_shared_pose_names_nobody()
     test_a_lora_is_reported()
     test_the_camera_is_held_where_nothing_places_it()

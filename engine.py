@@ -81,7 +81,7 @@ HARDWARE = (
     (r"straps?", "straps", "wrists"),
     (r"chains?", "chain", "wrists"),
     (r"cuffs?|cuffed", "cuffs", "wrists"),
-    (r"tape", "tape", "wrists"),
+    (r"tapes?|taped|taping", "tape", "wrists"),
 )
 # Preserve visual modifiers in continuity text. Hyphenated compounds pass whole;
 # arbitrary participles do not, because they are more often verbs than modifiers.
@@ -125,7 +125,12 @@ PARTS = (
     (r"hands?", "hands"),
     (r"feet|foot", "feet"),
 )
-PART_VARIES = frozenset({"chain", "rope", "straps", "tape"})
+# A LENGTH OF SOMETHING GOES WHEREVER IT IS PUT, so the table's default part is a
+# guess and the text's own word wins. A steel cable and a tether are as free as a
+# chain or a rope; left out of this set, a cable looped round a neck was recorded on
+# the wrists, because "wrists" is what the table says a cable usually holds.
+PART_VARIES = frozenset({"chain", "rope", "straps", "tape", "steel cable", "tether",
+                         "cling film"})
 
 # Which region a garment leaves uncovered when it comes off. Only what can be
 # placed with certainty; a garment that cannot be placed gets no clause, because
@@ -225,6 +230,24 @@ APPLY_VERB = (
     # requiring "puts on" adjacent read that as no application at all.
     r"(?:puts?|putting|slips?|slipped|snaps?|snapped|clicks?|clicked|clamps?|"
     r"clamped)(?:\s+\S+){0,4}?\s+(?:on|onto|around|shut|closed)|"
+    # A LENGTH OF SOMETHING GOES ON BY BEING PUT AROUND. "Mara loops a steel cable
+    # around her neck and down around her ankles" fastens nothing by these verbs
+    # alone -- loop, wrap, wind, thread, pass, run -- so the cable was never recorded
+    # on anybody, and every shot after the one that staged it had no cable in it at
+    # all. Reported as a steel cable that breaks and lets the legs drop. The particle
+    # is required: "she runs to the door" puts nothing on anybody.
+    # THE HARDWARE AS A BARE VERB, with a body part behind it. The branch below takes
+    # these only with a determiner in front, because "the cuffs" is a noun -- but
+    # "Mara tapes her wrists" has a verb, an object and no determiner, and recorded
+    # nothing at all. An object is what tells them apart.
+    r"(?:tapes|cuffs|chains|straps|binds|ties|locks|shackles|clips|hooks|wraps)\s+"
+    r"(?:\w+\s+){0,2}?(?:her|his|their|the)\s+(?:\w+\s+){0,2}?"
+    r"(?:wrists?|ankles?|hands?|feet|legs?|arms?|neck|throat|waist|knees?|thumbs?)|"
+    r"(?:loops?|looped|looping|wraps?|wrapped|wrapping|winds?|wound|winding|"
+    r"coils?|coiled|coiling|threads?|threaded|threading|passes|passed|passing|"
+    r"runs|ran|running|cinch(?:es|ed|ing)?|knots?|knotted|laces?|laced|"
+    r"hitch(?:es|ed|ing)?|slings?|slung)(?:\s+\S+){0,5}?\s+"
+    r"(?:around|round|through|under|over|about|behind|between)|"
     r"closes?\s+around|clicks?\s+shut)"
     r"|" + _DET + r"(?:handcuffs|cuffs|chains|shackles|locks|padlocks|fastens|"
     r"secures|tethers|ties|straps|clips|hooks|bolts|attaches|anchors|leashes|"
@@ -588,7 +611,11 @@ def hardware_spans(text):
         # A PARTICIPLE FINDS IT AND DOES NOT NAME IT. "is handcuffed" is how the
         # passive voice writes hardware, but an item recorded as "handcuffed"
         # renders as "The handcuffed stay closed and fastened". Quote the noun.
-        if noun.lower().endswith("ed"):
+        # A VERB FORM FINDS IT AND DOES NOT NAME IT, the same way a participle does:
+        # "tapes her wrists" is the tape, and an item recorded as "tapes" renders as
+        # "The tapes stays closed". Quote the noun the table knows.
+        if noun.lower().endswith(("ed", "ing")) or (
+                noun.lower() != canon and not canon.endswith("s")):
             written = f"{adj} {canon}".strip().lower()
         raw.append([canon, part, written, m.start()])
     # WHERE IT GOES, for the things that go anywhere. Bound after every item is
@@ -612,6 +639,20 @@ def hardware_spans(text):
             # "to" matters. "gags her with duct tape" names the gag's MATERIAL
             # by the same shape, and folding that away lost the tape entirely.
             _tether.append(row)
+    # ONE LENGTH, TWO PLACES. "loops a steel cable around her neck and down around
+    # her ankles" is one cable holding two parts of the body, and binding it to the
+    # NEAREST part alone recorded the neck and lost the ankles -- so the legs were
+    # held by nothing and dropped. Only for the things whose part varies: a pair of
+    # handcuffs named beside two body words is still one pair of handcuffs.
+    _spread = []
+    for row in raw:
+        if row[0] not in PART_VARIES:
+            continue
+        _next = min([a for c, a in _ats if a > row[3]], default=len(text))
+        _mine = [pt for pt, at in parts if row[3] < at < _next and pt != row[1]]
+        for _pt in dict.fromkeys(_mine):
+            _spread.append([row[0], _pt, row[2], row[3]])
+    raw += _spread
     raw = [r for r in raw if r not in _tether]
     # A VERB STILL FASTENS SOMETHING, and what it fastens is either an item the
     # beat names or a part of the body. "...chains her collar to the ring and
