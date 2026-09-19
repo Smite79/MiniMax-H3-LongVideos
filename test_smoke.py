@@ -1392,8 +1392,13 @@ def test_removing_shot_without_a_keyframe():
     sh = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3]) if x.strip()]
     check("the removing shot still says the garment is worn",
           "quilted jacket" in sh[0])
+    # IN THE SHEET, which is what "not yet showing" means here: the scarf must not be
+    # listed as WORN on the shot that is still taking the jacket off. The reveal
+    # clause is a different sentence and belongs -- the author's own beat says "to
+    # expose the scarf" -- and it now names the garment in the sheet's words rather
+    # than as a bare head noun, which this whole-shot substring check caught.
     check("...and the layer under it is not yet showing",
-          "grey wool scarf" not in sh[0])
+          "grey wool scarf" not in " ".join(sh[0].split()).split("There is")[0])
     # WHOSE HANDS, where the beat names them. An agentless "the jacket comes off"
     # describes a garment removing itself, which is what a belt dropping to the floor
     # on its own looked like.
@@ -8730,6 +8735,55 @@ def test_the_shot_that_puts_it_on_says_so():
     check("...and what is already on is not put on again", not already, str(already))
 
 
+def test_underwear_is_described_and_comes_all_the_way_off():
+    """REPORTED: described underwear renders black whatever it was written as, and
+    taking it off does not leave the body bare.
+
+    Two causes, one at each end of the layer's life. The reveal clause named the
+    garment by its identity KEY -- the head noun -- so a sheet saying "red lace
+    panties" was answered with "The panties underneath are what shows there now": one
+    garment named twice in a prompt, once with its description and once without, and
+    the bare mention is the one the prior answers. And when the last layer finally
+    came off, "The legs are bare from the hip down" named the legs and stopped, so the
+    one part of that region underwear occupies was left unspecified -- which this
+    file's own note beside REGION_OF says the prior fills with underwear."""
+    print("\n=== underwear is described, and comes all the way off ===")
+    mem = "Ana: she, 30, a denim skirt over red lace panties, a grey t-shirt."
+    shots = _shots_of(run_node(
+        "A room.\n\nAna stands by the bed.\n\nremove: skirt\nAna steps out of the "
+        "skirt.\n\nremove: panties\nAna takes the panties off.\n\nAna lies down.",
+        character_memory=mem, plan_only=True))
+    check("the revealed layer keeps its colour and material",
+          "red lace panties underneath" in " ".join(shots[1].split()),
+          " ".join(shots[1].split())[-170:])
+    check("...and is not also named bare",
+          "The panties underneath" not in shots[1])
+    check("the shot that takes it off says the body is bare there",
+          "genitals uncovered" in shots[2], " ".join(shots[2].split())[-190:])
+    check("...and every shot after it still does",
+          all("genitals uncovered" in sh for sh in shots[3:]), shots[-1][-150:])
+
+    # SILENT WHILE ANYTHING STILL COVERS IT. Taking the jeans off a woman still in a
+    # thong says what shows, not what is bare.
+    covered = _shots_of(run_node(
+        "A room.\n\nAna stands.\n\nremove: jeans\nAna steps out of the jeans.\n\n"
+        "Ana lies down.",
+        character_memory="Ana: she, 30, blue jeans over a black thong, a grey t-shirt.",
+        plan_only=True))
+    check("underwear still on keeps the region clothed",
+          not any("genitals uncovered" in sh for sh in covered), covered[1][-150:])
+    check("...and the thong is named as what shows, in the sheet's words",
+          "black thong underneath" in " ".join(covered[1].split()))
+
+    # THE SAME GATE body_of AND figure_of KEEP. No declared adult age, or no declared
+    # pronoun, and this file describes no body at all.
+    check("a declared adult gets the clause", S.groin_of("she", 30) != "")
+    check("...and so does a man", S.groin_of("he", 40) != "")
+    for pron, age in (("she", 17), ("she", 0), ("they", 30), ("", 30)):
+        check(f"nothing is described for pronoun={pron!r}, age={age}",
+              S.groin_of(pron, age) == "")
+
+
 def test_the_ranking_decides_what_survives():
     """fit_guards is ranked, and a greedy fill let price decide instead.
 
@@ -9571,6 +9625,7 @@ def main():
     test_hardware_in_a_hand_is_not_hardware_on_a_body()
     test_a_length_reaches_only_what_it_is_taken_around()
     test_the_shot_that_puts_it_on_says_so()
+    test_underwear_is_described_and_comes_all_the_way_off()
     test_the_ranking_decides_what_survives()
     test_a_dropped_clause_is_not_reported_as_sent()
     test_a_promoted_clause_opens_in_upper_case()

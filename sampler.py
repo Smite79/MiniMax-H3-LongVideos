@@ -1186,7 +1186,40 @@ def figure_of(pronoun, age=0):
     return ""
 
 
-def bare_clause(gone, covers=None, worn="", body="", figure=""):
+def groin_of(pronoun, age=0):
+    """What the hip region is, once the last thing on it has come off. "" otherwise.
+
+    The sister of figure_of, for the same reason and with the same gating. "The legs
+    are bare from the hip down" names the LEGS and stops, so the one part of that
+    region underwear occupies is left unspecified -- and this file's own note beside
+    REGION_OF says what fills an unspecified region: "the prior for a hip is
+    underwear". So the shot that takes the last layer off is answered by the model
+    putting another one back, or by a smoothed-over blank where the anatomy should
+    be. Reported as underwear that cannot be removed.
+
+    It is reached ONLY through a region this sentence has already called bare, which
+    means nothing on the sheet covers it and nothing under it was named. Saying what
+    is there is not an escalation; it is the same sentence finishing.
+
+    NO BODY IS DESCRIBED FOR A DECLARED AGE UNDER 18, and none for an entry that
+    declares no pronoun -- the identical rule body_of and figure_of keep, returning ""
+    so every clause built on this stays silent. See also the refusal in _prepare: a
+    script that declares a minor and stages nudity does not render at all."""
+    who = {"she": "woman", "he": "man"}.get(str(pronoun or "").strip().lower(), "")
+    if not who:
+        return ""
+    age = int(age or 0)
+    if not age or age < ADULT_AGE:
+        return ""
+    # Plain and anatomical, the register body_of and figure_of already set. Named
+    # positively, because at cfg 1 there is no negative prompt and "no underwear"
+    # would offer the word underwear. The same sentence serves either body: what the
+    # clause has to settle is that the region is SKIN and not cloth, and body_of has
+    # already said whose body it is.
+    return "the hips and groin bare as well, the genitals uncovered and in plain view"
+
+
+def bare_clause(gone, covers=None, worn="", body="", figure="", groin=""):
     """Say the uncovered region is BARE, when the sheet names nothing under it.
 
     A removal clause is emphatic -- off the body, dropped out of frame -- and then
@@ -1209,10 +1242,12 @@ def bare_clause(gone, covers=None, worn="", body="", figure=""):
         r = engine.region_of(item)
         if r and r not in regions:
             regions.append(r)
-    return bare_hold(regions, covers, worn, gone, body=body, figure=figure)
+    return bare_hold(regions, covers, worn, gone, body=body, figure=figure,
+                     groin=groin)
 
 
-def bare_hold(regions, covers=None, worn="", gone=(), whose="", body="", figure=""):
+def bare_hold(regions, covers=None, worn="", gone=(), whose="", body="", figure="",
+              groin=""):
     """Say those regions are bare -- from STATE, so it outlives its beat.
 
     The same suppression as the removal beat, because it is the same sentence:
@@ -1307,7 +1342,14 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose="", body="", figure=
     # about, and "the breasts ..., on the body of a woman of 45" puts the attribute
     # ahead of the thing it belongs to.
     said_fig = f", {figure}" if (figure and "torso" in spoke[:2]) else ""
-    return " " + joined + (f", on {body}" if body else "") + said_fig + \
+    # ...and the same for the hip region, which had no such clause at all. See
+    # groin_of: "bare from the hip down" names the legs and leaves the one part of
+    # that region underwear occupies unspecified, which the prior fills with
+    # underwear. Gated on the region having actually been SAID, exactly as the figure
+    # is -- `out` is capped at two, so "legs was in regions" is not the same question
+    # as "legs got said".
+    said_low = f", {groin}" if (groin and "legs" in spoke[:2]) else ""
+    return " " + joined + (f", on {body}" if body else "") + said_fig + said_low + \
         ", the skin itself the outermost surface there."
 
 
@@ -1450,17 +1492,26 @@ def under_clause(pairs):
     return " " + " ".join(_one(*p) for p in pairs[:2])
 
 
-def reveal_clause(items):
+def reveal_clause(items, scene=""):
     """Say what is underneath is what shows now, on the shot that uncovers it.
 
     The removal clause is emphatic and specific -- off the body, dropped out of frame
     -- while the layer beneath is one item in an attribute list. Against a model whose
     prior for trousers coming off is bare skin, a list entry does not compete. It has
-    to be told what fills the space the garment left."""
+    to be told what fills the space the garment left.
+
+    IN THE SHEET'S OWN WORDS, which is the same call off_by_last_frame makes and for
+    the same reason. `items` are identity KEYS -- head nouns -- and this sentence is
+    PROSE the model reads, so it said "The panties underneath are what shows there
+    now" on a shot whose sheet says "red lace panties". One garment named twice, once
+    with its description and once without, and the bare mention is the one the prior
+    answers: reported as underwear always coming out black whatever it was written as.
+    """
     if not items:
         return ""
-    said = " and ".join(f"the {i}" for i in items[:2])
-    plural = len(items) > 1 or items[0].endswith("s")
+    named = [scene_name_for(i, scene) or i for i in items] if scene else list(items)
+    said = " and ".join(f"the {i}" for i in named[:2])
+    plural = len(items) > 1 or plural_item(named[0])
     return (f" {said[0].upper()}{said[1:]} underneath {'are' if plural else 'is'} what "
             f"shows there now, on and unchanged.")
 
@@ -11002,7 +11053,8 @@ class H3LongVideos:
             # are what shows there now" would put back the one garment the beat was
             # most explicit about removing.
             _revealed = reveal_clause([u for u in revealed_by(covers, toks)
-                                       if u not in visible and not names_any(u, toks)])
+                                       if u not in visible and not names_any(u, toks)],
+                                      scene)
             if _revealed:
                 revealed_shots.append(len(plan) + 1)
             # ...and when the sheet names NOTHING underneath, say the region is bare.
@@ -11024,6 +11076,7 @@ class H3LongVideos:
             _one_age = age_in(_one_line)
             _one_body = (body_of(_one_pron, _one_age) if len(active or []) == 1 else "")
             _one_fig = (figure_of(_one_pron, _one_age) if len(active or []) == 1 else "")
+            _one_groin = (groin_of(_one_pron, _one_age) if len(active or []) == 1 else "")
             # THE WEARER'S OWN ENTRY, not the whole shot's. This clause is silent
             # when something still on the body covers the region -- and it was
             # reading every person in the shot, so the OTHER character's clothes
@@ -11037,7 +11090,7 @@ class H3LongVideos:
                                     if n and names_any(ln, toks)) or shot_sheet
             _bare = ("" if (_revealed or bare)
                      else bare_clause(toks, covers, _bare_sheet, body=_one_body,
-                                      figure=_one_fig))
+                                      figure=_one_fig, groin=_one_groin))
             # ...and on EVERY shot after it, from state, for as long as the
             # region has nothing on it. Said only on the uncovering beat, the
             # region went unspecified from the next shot on -- and the model
@@ -11112,7 +11165,8 @@ class H3LongVideos:
                               # entry. One age applied to two people is the bug the
                               # `whose` argument exists to prevent, one attribute over.
                               body=body_of(*_pron_age(shot_sheet, _n)),
-                              figure=figure_of(*_pron_age(shot_sheet, _n)))
+                              figure=figure_of(*_pron_age(shot_sheet, _n)),
+                              groin=groin_of(*_pron_age(shot_sheet, _n)))
                     for _n, _rg, _on in _rows)
             if _bare:
                 bared_shots.append(len(plan) + 1)
