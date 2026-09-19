@@ -1636,7 +1636,17 @@ def static_for_shot(static, sheet, shot_sheet):
     return "\n".join(out)
 
 
-_QUOTED = re.compile(r'["“][^"”]+["”]')
+# A SPAN OF SPEECH, in either of the two ways a script writes one: plain quotes, or
+# H3's own <d> marker.
+#
+# DEFINED ONCE. There were two of these -- this one matching quotes alone, and a
+# second one further down that matches <d> as well -- and the second silently won
+# everywhere, because a function looks its globals up when it RUNS. So every reader
+# above was written against quotes-only and executed against both, and the two places
+# that COUNT spoken words added _DIALOGUE_TAG on top of a pattern that already
+# matched it. A line marked the way this node's own note tells you to mark it counted
+# double. See spoken_words.
+_QUOTED = re.compile(r"\"[^\"]*\"|“[^”]*”|<d>.*?</d>", re.S)
 # H3's OWN dialogue delimiter. comfy/text_encoders/minimax.py registers <d> and </d>
 # as special tokens, alongside a caption channel (<|caption_start|>...) and a lyrics
 # one -- so the model distinguishes speech, captions and lyrics explicitly. Text in
@@ -1673,6 +1683,23 @@ WORDS_PER_SEC = 2.5            # spoken delivery
 _CLAUSE_SPLIT = re.compile(
     r"(?:[.!?;]+|,?\s+(?:and then|then|and|before|after|while|as|until)\s+"
     r"|,\s+(?=\w+(?:ing|es|s|ed)\b))")
+
+
+def spoken_words(beat):
+    """How many words this beat SPEAKS, counted once.
+
+    _QUOTED matches H3's own <d>...</d> as well as plain quotes, and both places that
+    counted speech added _DIALOGUE_TAG on top of it -- so a line written the way this
+    node's own note tells an author to write it counted DOUBLE. A sixteen-word line
+    was believed to take 12.8 seconds instead of 6.4: its shot was planned at 328
+    frames instead of 175, the dialogue-headroom warning never fired because the line
+    already "fitted", and the tail silence pin started late and held 1.6 seconds less
+    than it should. Written as one reader so the two cannot drift apart again.
+
+    The delimiters are not words: "<d>Hold this.</d>" is two."""
+    b = str(beat or "")
+    return sum(len(re.sub(r"</?\s*d\s*>|[\"“”]", " ", q).split())
+               for q in _QUOTED.findall(b))
 
 
 def travel_spaces(beat):
@@ -1728,8 +1755,7 @@ def beat_seconds(beat):
     crossings = max(0, travel_spaces(text) - 1)
     action = (BEAT_BASE_SEC + SECONDS_PER_ACTION * (len(clauses) + crossings)) \
         if (clauses or crossings) else 0.0
-    spoken = sum(len(q.split()) for q in _QUOTED.findall(beat or "")) \
-        + sum(len(q.split()) for q in _DIALOGUE_TAG.findall(beat or ""))
+    spoken = spoken_words(beat)
     return max(action, (spoken / WORDS_PER_SEC + 1.0) if spoken else 0.0)
 
 
@@ -1764,10 +1790,24 @@ def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
         # length was the reason. Reported as scenes being cut short.
         if want > ceiling_frames:
             capped.append((len(lens) + 1, want))
-        lens.append(max(MIN_AUTO_FRAMES, min(want, ceiling_frames)))
+        # THE CEILING IS THE CEILING. The floor used to be applied last, so any
+        # shot_seconds below ~3.0s was silently ignored and every shot came out
+        # LONGER than the number asked for -- while the note below said they had been
+        # cut to it. The floor belongs to the node's own estimate, which is what it
+        # was written for: one action needs three seconds. A ceiling the author typed
+        # is not an estimate, and the mismatch is told plainly underneath.
+        lens.append(min(max(MIN_AUTO_FRAMES, want), ceiling_frames))
     note = ""
+    # A ceiling BELOW one action's worth. Honoured, because the author typed it, and
+    # said out loud, because every shot in the film is now shorter than the shortest
+    # thing this node knows how to stage in one.
+    if ceiling_frames < MIN_AUTO_FRAMES:
+        note += (f"shot_seconds is {ceiling_frames / H3_FPS:.1f}s, below the "
+                 f"{MIN_AUTO_FRAMES / H3_FPS:.1f}s one staged action needs. Every shot "
+                 f"is held to it, so each beat performs faster than it reads -- if the "
+                 f"motion looks clipped, that is this number. ")
     if capped:
-        note = ("shot(s) "
+        note += ("shot(s) "
                 + ", ".join(f"{n} (wants {w / H3_FPS:.1f}s)" for n, w in capped[:6])
                 + f" stage more than shot_seconds allows, so they are cut to "
                   f"{ceiling_frames / H3_FPS:.1f}s and perform the whole beat faster "
@@ -2325,7 +2365,7 @@ def named_vocals_in(beat):
     return [phrase for pat, phrase in _VOCAL_FROM if re.search(pat, b, re.I)]
 
 
-def sound_clause(phrases, only=False):
+def sound_clause(phrases, only=False, written=False):
     """One sentence naming what the shot is heard as.
 
     `only` closes the list. H3 is joint, so the audio branch drives the face: a shot
@@ -2348,6 +2388,19 @@ def sound_clause(phrases, only=False):
     else:
         heard = ", ".join(phrases[:-1]) + " and " + phrases[-1]
     if only:
+        # THE AUTHOR ALREADY SCORED THIS SHOT. Nothing this node infers may claim to
+        # be the sound of a beat that wrote its own -- so the inferences are dropped
+        # from the list, and then the list was CLOSED around what was left: the
+        # node's own ambient bed and room tone. "Mara strains against the vice as
+        # rain hammers the tin roof" came out as "The only sounds are a strip light
+        # humming and a large room with a long tail", which tells the model the rain
+        # is not happening and the straining body makes no sound. The exclusivity is
+        # worth keeping -- it is what leaves nothing for an invented voice to fill --
+        # so it is written to INCLUDE what the beat says rather than to deny it.
+        # Positively, naming no absence, as everything here has to be at cfg 1.
+        if written:
+            return (f" The only sounds are the ones this beat describes, with "
+                    f"{heard} under them.")
         verb = "is" if len(phrases) == 1 else "are"
         return f" The only sound{'' if len(phrases) == 1 else 's'} {verb} {heard}."
     return f" It sounds like {heard}."
@@ -2448,9 +2501,24 @@ def speech_is_a_devices(beat, sheet=""):
 
 def device_voice_clause(beat):
     """Say which machine the voice is coming out of, so no face is given it."""
-    m = re.search(r"\b" + _TALKER_DEVICE + r"\b", beat or "", re.I)
-    if not m:
+    b = beat or ""
+    # THE MACHINE WITH THE LINE, not the first machine in the beat. This re-scanned
+    # from the start and took whichever device word came first, ignoring which one
+    # carries the speech verb -- so "Ana puts down the phone. The radio says: 'Storm
+    # warning.'" put the voice in the phone she had just put down, and "Ana looks at
+    # the monitor while the tannoy announces" gave the line to the monitor. The
+    # decision that there IS a machine speaking is made by _DEVICE_SAYS, which pairs
+    # a device with the verb; the name has to come from that same pairing.
+    # ...and the LAST device inside that pairing, because the pattern allows three
+    # words between the machine and its verb and two machines can sit inside them:
+    # "Ana looks at the monitor while the tannoy announces" pairs from "monitor" and
+    # speaks from "tannoy". The one nearest the verb is the one with the line.
+    _said = _DEVICE_SAYS.search(b)
+    _span = _said.group(0) if _said else b
+    _hits = list(re.finditer(r"\b" + _TALKER_DEVICE + r"\b", _span, re.I))
+    if not _hits:
         return ""
+    m = _hits[-1]
     # As the author spelled it. Lowercasing turned "TV" into "tv", and a set is not
     # improved by the node correcting its capitalisation.
     thing = re.sub(r"\s+", " ", m.group(0))
@@ -8286,7 +8354,7 @@ _REQUEST = re.compile(
 #
 # Only what is INSIDE the quotes. A beat that quotes a request and then narrates the
 # act -- "\"Take it off.\" He unlocks the belt." -- still has a removal outside them.
-_QUOTED = re.compile(r"\"[^\"]*\"|“[^”]*”|<d>.*?</d>", re.S)
+# _QUOTED is defined once, further up, beside the dialogue marker it reads.
 
 
 def _in_quotes(text, at):
@@ -12319,7 +12387,11 @@ class H3LongVideos:
             # the guard, the silence is, but it is what shapes a branch that is
             # legitimately open. Positively phrased: "the only sound is X" says what
             # IS there, where "nobody speaks" asks the model to render an absence.
-            _sound = sound_clause(heard, only=not _speaks)
+            # The author's OWN sound, where it is not one of the six vocals this
+            # node puts back by name -- rain, an engine, a body straining. It is in
+            # the beat and not in `heard`, so the closed list has to make room for it.
+            _own_unsaid = bool(_own) and not named_vocals_in(body)
+            _sound = sound_clause(heard, only=not _speaks, written=_own_unsaid)
             # Gaze is resolved after the other guards so a character is never named
             # twice. Person targets need no looker's name; object targets do when
             # several people are present.
@@ -12543,9 +12615,22 @@ class H3LongVideos:
             # in one jump, so what it fills with is a voice. Ambience everywhere and
             # silence are mutually exclusive by construction: the silence latent IS
             # the audio, and there is no room in it for a room tone.
+            # ...AND A WRITTEN SOUND THAT WAS MUTED IS NOT A SOUND. `sounded` is what
+            # ShotAudio.pinned reads, so passing `_own` here while _mute_written had
+            # already emptied `heard` left the shot paying the whole cost and taking
+            # none of the benefit: the ambience the author wrote was stripped out so
+            # the mouths could be held shut, the run said so -- "gave up the sound you
+            # wrote for them so the mouths could be held shut" -- and then the branch
+            # was never pinned to silence at all. An open branch on a joint model
+            # fills itself, and what it fills with is a voice, which is the one thing
+            # the whole exchange was for.
+            #
+            # This is _will_silence's own test, written where the plan record is made
+            # so the two cannot disagree.
             plan.add(shot_text,
                      list(active) if character_guard else [],
-                     _speaks, _own or _voiced, _voiced and not _own, _events)
+                     _speaks, (_own and not _mute_written) or _voiced,
+                     _voiced and not _own, _events)
 
         # What share of a shot is the node talking rather than the script. Continuity
         # clauses all say some version of "this stays as it is", and enough of them
@@ -12649,8 +12734,7 @@ class H3LongVideos:
         for _i, _b in enumerate(beats):
             if _i >= len(lens) or not has_speech(_b):
                 continue
-            _words = (sum(len(q.split()) for q in _QUOTED.findall(_b))
-                      + sum(len(q.split()) for q in _DIALOGUE_TAG.findall(_b)))
+            _words = spoken_words(_b)
             _say = _words / WORDS_PER_SEC
             plan.shots[_i].line_seconds = _say
             _tf = ShotAudio(True, True, False, bool(silence_nonspeech), speech_lead_seconds,

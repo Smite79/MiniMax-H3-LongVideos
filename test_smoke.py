@@ -1957,14 +1957,18 @@ def test_a_line_is_marked_however_it_is_punctuated():
     # A SHORT LINE IN A LONG SHOT is where doubled dialogue comes from: the audio
     # branch runs the whole shot and fills what is left with the line again.
     # Reported, not clause -- "the line said once" as prompt text made it worse.
+    # The shot has to BE long, and this file's own harness asks for 1.6s shots. It
+    # used to get long ones anyway, because a shot_seconds below one action's worth
+    # was silently ignored and every shot came out at the 3.0s floor instead. Said
+    # out loud here now that the ceiling is honoured.
     mem = "Dana: she, 35."
     thin = run_node("A room.\n\nDana says: \"No.\"\n\nDana waits.",
-                    plan_only=True, character_memory=mem)[2]
+                    plan_only=True, character_memory=mem, shot_seconds=6.0)[2]
     check("a line that does not fill its shot is reported",
           "no line in it" in thin, thin[-200:])
     full = run_node("A room.\n\nDana says: \"I told you last night that this was "
                     "going to happen and you did not listen to a word of it.\"",
-                    plan_only=True, character_memory=mem)[2]
+                    plan_only=True, character_memory=mem, shot_seconds=6.0)[2]
     check("...and a line that does fill it is not", "no line in it" not in full)
     # Numbers and abbreviations have no single spoken form, and the model picks.
     hard = run_node('A room.\n\nDana says: "Dr. Vale gets here at 7:30."',
@@ -5802,7 +5806,15 @@ def test_sound_survives_silencing():
          "The chain drags and rattles beside her.\n\n"
          'Jon says: "Get up."')
     vae = FakeAudioVAE()
-    info = run_node(P, audio_vae=vae, auto_sound=False)[2]
+    # mouths_shut_when_no_line OFF. That switch trades a written sound away so the
+    # mouths can be held shut on a wordless shot, and this test is about the other
+    # side of the bargain: what happens to a sound when it is KEPT. The two used to
+    # be testable together only because the trade was never completed -- the sound
+    # was stripped from the text and the branch was left open anyway, so the shot
+    # paid the cost and got none of the benefit. Both halves are checked now, each
+    # in the setting that means it.
+    info = run_node(P, audio_vae=vae, auto_sound=False,
+                    mouths_shut_when_no_line=False)[2]
     check("the beat that describes a sound keeps its audio",
           "describe a sound IN THE BEAT" in info)
     # NAMED, not counted. "2 shot(s) have an open branch" tells a reader that two
@@ -5819,6 +5831,12 @@ def test_sound_survives_silencing():
     # With silencing off, nothing is silenced and nothing is claimed about it.
     off = run_node(P, silence_nonspeech=False)[2]
     check("silencing off silences nothing", "conditioned on real silence" not in off)
+    # ...and with the mouth guard ON -- the default -- the trade IS made: the written
+    # sound goes, and the shot is actually pinned rather than merely told about it.
+    traded = run_node(P, audio_vae=FakeAudioVAE(), auto_sound=False)[2]
+    check("the mouth guard gives the written sound up", "gave up the sound you wrote" in traded)
+    check("...and the shot it took it from is really silenced",
+          "shot(s) 1, 2 have no quoted line and no sound described" in traded, traded[-260:])
 
 
 def test_auto_sound_end_to_end():
@@ -5836,7 +5854,11 @@ def test_auto_sound_end_to_end():
          "Jon walks to the bench and looks at the box.\n\n"
          "Maya lies still.\n\n"
          "The chain drags and rattles beside her.")
-    imgs, audio, info, script = run_node(P, plan_only=True)[:4]
+    # mouths_shut_when_no_line OFF, so the last beat's WRITTEN sound survives to be
+    # checked here. With it on -- the default -- that sound is deliberately traded
+    # away to hold the mouths shut, which test_sound_survives_silencing covers.
+    imgs, audio, info, script = run_node(P, plan_only=True,
+                                         mouths_shut_when_no_line=False)[:4]
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     # Shot 1 speaks, so its branch is open anyway and the action's sound is added.
     check("walking is heard on the shot that speaks", "footsteps" in sh[0])
@@ -5847,7 +5869,8 @@ def test_auto_sound_end_to_end():
     # describe an acoustic that is not there. This is the one that was babbling,
     # and it is still the behaviour with the switch off -- an ambient bed read from
     # the anchor is what opens them now, chosen deliberately.
-    q_info, q_script = run_node(P, plan_only=True, auto_sound=False)[2:4]
+    q_info, q_script = run_node(P, plan_only=True, auto_sound=False,
+                                mouths_shut_when_no_line=False)[2:4]
     q_sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", q_script)
             if x.strip()]
     check("a shot with no line gets no derived sound (auto_sound off)",
@@ -8707,6 +8730,118 @@ def test_the_shot_that_puts_it_on_says_so():
     check("...and what is already on is not put on again", not already, str(already))
 
 
+def test_a_line_is_counted_once():
+    """A line marked the way this node's own note tells you to mark it counted DOUBLE.
+
+    _QUOTED was defined twice -- once matching plain quotes, once matching those AND
+    H3's <d> marker -- and the second silently won everywhere, because a function
+    looks its globals up when it runs. Both places that count spoken words then added
+    _DIALOGUE_TAG on top of a pattern that already matched it. A sixteen-word line was
+    believed to take 12.8 seconds instead of 6.4: its shot was planned at twice the
+    length, the dialogue-headroom warning never fired because the line already
+    "fitted", and the tail silence pin started late."""
+    print("\n=== a line is counted once ===")
+    line = "Take the whole crate down to the yard and stack it by the blue door now"
+    quoted = f'Ana says: "{line}"'
+    marked = f"Ana says: <d>{line}</d>"
+    check("sixteen words, counted as sixteen", S.spoken_words(quoted) == 16,
+          str(S.spoken_words(quoted)))
+    check("...however the line is marked", S.spoken_words(marked) == 16,
+          str(S.spoken_words(marked)))
+    check("...so both spellings plan the same shot",
+          abs(S.beat_seconds(quoted) - S.beat_seconds(marked)) < 0.01,
+          f"{S.beat_seconds(quoted)} vs {S.beat_seconds(marked)}")
+    check("the delimiters are not words", S.spoken_words("Ana says: <d>Hold this.</d>") == 2,
+          str(S.spoken_words("Ana says: <d>Hold this.</d>")))
+    check("a beat with no line speaks nothing", S.spoken_words("Ana crosses the yard.") == 0)
+    check("_QUOTED is defined once", sum(
+        1 for ln in open(__file__.replace("test_smoke.py", "sampler.py"))
+        if ln.startswith("_QUOTED = ")) == 1)
+
+
+def test_the_ceiling_is_the_ceiling():
+    """shot_seconds below one action's worth was silently ignored.
+
+    The floor was applied AFTER the cap, so every shot came out at 3.0s however small
+    the number asked for -- and the note said the shots had been CUT to it. Two
+    statements in one report, one of them the opposite of what happened."""
+    print("\n=== the ceiling is the ceiling ===")
+    beats = ["Ana crosses the yard.", "Ana opens the gate."]
+    for secs in (1.0, 2.0, 2.3):
+        cf = S.align_frame_count_nearest(int(round(secs * S.H3_FPS)))
+        lens, note = S.plan_lengths(beats, cf, True)
+        check(f"shot_seconds {secs}s is honoured", all(n <= cf for n in lens),
+              f"ceiling {cf}f, got {lens}")
+        check("...and the run says the shots are shorter than one action",
+              "below the" in note and "one staged action needs" in note, note[:90])
+    # ...and above the floor nothing changed.
+    cf = S.align_frame_count_nearest(int(round(6.0 * S.H3_FPS)))
+    lens, note = S.plan_lengths(beats, cf, True)
+    check("a roomy ceiling still sizes from the beat", all(n < cf for n in lens), str(lens))
+    check("...and says nothing about a floor", "one staged action needs" not in note)
+
+
+def test_the_machine_with_the_line_is_the_one_that_speaks():
+    """The voice clause re-scanned the beat and took whichever machine came first,
+    ignoring which one carries the speech verb -- so "Ana puts down the phone. The
+    radio says: 'Storm warning.'" put the voice in the phone she had just put down."""
+    print("\n=== the machine with the line ===")
+    for beat, want in (
+            ('Ana puts down the phone. The radio says: "Storm warning."', "radio"),
+            ('Ana looks at the monitor while the tannoy announces: "Shift over."', "tannoy"),
+            ('The TV says: "Rain later."', "TV"),
+            ('The intercom buzzes and the speaker says: "Stand clear."', "speaker")):
+        said = S.device_voice_clause(beat)
+        got = re.search(r"the (\S+?)'s", said)
+        check(f"the voice is the {want}'s", bool(got) and got.group(1) == want,
+              said[:90])
+
+
+def test_a_written_sound_is_not_denied():
+    """The exclusive sound clause is what leaves nothing for an invented voice to
+    fill, and it was closing the list around the node's OWN two inferences.
+
+    "Mara strains against the vice as rain hammers the tin roof" came out as "The only
+    sounds are a strip light humming and a large room with a long tail" -- the rain
+    the author wrote and the straining body both excluded by a sentence claiming to
+    name everything audible."""
+    print("\n=== a written sound is not denied ===")
+    mem = "Mara: she, 41, overalls."
+    shot = _shots_of(run_node(
+        "A workshop.\n\nMara strains against the vice as rain hammers the tin roof."
+        "\n\nMara wipes her face.", character_memory=mem, plan_only=True,
+        mouths_shut_when_no_line=False))[0]
+    said = " ".join(shot.split())
+    check("the list still closes, so no voice fills the gap", "The only sounds" in said,
+          said[-160:])
+    check("...but it does not deny what the beat describes",
+          "the ones this beat describes" in said, said[-160:])
+    # A written VOCAL is still named outright: that path was already right.
+    vocal = " ".join(_shots_of(run_node(
+        "A workshop.\n\nMara screams.\n\nMara breathes.", character_memory=mem,
+        plan_only=True, mouths_shut_when_no_line=False))[0].split())
+    check("a scream is still named as the sound", "screaming" in vocal, vocal[-160:])
+
+
+def test_a_sound_given_up_is_really_silenced():
+    """The shot paid the cost and got none of the benefit.
+
+    With the mouth guard on, a wordless shot whose sound the author wrote has that
+    sound stripped out so the mouths can be held shut -- and the run says so. But the
+    plan recorded the shot as still having sound, so ShotAudio.pinned was false and
+    the branch was never pinned to silence. An open branch on a joint model fills
+    itself, and what it fills with is a voice: the one thing the whole exchange was
+    meant to buy."""
+    print("\n=== a sound given up is really silenced ===")
+    P = "A workshop.\n\nRain hammers the tin roof.\n\nMara wipes her face."
+    info = str(run_node(P, character_memory="Mara: she, 41, overalls.", plan_only=True,
+                        mouths_shut_when_no_line=True, silence_nonspeech=True)[2])
+    check("the run says the sound was given up", "gave up the sound you wrote" in info)
+    check("...and the shot it was taken from is pinned",
+          "shot(s) 1, 2 have no quoted line and no sound described" in info,
+          info[-240:])
+
+
 def test_one_person_gets_one_picture():
     """Two pictures of one person in one shot is what draws a second copy of her.
 
@@ -9343,6 +9478,11 @@ def main():
     test_hardware_in_a_hand_is_not_hardware_on_a_body()
     test_a_length_reaches_only_what_it_is_taken_around()
     test_the_shot_that_puts_it_on_says_so()
+    test_a_line_is_counted_once()
+    test_the_ceiling_is_the_ceiling()
+    test_the_machine_with_the_line_is_the_one_that_speaks()
+    test_a_written_sound_is_not_denied()
+    test_a_sound_given_up_is_really_silenced()
     test_one_person_gets_one_picture()
     test_an_untagged_picture_is_not_a_stranger()
     test_a_beat_that_moves_a_garment_keeps_the_cast()
