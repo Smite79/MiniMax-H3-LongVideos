@@ -1322,6 +1322,35 @@ def defer_tag_for(text, items):
     return out
 
 
+# The part of a body a garment covers, in the words a sentence about cloth needs.
+# The region names are the engine's; these are what to CALL them to a model being
+# told a surface is unbroken there.
+_COVER_PART = {
+    "legs": "the hips and waist",
+    "torso": "the chest and stomach",
+    "feet": "the feet and ankles",
+    "hands": "the hands",
+    "head": "the head",
+}
+
+
+def cover_part(garment):
+    """Where this garment covers, for the clause that says it is unbroken there.
+
+    A garment that is the whole outfit covers two of them, and saying only one left
+    the other half of the body unaccounted for in the same sentence that claims to
+    name the only thing in view."""
+    regions = engine.regions_of(garment)
+    if "torso" in regions and "legs" in regions:
+        return "the chest, stomach, hips and waist"
+    for r in regions:
+        if r in _COVER_PART:
+            return _COVER_PART[r]
+    # Unplaceable: the hips and waist is what this always said, and an apron or a
+    # cloak over something is far likelier to sit there than anywhere else.
+    return "the hips and waist"
+
+
 def under_clause(pairs):
     """Say that an under-layer is UNDER, rather than deleting it from the sheet.
 
@@ -1379,7 +1408,14 @@ def under_clause(pairs):
         # What survives is the half that works: a SURFACE, which the model
         # renders well, described as unbroken over the part of the body in
         # question. `u` is deliberately unused -- it is the thing not to mention.
-        return (f"{whose}{o} {cover} the hips and waist completely: whole, "
+        # WHERE THE COVER ACTUALLY SITS. This said "the hips and waist" whatever the
+        # garment was, so a sheet layering a bra under a t-shirt produced "The
+        # t-shirt covers the hips and waist completely ... the only one in view" --
+        # on a character whose same entry still lists blue jeans. The model is told a
+        # t-shirt is the only thing in view at the hips, which is a lie about the
+        # jeans and says nothing at all about the chest, which is the part the bra is
+        # actually under. The garment knows where it sits: ask it.
+        return (f"{whose}{o} {cover} {cover_part(o)} completely: whole, "
                 f"opaque and unbroken, the outermost layer there and the only "
                 f"one in view.")
 
@@ -4041,14 +4077,71 @@ def plural_item(name):
 # resolves it in the opening frames: whatever is on the body turns into the garment.
 # Reported as one thing instantly becoming another, a beat before the beat that
 # puts it on -- which is exactly what the opening frames of that shot are.
+# A DETERMINER IN FRONT IS WHAT MARKS A NOUN. Half the words this file reads as verbs
+# are nouns as well -- "her straps", "the chains hang", "her dresses", "the buttons" --
+# and read as verbs they stage an act nobody performed. You do not "the cuffs"
+# anybody, and you do not "her dresses" anybody either.
+#
+# A COUNTING WORD is a determiner too: "a pair of handcuffs" puts the article two
+# words back where a one-word lookbehind cannot see it, so the noun read as the verb
+# `handcuffs` and "Mara drops a pair of handcuffs into the toolbox" became a beat that
+# cuffed somebody. The counts came later still: engine._DET has had "two" and "more"
+# since it was written and this copy never did, so "Mara unpacks two collars" read as
+# a collaring. Two lists of the same determiners drift, which this file has recorded
+# more than once -- so there is one list, here, used by the restraint readers and the
+# wardrobe readers alike.
+_A_DETERMINER = (r"(?<!\bthe\s)(?<!\bher\s)(?<!\bhis\s)(?<!\ba\s)(?<!\bmy\s)"
+                 r"(?<!\bits\s)(?<!\btheir\s)(?<!\byour\s)(?<!\bthose\s)"
+                 r"(?<!\bthese\s)(?<!\bsome\s)(?<!\bboth\s)"
+                 r"(?<!\bof\s)(?<!\bpair\s)(?<!\bset\s)"
+                 r"(?<!\btwo\s)(?<!\bthree\s)(?<!\bmore\s)(?<!\bseveral\s)")
+
+
+# A GARMENT GOES ON A BODY. It is SET DOWN on one of these. "Ana puts the t-shirt on
+# the bench" is the same six words as "Ana puts the t-shirt on", and it was read as
+# her putting it back on: the shot got the both-ends dressing clause and every shot
+# after it opened "Ana is wearing the grey t-shirt", on a woman whose sheet entry had
+# been scrubbed because she took it off. A garment she set down was back on her for
+# the rest of the film.
+_A_SURFACE = (r"(?:bench(?:es)?|tables?|desks?|counters?|worktops?|shel(?:f|ves)|"
+              r"floors?|grounds?|chairs?|stools?|seats?|beds?|sofas?|couch(?:es)?|"
+              r"hooks?|rails?|racks?|pegs?|hangers?|lines?|"
+              r"box(?:es)?|crates?|baskets?|hampers?|bins?|trays?|drawers?|"
+              r"cupboards?|cabinets?|ledges?|sills?|windowsills?|steps?|stairs?|"
+              r"mats?|rugs?|carpets?|piles?|heaps?|stacks?|roofs?|bonnets?)")
 _PUTS_ON = re.compile(
-    r"\b(?:put(?:s|ting)?|pull(?:s|ing)?|slip(?:s|ping)?|tug(?:s|ging)?|"
-    r"draw(?:s|ing)?|get(?:s|ting)?|climb(?:s|ing)?|step(?:s|ping)?)\b"
-    r"[^.;!?]{0,40}?\b(?:back\s+on|back\s+into|on|into)\b", re.I)
+    # THE PAST TENSE TOO. engine.PUTS_ON has had pulled/slipped/tugged/stepped/
+    # climbed/got and "wriggles" since it was written and this list had none of
+    # them, so "Ana wriggles into the sweater" cleared the state while this half
+    # gave the shot no both-ends clause at all -- a garment that is off at the
+    # first frame and on at the last, with nothing in the text saying it changed.
+    # That is the static disagreement this pattern exists to prevent.
+    r"\b(?:put(?:s|ting)?|pull(?:s|ing|ed)?|slip(?:s|ping|ped)?|tug(?:s|ging|ged)?|"
+    r"draw(?:s|ing)?|drew|get(?:s|ting)?|got|climb(?:s|ing|ed)?|"
+    r"step(?:s|ping|ped)?|wriggle(?:s|d)?)\b"
+    # THE GAP MAY NOT CROSS A REMOVAL. Forty free characters reach across a whole
+    # clause, so "pulls Ana's t-shirt off and drops it on the bench" matched as
+    # "pulls ... off and drops it on" -- one span holding a removal and a dressing,
+    # and the SAME shot was given both clauses. Tempered rather than vetoed after
+    # the fact, so that a beat doing both in turn still finds its second half:
+    # "pulls off her jumper and puts on her coat" fails at "pulls" and matches at
+    # "puts", which is the clause that actually puts something on.
+    r"(?:(?!\boff\b)[^.;!?]){0,40}?\b(?:back\s+on|back\s+into|on|into)\b"
+    r"(?!\s+(?:the|a|an|her|his|their|its|that|this)?\s*(?:\w+\s+){0,1}?"
+    + _A_SURFACE + r"\b)", re.I)
 # ...and the ones that need no preposition.
-_DRESSES = re.compile(r"\b(?:dress(?:es|ing)?|redress(?:es|ing)?|"
-                      r"button(?:s|ing)?(?:\s+up)?|zip(?:s|ping)?\s+up|"
-                      r"fasten(?:s|ing)?|laces?\s+up|puts?\s+back\s+on)\b", re.I)
+#
+# VERB FORMS ONLY. "dress" is a garment as often as it is a verb, so the very shot a
+# dress came off was also told the dress goes on -- "The grey dress comes off during
+# this shot" and "Grey dress is off the body as the shot opens and fully on by the
+# last frame" in one prompt. "button" is the same word twice over: a beat sewing one
+# on staged the shirt going on. The determiner guard carries the rest, since nobody
+# "the dresses" anybody -- it is what keeps "her dresses" and "the buttons" nouns.
+_DRESSES = re.compile(
+    _A_DETERMINER
+    + r"\b(?:dress(?:es|ing)|redress(?:es|ing)?|"
+    r"button(?:s|ing)(?:\s+up)?|zip(?:s|ping)?\s+up|"
+    r"fasten(?:s|ing)|laces?\s+up|puts?\s+back\s+on)\b", re.I)
 
 
 def beat_stages_wearing(beat, item):
@@ -4784,21 +4877,8 @@ CHAIN_RIGID_TAIL = " Its links keep their size and the run between them stays ta
 # and it is then told the hardware is off at the first frame -- the exact inversion
 # this is here to prevent, on a woman who has been in cuffs for five shots.
 #
-# A determiner in front is what marks the noun. You do not "the cuffs" anybody.
-# ...and a COUNTING WORD is a determiner too. "a pair of handcuffs" puts the article
-# two words back where a one-word lookbehind cannot see it, so the noun read as the
-# verb `handcuffs` and "Mara drops a pair of handcuffs into the toolbox" was a beat
-# that cuffed somebody -- told, in the same shot, that the hardware is open at the
-# first frame and closed by the last.
-_A_DETERMINER = (r"(?<!\bthe\s)(?<!\bher\s)(?<!\bhis\s)(?<!\ba\s)(?<!\bmy\s)"
-                 r"(?<!\bits\s)(?<!\btheir\s)(?<!\byour\s)(?<!\bthose\s)"
-                 r"(?<!\bthese\s)(?<!\bsome\s)(?<!\bboth\s)"
-                 r"(?<!\bof\s)(?<!\bpair\s)(?<!\bset\s)"
-                 # ...and the COUNTS. engine._DET has had "two" and "more" since it
-                 # was written and this copy never did, so "Mara unpacks two collars"
-                 # read as a beat that collars somebody. Two lists of the same
-                 # determiners drift, which this file has recorded more than once.
-                 r"(?<!\btwo\s)(?<!\bthree\s)(?<!\bmore\s)(?<!\bseveral\s)")
+# A determiner in front is what marks the noun. You do not "the cuffs" anybody -- see
+# _A_DETERMINER, which is defined further up because the wardrobe readers need it too.
 _APPLY_NOW = re.compile(
     _A_DETERMINER +
     r"\b(?:cuffs|handcuffs|chains|ties|binds|locks|straps|tapes|gags|shackles|"
@@ -8356,35 +8436,11 @@ region_of = engine.region_of
 # which is re-stamped into every later shot, so the clothes came back on.
 #
 # "naked eye" and "naked flame" are not people.
-_NAKED_CUE = re.compile(
-    r"\bnaked\b(?!\s+(?:eye|flame))"
-    r"|\bnude\b|\bin\s+the\s+nude\b"
-    r"|\bundress(?:es|ed|ing)?\b"
-    # "strips off" and "strips out of" only when nothing specific follows. "She strips
-    # off her coat" named a coat and read as naked: coat, sweater, jeans and boots all
-    # came off, and the next shot called her bare. A named garment is handled as that
-    # garment; "strips off." and "strips off her clothes" still undress.
-    r"|\bstrips?\s+(?:down|naked|bare)\b|\bstripp(?:ed|ing)\s+(?:down|naked|bare)\b"
-    r"|\b(?:strips?|stripp(?:ed|ing))\s+(?:out\s+of|off)\b"
-    r"(?=\s*(?:[.,;!?]|$)|\s+(?:and|then|while|as)\b|\s+(?:everything|it\s+all|all\s+of\s+it)\b"
-    r"|\s+(?:(?:his|her|their|all\s+(?:his|her|their))\s+)?(?:clothes|clothing|garments|things|kit|outfit|gear)\b)"
-    r"|\btakes?\s+(?:everything|it\s+all|all\s+of\s+it|the\s+lot)\s+off\b"
-    # A GENERIC garment word as the object. "Sam takes off his clothes" is the
-    # commonest way anybody writes this, and it named no garment the sheet lists,
-    # so every other path had nothing to remove: his wardrobe stayed in the scene
-    # text and was re-stamped into every later shot, which is the clothes still
-    # being on. Her named garments came off; his generic ones never did.
-    r"|\b(?:takes?|took|taking|pulls?|pulled|peels?|peeled|sheds?|shed|"
-    r"removes?|removed|gets?|got|slips?|slipped)\b"
-    r"(?:\s+(?:off|out\s+of))?\s+(?:his|her|their|its|the|all\s+(?:his|her|their))?"
-    r"\s*(?:clothes|clothing|garments|things|kit|outfit|gear)\b"
-    r"(?:\s+off)?"
-    # A bare "strips" only when it takes NO object: "Sam strips." undresses him,
-    # "she strips the paint off the door" and "strips a length of tape" do not.
-    # The object is what tells them apart, so anything but a clause end is out.
-    r"|\bstrips?\b(?=\s*[.,;!?]|\s*$)"
-    r"|\bstripp(?:ed|ing)\b(?=\s*[.,;!?]|\s*$)"
-    r"|\bwearing\s+nothing\b|\bwith\s+no\s+clothes\b|\bbare\s+skin\b", re.I)
+# ONE LIST, READ BY BOTH HALVES. This lived here and the engine had nothing like
+# it, so "Ana undresses completely." emptied her sheet here while SceneState
+# recorded nothing -- and from the next shot on the prompt described a person
+# with no clothes listed and no skin described either.
+_NAKED_CUE = engine.STRIPS_BARE
 
 
 def strips_who(beat, cast):
@@ -8538,7 +8594,20 @@ def hide_item(text, items):
     22") never disappears, whatever else is in it."""
     if not text or not items:
         return text
-    pats = [re.compile(r"(?:\b\w+[\w-]*\s+){0,3}?\b" + re.escape(str(i).strip()) + r"\b",
+    # THE ADJECTIVES IN FRONT, AND NOTHING PAST A LAYERING WORD. The run of up to
+    # three words was untempered, so hiding the under-layer of "a denim skirt over
+    # black knickers" matched "skirt over black knickers" -- three words before the
+    # item, the outermost of them the OUTER GARMENT -- and took the skirt out of the
+    # sheet with the knickers. The covered shots then described a woman in a t-shirt
+    # and nothing else, the model invented a skirt for them, and the shot that
+    # uncovers the knickers said "The denim skirt comes off": a garment changing into
+    # a denim one at the removal boundary.
+    #
+    # It only ever worked by accident. "blue jeans over a black thong" has an article
+    # in the way, which pushes the outer garment to four words back and out of reach.
+    _NOT_PAST = (r"(?:\b(?!(?:over|under|underneath|beneath|above|below|with|and|"
+                 r"plus|inside)\b)\w+[\w-]*\s+){0,3}?")
+    pats = [re.compile(_NOT_PAST + r"\b" + re.escape(str(i).strip()) + r"\b",
                        re.I) for i in items if str(i).strip()]
     out_lines = []
     for line in str(text).split("\n"):
@@ -8559,6 +8628,12 @@ def hide_item(text, items):
                     # The item, plus any adjectives sitting directly in front of it.
                     new = p.sub("", new)
                 removed = new != unit
+                # ...and the word that joined it to what covers it, which is left
+                # dangling now that the run above stops short of it: "a denim skirt
+                # over ," is not a sheet entry anybody can read.
+                if removed:
+                    new = re.sub(r"\s*\b(?:over|under|underneath|beneath|above|below|"
+                                 r"with|and|plus|inside)\b\s*(?=[,.;]|$)", "", new)
             # THE PRINT ON A COVERED GARMENT GOES WITH THE GARMENT.
             #
             # Reported: a thong under shorts, lettering on the thong, and the
@@ -10774,8 +10849,19 @@ class H3LongVideos:
             _one_age = age_in(_one_line)
             _one_body = (body_of(_one_pron, _one_age) if len(active or []) == 1 else "")
             _one_fig = (figure_of(_one_pron, _one_age) if len(active or []) == 1 else "")
+            # THE WEARER'S OWN ENTRY, not the whole shot's. This clause is silent
+            # when something still on the body covers the region -- and it was
+            # reading every person in the shot, so the OTHER character's clothes
+            # answered for this one's body. A woman whose trousers had just come off
+            # was told nothing about her legs because somebody kneeling beside her
+            # was wearing overalls, and an unspecified region is filled by the
+            # model's own prior: legwear the prompt never asked for, carried into
+            # every later shot by the keyframe. The same defect as the hardware hold
+            # naming one person's cuffs on another's shots.
+            _bare_sheet = "\n".join(ln for n, ln in sheet_lines(shot_sheet)
+                                    if n and names_any(ln, toks)) or shot_sheet
             _bare = ("" if (_revealed or bare)
-                     else bare_clause(toks, covers, shot_sheet, body=_one_body,
+                     else bare_clause(toks, covers, _bare_sheet, body=_one_body,
                                       figure=_one_fig))
             # ...and on EVERY shot after it, from state, for as long as the
             # region has nothing on it. Said only on the uncovering beat, the

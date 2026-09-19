@@ -156,12 +156,25 @@ REGION_OF = (
     # No hardware. A chastity belt is in the layering vocabulary, but it is a
     # restraint: it is latched and held by its own mechanism, and a bare region
     # read off it would argue with that.
+    # A GARMENT THAT IS THE WHOLE OUTFIT LEAVES TWO REGIONS, and it is in both rows
+    # for that reason -- see regions_of. There was no row for one at all, so the
+    # commonest full-body garment in any script came off, the sheet emptied to
+    # "Ana: she, 30.", and not one shot -- not even the removing shot -- said
+    # anything about the body it left. That is the unspecified region this whole
+    # table exists to prevent, over the whole figure at once.
+    #
+    # An apron, a cloak and a poncho are deliberately absent: they are worn OVER
+    # clothes, and taking one off leaves nobody bare.
     (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|tights|"
-     r"pantyhose|jeggings|culottes|tracksuit\s+bottoms|"
+     r"pantyhose|jeggings|culottes|tracksuit\s+bottoms|sweatpants|pants|"
+     r"dress|gown|dressing-?gown|robe|kimono|sari|nightdress|nightie|nightgown|"
+     r"jumpsuit|romper|playsuit|catsuit|bodysuit|leotard|onesie|"
+     r"overalls|dungarees|boilersuit|coveralls|swimsuit|"
      r"panties|knickers|thong|g-?string|briefs|boxers|underwear|undies|"
      r"jockstrap|loincloth", "legs",
      "The legs are bare from the hip down"),
-    (r"socks|stockings|hold-?ups|boots|shoes|trainers|sneakers|sandals|heels",
+    (r"socks|stockings|hold-?ups|boots|shoes|trainers|sneakers|sandals|heels|"
+     r"slippers|loafers|brogues|clogs|espadrilles|flats|moccasins|pumps|wedges",
      "feet", "The feet and ankles are bare"),
     # THE CHEST IS THE POINT. This said "The arms and shoulders are bare" and
     # stopped there, so a shirt coming off left the one region a bra occupies
@@ -169,9 +182,22 @@ REGION_OF = (
     # prior. Reported as a bra coming back on somebody topless, on a character
     # whose sheet never listed a bra: it was never restored, it was invented.
     (r"top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|hoodie|cardigan|"
-     r"jacket|coat|tunic|bra|bralette|camisole|vest", "torso",
+     r"jacket|coat|tunic|bra|bralette|camisole|vest|"
+     r"pullover|overcoat|raincoat|peacoat|windbreaker|blazer|anorak|parka|gilet|"
+     # ...the whole-outfit garments again, which cover this half too.
+     r"dress|gown|dressing-?gown|robe|kimono|sari|nightdress|nightie|nightgown|"
+     r"jumpsuit|romper|playsuit|catsuit|bodysuit|leotard|onesie|"
+     r"overalls|dungarees|boilersuit|coveralls|swimsuit",
+     "torso",
      "The chest, shoulders and arms are bare skin"),
     (r"gloves|mittens", "hands", "The hands are bare"),
+    # THE HEAD HAD NO ROW AT ALL, so a hat coming off placed nothing: the sheet
+    # stopped listing it and no shot said what was there instead. Every other row
+    # here exists because an unspecified region gets filled from the model's prior,
+    # and a head is the one part of a body that prior will happily put a hat back
+    # on. Said as hair rather than as skin, which is what is actually uncovered.
+    (r"hat|cap|beanie|beret|headscarf|headband|hood", "head",
+     "The head is bare, the hair uncovered"),
 )
 # Being in that state rather than arriving at it. "Kate is topless" takes nothing
 # off, so every removal path had nothing to remove and no shot ever said what was
@@ -331,12 +357,27 @@ _ROOM_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|
 GARMENT_PHRASES = (r"chastity[\s-]*(?:belts?|devices?|cages?)|g[\s-]?strings?|"
                    r"boxer[\s-]+shorts?|sports?[\s-]+bras?|body[\s-]?suits?|"
                    r"suspender[\s-]+belts?|garter[\s-]+belts?")
-GARMENT_WORDS = (r"shirt|blouse|top|t-shirt|tshirt|dressing-gown|vest|waistcoat|"
+GARMENT_WORDS = (r"shirt|blouse|top|t-shirt|tshirt|dressing-?gown|vest|waistcoat|"
                  r"gilet|jumper|sweater|"
                  r"sweatshirt|hoodie|cardigan|jacket|blazer|coat|anorak|parka|"
                  r"poncho|cloak|dress|gown|skirt|kilt|sari|kimono|trousers|pants|"
                  r"jeans|slacks|chinos|shorts|leggings|joggers|tracksuit|tights|"
                  r"stockings|socks|shoes|boots|trainers|sneakers|sandals|heels|"
+                 # WORDS THE SAMPLER'S OWN FAMILIES NAME AND THIS LIST DID NOT.
+                 # Its positional reader takes a pullover or a pair of loafers off
+                 # happily -- scrubbed from the sheet, removal clause printed -- and
+                 # this list is what SceneState reads, so nothing was recorded and no
+                 # later shot was told what is on that region. Twenty-four of them,
+                 # found by walking the two lists against each other rather than by
+                 # noticing one at a time.
+                 r"pullover|overcoat|raincoat|peacoat|windbreaker|sweatpants|tee|"
+                 r"loafers|brogues|clogs|espadrilles|flats|moccasins|pumps|wedges|"
+                 r"beret|"
+                 # ...and the ones REGION_OF knows that this list did not, which is
+                 # two vocabularies inside this one file disagreeing with each other.
+                 r"culottes|hold-?ups|jeggings|pantyhose|tunic|headscarf|headband|hood|"
+                 r"nightgown|playsuit|catsuit|bodysuit|leotard|onesie|boilersuit|"
+                 r"coveralls|"
                  r"slippers|gloves|mittens|scarf|hat|cap|beanie|tie|apron|"
                  r"overalls|dungarees|uniform|robe|pyjamas|pajamas|nightdress|"
                  r"nightie|swimsuit|bikini|trunks|romper|jumpsuit|"
@@ -356,12 +397,56 @@ _GARMENT = GARMENT_PHRASES + r"|" + GARMENT_WORDS
 # words in the gap. Requiring them adjacent read that last one as no change at
 # all, so the garment silently stayed off.
 _GAP = r"(?:\s+\S+){0,4}?\s+"
-TAKES_OFF = (r"(?:takes?|took|taking|pulls?|pulled|peels?|peeled|strips?|"
-             r"stripped|shrugs?|slips?|slipped|steps?|gets?|got|kicks?|"
-             r"kicked)" + _GAP + r"(?:off|out\s+of)\b"
+# Shared with the removal readers in sampler.py: the sampler imports this one.
+_STRIP_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
+               r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|"
+               r"slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
+               r"toss(?:es|ed)?|throw[s]?|threw|"
+               # How clothes actually come off, in the words people write it in.
+               # Without these a beat took the garment off on screen while the scene
+               # kept saying it was worn -- and the scene is re-stamped into every
+               # later shot, so it came back on and stayed on.
+               r"kick(?:s|ed|ing)?|step(?:s|ped|ping)?|lift(?:s|ed|ing)?|"
+               r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?|work(?:s|ed)?")
+# ONE LIST, READ BY BOTH HALVES. This was a second hand-written list of removal
+# verbs, and it had drifted from the one above by FORTY-TWO forms: yank, tug, rip,
+# tear, toss, throw, cut, slide, wriggle, work and every participle of them. The
+# sampler took the garment off on those -- scrubbed it from the sheet, printed "the
+# red sweater comes off during this shot" -- while SceneState recorded nothing, so
+# p.bare never gained the region and no later shot said anything about her chest at
+# all. An unspecified region is one the model fills from its own prior, which is the
+# bug REGION_OF exists for: a bra coming back on somebody topless.
+#
+# "gets"/"got" are kept beside it because they are a removal only with a particle,
+# and are too ordinary a verb to put in the shared list.
+# The verbs above that stay a removal when the particle TRAILS the object -- "kicks
+# her boots off". The rest are removals only with the particle straight after them:
+# "steps out of her leggings" is one, "steps back" while a light goes off later in
+# the sentence is not, and the trailing form would read that as a removal.
+_TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
+                  r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|"
+                  r"tore|slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
+                  r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
+                  # "works her sweater off" is how a tight garment comes off, and the
+                  # sampler's own positional reader has always taken it -- so leaving
+                  # it out here was the two halves disagreeing about one sentence,
+                  # which is the whole failure this pairing exists to stop.
+                  r"work(?:s|ed)?|"
+                  r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
+TAKES_OFF = (r"(?:" + _TRAILING_VERB + r"|gets?|got)" + _GAP + r"(?:off|out\s+of)\b"
+             # ...and the ones that need the particle straight after them, which is
+             # the same call the trailing list above makes and for the same reason:
+             # "lifts the lid off the box" must not take off the coat named later in
+             # the sentence.
+             r"|\b(?:steps?|stepped|stepping|lifts?|lifted|lifting|"
+             r"works?|worked|working)\s+(?:off|out\s+of)\b"
              r"|\b(?:removes?|removed|removing|discards?|discarded|sheds?|shedding|"
              r"undresses|undressed)")
 PUTS_ON = (r"(?:puts?|putting|pulls?|pulled|slips?|slipped|tugs?|tugged|"
+           # "draws the sweater back on" put it on for the sampler and not for this
+           # reader, so the shot said the sweater was on AND that the chest was bare
+           # -- in the same sentence block, and in every shot after it.
+           r"draws?|drew|drawing|"
            r"steps?|stepped|climbs?|climbed|gets?|got|wriggles?)" + _GAP +
            r"(?:on|into|back\s+on)\b"
            r"|\b(?:dresses?\s+in|dressed\s+in|buttons?|zips?\s+up|fastens?)")
@@ -735,13 +820,58 @@ _REGION_RX = tuple((_rx(r"\b(?:" + p + r")\b"), region, said)
                    for p, region, said in REGION_OF)
 _NUDITY_RX = tuple((_rx(r"\b(?:" + p + r")\b"), regions) for p, regions in NUDITY)
 
+# ARRIVING AT IT, which the table above deliberately does not cover: those are states
+# a person is already in. Undressing is an ACT, and it names no garment, so every
+# removal path here had nothing to take off -- "Ana undresses completely." emptied her
+# sheet in the sampler while this reader recorded nothing at all, and from the next
+# shot on the prompt described a person with no clothes listed and no skin described.
+# Meanwhile "Ana strips naked." latched all three regions and held them on every shot,
+# so two spellings of one act behaved differently.
+#
+# Shared with sampler._NAKED_CUE rather than written twice: it is the same question,
+# and it is a careful pattern. "She strips off her coat" names a coat and must stay a
+# coat coming off; "she strips the paint off the door" undresses nobody. The object is
+# what tells them apart, which is why the bare forms demand a clause end.
+STRIPS_BARE = _rx(
+    r"\bnaked\b(?!\s+(?:eye|flame))"
+    r"|\bnude\b|\bin\s+the\s+nude\b"
+    r"|\bundress(?:es|ed|ing)?\b"
+    r"|\bstrips?\s+(?:down|naked|bare)\b|\bstripp(?:ed|ing)\s+(?:down|naked|bare)\b"
+    r"|\b(?:strips?|stripp(?:ed|ing))\s+(?:out\s+of|off)\b"
+    r"(?=\s*(?:[.,;!?]|$)|\s+(?:and|then|while|as)\b|\s+(?:everything|it\s+all|all\s+of\s+it)\b"
+    r"|\s+(?:(?:his|her|their|all\s+(?:his|her|their))\s+)?(?:clothes|clothing|garments|things|kit|outfit|gear)\b)"
+    r"|\btakes?\s+(?:everything|it\s+all|all\s+of\s+it|the\s+lot)\s+off\b"
+    r"|\b(?:takes?|took|taking|pulls?|pulled|peels?|peeled|sheds?|shed|"
+    r"removes?|removed|gets?|got|slips?|slipped)\b"
+    r"(?:\s+(?:off|out\s+of))?\s+(?:his|her|their|its|the|all\s+(?:his|her|their))?"
+    r"\s*(?:clothes|clothing|garments|things|kit|outfit|gear)\b"
+    r"(?:\s+off)?"
+    r"|\bstrips?\b(?=\s*[.,;!?]|\s*$)"
+    r"|\bstripp(?:ed|ing)\b(?=\s*[.,;!?]|\s*$)"
+    r"|\bwearing\s+nothing\b|\bwith\s+no\s+clothes\b|\bbare\s+skin\b")
+
 
 def region_of(garment):
-    """The region a garment covers, or "" when it cannot be placed."""
+    """The region a garment covers, or "" when it cannot be placed.
+
+    The FIRST of them where a garment covers more than one. See regions_of, which
+    is what anything latching a bare region should be asking."""
     for rx, region, _said in _REGION_RX:
         if rx.search(str(garment or "")):
             return region
     return ""
+
+
+def regions_of(garment):
+    """EVERY region a garment covers. [] when it cannot be placed.
+
+    A dress is two of them, and a table that could only answer with one left the
+    other unspecified -- which is the region the model fills from its own prior."""
+    out = []
+    for rx, region, _said in _REGION_RX:
+        if rx.search(str(garment or "")) and region not in out:
+            out.append(region)
+    return out
 
 
 def nudity_in(text):
@@ -886,7 +1016,22 @@ def garments_in(text):
     return out
 
 
-_CLAUSE_BOUNDARY = re.compile(r"[,;]|\b(?:and|while)\b", re.I)
+# A FULL STOP IS A CLAUSE BOUNDARY. It was not, and a beat is usually several
+# sentences, so "Ana takes off her boots. Mara hangs a coat on the hook." was ONE
+# clause: the boots were credited to Mara, and the coat -- which is on a hook and was
+# never worn by anybody -- was recorded as coming off her too. Mara's bare regions
+# became feet and torso, and every later shot described her barefoot and topless.
+# Writing the same beat with ", and" instead of the full stop gave the right answer,
+# which is the tell. All three of the sampler's own clause splitters have always
+# split on . ! ? -- this was the odd one out.
+_CLAUSE_BOUNDARY = re.compile(r"[,;.!?]|\b(?:and|while)\b", re.I)
+
+
+# A clause holding NOTHING but a determiner in front of its garment, which is what a
+# second object of a shared verb looks like: "...and her jeans". See the inheritance
+# in read(): anything else in front is a clause with business of its own.
+_ONLY_A_DETERMINER = re.compile(
+    r"\s*(?:(?:her|his|their|its|the|a|an|my|your|our|both|two|all)\s+)?\s*", re.I)
 
 
 def _clause_at(text, at, boundaries=None):
@@ -1040,27 +1185,8 @@ _DET_POSS = DET_POSS
 # same sheet, and they now sit beside the vocabulary they both read.
 # ---------------------------------------------------------------------------
 
-# Shared with the removal readers still in sampler.py, which is why it is here
-# rather than moved: this is the copy, and the sampler imports it.
-_STRIP_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
-               r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|"
-               r"slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
-               r"toss(?:es|ed)?|throw[s]?|threw|"
-               # How clothes actually come off, in the words people write it in.
-               # Without these a beat took the garment off on screen while the scene
-               # kept saying it was worn -- and the scene is re-stamped into every
-               # later shot, so it came back on and stayed on.
-               r"kick(?:s|ed|ing)?|step(?:s|ped|ping)?|lift(?:s|ed|ing)?|"
-               r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?|work(?:s|ed)?")
-# The verbs above that stay a removal when the particle TRAILS the object -- "kicks
-# her boots off". The rest are removals only with the particle straight after them:
-# "steps out of her leggings" is one, "steps back" while a light goes off later in
-# the sentence is not, and the trailing form would read that as a removal.
-_TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
-                  r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|"
-                  r"tore|slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
-                  r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
-                  r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
+# _STRIP_VERB and _TRAILING_VERB are defined further up, beside TAKES_OFF, which is
+# now built from them.
 # ...and verbs that are a removal on their own, needing no particle.
 _UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|shed(?:s|ding)?|unzip(?:s|ped)?|"
               r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?|"
@@ -1798,6 +1924,36 @@ class SceneState:
                 actions += [(x.start(), "aside") for x in _DISPLACES.finditer(clause)
                             if x.start() <= item_at]
                 action = max(actions, default=(-1, ""))[1]
+                # A SECOND OBJECT OF THE SAME VERB. "takes off her t-shirt and her
+                # jeans" puts the jeans in a clause of their own, because "and" is a
+                # boundary -- and that clause holds no verb, so the jeans were never
+                # recorded as coming off at all. The sampler scrubbed both from the
+                # sheet, so from the next shot on the legs were an unspecified region
+                # on a woman the prompt described with no trousers, and the model
+                # filled it from its own prior.
+                #
+                # Only where there is NOTHING in front of the garment but a
+                # determiner: "Ana takes off her boots and Mara hangs a coat on the
+                # hook" has a verb of its own, and a coat on a hook is not coming off
+                # anybody. The clause before must be in the same sentence, which is
+                # what makes a full stop a boundary worth having.
+                # A list of them walks back through each other object in turn:
+                # "her t-shirt, her jeans and her boots" is three clauses and one
+                # verb, and stopping at the first left the boots on.
+                if not action and _ONLY_A_DETERMINER.fullmatch(clause[:item_at]):
+                    _lo = lo
+                    for _ in range(6):
+                        _b = next((x for x in boundaries if x.end() == _lo), None)
+                        if not _b or _b.group(0).lower() not in ("and", ",", ";"):
+                            break
+                        prev, _plo = _clause_at(beat, max(0, _b.start() - 1), boundaries)
+                        back = [(x.start(), "off") for x in _TAKES_OFF.finditer(prev)]
+                        back += [(x.start(), "on") for x in _PUTS_ON.finditer(prev)]
+                        back += [(x.start(), "aside") for x in _DISPLACES.finditer(prev)]
+                        action = max(back, default=(-1, ""))[1]
+                        if action or _plo >= _lo:
+                            break
+                        _lo = _plo
                 if action == "aside" and _OPENS_GARMENT.search(clause[:item_at]):
                     if _COMPLETES_OFF.search(re.split(r"[.;!?]", beat[m.end():])[0]):
                         action = "off"
@@ -1811,7 +1967,7 @@ class SceneState:
                     p.worn = [x for x in p.worn if _garment_key(x) != key]
                     p.displaced = [x for x in p.displaced
                                    if _garment_key(x) != key]
-                    _bare_on(p, region_of(g))
+                    _bare_on(p, regions_of(g))
                 elif action == "on":
                     if key not in [_garment_key(x) for x in p.worn]:
                         p.worn.append(g)
@@ -1822,7 +1978,7 @@ class SceneState:
                     # Covered again: the latch has to release, or a character who
                     # dresses is told for the rest of the film that the region is
                     # bare, over the garment she just put on.
-                    _bare_off(p, region_of(g))
+                    _bare_off(p, regions_of(g))
                 elif action == "aside":
                     if key not in [_garment_key(x) for x in p.displaced]:
                         p.displaced.append(g)
@@ -1831,10 +1987,15 @@ class SceneState:
         # BEING in the state, rather than arriving at it. No garment is named and
         # nothing comes off, so every removal path had nothing to do and no shot
         # ever said what was on the chest.
-        _nude = nudity_in(beat)
+        # ...OR ARRIVING AT IT. Undressing names no garment either, so it took the
+        # same path or no path at all -- and it took no path at all. See STRIPS_BARE.
+        _strip = STRIPS_BARE.search(beat or "")
+        _nude = nudity_in(beat) or (["torso", "legs", "feet"] if _strip else [])
         if _nude:
-            nude_at = min((m.start() for rx, _regions in _NUDITY_RX
-                           for m in rx.finditer(beat)), default=len(beat))
+            nude_at = min([m.start() for rx, _regions in _NUDITY_RX
+                           for m in rx.finditer(beat)]
+                          + ([_strip.start()] if _strip else []),
+                          default=len(beat))
             located = [(abs(beat.find(n) - nude_at), n) for n in who if beat.find(n) >= 0]
             owners = [min(located)[1]] if located else ([subject] if subject else [])
             for n in owners:
@@ -1846,7 +2007,7 @@ class SceneState:
                 # that says the chest is bare, because something "still worn"
                 # covered the region. The state has to agree with itself.
                 for g in list(q.worn):
-                    if region_of(g) in _nude:
+                    if any(r in _nude for r in regions_of(g)):
                         q.worn.remove(g)
                         if _garment_key(g) not in [_garment_key(x)
                                                    for x in q.removed]:

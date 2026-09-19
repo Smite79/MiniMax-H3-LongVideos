@@ -8707,6 +8707,253 @@ def test_the_shot_that_puts_it_on_says_so():
     check("...and what is already on is not put on again", not already, str(already))
 
 
+def test_a_garment_set_down_is_not_a_garment_put_on():
+    """Taking something off, and putting it down, is not putting it back on.
+
+    Three ways one shot came to hold both clauses at once. "dress" is a garment as
+    often as it is a verb, so the shot a dress came off was also told the dress goes
+    on. "Ana puts the t-shirt on the bench" is the same six words as putting it on.
+    And the gap between verb and particle reached across a whole clause, so "pulls
+    Ana's t-shirt off and drops it on the bench" matched as "pulls ... off and drops
+    it on". Every shot after opened "Ana is wearing the grey t-shirt", on a woman
+    whose sheet entry had been scrubbed because she took it off."""
+    print("\n=== set down is not put on ===")
+    for beat, item, want in (
+            ("Ana takes off her dress and drops it on the bench.", "dress", False),
+            ("Ana puts the t-shirt on the bench.", "t-shirt", False),
+            ("Mara pulls Ana's t-shirt off and drops it on the bench.", "t-shirt", False),
+            ("Ana hangs the coat on the hook.", "coat", False),
+            ("Ana puts her boots on the floor.", "boots", False),
+            ("Ana folds her dresses and puts them in the drawer.", "dress", False),
+            ("Ana sews a button on the shirt.", "shirt", False),
+            # ...and the dressings that must survive all of that.
+            ("Ana puts her coat on.", "coat", True),
+            ("Ana pulls the sweater back on.", "sweater", True),
+            ("Ana pulls her boots on.", "boots", True),
+            ("Ana steps into the jeans.", "jeans", True),
+            ("Ana zips up the jacket.", "jacket", True),
+            ("Ana pulls off her jumper and puts on her coat.", "coat", True)):
+        check(f"{'puts on' if want else 'does not put on'}: {beat[:40]!r}",
+              S.beat_stages_wearing(beat, item) is want)
+    # End to end: the removing shot says one thing about the garment, not two.
+    shot = _shots_of(run_node(
+        "A workshop.\n\nMara pulls Ana's t-shirt off and drops it on the bench.\n\n"
+        "Ana breathes.",
+        character_memory="Ana: she, 30, a grey t-shirt, blue jeans.\n"
+                         "Mara: she, 34, a blue apron.", plan_only=True))[0]
+    check("the removing shot does not also dress her",
+          "fully on by the last frame" not in shot, shot[-140:])
+
+
+def test_what_a_removal_uncovers_is_said_on_every_later_shot():
+    """A region with nothing on it has to be described for as long as that is true.
+
+    An unspecified region is one the model fills from its own prior, which is the
+    report this machinery exists for: a bra coming back on a topless character whose
+    sheet never had one. It was never restored, it was invented.
+
+    Four ways the latch never caught. A compound removal recorded only the first
+    garment, so "takes off her t-shirt and her jeans" left the legs unspecified from
+    the next shot on. "Ana undresses completely." latched nothing at all while "Ana
+    strips naked." latched everything -- two spellings of one act. And a dress, gown,
+    robe or overalls sat in no region row, so the commonest full-body garment in any
+    script came off and not one shot said anything about the body it left."""
+    print("\n=== what a removal uncovers ===")
+    E = S.engine
+
+    def bare_of(beat, sheet="she, 30, a grey t-shirt, blue jeans, boots"):
+        st = E.SceneState("a workshop")
+        st.declare("Ana", sheet)
+        st.read(beat, cast=["Ana"], shot=1)
+        return st.people["Ana"].bare
+
+    check("a compound removal records both garments",
+          bare_of("Ana takes off her t-shirt and her jeans.") == ["torso", "legs"],
+          str(bare_of("Ana takes off her t-shirt and her jeans.")))
+    check("...and a list of three records all of them",
+          sorted(bare_of("Ana takes off her t-shirt, her jeans and her boots."))
+          == ["feet", "legs", "torso"])
+    check("...while a second clause with a verb of its own inherits nothing",
+          bare_of("Ana takes off her boots and sits on the bench.") == ["feet"])
+
+    for spelling in ("Ana undresses completely.", "Ana strips naked.",
+                     "Ana takes all her clothes off.", "Ana takes off her clothes."):
+        check(f"{spelling!r} leaves the whole body bare",
+              sorted(bare_of(spelling)) == ["feet", "legs", "torso"],
+              str(bare_of(spelling)))
+    check("...but taking off ONE named garment still takes off one",
+          bare_of("Ana strips off her coat.") == ["torso"])
+    check("...and stripping paint undresses nobody",
+          bare_of("She strips the paint off the door.") == [])
+
+    # A GARMENT THAT IS THE WHOLE OUTFIT leaves two regions, and both are said.
+    for whole in ("gown", "dress", "robe", "overalls", "jumpsuit"):
+        check(f"a {whole} leaves both halves of the body",
+              sorted(E.regions_of(whole)) == ["legs", "torso"],
+              str(E.regions_of(whole)))
+    check("...and an apron leaves nobody bare", E.regions_of("apron") == [])
+    shots = _shots_of(run_node(
+        "A workshop.\n\nAna stands at the bench.\n\nremove: gown\nAna pulls the gown "
+        "off.\n\nAna picks up a wrench.\n\nAna turns to the window.",
+        character_memory="Ana: she, 30, a silk gown.", plan_only=True))
+    check("the shots after a gown comes off describe the body it left",
+          all("bare from the hip down" in sh and "bare skin" in sh
+              for sh in shots[2:]), shots[-1][-150:])
+
+
+def test_a_full_stop_ends_a_clause():
+    """Two sentences in one beat are two clauses.
+
+    The engine knew only "," ";" "and" and "while", and a beat is usually several
+    sentences -- so "Ana takes off her boots. Mara hangs a coat on the hook." was ONE
+    clause. The boots were credited to Mara, and the coat, which is on a hook and was
+    never worn by anybody, was recorded as coming off her too: every later shot
+    described Mara barefoot and topless. Writing the same beat with ", and" gave the
+    right answer, which is the tell."""
+    print("\n=== a full stop ends a clause ===")
+    E = S.engine
+    for beat in ("Ana takes off her boots. Mara hangs a coat on the hook.",
+                 "Ana takes off her boots, and Mara hangs a coat on the hook."):
+        st = E.SceneState()
+        st.declare("Ana", "she, 30, a coat, boots, gloves")
+        st.declare("Mara", "she, 41, overalls")
+        ch = st.read(beat, cast=["Ana", "Mara"])
+        check(f"the boots are Ana's in {beat[:34]!r}",
+              ch["removed"] == [("Ana", "boots")], str(ch["removed"]))
+        check("...and nobody else is undressed by it",
+              st.people["Mara"].bare == [], str(st.people["Mara"].bare))
+
+
+def test_a_layer_is_covered_where_it_actually_sits():
+    """The clause that covers an under-layer has to name the right part of the body,
+    and must not take the covering garment out of the sheet with it.
+
+    It said "the hips and waist" whatever the garment was, so a bra under a t-shirt
+    produced "The t-shirt covers the hips and waist completely ... the only one in
+    view" -- on a character whose same entry lists blue jeans. And hiding the
+    under-layer of "a denim skirt over black knickers" matched three words back and
+    took the SKIRT out too: the model invented a skirt for the covered shots, which
+    then changed into a denim one at the removal boundary."""
+    print("\n=== a layer is covered where it sits ===")
+    check("a t-shirt covers the chest",
+          "the chest and stomach" in S.under_clause([("black bra", "t-shirt", "Ana")]))
+    check("a skirt covers the hips",
+          "the hips and waist" in S.under_clause([("knickers", "denim skirt", "Ana")]))
+    check("a dress covers both",
+          "the chest, stomach, hips and waist"
+          in S.under_clause([("camisole", "silk dress", "Ana")]))
+    check("boots cover the feet",
+          "the feet and ankles" in S.under_clause([("socks", "boots", "Ana")]))
+
+    check("hiding the under-layer keeps the garment over it",
+          S.hide_item("Ana: she, 30, a denim skirt over black knickers, a grey t-shirt.",
+                      ["knickers"])
+          == "Ana: she, 30, a denim skirt, a grey t-shirt.",
+          S.hide_item("Ana: she, 30, a denim skirt over black knickers, a grey t-shirt.",
+                      ["knickers"]))
+    check("...with an article in the way too",
+          S.hide_item("Ana: she, 30, blue jeans over a black thong, a grey t-shirt.",
+                      ["thong"]) == "Ana: she, 30, blue jeans, a grey t-shirt.")
+    check("...and the adjectives still go with their own garment",
+          S.hide_item("Ana: she, 30, a tight white crop top, blue jeans.",
+                      ["crop top"]) == "Ana: she, 30, blue jeans.")
+
+
+def test_another_persons_clothes_do_not_answer_for_this_body():
+    """The bare clause is silent when something still worn covers the region -- and
+    it was reading every person in the shot, so the OTHER character's clothes
+    answered for this one's body.
+
+    A woman whose trousers have just come off is told nothing about her legs because
+    somebody kneeling beside her is wearing overalls. The region goes unspecified,
+    and the model fills it from its own prior: legwear the prompt never asked for,
+    carried into every later shot by the keyframe."""
+    print("\n=== another person's clothes ===")
+    P = ("A workshop.\n\nAna lies hogtied on the floor.\n\nMara kneels beside her.\n\n"
+         "Mara pulls Ana's trousers down to her knees.\nremove: trousers\n\n"
+         "Ana pulls against the chain.")
+    for mara in ("navy overalls", "a navy shirt"):
+        mem = ("Ana: she, 30, grey t-shirt, black trousers, a steel chain linking her "
+               f"wrists and ankles behind her back.\nMara: she, 41, {mara}.")
+        shot = _shots_of(run_node(P, character_memory=mem, plan_only=True))[2]
+        check(f"...with Mara in {mara!r}, Ana's legs are still described",
+              "bare from the hip down" in shot, shot[-150:])
+
+
+def test_the_two_wardrobe_readers_agree():
+    """The sampler and the engine must read the same sentence the same way.
+
+    They keep separate vocabularies for removals, for dressing and for what counts as
+    a garment, and where they disagree ONE HALF ACTS AND THE OTHER DOES NOT -- which
+    is not a missed feature, it is a contradiction inside one prompt. The sampler
+    takes the sweater off, scrubs it from the sheet and prints "the red sweater comes
+    off during this shot"; SceneState never records it, so `p.bare` never gains the
+    torso and no later shot says anything about her chest. An unspecified region is
+    one the model fills from its own prior, which is the report REGION_OF exists for:
+    a bra coming back on somebody topless, on a character whose sheet never had one.
+
+    Walked as a matrix, because the gaps were never where anyone was looking: the
+    removal lists had drifted by FORTY-TWO forms, the dressing lists by nine in both
+    directions, and twenty-four garments the sampler's own families name could not be
+    placed by the engine at all. Four of those were engine.REGION_OF disagreeing with
+    engine.GARMENT_WORDS -- two lists in one file."""
+    print("\n=== the two wardrobe readers agree ===")
+    E = S.engine
+
+    def engine_removes(beat):
+        st = E.SceneState()
+        st.declare("Ana", "she, 30, a red sweater, blue jeans")
+        ch = st.read(beat, cast=["Ana"])
+        return bool(ch.get("removed")) or bool(st.people["Ana"].bare)
+
+    sheet = "Ana: she, 30, a red sweater, blue jeans."
+    forms = sorted(set(_spellings(E._STRIP_VERB, cap=200)))
+    split = [v for v in forms
+             if bool(S.infer_removals(f"Ana {v} her sweater off.", sheet))
+             != engine_removes(f"Ana {v} her sweater off.")]
+    check(f"a removal is a removal to both readers ({len(forms)} verb forms)",
+          not split, str(split[:8]))
+
+    dressing = [v for v in ("puts", "pulls", "pulled", "slips", "slipped", "tugs",
+                            "tugged", "steps", "stepped", "climbs", "climbed",
+                            "gets", "got", "wriggles", "draws", "drew")
+                if bool(S._PUTS_ON.search(f"Ana {v} the sweater on."))
+                != bool(re.search(E.PUTS_ON, f"Ana {v} the sweater on.", re.I))]
+    check("...and so is a dressing", not dressing, str(dressing))
+
+    unplaceable = [w for fam in S._GARMENT_FAMILIES for w in fam
+                   if not E.garments_in(f"Ana takes her white {w} off.")
+                   or not E.region_of(w)]
+    check("every garment the sampler names, the engine can place",
+          not unplaceable, str(unplaceable[:8]))
+
+    # ...and engine.REGION_OF against engine.GARMENT_WORDS, which are two lists in
+    # one file and had drifted from each other by seven words.
+    orphan = [w for pat, _r, _s in E.REGION_OF for w in _spellings(pat, cap=80)
+              if not E.garments_in(f"Ana takes her white {w} off.")]
+    check("...and every word with a region is a word the engine calls a garment",
+          not orphan, str(orphan[:8]))
+
+    # None of that turns an ordinary sentence into an undressing.
+    innocent = [b for b in ("Ana cuts the bread.",
+                            "Ana works late at the bench.",
+                            "Ana steps back from the door.",
+                            "Ana lifts the lid off the box.",
+                            "Ana throws the switch.")
+                if engine_removes(b)]
+    check("...and no ordinary sentence undresses anybody", not innocent, str(innocent))
+
+    # THE POINT OF ALL OF IT: the region is still described several shots later.
+    for verb in ("yanks", "rips", "works", "tosses", "cuts"):
+        shots = _shots_of(run_node(
+            f"A workshop.\n\nAna stands.\n\nAna {verb} her sweater off.\n\n"
+            "Ana picks up a spanner.\n\nAna waits.",
+            character_memory="Ana: she, 30, a red sweater, blue jeans.",
+            plan_only=True))
+        check(f"...so {verb!r} leaves a chest the later shots still describe",
+              all("are bare skin" in sh for sh in shots[2:]), shots[-1][-110:])
+
+
 def test_a_beam_in_a_roof_is_not_a_smile():
     """"Beam" is a piece of a building in this node's own anchor list, and a broad
     smile in its emotion list. Chaining somebody to one made the face beam."""
@@ -8940,6 +9187,12 @@ def main():
     test_hardware_in_a_hand_is_not_hardware_on_a_body()
     test_a_length_reaches_only_what_it_is_taken_around()
     test_the_shot_that_puts_it_on_says_so()
+    test_a_garment_set_down_is_not_a_garment_put_on()
+    test_what_a_removal_uncovers_is_said_on_every_later_shot()
+    test_a_full_stop_ends_a_clause()
+    test_a_layer_is_covered_where_it_actually_sits()
+    test_another_persons_clothes_do_not_answer_for_this_body()
+    test_the_two_wardrobe_readers_agree()
     test_a_beam_in_a_roof_is_not_a_smile()
     test_the_shot_that_takes_it_off_is_not_told_where_it_sits()
     print()
