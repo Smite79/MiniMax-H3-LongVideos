@@ -3964,13 +3964,20 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
     # shot, so this is the only place left that can claim the image -- and a shot
     # carrying a reference whose tag it never names reads the picture as ANOTHER
     # subject, which is a duplicate rather than a belt.
+    # ONE ENTRY PER GARMENT, by the words the sheet uses for it. Two tokens can be
+    # two keys for one entry -- "belt" and "chastity belt" both resolve to the same
+    # line -- and naming it twice in one sentence is one garment described twice,
+    # which is what draws two of them, on top of putting a plural verb on a single
+    # item ("The chastity belt and the chastity belt come off").
     named = []
     for i in items:
         nm = scene_name_for(i, scene) or i
         tag = scene_tag_for(i, scene)
-        named.append(f"{nm} {tag}" if tag else nm)
+        nm = f"{nm} {tag}" if tag else nm
+        if nm not in named:
+            named.append(nm)
     what = " and ".join(f"the {i}" for i in named)
-    plural = len(items) > 1 or bool(_PLURAL_ITEM.search(named[-1]))
+    plural = len(named) > 1 or plural_item(named[-1])
     verb, are = ("come", "are") if plural else ("comes", "is")
     # Named hands where the beat gives them. Without an agent this says a garment
     # comes off by itself, and a belt with nobody touching it drops to the floor.
@@ -4009,8 +4016,18 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
 
 
 # Garments that are grammatically plural, so the sentence above agrees with them.
-_PLURAL_ITEM = re.compile(r"\b(?:s|shorts|trousers|pants|jeans|boots|shoes|gloves|"
-                          r"tights|leggings|briefs|knickers|cuffs)$", re.I)
+def plural_item(name):
+    """Does this thing take a plural verb? "the boots ARE", "the belt IS".
+
+    Was a list of the plural garments this file had thought of, anchored with \\b --
+    which meant it only ever matched a WHOLE word, so "handcuffs" was not "cuffs"
+    and the removal said "The handcuffs comes off during this shot and is away by
+    the last frame". Written as the rule instead of the list, and the same rule
+    restraint_sentence already uses: ends in s, and not in ss, so a dress and a
+    harness stay singular. A reference tag is not part of the name."""
+    w = re.sub(r"<[^>]*>", " ", str(name or "")).strip().rstrip(".").lower().split()
+    last = w[-1] if w else ""
+    return bool(last) and last.endswith("s") and not last.endswith("ss")
 
 
 # PUTTING SOMETHING BACK ON. The mirror of a removal, and it had none of the same
@@ -4069,7 +4086,7 @@ def wearing_clause(phrases):
     if not items:
         return ""
     what = " and ".join(items)
-    plural = len(items) > 1 or bool(_PLURAL_ITEM.search(items[-1]))
+    plural = len(items) > 1 or plural_item(items[-1])
     are = "are" if plural else "is"
     return (f" {what[0].upper()}{what[1:]} {are} off the body as the shot opens and "
             f"fully on by the last frame, put on during this shot.")
@@ -4083,9 +4100,18 @@ def wearing_clause(phrases):
 # ONE sentence, impersonal, positive. The previous version had a per-limb effect
 # table, pose tracking and a hardware clause, and between them the beat became 4% of
 # the prompt. This is the fact and nothing else.
-# What a `remove:` has to name to switch the hold off again.
-RESTRAINT_HOLD_KEY = ("handcuffs cuffs chains rope ropes tape gag collar restraints "
-                      "shackles clamp clamps clip clips")
+# WHAT A `remove:` HAS TO NAME to switch the hold off again -- derived from the
+# engine's hardware table rather than typed out beside it. Typed out, it knew
+# "chains" and not "chain", "rope" and not "tether", so `remove: chain` left the hold
+# latched for the rest of the film while `remove: chains` cleared it. The singular and
+# the plural of every name the engine knows are here, and nothing else needs adding
+# when a word is added there.
+RESTRAINT_HOLD_KEY = " ".join(dict.fromkeys(
+    w for _p, _n, _pt in engine.HARDWARE
+    for w in (_n, _n if _n.endswith("s") else _n + "s",
+              _n[:-1] if _n.endswith("s") and not _n.endswith("ss") else _n,
+              _n.split()[-1])
+    if w))
 # Every one of these constrains the HARDWARE, never the body. An earlier wording said
 # the restraint held "the same way from the first frame to the last" and the chain let
 # the body reach "only as far as the metal allows before it stops" -- read plainly,
@@ -4583,7 +4609,13 @@ def duress_face(beat, wearers, described, film_duress=False):
 # no feeling, nothing here fires and the film's own mood clause is untouched.
 _EMOTION = re.compile(
     r"\b(?:happy|happily|happiness|delighted|delight(?:ed)?|thrilled|overjoyed|"
-    r"joyful|joyous|elated|ecstatic|beaming|beams?|gleeful|glee|cheerful|cheery|"
+    # A BEAM IS ALSO A PIECE OF A BUILDING, and this node's own anchor vocabulary
+    # lists it as one: "Mara chains Ana to the beam" made the face beam -- a broad
+    # smile on the shot where somebody is being locked to a roof timber. The
+    # participle is unambiguous and stays; the noun goes, and the verb is kept only
+    # where a person is in front of it. Same trade the engine's _BINDING_VERB makes
+    # by keeping "taped" and dropping the noun "tapes".
+    r"joyful|joyous|elated|ecstatic|beaming|gleeful|glee|cheerful|cheery|"
     r"pleased|excited|excitement|grateful|relieved|relief|proud|smug|amused|"
     r"terrified|terror|frightened|afraid|scared|fearful|panicked|panicking|panic|"
     r"furious|fury|angry|angrily|anger|enraged|livid|seething|indignant|"
@@ -4592,10 +4624,20 @@ _EMOTION = re.compile(
     r"anguished|anguish|agony|bereft|despair(?:ing)?)\b", re.I)
 
 
+# "She beams at him" is a smile; "the steel beams" is a ceiling, and "chained to the
+# beam" is a place somebody is locked to. The verb counts only with a person in front
+# of it -- a pronoun or a name -- which tells the two apart without keeping a
+# vocabulary of building parts here as well as in the anchor list.
+_BEAMS_AT = re.compile(r"\b(?:she|he|they|[A-Z][a-z]+)\s+beams\b")
+
+
 def emotion_in(beat):
     """The emotion this beat states, in the author's own word. "" when it states none."""
-    m = _EMOTION.search(str(beat or ""))
-    return m.group(0).lower() if m else ""
+    text = str(beat or "")
+    m = _EMOTION.search(text)
+    if m:
+        return m.group(0).lower()
+    return "beaming" if _BEAMS_AT.search(text) else ""
 
 
 def emotion_owner(beat, names, word):
@@ -4743,18 +4785,44 @@ CHAIN_RIGID_TAIL = " Its links keep their size and the run between them stays ta
 # this is here to prevent, on a woman who has been in cuffs for five shots.
 #
 # A determiner in front is what marks the noun. You do not "the cuffs" anybody.
+# ...and a COUNTING WORD is a determiner too. "a pair of handcuffs" puts the article
+# two words back where a one-word lookbehind cannot see it, so the noun read as the
+# verb `handcuffs` and "Mara drops a pair of handcuffs into the toolbox" was a beat
+# that cuffed somebody -- told, in the same shot, that the hardware is open at the
+# first frame and closed by the last.
 _A_DETERMINER = (r"(?<!\bthe\s)(?<!\bher\s)(?<!\bhis\s)(?<!\ba\s)(?<!\bmy\s)"
                  r"(?<!\bits\s)(?<!\btheir\s)(?<!\byour\s)(?<!\bthose\s)"
-                 r"(?<!\bthese\s)(?<!\bsome\s)(?<!\bboth\s)")
+                 r"(?<!\bthese\s)(?<!\bsome\s)(?<!\bboth\s)"
+                 r"(?<!\bof\s)(?<!\bpair\s)(?<!\bset\s)"
+                 # ...and the COUNTS. engine._DET has had "two" and "more" since it
+                 # was written and this copy never did, so "Mara unpacks two collars"
+                 # read as a beat that collars somebody. Two lists of the same
+                 # determiners drift, which this file has recorded more than once.
+                 r"(?<!\btwo\s)(?<!\bthree\s)(?<!\bmore\s)(?<!\bseveral\s)")
 _APPLY_NOW = re.compile(
     _A_DETERMINER +
     r"\b(?:cuffs|handcuffs|chains|ties|binds|locks|straps|tapes|gags|shackles|"
     r"fastens|secures|padlocks|buckles|clamps|clips|snaps|trusses|lashes|wraps|"
+    # ...and the ones the engine applies. Every alternative here is already behind
+    # the determiner guard, which is what makes the bare verb `collars` safe to
+    # read: you do not "the collars" anybody.
+    r"restrains|immobili[sz]es|pinions|fetters|collars|hobbles|"
+    r"hog-?ties|straitjackets|manacles|blindfolds|leashes|"
     r"cinches|tightens)\b", re.I)
 _APPLY_PHRASE = re.compile(
     r"\b(?:put|puts|putting|pull|pulls|pulling|force|forces|forcing|get|gets|"
     r"getting|work|works|snap|snaps)\s+(?:[\w,']+\s+){0,4}?"
-    r"(?:on|onto|around|behind|together|shut|closed)\b", re.I)
+    r"(?:on|onto|around|behind|together|shut|closed)\b"
+    # A LENGTH GOES ON BY BEING PUT AROUND, which is not a fastening verb at all --
+    # the engine learned this and this half did not, so the shot that loops a cable
+    # round a neck was told the cable "stays closed and fastened as it was put on",
+    # said of hardware that is open and in somebody's hands at the first frame.
+    # PRESENT TENSE ONLY, the rule this pattern keeps: "wound around her wrists"
+    # describes a state that already holds and must not read as the shot that
+    # closes it.
+    r"|\b(?:loops?|wraps?|winds?|coils?|threads?|passes|runs|cinch(?:es)?|knots?|"
+    r"laces?|hitch(?:es)?|slings?)\s+(?:[\w,']+\s+){0,5}?"
+    r"(?:around|round|through|under|over|behind|between)\b", re.I)
 
 
 # WHAT the hardware is, in the author's own words.
@@ -4874,6 +4942,17 @@ def restraint_words(line):
         item = _LEADING_TAG.sub("", re.sub(r"\s+", " ", item)).strip()
         if not item:
             continue
+        # READ WITH THE VOCABULARY THAT KNOWS HARDWARE, not by taking the last word
+        # of the fragment. "a grey t-shirt, handcuffs" ended in the hardware and was
+        # found; "steel handcuffs locked on her wrists" ends in "wrists" and was not,
+        # so a beat that unlocked them cleared the hold while the sheet went on
+        # listing the cuffs -- and the next shot read them back out of the sheet and
+        # latched it again. The last word is still tried, for anything the table has
+        # never heard of.
+        for _canon, _pt, _written, _at in engine.hardware_spans(item):
+            for _w in (str(_written).split()[-1].lower(), str(_canon).split()[-1].lower()):
+                if _w and _w not in out:
+                    out.append(_w)
         head = item.split()[-1].lower().strip("-")
         if head and _RESTRAINT_WORD.match(head) and head not in out:
             out.append(head)
@@ -4901,7 +4980,16 @@ def restraint_coming_off(beat):
 
 
 def restraint_going_on(beat):
-    """Does this beat stage hardware being APPLIED, rather than already worn?"""
+    """Does this beat stage hardware being APPLIED, rather than already worn?
+
+    THE TENSE IS WHAT THIS ANSWERS, which is why it cannot simply defer to
+    engine.applies_hardware. The engine reads "her wrists cuffed" and "Mara is
+    handcuffed to the rail" as hardware going on, because for its purposes it is --
+    it is recording what is on whom. Here the question is narrower: is this the shot
+    where it CLOSES? Answering yes for a state that already holds puts "open and off
+    the body at the first frame" on a woman who has been in cuffs for five shots.
+    So the engine's vocabulary is mirrored in the -s forms above, deliberately, and
+    test_smoke walks the two lists against each other."""
     b = beat or ""
     return bool(_APPLY_NOW.search(b) or _APPLY_PHRASE.search(b))
 
@@ -5291,9 +5379,19 @@ POSE_LYING_WEIGHT = "The shoulder and the hip take the weight of the body"
 _LEG_WORD = r"(?:ankles?|legs?|feet|knees?|thighs?|calves)"
 # ...and the ways a LENGTH of something holds a leg, which is not a fastening verb
 # at all: it goes AROUND. A cable around the ankles placed no legs, so they dropped.
-_LEG_TIE = (r"(?:cuffed|shackled|chained|tied|bound|strapped|secured|fastened|locked|"
-            r"linked|clipped|hooked|lashed|drawn|pulled|folded|bent|looped|wrapped|"
-            r"wound|coiled|threaded|passed|slung|knotted|cinched|around|round)")
+_LEG_FASTEN = (r"(?:cuffed|shackled|chained|tied|bound|strapped|secured|fastened|"
+               r"locked|linked|clipped|hooked|lashed|drawn|pulled|folded|bent|"
+               r"looped|wrapped|wound|coiled|threaded|passed|slung|knotted|cinched)")
+# ...and the bare particles, kept APART from the verbs above. A length holds a leg by
+# going around it, so "around" has to read as a tie here -- but _FASTENING_NEAR is
+# built from this list too, and that is the test deciding whether a bare "her feet
+# together" is a fastening or a way of standing. With "around" in it, "Mara looks
+# around the workshop while Ana stands with her feet together" was read as a
+# fastening, and the shot was told both ankles are fastened one against the other.
+_LEG_TIE = r"(?:" + _LEG_FASTEN + r"|around|round)"
+# ...and what takes a length from one part of the body to another, which is wider
+# still: "a cable from her neck to her ankles" ties with no tie word in it.
+_LEG_JOIN = r"(?:" + _LEG_FASTEN + r"|around|round|from|to|down\s+to|up\s+to)"
 _LEG_ANCHOR = (
     # A HOGTIE, by its name or by what it does: the ankles held to the wrists.
     (r"\bhog-?(?:tie|ties|tied|tying|cuff|cuffs|cuffed|chains?|chained|bound)\b"
@@ -5322,8 +5420,23 @@ _LEG_ANCHOR = (
     (_LEG_WORD + r"\s+(?:\w+\s+){0,2}?(?:together|crossed)\b", "ankles together", True),
     # ...and the same length run from the NECK to them, which is what holds the legs
     # up behind the body rather than merely together.
-    (r"(?:neck|throat)\b[^.]{0,60}?" + _LEG_WORD
-     + r"|" + _LEG_WORD + r"\b[^.]{0,60}?(?:neck|throat)", "ankles to the neck"),
+    # The LINE has to run between them. Written as bare co-occurrence -- a neck word
+    # within sixty characters of a leg word, either order -- this fired on any shot
+    # already holding a restraint where a collar and the legs were both mentioned:
+    # "Ana kneels, the collar at her neck, her legs folded under her" hoisted a
+    # kneeling body off the floor with its ankles behind its back. What makes it a
+    # hogtie by the neck is the length going from the one to the other, so the tie
+    # word has to sit BETWEEN them.
+    # The joiner is wider than a tie: a length that RUNS from one to the other is
+    # written "from her neck to her ankles" as often as "around her neck and down
+    # around her ankles", and neither is a fastening verb.
+    (r"(?:neck|throat)\b[^.]{0,40}?" + _LEG_JOIN + r"[^.]{0,30}?" + _LEG_WORD
+     + r"|" + _LEG_WORD + r"\b[^.]{0,40}?" + _LEG_JOIN + r"[^.]{0,30}?(?:neck|throat)",
+     # Not flagged weak: the joiner between the two IS the evidence, and asking
+     # _FASTENING_NEAR for a second one loses "a cable from her neck to her ankles"
+     # -- a plain cable, which the hardware table only knows as "steel cable", tying
+     # with no tie word anywhere in it.
+     "ankles to the neck"),
     # A LENGTH ROUND THE ANKLES, written the way a length is written: the thing comes
     # first and the part after it. Every entry above expects the leg word in front,
     # so "a steel cable around her ankles" placed no legs at all and they dropped.
@@ -5353,7 +5466,8 @@ _POSE_OF_LEGS = {
 # before it counts as one. The hardware words live in the engine, so a restraint it
 # knows about and this file does not cannot fall through the gap between them.
 _FASTENING_NEAR = re.compile(
-    _LEG_TIE + r"|\b(?:" + "|".join(p for p, _n, _pt in engine.HARDWARE) + r")\b", re.I)
+    _LEG_FASTEN + r"|\b(?:" + "|".join(p for p, _n, _pt in engine.HARDWARE) + r")\b",
+    re.I)
 
 
 def legs_anchor(text):
@@ -5385,6 +5499,27 @@ def pose_clause(position, lying=False, legs=""):
     if said and lying and key == "behind the back":
         said = f"{said}. {POSE_LYING_WEIGHT}"
     return "".join(f" {part}." for part in (said, legs_said) if part)
+
+
+def merge_hardware_names(items):
+    """One name per piece of hardware, keeping the fullest wording of each.
+
+    Substring-aware, because the beats name the same thing differently from shot to
+    shot: "handcuffs" in shot 1 and "the cuffs" in shot 4 is ONE pair of handcuffs,
+    and an exact-match check listed both -- "The handcuffs, steel collar, chain and
+    cuffs stay closed", which reads as four things and invites the model to draw a
+    spare set."""
+    out = []
+    for it in (items or []):
+        it = str(it or "").strip()
+        if not it:
+            continue
+        same = next((k for k, p in enumerate(out) if p in it or it in p), None)
+        if same is None:
+            out.append(it)
+        elif len(it) > len(out[same]):
+            out[same] = it
+    return out
 
 
 def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False,
@@ -5467,9 +5602,21 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
         elif not _pos:
             out += f", holding the {_part}"
     if posed:
-        out += ("; the metal is already drawn to its full length, so the position it "
-                "fixes is the position that keeps, and the body strains against it "
-                "while the fastenings hold")
+        # NAMED BY WHAT IT IS MADE OF, not by what most hardware is made of. `posed`
+        # latches across the film, so a woman in a leather collar was told "the metal
+        # is already drawn to its full length" because somebody ELSE in the scene is
+        # in steel handcuffs -- the wrong material asserted on her own neck, against
+        # this node's own rule that a restraint is the same object in the same
+        # material from shot to shot. Metal is said where the hardware is metal;
+        # rope, leather and tape are said without a material rather than as the wrong
+        # one, and the fact that carries the pose -- that it is already at its full
+        # length -- is the same either way.
+        _stuff = ("the metal" if (rigid or (item and rigid_hardware(item)))
+                  else "it" if not plural else "they")
+        _drawn = "is" if _stuff != "they" else "are"
+        out += (f"; {_stuff} {_drawn} already drawn to {'their' if _stuff == 'they' else 'its'} "
+                "full length, so the position it fixes is the position that keeps, "
+                "and the body strains against it while the fastenings hold")
     elif rigid:
         out += (f", {'their' if plural else 'its'} links keeping their size and the run "
                 f"between them taut")
@@ -5570,7 +5717,18 @@ _RESTRAINT_PLAIN = re.compile(
     r"handcuff(?:s|ed|ing)?|cuffed|shackle[sd]?|manacle[sd]?|hogtied|hog-?tied|"
     r"hogcuffed|hog-?cuffed|gag(?:ged|s)?|blindfold(?:ed|s)?|zip[- ]ties?|"
     r"cable[- ]ties?|restrain(?:t|ts|ed)|bound|bindings?|straitjacket|"
-    r"collared|leashed|tethered|manacled|fettered|chained\s+up|"
+    r"collared|leashed|tethered|manacled|fettered|chained\s+up|hobbled|"
+    # VERBS THE ENGINE APPLIES AND THIS READER COULD NOT SEE. engine.APPLY_VERB has
+    # restrains, immobilises, pinions and fetters; this list had only the participle
+    # forms, and the -s form is what an author actually writes. "Mara restrains Ana"
+    # produced no hold, no arm position and no legs, while the structurally identical
+    # "Mara trusses Ana up" produced all three -- the same drift this list exists to
+    # close, found by walking the two vocabularies against each other.
+    r"restrain(?:s|ing)|immobili[sz](?:e|es|ed|ing)|pinion(?:s|ed|ing)|fetters|"
+    # `collars` is the one of them that is also a plural noun, so it carries the
+    # determiner guard the apply patterns use: you do not "the collars" anybody,
+    # and "Mara unpacks two collars" is a box being opened.
+    + _A_DETERMINER + r"collars|"
     # PARTICIPLES are unambiguous and are not in the noun list, so they cannot
     # satisfy both halves of the MAYBE rule by themselves. "Ana is collared and
     # chained to the wall" matched nothing at all before this: "collared" is not
@@ -5596,9 +5754,38 @@ _RESTRAINT_PLAIN = re.compile(
 # tool, clamped to a body it is hardware, and only the context tells them apart.
 _RESTRAINT_MAYBE = re.compile(
     r"\b(?:chains?|ropes?|cords?|cuffs?|straps?|collars?|tapes?|taped|taping|"
-    r"belts?|harness|hobble|clamps?|clips?)\b", re.I)
+    # SPELLINGS THE ENGINE TRACKS AND THIS READER DID NOT. Its table records twine
+    # as rope, a choker as a collar, harnesses in the plural and steel or baling
+    # wire as a steel cable -- and none of them reached this list, so the item sat
+    # in the state and in the sheet with nothing holding it shut. Ambiguous, all of
+    # them: twine on a workbench, a shirt's choker-length collar, a climbing
+    # harness, wire on a fence. They need the binding verb or the body part the
+    # rest of this list needs, which is exactly what a sheet entry gives them.
+    r"twine|chokers?|harness(?:es)?|(?:steel|baling)\s+wires?|"
+    r"belts?|hobble|clamps?|clips?)\b", re.I)
 # VERB forms only. An earlier version listed "chain" and "cuff" here as well as in
 # the noun list, so a chain-link fence matched both halves and armed the rule.
+# Hardware being MOVED rather than fastened. See restraint_present: these disarm the
+# plain-noun branch when the clause fastens nothing to anybody. "Holds up" and "shows"
+# are deliberately absent -- an item held up for the camera still has to be drawn as
+# the thing it is, and the clause that says where it belongs is driven from here.
+_HANDLING_VERB = re.compile(
+    r"\b(?:drops?|dropped|dropping|throws?|threw|thrown|throwing|tosses|tossed|"
+    r"tossing|kicks?|kicked|kicking|carries|carried|carrying|"
+    r"picks?\s+up|picked\s+up|picking\s+up|puts?\s+(?:it|them|the\s+\w+\s+)?"
+    r"(?:down|away|back)|sets?\s+(?:it|them)?\s*down|lays?\s+(?:it|them)?\s*down|"
+    r"pockets?|pocketed|stows?|stowed|packs?\s+(?:up|away)|hangs?\s+up)\b", re.I)
+# Hardware being SHOWN. It is in somebody's hand, not on anybody: "Mara holds up the
+# steel collar" was a beat that put the collar on Mara's neck and kept it there for
+# the rest of the film. Separate from the list above because the two answers differ:
+# a thing being shown still has to be DRAWN as the thing it is, so the clause saying
+# where a collar belongs is still wanted, while the hold saying it is closed on a body
+# is not. See hardware_handled.
+_SHOWN_VERB = re.compile(
+    r"\b(?:holds?\s+up|held\s+up|holding\s+up|shows?|showed|showing|"
+    r"lifts?|lifted|lifting|dangles?|dangled|dangling|"
+    r"weighs?\s+(?:it|them)|turns?\s+(?:it|them)\s+over|"
+    r"inspects?|inspecting|examines?|examining)\b", re.I)
 _BINDING_VERB = re.compile(
     r"\b(?:cuffed|chained|tied|tying|bound|binds?|binding|locked|locks|"
     r"strapped|taped|taping|gagged|shackled|fastened|fastens|secured|secures|"
@@ -7621,6 +7808,38 @@ def rigid_hardware(text):
     return bool(_RIGID_HARDWARE.search(text or ""))
 
 
+def _merely_handled(part, shown=True):
+    """Does this clause MOVE hardware without fastening it to anybody?
+
+    A restraint is an object before it is a restraint, and an object can be picked
+    up, dropped in a toolbox or thrown on a bench. Nothing in the clause fastens it
+    to a body, holds a body part, or ties it to anything that does not move.
+
+    `shown` counts holding one UP as handling it, which is right for the hold and
+    wrong for the clause that says where a piece of hardware sits."""
+    moved = _HANDLING_VERB.search(part) or (shown and _SHOWN_VERB.search(part))
+    return bool(moved) and not (
+        _BINDING_VERB.search(part) or _BODY_PART.search(part)
+        or _ANCHOR_POINT.search(part))
+
+
+def hardware_handled(text):
+    """Is every mention of hardware here a mention of it being CARRIED?
+
+    False when the text names no hardware at all: this answers "is it only being
+    handled", not "is there none"."""
+    seen = False
+    for part in re.split(r"(?<=[.;!?])\s+", str(text or "")):
+        if not (_RESTRAINT_PLAIN.search(part) or _RESTRAINT_MAYBE.search(part)):
+            continue
+        # Held up, it is still drawn -- so it still needs the clause that says a
+        # collar belongs on a neck. Only what is being put away stops needing one.
+        if not _merely_handled(part, shown=False):
+            return False
+        seen = True
+    return seen
+
+
 def restraint_present(text):
     """Is a restraint being applied or worn, in this text?
 
@@ -7628,7 +7847,21 @@ def restraint_present(text):
     body part alongside it, so a chain-link fence and a leather belt do not arm a
     continuity rule about restraints."""
     t = text or ""
-    if _RESTRAINT_PLAIN.search(t):
+    for part in re.split(r"(?<=[.;!?])\s+", t):
+        if not _RESTRAINT_PLAIN.search(part):
+            continue
+        # HARDWARE BEING CARRIED IS NOT HARDWARE BEING WORN. A restraint is an
+        # object before it is a restraint: it can be picked up, dropped in a
+        # toolbox, thrown on a bench. The plain branch counted the word on its own,
+        # so "Mara drops a pair of handcuffs into the toolbox" armed the latch on
+        # MARA, and every shot after it said the handcuffs stay closed on her --
+        # hardware worn by the person who put it down.
+        #
+        # Only where nothing in the clause fastens it to anybody. "Picks up the
+        # cuffs and locks them on her wrists" carries AND fastens, and the
+        # fastening is what the clause is about.
+        if _merely_handled(part):
+            continue
         return True
     # SAME CLAUSE. Both halves were searched across the whole text, however far
     # apart: a sheet listing a belt and a beat saying "she sits with her legs
@@ -10247,7 +10480,14 @@ class H3LongVideos:
                                                body or "", re.I)
                             _pron = (len(restraint_words(_ln)) == 1
                                      and re.search(r"\b(?:them|it)\b", body or "", re.I))
-                            if (_named or _pron) and _hw not in toks and _hw not in gone:
+                            # ...and not one already read out of the prose. The test
+                            # was against `toks` and `gone` only, and infer_removals
+                            # had put the same word in `inferred` a moment earlier --
+                            # so the shot said "The chastity belt and the chastity
+                            # belt come off", one garment named twice, which is two
+                            # belts to draw and a plural verb on a single item.
+                            if (_named or _pron) and _hw not in toks \
+                                    and _hw not in gone and _hw not in inferred:
                                 inferred.append(_hw)
                 if inferred:
                     toks = list(toks) + inferred
@@ -10909,8 +11149,27 @@ class H3LongVideos:
                         # the engine does ask, and refuses where a scene leaves two
                         # candidates. Reported as the hold appearing on the captor's
                         # shots and never on the captive's.
-                        _w = engine.wearer_of(body, [n for n, _ in sheet_lines(sheet) if n])
-                        _new = {_w} if _w else restrained_by_beat(body, active)
+                        # ...but ONLY where this beat stages a fastening. wearer_of
+                        # reads the sentence as somebody doing it to somebody else, so
+                        # asked about "Ana and Mara kneel side by side" -- which fastens
+                        # nothing, and is simply the shot where a sheet's hardware is
+                        # first seen -- it answers with the second name. The sheet said
+                        # whose it was all along.
+                        # THE BEAT PUT IT ON, or the sheet declared it. Only the first
+                        # is a sentence about somebody doing it to somebody else, and
+                        # only there does the engine's reading of who it went ON apply.
+                        # A beat that merely opens a scene whose sheet already lists
+                        # the hardware -- "Ana and Mara kneel side by side" -- was
+                        # being read that way too, and the answer to a question it
+                        # never asked is the second name.
+                        _staged_here = (engine.applies_hardware(body)
+                                        or restraint_going_on(body)
+                                        or (restraint_present(body)
+                                            and not restraint_present(_scene_for_state)))
+                        _w = (engine.wearer_of(body, [n for n, _ in sheet_lines(sheet) if n])
+                              if _staged_here else "")
+                        _new = ({_w} if _w else
+                                set(restraint_wearers(sheet)) or restrained_by_beat(body, active))
                         restrained_who |= (_new if _new else set(active))
             # The shot where the hardware GOES ON. Newly restrained -- so it was not on
             # before -- and the beat stages the act rather than describing it worn. On
@@ -10928,21 +11187,6 @@ class H3LongVideos:
             # cuffs -- and from that shot on the cuffs were never named again,
             # which is hardware that stops being drawn.
             _named_item = hardware_named(body) if restrained else ""
-            # EVERY item this beat names, not just the most specific one. One beat
-            # that cuffs the wrists AND locks on a collar used to record whichever
-            # phrase was longer and drop the other for the rest of the film.
-            for _hw in (hardware_all_named(body) if restrained else []):
-                # Substring-aware, because the beats name the same thing differently
-                # from shot to shot: "handcuffs" in shot 1 and "the cuffs" in shot 4
-                # is ONE pair of handcuffs, and an exact-match check listed both --
-                # "The handcuffs, steel collar, chain and cuffs stay closed", which
-                # reads as four things and invites the model to draw a spare set.
-                _same = next((k for k, p in enumerate(worn_items)
-                              if p in _hw or _hw in p), None)
-                if _same is None:
-                    worn_items.append(_hw)
-                elif len(_hw) > len(worn_items[_same]):
-                    worn_items[_same] = _hw
             # THE ENGINE IS THE AUTHORITY ON WHAT IS ON WHOM, and this is the
             # only place the answer comes from now. The old derivation ran here
             # too, in parallel, and a disable-check showed the engine was not
@@ -10955,14 +11199,19 @@ class H3LongVideos:
             # rather than the longest, each modifier bound to its own item.
             _eng_hw = [r for p in _state.people.values()
                        for r in p.hardware.values()]
-            worn_items = []
-            for _r in _eng_hw:
-                _same = next((k for k, p_ in enumerate(worn_items)
-                              if p_ in _r.item or _r.item in p_), None)
-                if _same is None:
-                    worn_items.append(_r.item)
-                elif len(_r.item) > len(worn_items[_same]):
-                    worn_items[_same] = _r.item
+            # ...AND WHOSE EACH PIECE IS. Flattened, this list is every restraint in
+            # the FILM, and the hold names all of it on whoever the shot describes:
+            # Ana's solo shot was told the leather collar locked on Mara stays
+            # closed, and Mara's that Ana's steel handcuffs do. Hardware named on a
+            # body that is not wearing it is hardware the model puts there, or a
+            # second body to put it on. Kept per person here and narrowed to the
+            # shot's own cast where the hold is written, which is the first point
+            # the described cast is known.
+            _hw_by_wearer = {}
+            for _nm, _pp in _state.people.items():
+                for _r in _pp.hardware.values():
+                    _hw_by_wearer.setdefault(_nm, []).append(_r.item)
+            worn_items = merge_hardware_names([_r.item for _r in _eng_hw])
             worn_item = ", ".join(worn_items)
             # THE SCRIPT DECIDES THE MOMENT, and the sheet check must not veto it.
             # Blocking on restraint_present(shot_scene) is right when the sheet
@@ -11187,7 +11436,23 @@ class H3LongVideos:
             # band with no place to be, and it ends up on the head. Only where this
             # beat itself raises the item, and only when the text has not already put
             # it somewhere -- what you wrote wins.
-            anchors = anchor_clause(unanchored_hardware(body))
+            # ...and NOT on the shot that takes it off. This fires on any beat that
+            # names hardware with no body part beside it, and "Mara unlocks the
+            # handcuffs" is exactly that shape -- so the removing shot said both
+            # "The handcuffs come off during this shot and are away by the last
+            # frame" and "Each piece of hardware sits where it belongs: handcuffs
+            # close around the wrists", one sentence undoing the other in the same
+            # breath. Where a thing SITS is not a fact about the shot it leaves in.
+            _off_here = (restraint_coming_off(body)
+                         or names_any(RESTRAINT_HOLD_KEY, toks)
+                         or any(restraint_present(t) for t in toks))
+            # ...nor where the hardware is only being CARRIED. "Mara drops a pair of
+            # handcuffs into the toolbox" was answered with "handcuffs close around
+            # the wrists", which is the node putting them on somebody the beat took
+            # care to say they are not on. Holding one UP is different and stays:
+            # an item shown to the camera still has to be drawn as what it is.
+            anchors = ("" if (_off_here or hardware_handled(body))
+                       else anchor_clause(unanchored_hardware(body)))
             if anchors:
                 notes.append(f"shot {i_shot + 1} names hardware with no body part beside "
                              f"it, so the shot says where it sits: "
@@ -11581,15 +11846,32 @@ class H3LongVideos:
                     anchored_shots.remove(len(plan) + 1)
                 absent_hold.append(len(plan) + 1)
             elif not _applying and restrained:
+                # THIS SHOT'S HARDWARE, not the film's -- see _hw_by_wearer. Only
+                # when the narrowing finds something: a script with no sheet, or one
+                # whose people the state never learned, has an empty map, and an
+                # empty list there would drop the name of the cuffs from every shot
+                # rather than name the wrong ones.
+                _here_items = merge_hardware_names(
+                    [i for n in (_described or []) for i in _hw_by_wearer.get(n, [])]
+                ) or worn_items
+                _here_item = ", ".join(_here_items)
+                # ...and whether THIS shot's hardware is the kind that cannot flex.
+                # The latch is film-wide, so a woman in a leather collar was told
+                # "the metal is already drawn to its full length" because somebody
+                # else in the film is in steel handcuffs -- the wrong material named
+                # on her neck, and this node's own rule is that a restraint is the
+                # same object in the same material from shot to shot.
+                _here_rigid = bool(rigid) and (rigid_hardware(_here_item)
+                                               if _here_item else True)
                 hold = restraint_sentence(
-                    worn_item if not _named_item else "",
+                    _here_item if not _named_item else "",
                     # Not on the shot that STAGES the anchor: the author's own
                     # words are right there, and a second sentence saying it back
                     # is the redundancy this merge exists to remove.
                     _wearers, _described, anchor=("" if _anchor_now else anchored),
-                    rigid=bool(rigid), posed=bool(posed),
-                    part=held_part(worn_items or ([worn_item] if worn_item else [])))
-                if worn_item and not _named_item:
+                    rigid=_here_rigid, posed=bool(posed),
+                    part=held_part(_here_items or ([_here_item] if _here_item else [])))
+                if _here_item and not _named_item:
                     named_shots.append(len(plan) + 1)
             else:
                 hold = own_hold(hold, _wearers, _described)

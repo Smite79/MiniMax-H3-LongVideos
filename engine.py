@@ -206,8 +206,14 @@ ANCHORS = (r"walls?|floors?|grounds?|ceilings?|pillars?|columns?|posts?|rails?|"
 # Verbs, as VERBS. Participles and -ing forms are unambiguous. The -s forms are
 # also plural nouns, so they carry a lookbehind: "the guard chains her collar" is
 # a verb and "the chains on the floor" is not.
+# ...and "of" belongs in the list. "a pair OF handcuffs" put a determiner two words
+# back where the lookbehind could not see it, so the noun read as the verb
+# `handcuffs` -- and "Mara drops a pair of handcuffs into the toolbox" was a beat
+# that cuffed Mara. "pair" is there for the same reason, since an author writes
+# "the pair of cuffs" as often as "a pair".
 _DET = (r"(?<!\bthe\s)(?<!\ba\s)(?<!\ban\s)(?<!\bthese\s)(?<!\bthose\s)"
-        r"(?<!\btwo\s)(?<!\bsome\s)(?<!\bmore\s)(?<!\bhis\s)(?<!\bher\s)")
+        r"(?<!\btwo\s)(?<!\bsome\s)(?<!\bmore\s)(?<!\bhis\s)(?<!\bher\s)"
+        r"(?<!\bof\s)(?<!\bpair\s)(?<!\bset\s)")
 APPLY_VERB = (
     r"(?:handcuffed|cuffed|chained|shackled|manacled|locked|padlocked|fastened|"
     r"secured|tethered|bound|tied|strapped|clipped|hooked|bolted|attached|"
@@ -247,7 +253,16 @@ APPLY_VERB = (
     r"coils?|coiled|coiling|threads?|threaded|threading|passes|passed|passing|"
     r"runs|ran|running|cinch(?:es|ed|ing)?|knots?|knotted|laces?|laced|"
     r"hitch(?:es|ed|ing)?|slings?|slung)(?:\s+\S+){0,5}?\s+"
-    r"(?:around|round|through|under|over|about|behind|between)|"
+    r"(?:around|round|through|under|over|about|behind|between)"
+    # ...AROUND A BODY. The particle on its own fastens nothing to anybody: "Mara
+    # runs the steel cable through the pulley" was read as a cable locked on Mara
+    # -- a steel cable's default part is the wrists -- and every shot after it was
+    # told the cable stays closed and fastened on her, a restraint on a character
+    # the script never restrained, latched for the rest of the film. What the
+    # length goes around has to be a person for this to be a person being tied.
+    r"(?:\s+\S+){0,3}?\s+(?:" + "|".join(p for p, _n in PARTS)
+    + r"|backs?|hips?|shoulders?|chests?|torsos?|heads?|thumbs?|bod(?:y|ies)|"
+      r"her|him|them|herself|himself|themselves)\b|"
     r"closes?\s+around|clicks?\s+shut)"
     r"|" + _DET + r"(?:handcuffs|cuffs|chains|shackles|locks|padlocks|fastens|"
     r"secures|tethers|ties|straps|clips|hooks|bolts|attaches|anchors|leashes|"
@@ -545,6 +560,19 @@ _PART_ONE = _rx(r"\b(" + "|".join(p for p, _n in PARTS) + r")\b")
 _NOUN_BEFORE = _rx(r"(?:\b(?:a|an|the|her|his|its|their|my|your|our|this|that|"
                    r"these|those|one|two|three|several|more|another|in|with|by|"
                    r"of|on|from)\b|[,;:(])\s*(?:" + _ADJ + r"\s+){0,3}$")
+# What takes a LENGTH to a second part of the body. See the _spread loop: a cable is
+# at the ankles as well as the neck because it was run "down around" them, and a beat
+# that merely names the hands afterwards ("...and wipes her own hands") takes nothing
+# anywhere. "on" and "at" are deliberately absent: they place a thing that is already
+# there, and "rests her hands on Ana's shoulders" is not a second fastening.
+_REACHES = _rx(r"\b(?:around|round|through|under|over|behind|between|across|to|onto)"
+               r"\b(?:\s+[\w']+){0,2}\s*$"
+               # ...or it is simply the verb's SECOND OBJECT: "tapes her wrists and
+               # her ankles" is one roll of tape at two places, joined by nothing but
+               # "and". Only a determiner may stand between, which is what separates
+               # it from "...and wipes her own hands" -- a new verb, a new clause,
+               # and nothing of the tape in it.
+               r"|\band\s+(?:her|his|their|its|the|a|an|both|each)?\s*$")
 _POSITION = [(_rx(r"\b" + p + r"\b"), name) for p, name in POSITIONS]
 # What can stand in front of an anchor. "one ring", "the other ring", "a second
 # hook" are the same fixture as "the ring", and the six-word list read them as no
@@ -644,13 +672,30 @@ def hardware_spans(text):
     # NEAREST part alone recorded the neck and lost the ankles -- so the legs were
     # held by nothing and dropped. Only for the things whose part varies: a pair of
     # handcuffs named beside two body words is still one pair of handcuffs.
+    #
+    # ...AND ONLY WHERE THE LENGTH REACHES. Every part named after the item was
+    # taking a copy, with nothing asked about whether the two are joined and no
+    # clause boundary to stop at: "Mara straps Ana's wrists to the bench and wipes
+    # her own hands" recorded the straps on the wrists AND on the hands, which comes
+    # out as "The straps and straps go on during this shot. They hold the wrists and
+    # the hands." A length gets to a second part by being TAKEN there -- around it,
+    # behind it, to it -- so the joining word has to stand in front of the part, and
+    # the part has to be in the same sentence.
     _spread = []
     for row in raw:
         if row[0] not in PART_VARIES:
             continue
-        _next = min([a for c, a in _ats if a > row[3]], default=len(text))
-        _mine = [pt for pt, at in parts if row[3] < at < _next and pt != row[1]]
-        for _pt in dict.fromkeys(_mine):
+        _stop = min([a for c, a in _ats if a > row[3]]
+                    + [m.start() for m in re.finditer(r"[.;!?]", text)
+                       if m.start() > row[3]],
+                    default=len(text))
+        _mine = [(pt, at) for pt, at in parts
+                 if row[3] < at < _stop and pt != row[1]]
+        for _pt, _at in dict.fromkeys(_mine).keys():
+            if not _REACHES.search(text[row[3]:_at]):
+                continue
+            if any(r[0] == row[0] and r[1] == _pt for r in _spread):
+                continue
             _spread.append([row[0], _pt, row[2], row[3]])
     raw += _spread
     raw = [r for r in raw if r not in _tether]
@@ -2037,6 +2082,18 @@ _LEADING_ARTICLE = re.compile(r"^(?:a|an|the|her|his|their|its)\s+", re.I)
 def bare_name(text):
     """A garment or object name with any leading article or possessive taken off."""
     return _LEADING_ARTICLE.sub("", str(text or "").strip())
+
+
+def applies_hardware(beat):
+    """Does this beat FASTEN something onto somebody?
+
+    The same test SceneState.read makes before it records anything: hardware named,
+    an applying verb, and not a release. Exposed because the sampler had its own
+    hand-written list of applying verbs that knew 22 of them, so a beat that hogtied
+    somebody was not "hardware going on" as far as that half of the node was
+    concerned -- and the reader that decides WHOSE it is was never consulted."""
+    text = beat or ""
+    return bool(hardware_spans(text)) and bool(_APPLY.search(text)) and not _RELEASE.search(text)
 
 
 def wearer_of(beat, cast=()):

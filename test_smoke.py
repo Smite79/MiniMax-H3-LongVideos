@@ -79,6 +79,48 @@ def check(label, ok, detail=""):
         _fails.append(label)
 
 
+try:                                     # 3.11 renamed it; both are the same parser
+    import re._parser as _re_parser
+except ImportError:                      # pragma: no cover - older interpreters
+    import sre_parse as _re_parser
+
+
+def _spellings(pattern, cap=32):
+    """Every literal string a small alternation can match.
+
+    The two restraint vocabularies are checked against each other by walking the
+    engine's HARDWARE table -- and walking its CANONICAL NAMES only passed while six
+    alternate spellings inside those very patterns matched nothing in this file at
+    all. A table entry is its pattern, not its label, so the test reads the pattern.
+
+    Only the constructs those patterns use: alternation, an optional group, a
+    literal, and a character class. Anything else contributes nothing, which is
+    right for a sampler -- it yields fewer strings, never wrong ones."""
+    def walk(seq):
+        out = [""]
+        for op, av in seq:
+            kind = str(op)
+            if kind.endswith("LITERAL"):
+                out = [s + chr(av) for s in out]
+            elif kind.endswith("BRANCH"):
+                alts = [t for sub in av[1] for t in walk(sub)]
+                out = [s + a for s in out for a in alts]
+            elif kind.endswith("SUBPATTERN"):
+                alts = walk(av[3])
+                out = [s + a for s in out for a in alts]
+            elif kind.endswith("MAX_REPEAT") or kind.endswith("MIN_REPEAT"):
+                lo, _hi, sub = av
+                alts = ([""] if lo == 0 else []) + walk(sub)
+                out = [s + a for s in out for a in alts]
+            elif kind.endswith("IN"):
+                picks = [chr(a) for o, a in av if str(o).endswith("LITERAL")]
+                out = [s + p for s in out for p in (picks or [" "])]
+            if len(out) > cap * 8:
+                out = out[:cap * 8]
+        return out
+    return sorted({s for s in walk(_re_parser.parse(pattern)) if s})[:cap]
+
+
 # --- fakes ------------------------------------------------------------------
 
 W, H, FRAMES = 128, 96, 39            # small, on the 17k+5 grid
@@ -2202,6 +2244,29 @@ def test_any_restraint_holds_from_shot_to_shot():
     missed = [n for _p, n, _pt in S.engine.HARDWARE
               if not S.restraint_present(f"Ana: she, 30, {n} locked on her wrists.")]
     check("the engine's hardware is hardware to this file too", not missed, str(missed))
+
+    # EVERY SPELLING, not just the canonical name. Walking the canon names only, all
+    # 26 passed while twine, a choker, harnesses, steel wire, baling wire and the
+    # participle "hobbled" -- all of them in those same patterns -- reached neither
+    # of this file's lists. The item sat in the state and in the sheet with nothing
+    # holding it shut: hardware tracked and never held.
+    gaps = [(n, form) for pat, n, part in S.engine.HARDWARE
+            for form in _spellings(pat)
+            if not S.restraint_present(
+                f"Ana: she, 30, {form} locked on her {part or 'wrists'}.")]
+    check(f"...in every spelling those patterns accept "
+          f"({sum(len(_spellings(p)) for p, _n, _pt in S.engine.HARDWARE)} of them)",
+          not gaps, str(gaps[:6]))
+
+    # THE VERBS TOO. engine.APPLY_VERB applies these and this file's reader could not
+    # see the -s forms, which are the ones an author writes: "Mara restrains Ana"
+    # produced no hold, no arm position and no legs, beside a "Mara trusses Ana up"
+    # that produced all three.
+    deaf = [v for v in ("restrains", "immobilises", "immobilizes", "pinions",
+                        "fetters", "collars", "hobbles", "trusses")
+            if not S.restraint_present(f"Mara {v} Ana.")]
+    check("a verb the engine applies is a restraint to this file too",
+          not deaf, str(deaf))
 
     # APPLIED MID-SCENE, by any of the ways a beat writes it, and the hold follows the
     # person WEARING it rather than the person doing the tying.
@@ -8453,6 +8518,237 @@ def test_an_undeclared_pronoun_is_reported():
     check("...and not when the script only uses names", "no pronoun on the sheet" not in str(quiet[2]))
 
 
+def test_hardware_is_named_only_on_its_own_wearer():
+    """Two people in two different restraints, and each shot names only what is on
+    the body it describes.
+
+    The hold read its list of hardware by flattening every restraint in the FILM into
+    one list, so Ana's solo shot was told the leather collar stays closed -- Mara's
+    collar, on Ana's neck, with the count in the same breath saying one body. The
+    other direction put Ana's steel handcuffs on Mara. Hardware named on a body that
+    is not wearing it is hardware the model draws there, or a second body to put it
+    on: this file's standing rule."""
+    print("\n=== hardware is named on its own wearer ===")
+    mem = ("Ana: she, 30, a grey t-shirt, steel handcuffs locked on her wrists.\n"
+           "Mara: she, 41, overalls, a leather collar locked on her neck.")
+    shots = _shots_of(run_node(
+        "A workshop.\n\nAna and Mara kneel side by side.\n\nAna looks up.\n\n"
+        "Mara looks down.", character_memory=mem, plan_only=True))
+    check("Ana's own shot names her handcuffs", "handcuffs" in shots[1])
+    check("...and not the other woman's collar", "collar" not in shots[1])
+    check("Mara's own shot names her collar", "collar" in shots[2])
+    check("...and not the other woman's handcuffs", "handcuffs" not in shots[2])
+    # Both wearers in frame: both pieces belong in the sentence.
+    check("the shot with both of them names both", "handcuffs" in shots[0]
+          and "collar" in shots[0])
+
+
+def test_a_soft_restraint_is_not_called_metal():
+    """A leather collar is not metal, and is not told it is.
+
+    The pose wording said "the metal is already drawn to its full length" whenever
+    anything in the film was rigid -- so a woman in a leather collar was given a
+    steel one, because somebody ELSE in the scene was in handcuffs. The material is
+    the thing this node promises holds from shot to shot; naming the wrong one is the
+    continuity break, not a wording nicety."""
+    print("\n=== a soft restraint is not called metal ===")
+    mem = ("Ana: she, 30, a grey t-shirt, steel handcuffs locked on her wrists.\n"
+           "Mara: she, 41, overalls, a leather collar locked on her neck.")
+    shots = _shots_of(run_node(
+        "A workshop.\n\nAna and Mara kneel side by side.\n\nAna looks up.\n\n"
+        "Mara looks down.", character_memory=mem, plan_only=True))
+    check("the collar is not called metal", "the metal" not in shots[2])
+    check("...but it is still held at its full length",
+          "already drawn to its full length" in shots[2])
+    check("steel is still called metal", "the metal" in shots[1])
+    # Rope, all the way soft, is not metal on any shot of its own.
+    rope = _shots_of(run_node(
+        "A workshop.\n\nAna kneels on the floor.\n\nAna breathes.",
+        character_memory="Ana: she, 30, a grey t-shirt, rope tying her wrists "
+                         "behind her back.", plan_only=True))
+    check("rope is not metal either", not any("the metal" in s for s in rope))
+
+
+def test_one_garment_is_named_once_when_it_comes_off():
+    """A garment two readers both find is still ONE garment coming off.
+
+    The prose reader inferred "belt" from "Dan unlocks the chastity belt" and the
+    hardware reader inferred it again off the sheet, and neither checked the other's
+    list -- so the shot said "The chastity belt and the chastity belt come off",
+    which is one garment described twice (two to draw) and a plural verb on a single
+    item."""
+    print("\n=== one garment, named once ===")
+    P = ("A room.\n\nMcKenna: she, 22, crop top, chastity belt.\n\n"
+         "Dan: he, 30, shirt.\n\nMcKenna walks in.\n\nDan looks at her.\n\n"
+         "Dan unlocks the chastity belt.\n\nMcKenna sits down.")
+    shot = _shots_of(run_node(P, plan_only=True, ref_noise_aug=0.999))[2]
+    # The BEAT names it too, and that one is the author's. Counted in the sentence
+    # this node writes, which is the one that had it twice.
+    said = next((s for s in re.split(r"(?<=\.)\s+", " ".join(shot.split()))
+                 if "comes off" in s or "come off" in s), "")
+    check("the removal names the belt once",
+          said.count("chastity belt") == 1, said or shot)
+    check("...and as one thing, not two", "comes off during this shot" in shot)
+    check("...and not as a pair", "belt and the chastity belt" not in shot)
+
+
+def test_hardware_in_a_hand_is_not_hardware_on_a_body():
+    """Carrying a pair of handcuffs does not put them on the person carrying them.
+
+    The plain-noun branch counted the word alone, and "a pair OF handcuffs" put the
+    article two words back where the determiner guard could not see it -- so the noun
+    read as the VERB `handcuffs` as well. "Mara drops a pair of handcuffs into the
+    toolbox" was a beat that cuffed Mara: the shot was told the hardware is open at
+    the first frame and closed by the last, and every shot after it said the cuffs
+    stay closed on her."""
+    print("\n=== hardware in a hand ===")
+    HOLD = re.compile(r"stays?\s+(?:closed and fastened|tied and holding)", re.I)
+    for beat in ("Mara drops a pair of handcuffs into the toolbox.",
+                 "Mara throws the cuffs on the bench.",
+                 "Mara picks up a set of cuffs."):
+        shots = _shots_of(run_node(f"A workshop.\n\n{beat}\n\nMara wipes her hands.",
+                                   character_memory="Mara: she, 41, overalls.",
+                                   plan_only=True))
+        check(f"nothing is fastened by {beat[:30]!r}",
+              not any(HOLD.search(sh) for sh in shots), shots[-1][-120:])
+        check("...and nothing is told where it sits on her",
+              "sits where it belongs" not in shots[0])
+    # ...while a beat that carries it AND fastens it is a fastening.
+    both = _shots_of(run_node(
+        "A workshop.\n\nMara picks up the handcuffs and locks them on Ana's wrists."
+        "\n\nAna kneels.", character_memory="Ana: she, 30, a grey t-shirt.\n"
+                                            "Mara: she, 41, overalls.", plan_only=True))
+    check("picking them up and locking them on is still a restraint",
+          HOLD.search(both[-1]) is not None, both[-1][-120:])
+    # HELD UP is the third case: not worn, but still drawn -- so the sentence that
+    # says where a collar belongs is wanted and the one that says it is closed on a
+    # body is not.
+    shown = _shots_of(run_node("A workshop.\n\nMara holds up the steel collar.\n\n"
+                               "Mara turns.", character_memory="Mara: she, 41, overalls.",
+                               plan_only=True))
+    check("a collar held up is drawn as a collar", "sits where it belongs" in shown[0])
+    check("...but nobody is wearing it", not any(HOLD.search(sh) for sh in shown))
+
+
+def test_a_length_reaches_only_what_it_is_taken_around():
+    """A length is recorded where it is PUT, not at every part named after it.
+
+    Four ways this over-fired, all of them added while making lengths work at all:
+    a run through a pulley was a cable locked on the person running it; every body
+    part named after the item took a copy of it, so "straps Ana's wrists to the bench
+    and wipes her own hands" put the straps on the hands as well; a neck word within
+    sixty characters of a leg word hoisted a kneeling body off the floor; and the
+    bare word "around" counted as evidence that a fastening had happened at all."""
+    print("\n=== a length reaches what it is taken around ===")
+    E = S.engine
+    def parts(beat):
+        return sorted((c, pt) for c, pt, _w, _a in E.hardware_spans(beat))
+
+    check("a cable run through a pulley is on nobody",
+          not E.applies_hardware("Mara runs the steel cable through the pulley."))
+    check("...nor is a chain wound round a post",
+          not E.applies_hardware("Mara winds the chain around the post."))
+    check("a cable run around a neck is on somebody",
+          E.applies_hardware("Mara loops the steel cable around Ana's neck."))
+
+    check("a length holds the part it is taken around, and no other",
+          parts("Mara straps Ana's wrists to the bench and wipes her own hands.")
+          == [("straps", "wrists")],
+          str(parts("Mara straps Ana's wrists to the bench and wipes her own hands.")))
+    check("...and a second clause takes nothing with it",
+          parts("Mara ties the rope around Ana's waist, then rests her hands "
+                "on Ana's shoulders.") == [("rope", "waist")])
+    check("...while a second object of the same verb does",
+          parts("Mara tapes her wrists and her ankles.")
+          == [("tape", "ankles"), ("tape", "wrists")])
+    check("...and one length at two places is at both",
+          parts("Mara loops a steel cable around her neck and down around her ankles.")
+          == [("steel cable", "ankles"), ("steel cable", "neck")])
+
+    # THE LEGS. The line has to run between the neck and them for the body to be
+    # held up by it, and "around" on its own is not evidence that anything is tied.
+    for text, want in (("Mara loops a steel cable around her neck and down around "
+                        "her ankles.", "ankles to the neck"),
+                       ("a cable from her neck to her ankles", "ankles to the neck"),
+                       ("Ana kneels, the collar at her neck, her legs folded under her.", ""),
+                       ("Mara looks around the workshop while Ana stands with her "
+                        "feet together.", ""),
+                       ("Ana stands with her feet together.", ""),
+                       ("Ana's ankles are cuffed together.", "ankles together")):
+        check(f"legs of {text[:42]!r}", S.legs_anchor(text) == want, S.legs_anchor(text))
+
+
+def test_the_shot_that_puts_it_on_says_so():
+    """The applying shot must not be told the hardware is already closed.
+
+    `restraint_going_on` keeps its own list of applying verbs, and the engine keeps a
+    fuller one. Where they disagreed the shot that puts the manacles on fell through
+    to the standing hold -- "Every restraint stays closed and fastened as it was put
+    on" -- said of hardware that is open and in somebody's hands at the first frame,
+    which is the one shot where that sentence is a lie.
+
+    The lists are mirrored rather than merged, because this one answers a narrower
+    question: the engine reads "her wrists cuffed" as hardware on, correctly, and
+    here that must NOT read as the shot where it closes."""
+    print("\n=== the shot that puts it on ===")
+    staged = [v for v in ("manacles Ana's wrists", "blindfolds Ana", "leashes Ana",
+                          "hogties Ana", "straitjackets Ana", "collars Ana",
+                          "hobbles Ana", "shackles Ana's ankles",
+                          "loops the rope around Ana's wrists",
+                          "winds the chain around Ana's waist")
+              if not S.restraint_going_on(f"Mara {v}.")]
+    check("every way of putting it on is read as putting it on", not staged, str(staged))
+    # ...and a state that already holds is not a shot that closes it.
+    already = [b for b in ("Mara stands by the wall, her wrists cuffed behind her.",
+                           "Mara is handcuffed to the rail.",
+                           "The cable wound around her wrists holds.",
+                           "Ana pulls against the cuffs.")
+               if S.restraint_going_on(b)]
+    check("...and what is already on is not put on again", not already, str(already))
+
+
+def test_a_beam_in_a_roof_is_not_a_smile():
+    """"Beam" is a piece of a building in this node's own anchor list, and a broad
+    smile in its emotion list. Chaining somebody to one made the face beam."""
+    print("\n=== a beam is not a smile ===")
+    check("chaining somebody to a beam names no feeling",
+          S.emotion_in("Mara chains Ana to the beam.") == "")
+    check("...nor does looking at one", S.emotion_in("Ana looks up at the beam.") == "")
+    check("...nor do the beams holding a roof",
+          S.emotion_in("The steel beams hold the roof.") == "")
+    check("a person still beams", S.emotion_in("Ana beams at him.") == "beaming")
+    shot = _shots_of(run_node("A barn.\n\nMara chains Ana to the beam.\n\nAna breathes.",
+                              character_memory="Ana: she, 30, a grey t-shirt.\n"
+                                               "Mara: she, 41, overalls.",
+                              plan_only=True))[0]
+    check("...and the shot that chains her says nothing about a smile",
+          "expression is beam" not in shot)
+
+
+def test_the_shot_that_takes_it_off_is_not_told_where_it_sits():
+    """One sentence must not undo the other in the same breath.
+
+    The clause that says where hardware belongs fires on any beat naming hardware
+    with no body part beside it -- and "Mara unlocks the handcuffs" is exactly that
+    shape. The removing shot read both "The handcuffs come off during this shot and
+    are away by the last frame" and "handcuffs close around the wrists"."""
+    print("\n=== taken off, not placed ===")
+    mem = ("Ana: she, 30, a grey t-shirt, steel handcuffs locked on her wrists.\n"
+           "Mara: she, 41, overalls.")
+    shot = _shots_of(run_node("A workshop.\n\nAna kneels.\n\nMara unlocks the handcuffs."
+                              "\n\nAna stands up.", character_memory=mem,
+                              plan_only=True))[1]
+    check("the removing shot says they come off", "come off during this shot" in shot)
+    check("...and is not also told where they sit",
+          "sits where it belongs" not in shot, shot)
+    # ...and a plural item takes a plural verb. "cuffs" was only matched as a whole
+    # word, so "handcuffs" read as singular: "The handcuffs comes off ... and is away".
+    check("a plural item takes a plural verb", "handcuffs come off" in shot)
+    check("...and a singular one does not", S.plural_item("chastity belt") is False)
+    check("...and a dress is not a plural", S.plural_item("a red dress") is False)
+    check("...while boots are", S.plural_item("black boots") is True)
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -8638,6 +8934,14 @@ def main():
     test_a_pronoun_in_a_description_is_not_the_declared_one()
     test_a_name_used_as_a_word_stages_nobody()
     test_an_undeclared_pronoun_is_reported()
+    test_hardware_is_named_only_on_its_own_wearer()
+    test_a_soft_restraint_is_not_called_metal()
+    test_one_garment_is_named_once_when_it_comes_off()
+    test_hardware_in_a_hand_is_not_hardware_on_a_body()
+    test_a_length_reaches_only_what_it_is_taken_around()
+    test_the_shot_that_puts_it_on_says_so()
+    test_a_beam_in_a_roof_is_not_a_smile()
+    test_the_shot_that_takes_it_off_is_not_told_where_it_sits()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
