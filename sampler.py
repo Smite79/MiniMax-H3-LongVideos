@@ -1821,7 +1821,11 @@ def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
                 + ", ".join(f"{n}f/{n / H3_FPS:.1f}s" for n in lens)
                 + "). They differ, so one seed does not give them one noise field -- "
                   "noise is drawn to the latent's shape -- and surface detail resets at "
-                  "each cut. Set shot_length to 'fixed' if that matters more than pacing")
+                  "each cut. Set shot_length to 'fixed' if that matters more than "
+                  "pacing. The frames_per_shot output is ONE number and cannot "
+                  "describe shots of different lengths: it reports the first one, so "
+                  "do not split or index the image batch with it here -- the list "
+                  "above is the split")
     return lens, note
 
 
@@ -3274,7 +3278,7 @@ def frame_detail(img):
     return float((gx + gy) * 0.5), float(x.std())
 
 
-def levels_report(levels, shots):
+def levels_report(levels, shots, strength=None):
     """What hold_levels measured, and what it did about it.
 
     Worth printing even when it corrected nothing: the measurement is the evidence that
@@ -3291,8 +3295,18 @@ def levels_report(levels, shots):
             f"per boundary, per R/G/B channel, from {len(levels._bg)} boundary(ies)")
     n = len(levels.applied)
     if not n:
-        line += (" -- below the 8-bit floor a handoff is quantised to, so nothing was "
-                 "applied rather than claiming a correction that would be erased")
+        # WHICH REASON. gains() returns nothing for two of them -- the strength is
+        # zero, or the correction is smaller than the 8-bit floor it would be
+        # quantised to -- and this printed the second for both. With hold_levels at 0
+        # on a chain measurably drifting, the note said the drift was "below the 8-bit
+        # floor" while the numbers in its own first half said otherwise.
+        if strength is not None and strength <= 0:
+            line += (" -- and did nothing about it, because hold_levels is 0. The "
+                     "measurement above is what the chain is doing unattended; raise "
+                     "hold_levels to take it back out")
+        else:
+            line += (" -- below the 8-bit floor a handoff is quantised to, so nothing was "
+                     "applied rather than claiming a correction that would be erased")
     else:
         last = levels.applied[-1][0]
         line += (f", and took it back out of {n} handoff(s); the last gain applied was "
@@ -5223,7 +5237,15 @@ def fit_guards(clauses, beat_words, floor=None):
             continue
         cost = len(text.split())
         if spent + cost > budget and spent > 0:
-            continue
+            # ...AND EVERYTHING BELOW IT, which is what a ranking is for. This
+            # skipped the clause and kept scanning, so a cheap LOW-ranked clause
+            # slipped into room an expensive HIGH-ranked one had just been refused:
+            # on a plain wardrobe script the rank-10 state clause was dropped while
+            # rank-11 gaze, rank-12 mouth and rank-13 camera all survived. The
+            # budget then decided by price what the ranking is there to decide by
+            # importance. The first clause is still always kept, whatever it costs,
+            # so a shot is never left with no guard at all.
+            break
         spent += cost
         keep.add(name)
     kept = "".join(t for _, n, t in clauses if n in keep and t)
@@ -7800,7 +7822,13 @@ def scene_for_here(scene, here, always="", names=(), beat=""):
             mended = []
             for unit in (k for k in kept if k.strip()):
                 unit = re.sub(r";$", ".", unit.strip())
-                if mended and mended[-1].endswith(".") and unit[:1].islower():
+                # ...OR IT IS THE FIRST THING LEFT ON THE LINE. The capital was only
+                # restored when something survived in front of it, so a clause
+                # promoted out of a semicolon at the START of a line opened the
+                # sentence -- and the whole prompt -- in lower case: "the kitchen has
+                # white tiles. Ana fills a glass at the sink."
+                if (unit[:1].islower()
+                        and ((mended and mended[-1].endswith(".")) or not mended)):
                     unit = unit[0].upper() + unit[1:]
                 mended.append(unit)
             kept = mended
@@ -12539,6 +12567,32 @@ class H3LongVideos:
                 floor=RESTRAINT_FLOOR_WORDS if (hold or _pose or anchors) else None)
             if _dropped:
                 crowded.append((len(plan) + 1, _dropped))
+            # ...AND THE NOTES MUST NOT GO ON CLAIMING A DROPPED CLAUSE LANDED. Every
+            # one of these trackers appends where its clause is BUILT, which is
+            # before the budget runs -- so whenever the budget binds, the report
+            # names shots that never got the sentence it is describing. `sound` was
+            # corrected below and nothing else was. A reader uses these notes to work
+            # out why a shot came out wrong, and one that names the wrong shot costs
+            # more than the dropped clause did.
+            #
+            # Only the trackers that exist SOLELY to write a note. moved_shots,
+            # revealed_shots, bared_shots and anchored_shots are read by the render
+            # as well -- what the wardrobe did is still true whether or not the
+            # sentence about it fitted -- so they are deliberately left alone.
+            for _gone in _dropped:
+                _tracker = {
+                    "wearing": wearing_shots, "fall": fall_shots,
+                    "travel": travel_shots, "where": where_shots,
+                    "pace": paced_shots, "device": device_shots,
+                    "state": stated_shots, "posture": posture_shots,
+                    "gaze": gaze_shots, "duress": duress_shots,
+                    "mouth": mouth_named, "language": language_shots,
+                    "contact": contact_shots, "frame": frame_shots,
+                    "camera": camera_shots, "told": told_shots,
+                    "turn": turned_shots, "sound": inferred_sound,
+                }.get(_gone)
+                while _tracker is not None and (len(plan) + 1) in _tracker:
+                    _tracker.remove(len(plan) + 1)
             # Body count is a composition invariant, not a continuity detail. It
             # must not evict speaker, gaze, or ownership clauses from the bounded
             # guard budget; doing so fixed the extra body by breaking who spoke.
@@ -12591,7 +12645,14 @@ class H3LongVideos:
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
-            _sound_kept = "" if "sound" in _dropped else _sound
+            # UNDER verbatim NOTHING BUT THE BEAT IS SENT. The clauses are still
+            # worked out -- that is what makes the switch worth having as a
+            # diagnostic -- but this note is about what each shot IS TOLD, and it
+            # counted a sound clause that never left the building. The subtraction
+            # below then drove the guard share negative: "continuity clauses -79%,
+            # sound 79%" on a shot whose prompt is the author's sentence and nothing
+            # else.
+            _sound_kept = "" if (verbatim or "sound" in _dropped) else _sound
             sound_words += len(_sound_kept.split())
             guard_words += (len(shot_text.split()) - len(_sound_kept.split())
                             - len(f"{_scene_sent} {body}".split()) - len(_exact.split()))
@@ -12758,7 +12819,16 @@ class H3LongVideos:
         # Seconds of shot per staged action -- the number that decides whether the
         # motion looks brisk or stretched. A shot longer than its action is filled by
         # performing the action more slowly, not by inventing more of it.
-        _clauses = sum(max(1, len([p for p in _CLAUSE_SPLIT.split(b)
+        # COUNTED THE WAY beat_seconds COUNTS, which means speech and the directive
+        # lines come out first. This ran the splitter over the raw beat, so the
+        # clauses INSIDE a quoted line were counted as staged actions: a beat with
+        # one action and one line read as four, and "pacing: 10.1s per staged action"
+        # came out as 4.0s. The number exists to say whether the motion looks brisk
+        # or stretched, and it was reporting the dialogue as motion.
+        _clauses = sum(max(1, len([p for p in _CLAUSE_SPLIT.split(
+                                       _REMOVE_LINE.sub("", _ADD_LINE.sub(
+                                           "", _DIALOGUE_TAG.sub(
+                                               " ", _QUOTED.sub(" ", b or "")))))
                                    if p and len(p.split()) >= 2])) for b in beats)
         if _clauses and lens:
             _per = sum(lens) / H3_FPS / _clauses
@@ -14157,7 +14227,12 @@ class H3LongVideos:
         _room_frames = {}           # room -> [(last frame there, who was in it, wardrobe generation, shot)], newest first
         _room_returns = []          # (shot, room, source shot) actually carried
         _wardrobe_gen = 0           # bumped by every shot that changes what anybody wears or is held by
-        _handoff_claimed = []       # shots whose demoted handoff was named in the text
+        _handoff_claimed = []       # shots whose opening frame is named in the text
+        # ...and the subset where the REASON is the aug demotion. The note below used
+        # to be written for all four branches while being true of only this one, so a
+        # film running at the default 0.999 was told "ref_noise_aug is below 0.99" and
+        # to raise a number that was already above it.
+        _aug_claimed = []
         _untrimmed = []             # shots that opened on no keyframe, so kept frame one
         _plate_on = 0               # the shot whose first_frame rides as the SET
         _carried = []               # (shot, who was there, who joins) room carried on
@@ -14463,6 +14538,7 @@ class H3LongVideos:
             elif handoff_rides_as_ref(shot_handoff, _shot_refs, ref_noise_aug):
                 shot_prompt = shot_prompt + handoff_claim(len(_shot_refs) + 1)
                 _handoff_claimed.append(i + 1)
+                _aug_claimed.append(i + 1)
             # Whatever this shot ends up being, that is what `script` reports.
             shot.prompt = shot_prompt
             cond, latent, fc, demoted = build_conditioning(
@@ -14561,11 +14637,13 @@ class H3LongVideos:
             # viewer sees are the ones the model made. Everything that leaves this shot for
             # a later one comes off hand_src, so the handoff and any captured face take the
             # same grade from the same call.
+            _grade = None               # the correction, kept for the captured face
             try:
                 if hold_levels > 0 and hand_src is not None and hand_src.shape[0]:
                     _lg, _lo = _levels.gains(hold_levels)
                     if _lg is not None:
                         hand_src = apply_levels(hand_src, _lg, _lo)
+                        _grade = (_lg, _lo)
                         _levels.note(_lg, _lo)   # recorded for the end-of-run report
             except Exception:
                 pass
@@ -14612,11 +14690,21 @@ class H3LongVideos:
             try:
                 # ONE PERSON IN THE FRAME, not in the text: a shot describing only
                 # Crystal while Dan sits beside her is a picture of both of them.
-                if (hand_src.shape[0] and len(plan.shots[i].cast) == 1
+                if (imgs.shape[0] and len(plan.shots[i].cast) == 1
                         and len(_frame_cast(i)) == 1 and _wardrobe_normal):
-                    _mid = hand_src.shape[0] // 2
-                    _keep = hand_src[_mid:_mid + 1].detach().clamp(0.0, 1.0).to(
-                        "cpu", copy=True)
+                    # THE MIDDLE OF THE SHOT, off the shot's OWN frames. This came
+                    # off hand_src, which is the HANDOFF's source -- and with
+                    # latent_upscale on that is rebuilt from the last few latents, so
+                    # its middle is the middle of the TAIL, which is the last third
+                    # of the shot. That is exactly the frame the note below rules
+                    # out: somebody walking out during the shot is already gone in
+                    # it. The grade still follows, so the recovered face and the
+                    # handoff agree with each other.
+                    _mid = imgs.shape[0] // 2
+                    _keep = imgs[_mid:_mid + 1]
+                    if _grade is not None:
+                        _keep = apply_levels(_keep, _grade[0], _grade[1])
+                    _keep = _keep.detach().clamp(0.0, 1.0).to("cpu", copy=True)
                     for _who in plan.shots[i].cast:
                         _captured[_who] = _keep
                         _captured_from[_who] = i + 1
@@ -14720,10 +14808,17 @@ class H3LongVideos:
                 f"before -- reported as the last frame and the first frame of the next "
                 f"beat not matching up. The audio is trimmed with the picture or not at "
                 f"all, so the two cannot come apart")
-        if _handoff_claimed:
+        if _handoff_claimed and not _aug_claimed:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in _handoff_claimed)} name the frame "
+                f"they open on in their own text -- the set, or the room and who was in "
+                f"it. A picture the prompt never refers to is read as another subject, "
+                f"so an unnamed one would arrive as a second person with the same face "
+                f"and the same clothes")
+        if _aug_claimed:
             notes.append(
                 f"ref_noise_aug is below {KEYFRAME_SAFE_AUG:g}, so on shot(s) "
-                f"{', '.join(str(n) for n in _handoff_claimed)} the handoff is encoded as "
+                f"{', '.join(str(n) for n in _aug_claimed)} the handoff is encoded as "
                 f"a reference rather than a keyframe, and the text now NAMES it as the "
                 f"frame the shot opens on. Unnamed it was a picture of the previous shot "
                 f"-- the same people, a moment earlier -- sitting in the reference rows "
@@ -14760,7 +14855,9 @@ class H3LongVideos:
                   "CLAIMED on their sheet entry for that shot -- a picture the "
                   "prompt never refers to is read as another subject, so an "
                   "unclaimed one would arrive as a second person with the same "
-                  "face and the same clothes. `script` is written before the render, so it does not show that tag")
+                  "face and the same clothes. The tag is in the `script` output: the "
+                  "finished prompt is written back to the shot, and `script` is built "
+                  "from those at the end of the run")
         # FrameAccumulator writes each decoded shot directly into the finished chain.
         # Its overflow path covers malformed VAE output without making the normal
         # path allocate and concatenate a second full copy.
@@ -14931,7 +15028,7 @@ class H3LongVideos:
         _detail = detail_report(shot_detail)
         if _detail:
             notes.append(_detail)
-        _lvl = levels_report(_levels, len(plan.shots))
+        _lvl = levels_report(_levels, len(plan.shots), hold_levels)
         if _lvl:
             notes.append(_lvl)
         if t_decode > t_sample:

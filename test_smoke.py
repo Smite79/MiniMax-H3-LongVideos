@@ -8730,6 +8730,99 @@ def test_the_shot_that_puts_it_on_says_so():
     check("...and what is already on is not put on again", not already, str(already))
 
 
+def test_the_ranking_decides_what_survives():
+    """fit_guards is ranked, and a greedy fill let price decide instead.
+
+    Skipping an over-budget clause and carrying on meant a cheap LOW-ranked clause
+    slipped into room an expensive HIGH-ranked one had just been refused: the rank-10
+    state clause dropped while rank-11 gaze, rank-12 mouth and rank-13 camera all
+    survived. The first clause is still always kept, whatever it costs, so a shot is
+    never left with no guard at all."""
+    print("\n=== the ranking decides what survives ===")
+    clauses = [(1, "first", " one two three four five"),
+               (5, "big", " " + " ".join(["word"] * 200)),
+               (9, "cheap", " tiny clause here")]
+    kept, dropped = S.fit_guards(clauses, 2)
+    check("the top-ranked clause is kept", "first" not in dropped)
+    check("...the one that does not fit is dropped", "big" in dropped, str(dropped))
+    check("...and nothing below it sneaks in", "cheap" in dropped, str(dropped))
+    check("the kept text is what survived", kept.strip() == "one two three four five",
+          repr(kept))
+    # An expensive FIRST clause is still kept: something always survives.
+    only_big = S.fit_guards([(1, "big", " " + " ".join(["word"] * 200))], 2)
+    check("a shot is never left with no guard", only_big[1] == [], str(only_big[1]))
+
+
+def test_a_dropped_clause_is_not_reported_as_sent():
+    """The per-shot trackers append where a clause is BUILT, before the budget runs,
+    so when the budget binds the notes go on naming shots that never got it.
+
+    A reader uses these notes to work out why a shot came out wrong; one that names
+    the wrong shot costs more than the dropped clause did."""
+    print("\n=== a dropped clause is not reported as sent ===")
+    mem = ("Ana: she, 30, a grey t-shirt over a black bra, blue jeans, boots.\n"
+           "Mara: she, 41, navy overalls.")
+    info = str(run_node(
+        "A workshop with white tiles.\n\nAna and Mara walk in from the yard.\n\n"
+        "Ana looks at Mara.\n\nremove: t-shirt\nAna pulls it off and falls.\n\n"
+        "Ana waits.", character_memory=mem, plan_only=True)[2])
+    drop = next((n for n in info.split(" | ") if "dropped for room" in n), "")
+    check("the run reports a shot whose clauses were dropped", "shot 3:" in drop, drop[:90])
+    # Those exact clause names must not appear in their own notes for shot 3.
+    for name, marker in (("frame", "told what the frame HOLDS"),
+                         ("camera", "one unbroken TAKE")):
+        if name in drop:
+            said = next((n for n in info.split(" | ") if marker in n), "")
+            shots = said.split("shot(s) ")[1].split(" ")[0] if "shot(s) " in said else ""
+            check(f"...and the {name} note does not claim shot 3",
+                  "3" not in shots.split(","), said[:110])
+
+
+def test_a_promoted_clause_opens_in_upper_case():
+    """A clause promoted out of a semicolon opens the sentence -- and the whole prompt.
+    The capital was only restored when something survived in front of it."""
+    print("\n=== a promoted clause opens in upper case ===")
+    shots = _shots_of(run_node(
+        "A kitchen; the kitchen has white tiles.\n\nAna fills a glass at the sink.\n\n"
+        "Ana drinks.", character_memory="Ana: she, 30, a grey t-shirt.",
+        plan_only=True))
+    for i, sh in enumerate(shots, 1):
+        body = sh.split("] ", 1)[-1].lstrip()
+        check(f"shot {i} does not open in lower case",
+              not body[:1].islower(), body[:60])
+
+
+def test_the_reports_say_what_happened():
+    """Three notes that stated something untrue.
+
+    The balance note counted clauses that verbatim never sent, and drove its own
+    guard share negative. The pacing note ran the clause splitter over the raw beat,
+    so the clauses inside a quoted line counted as staged actions. And the
+    recovered-face note said `script` does not show the claim tag, which it does."""
+    print("\n=== the reports say what happened ===")
+    mem = "Ana: she, 30, a grey t-shirt."
+    for P in ("A workshop.\n\nAna screams as the drill whines.\n\nAna waits.",
+              'A workshop.\n\nAna says: "Hold this."\n\nAna waits.'):
+        info = str(run_node(P, character_memory=mem, plan_only=True, verbatim=True)[2])
+        bal = next((n for n in info.split(" | ") if "balance" in n), "")
+        check("no negative share under verbatim", "-" not in bal.split("clauses")[1][:6],
+              bal[:130])
+        check("...and nothing is counted as sent that was not",
+              "continuity clauses 0%, sound 0%" in bal, bal[:130])
+    # The pacing number counts ACTIONS, and a spoken line is not four of them.
+    spoken = str(run_node(
+        'A workshop.\n\nAna puts the crate down and says: "Take it, then go, and '
+        'do not come back."\n\nAna waits.', character_memory=mem, plan_only=True)[2])
+    quiet = str(run_node(
+        "A workshop.\n\nAna puts the crate down.\n\nAna waits.",
+        character_memory=mem, plan_only=True)[2])
+    def per(info):
+        n = next((x for x in info.split(" | ") if x.startswith("pacing:")), "")
+        return float(n.split("pacing: ")[1].split("s of")[0]) if n else 0.0
+    check("a spoken line is not counted as staged actions",
+          per(spoken) >= per(quiet) * 0.8, f"{per(spoken)} vs {per(quiet)}")
+
+
 def test_a_line_is_counted_once():
     """A line marked the way this node's own note tells you to mark it counted DOUBLE.
 
@@ -9478,6 +9571,10 @@ def main():
     test_hardware_in_a_hand_is_not_hardware_on_a_body()
     test_a_length_reaches_only_what_it_is_taken_around()
     test_the_shot_that_puts_it_on_says_so()
+    test_the_ranking_decides_what_survives()
+    test_a_dropped_clause_is_not_reported_as_sent()
+    test_a_promoted_clause_opens_in_upper_case()
+    test_the_reports_say_what_happened()
     test_a_line_is_counted_once()
     test_the_ceiling_is_the_ceiling()
     test_the_machine_with_the_line_is_the_one_that_speaks()
