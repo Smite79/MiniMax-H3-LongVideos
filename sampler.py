@@ -1923,6 +1923,10 @@ _VOCAL_FROM = (
     (r"\bwhin(?:e|es|ing|ed)\b",                    "whining"),
 )
 
+# One phrase, named once: it is a table entry, the thing that retires a plainer
+# "breathing", and the key of the pair that replaces it -- three copies before this.
+EFFORT_BREATH = "unsteady breathing, with gasps and moans of effort"
+
 _SOUND_FROM = (
     # A VOCAL THE BEAT NAMES IS THE ONE THE SHOT MAKES, and it goes FIRST.
     #
@@ -2015,8 +2019,7 @@ _SOUND_FROM = (
     (r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
      r"strain(?:s|ing|ed)?|trembl(?:e|es|ing|ed)|shiver(?:s|ed|ing)?)\b"
      r"|\b(?:" + _EXERTION_NARROW_SRC + r")",
-                                                    "unsteady breathing, with gasps and "
-                                                    "moans of effort"),
+                                                    EFFORT_BREATH),
     (r"\b(?:zip(?:s|ped|ping)?|unzip(?:s|ped|ping)?|zipper)\b", "a zip running"),
     (r"\btap(?:e|es|ed|ing)\b",                     "tape pulling off"),
     # Gaps found by listing the beats this is actually asked for and reading what
@@ -2052,7 +2055,7 @@ MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
 # retires the bare "breathing" on its own, with no vocal named at all: "wakes up"
 # and "thrashes" both fired and a shot came back listing "unsteady breathing, with
 # gasps and moans of effort AND breathing".
-_VOCAL_RETIRES = ("unsteady breathing, with gasps and moans of effort", "breathing")
+_VOCAL_RETIRES = (EFFORT_BREATH, "breathing")
 # WHAT IS HAPPENING BETWEEN THE MOANS.
 #
 # A named vocal opens the audio branch on purpose -- it is meant to be heard -- and
@@ -2077,7 +2080,7 @@ _NAMED_VOCALS = frozenset(("whimpering", "sobbing", "moaning", "groaning",
                            "screaming", "whining"))
 _SOUND_SUPERSEDES = {
     "cuffs ratcheting closed": ("cuffs knocking",),
-    "unsteady breathing, with gasps and moans of effort": ("breathing",),
+    EFFORT_BREATH: ("breathing",),
     "whimpering": _VOCAL_RETIRES,
     "sobbing": _VOCAL_RETIRES,
     "moaning": _VOCAL_RETIRES,
@@ -2446,9 +2449,8 @@ def speakers_in(beat, sheet=""):
         # predicate whose subject is still Kate, so the shot was told the wrong
         # person speaks -- and the mouth guard then held the actual speaker's mouth
         # shut. Filler like "then"/"quietly" is still allowed through.
-        if re.search(r"\b" + re.escape(n) + r"\b"
-                     r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?\s+"
-                     r"(?:" + _SAYS + r")\b", b, re.I):
+        if re.search(r"\b" + re.escape(n) + r"\b" + _UP_TO_TWO_WORDS
+                     + r"\s+(?:" + _SAYS + r")\b", b, re.I):
             out.append(n)
     # INVERTED attribution: the verb comes first. '"Sure thing," says Dan.' is the
     # commonest form in prose after the plain one, and the pattern above only ever
@@ -2669,7 +2671,11 @@ def told_hold(listeners):
 
 # The tail both voice guards end on, defined once so they cannot drift apart.
 MOUTH_HOLD_REST = "every other mouth in the shot stays closed, those expressions moving"
-MOUTH_HOLD_OTHERS = " Only {who} speaks; " + MOUTH_HOLD_REST + "."
+# UP TO TWO WORDS BETWEEN A NAME AND ITS VERB, with `and` shut out: "Dan holds the
+# door and McKenna looks away" must not credit Dan, because `and` opens a new
+# predicate with its own subject. Filler like "then" or "quietly" still passes.
+# Written out at four call sites before this, which is four places to drift.
+_UP_TO_TWO_WORDS = r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?"
 
 
 # A VOCAL BELONGS TO SOMEBODY.
@@ -2691,6 +2697,7 @@ MOUTH_HOLD_OTHERS = " Only {who} speaks; " + MOUTH_HOLD_REST + "."
 # Attribution table of its own, NOT _VOCAL_FROM. That one feeds the sound clause and
 # is the six vocals the node will name as a sound; this is about whose face moves,
 # which is a wider list and must not change what the shot is heard as.
+
 _VOCAL_SOURCE = (
     (r"whimper(?:s|ing|ed)?", "whimpering"), (r"sob(?:s|bing|bed)?", "sobbing"),
     (r"moan(?:s|ing|ed)?", "moaning"),       (r"groan(?:s|ing|ed)?", "groaning"),
@@ -2716,9 +2723,8 @@ def vocal_sources_in(beat, sheet=""):
         if not n:
             continue
         for pat, phrase in _VOCAL_SOURCE:
-            if re.search(r"\b" + re.escape(n) + r"\b"
-                         r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?\s+"
-                         r"(?:" + pat + r")\b", b, re.I):
+            if re.search(r"\b" + re.escape(n) + r"\b" + _UP_TO_TWO_WORDS
+                         + r"\s+(?:" + pat + r")\b", b, re.I):
                 out.append((n, phrase))
                 break
             # A COMPOUND SUBJECT IS TWO SOURCES, NOT ONE.
@@ -3721,11 +3727,10 @@ _STRIP_VERB = engine._STRIP_VERB
 # her boots off". The rest are removals only with the particle straight after them:
 # "steps out of her leggings" is one, "steps back" while a light goes off later in
 # the sentence is not, and the trailing form would read that as a removal.
-_TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
-                  r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|"
-                  r"tore|slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
-                  r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
-                  r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
+# Defined in the engine and used here. This was a second copy of the same list,
+# byte for byte, and a verb added to one of them is a removal the other half of
+# the node cannot see -- the shape of every vocabulary bug in this file.
+_TRAILING_VERB = engine._TRAILING_VERB
 # ...and verbs that are a removal on their own, needing no particle.
 # One definition, in the engine. See engine._UNDO_VERB.
 _UNDO_VERB = engine._UNDO_VERB
@@ -4601,10 +4606,9 @@ def emotion_owner(beat, names, word):
     rather than a sheet because the caller already has the shot's cast."""
     b = str(beat or "")
     for n in (names or []):
-        if n and re.search(r"\b" + re.escape(n) + r"\b"
-                           r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?"
-                           r"\s+(?:is|was|looks?|looked|seems?|feels?|felt|sounds?|"
-                           r"becomes?|became|goes|went|turns?|gets?|got)?\s*"
+        if n and re.search(r"\b" + re.escape(n) + r"\b" + _UP_TO_TWO_WORDS
+                           + r"\s+(?:is|was|looks?|looked|seems?|feels?|felt|sounds?|"
+                             r"becomes?|became|goes|went|turns?|gets?|got)?\s*"
                            + re.escape(word) + r"\b", b, re.I):
             return n
     return ""
@@ -4692,6 +4696,9 @@ def beat_puts_somebody_on_screen(beat, sheet=""):
                for n, _ in sheet_lines(sheet))
 
 FORM_HOLD = ", the same object in the same material."
+# WHAT EVERYBODY ELSE HAS ON, which is what stops one person's hardware appearing on
+# another. Both places that need it said it in full; one place says it now.
+OTHERS_UNCHANGED = " Everyone else in the shot has on exactly what their own entry lists."
 
 # THE SHOT WHERE THE HARDWARE GOES ON IS NOT A SHOT WHERE IT IS ALREADY ON.
 #
@@ -5031,7 +5038,6 @@ _CONTACT_SRC = (
     r"press(?:es|ed|ing)?\s+(?:against|into)|sit(?:s|ting)?\s+on|"
     r"wraps?\s+(?:her|his|their)\s+arms?\s+around|"
     r"reach(?:es|ed|ing)?\s+for|undress(?:es|ed|ing)?")
-_CONTACT_VERB = re.compile(r"(?:" + _CONTACT_SRC + r")", re.I)
 # A clause boundary for contact: each pair gets its own, so "A kisses B while C kisses
 # D" is read as two pairs rather than one four-way.
 _CONTACT_SPLIT = re.compile(r"(?<=[.;!?])\s+|\s+\b(?:while|as|and|then)\b\s+|,\s+", re.I)
@@ -5452,9 +5458,9 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
     elif rigid:
         out += (f", {'their' if plural else 'its'} links keeping their size and the run "
                 f"between them taut")
-    out += ", the same object in the same material."
+    out += FORM_HOLD
     if who:
-        out += " Everyone else in the shot has on exactly what their own entry lists."
+        out += OTHERS_UNCHANGED
     return out
 
 
@@ -5521,7 +5527,7 @@ def own_hold(hold, wearers, described):
     #
     # What is KEPT is the half that does work the rewrite cannot: excluding everyone
     # else. That is what stopped one character's hardware appearing on another.
-    tail = " Everyone else in the shot has on exactly what their own entry lists."
+    tail = OTHERS_UNCHANGED
     return hold.replace("Every restraint", f"Every restraint on {who}", 1).rstrip() + tail
 
 # Hardware that means restraint on its own.
@@ -6237,9 +6243,8 @@ def subjects_for(beat, sheet, verbs):
     Dan, because `and` opens a new predicate with its own subject."""
     b, out = beat or "", []
     for n, _ in sheet_lines(sheet):
-        if n and re.search(r"\b" + re.escape(n) + r"\b"
-                           r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?"
-                           r"\s+(?:" + verbs + r")\b", b, re.I):
+        if n and re.search(r"\b" + re.escape(n) + r"\b" + _UP_TO_TWO_WORDS
+                           + r"\s+(?:" + verbs + r")\b", b, re.I):
             out.append(n)
     return out
 
@@ -6824,8 +6829,9 @@ _NOT_A_ROOM_MODIFIER = {"the", "a", "an", "this", "that", "her", "his", "their",
 # so the FIRST place word wins and the modifiers are only tried when it does not
 # match. Prepositions and articles are excluded, so a match cannot cross into
 # "the door OF THE bedroom", and a comma ends it, so it cannot cross a clause.
-_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|his|"
-        r"their|its|my|our|your)\b)[A-Za-z][A-Za-z-]*\s+){0,3}?")
+# The engine's, not a second one: the same adjective run in front of the same
+# nouns, written out twice under two names.
+_MOD = engine._ROOM_MOD
 # "to the bedroom", "into the kitchen" -- where it ENDS.
 # A room can belong to somebody. "McKenna's bedroom" is the ordinary way to write
 # whose room it is, and a determiner list of the/her/his/their/a did not match a
@@ -10760,8 +10766,7 @@ class H3LongVideos:
                 if len(_owners) == 1 and _here_names:
                     if _owners[0] not in _here_names:
                         continue
-                    _bare_name = re.sub(r"^(?:a|an|the|her|his|their|its)\s+", "",
-                                        a.strip().rstrip("."), flags=re.I)
+                    _bare_name = engine.bare_name(a.strip().rstrip("."))
                     _said.append(f"{_owners[0]} is wearing the {_bare_name}")
                 else:
                     _said.append(a.rstrip("."))

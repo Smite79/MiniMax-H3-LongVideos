@@ -3649,7 +3649,10 @@ def test_a_grin_is_not_a_closed_mouth():
     # The guard no longer orders the lower face to hold still. "Mouths stay closed"
     # is the whole of the lip-sync guarantee; "jaws still" was a stillness
     # instruction riding along on it, on every quiet shot in the film.
-    for _c in (S.MOUTH_HOLD, S.MOUTH_HOLD_OTHERS):
+    # ONE_VOICE is the sentence a shot actually gets when a line has no name on it;
+    # MOUTH_HOLD_OTHERS was a constant of the same wording that nothing emitted, and
+    # it went with the dead-code pass.
+    for _c in (S.MOUTH_HOLD, S.ONE_VOICE):
         check(f"no stillness ordered: {_c[:34]!r}",
               not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", _c, re.I), _c)
         check("...and the mouth is still shut", "clos" in _c)

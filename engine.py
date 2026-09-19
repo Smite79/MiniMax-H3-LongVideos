@@ -1057,7 +1057,7 @@ def scene_name_for(head, scene):
                 if not part or part.split()[-1].lower() != head:
                     continue
                 # Drop a leading article or possessive; they are not description.
-                part = re.sub(r"^(?:a|an|the|her|his|their|its)\s+", "", part, flags=re.I)
+                part = bare_name(part)
                 # The longest entry wins: a sheet that names it twice described it
                 # most fully once, and the fuller name is the one worth carrying.
                 if len(part) > len(best):
@@ -1984,6 +1984,18 @@ def _wearer(beat, who, fallback, cast=()):
                         nearest = (m.start(), name)
         agent = nearest[1] if nearest else who[0]
     return next((n for n in who if n != agent), fallback)
+
+
+# A LEADING ARTICLE OR POSSESSIVE IS NOT DESCRIPTION. "the blue shorts" and "her
+# blue shorts" name the same garment as "blue shorts", and both halves of this node
+# had to strip one before comparing or printing a name. Written out in both files
+# before this, which is two places for one rule to drift.
+_LEADING_ARTICLE = re.compile(r"^(?:a|an|the|her|his|their|its)\s+", re.I)
+
+
+def bare_name(text):
+    """A garment or object name with any leading article or possessive taken off."""
+    return _LEADING_ARTICLE.sub("", str(text or "").strip())
 
 
 def wearer_of(beat, cast=()):
