@@ -168,8 +168,6 @@ def test_a_chain_is_a_tether_not_a_second_restraint():
         "Ana sits down."])
     hw = st.person("Ana").kinds()
     check(f"one item, not two: {hw}", hw == ["collar"], str(hw))
-    # Guarded: with the item reader broken there is no collar to index, and a
-    # KeyError reports as a crashed suite rather than as the failure it is.
     check("it carries the anchor",
           bool(st.person("Ana").hw("collar"))
           and st.person("Ana").hw("collar").anchor == "wall")
@@ -209,8 +207,6 @@ def test_the_material_survives_as_written():
     check("garments keep theirs too",
           E.garments_in("a mirrored PVC skirt") == ["mirrored pvc skirt"],
           str(E.garments_in("a mirrored PVC skirt")))
-    # A VERB IS NOT A MODIFIER. "-ed" is a verb far more often than an adjective,
-    # and capturing one would put an action into the name of the thing.
     for t, want in (("She grabbed her collar.", ["collar"]),
                     ("He unlocked the collar.", ["collar"]),
                     ("He dropped the steel collar.", ["steel collar"])):
@@ -234,8 +230,6 @@ def test_a_two_word_name_is_still_a_name():
                      ["Mistress Vale", "Ana"]) == ["Mistress Vale"])
     check("...or to the other one",
           E.names_in("Vale looks up.", ["Mistress Vale", "Ana"]) == ["Mistress Vale"])
-    # Ambiguous: the word belongs to somebody else outright, so picking either is
-    # a guess, and guessing is how the wrong person gets into a shot.
     check("a word another character owns stands in for nobody",
           E.names_in("The Mistress stands at the window.",
                      ["Mistress", "Mistress Vale", "Ana"]) == ["Mistress"])
@@ -267,8 +261,6 @@ def test_a_bare_region_stays_bare():
     k = st.person("Kate")
     check("being topless takes the shirt off", "shirt" not in str(k.worn), str(k.worn))
     check("...and latches the region", k.bare == ["torso"], str(k.bare))
-    # The sheet is re-read every shot and is never edited, so it used to put the
-    # shirt straight back on and the bare clause went silent from shot 2.
     st.declare("Kate", "Kate: she, 24, a shirt, jeans.")
     check("the sheet does not put it back on", "shirt" not in str(k.worn), str(k.worn))
     check("...so the region is still bare", k.bare == ["torso"], str(k.bare))
@@ -342,8 +334,6 @@ def test_chains_do_not_interfere():
     check("...and a verb still fastens what it names",
           kinds("Sam chains her ankles together.") == [("chain", "ankles")],
           str(kinds("Sam chains her ankles together.")))
-    # TWO CHAINS ARE TWO RESTRAINTS. Keyed by name alone, the second overwrote
-    # the first and one of them was never drawn again.
     two = kinds("Sam chains Kate's collar to the ring and chains her ankles "
                 "together.")
     check("a second chain is not eaten by the first",
@@ -359,9 +349,6 @@ def test_chains_do_not_interfere():
     check("...while a material is kept",
           ("tape", "wrists") in kinds("Dan gags her with duct tape."),
           str(kinds("Dan gags her with duct tape.")))
-    # ONE OF TWO RINGS IS STILL A RING. The determiner list was six words, so a
-    # collar chained to "one ring" was not a restraint at all and nothing about
-    # it survived the shot it went on in.
     check("an anchor takes any determiner",
           E.anchor_in("Sam chains Kate's collar to one ring.") == "ring")
     check("...and a qualifier before it",
@@ -380,8 +367,6 @@ def test_a_modifier_belongs_to_its_own_item():
         "collar around her neck, chained to the wall.",
         "Ana sits down."])
     ana = st.person("Ana")
-    # Guarded: with the item reader broken one of these is missing entirely, and
-    # a KeyError reports as a crashed suite rather than as the failure it is.
     check(f"both items recorded: {ana.kinds()}",
           "handcuffs" in ana.kinds() and "collar" in ana.kinds())
     c, k = ana.hw("handcuffs"), ana.hw("collar")
@@ -412,8 +397,6 @@ def test_a_spoken_name_is_not_a_staged_one():
     check("staging survives it",
           "McKenna" in E._outside_speech(
               'Dana turns to McKenna and says: <d>Wait.</d>'))
-    # An order given aloud names the person it is given to. That is not the
-    # person the hardware goes on -- nobody in this beat is touched at all.
     st = SceneState_for('Dan says: <d>McKenna, put the cuffs on.</d>')
     check("nobody spoken to is restrained",
           not st.person("McKenna").restrained(),
@@ -454,10 +437,6 @@ def test_fastening_something_to_a_collar_does_not_date_the_collar():
     # A beat that only MENTIONS hardware dates nothing.
     check("a mention dates nothing",
           E.staged_applications(["McKenna looks at the collar."]) == {})
-    # KNOWN GAP, recorded rather than guessed at: "lead" as a noun is not in the
-    # hardware table. It is the British word for a leash and it is also a very
-    # common verb ("Dana leads her down the hall"), and no cheap pattern told
-    # them apart without false-firing on the verb. Write "leash" for now.
     check("a bare 'lead' is not read as hardware (known gap)",
           not E.hardware_spans("Dana clips a lead to it"))
 

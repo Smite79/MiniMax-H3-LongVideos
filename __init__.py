@@ -44,8 +44,5 @@ from .overlay import NODE_CLASS_MAPPINGS as _o_c, NODE_DISPLAY_NAME_MAPPINGS as 
 NODE_CLASS_MAPPINGS = {**_s_c, **_sl_c, **_i_c, **_o_c}
 NODE_DISPLAY_NAME_MAPPINGS = {**_s_d, **_sl_d, **_i_d, **_o_d}
 
-# No WEB_DIRECTORY: the only frontend script was autoshift.js, which wrote
-# auto-derived flow shifts back into the widgets. auto_shift is gone -- its premise
-# was wrong for distilled LoRAs -- and nothing else here needs a browser-side hook.
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

@@ -38,40 +38,18 @@ WHAT THE STATE GUARANTEES
 
 import re
 
-# ---------------------------------------------------------------------------
-# Vocabulary. One table per KIND of thing, and a word appears in exactly one of
-# them. The old engine had "chain" as a noun in one list and a verb in another,
-# which let a chain-link fence satisfy both halves of a rule by itself.
-# ---------------------------------------------------------------------------
 
-# Hardware, and the part each kind holds. The part is a property of the ITEM --
-# this is the table whose absence produced "holding the neck behind the back".
 HARDWARE = (
     (r"hand\s?cuffs?|handcuffed", "handcuffs", "wrists"),
     (r"leg\s?irons?", "leg irons", "ankles"),
-    # ANKLE AND WRIST IRONS were not here while LEG irons were, so half the words for
-    # the same object read as no restraint at all. A tether was in no list either, and
-    # a script that says "steel braided tether" was asking for hardware the node did
-    # not believe existed: no hold, no limb position, nothing carried shot to shot.
     (r"ankle\s?irons?", "ankle irons", "ankles"),
     (r"wrist\s?irons?", "wrist irons", "wrists"),
     (r"tethers?|tethered", "tether", "wrists"),
-    # A bare "cable" is scenery in half the rooms anybody writes, so it needs a
-    # material in front of it. "cable tie" is matched above and is a different thing.
     (r"(?:braided\s+)?(?:steel|wire)\s+cables?|(?:steel|baling)\s+wire", "steel cable", "wrists"),
     (r"hobbles?|hobbled", "hobble", "ankles"),
     (r"(?:bike|bicycle)\s+locks?|[ud]-?locks?", "bike lock", "wrists"),
     (r"cling\s?film|plastic\s+wrap", "cling film", "wrists"),
-    # A chastity belt is a restraint. This file's own note beside the layering table
-    # says so -- it was kept OUT of the under-garment list for exactly that reason --
-    # and it was in no hardware list either, so nothing held it on.
     (r"chastity\s+belts?", "chastity belt", "hips"),
-    # A BELT MADE OF HARDWARE. Plain "belt" is clothing and stays clothing --
-    # that distinction is pinned by this file's own tests -- but a steel one
-    # locked round a waist or a pair of wrists is a restraint, and it was in no
-    # list at all: "Dan locks a steel belt on her" recorded nothing, put the
-    # wearer on DAN, and every shot after it held nothing shut. The material is
-    # what settles it, the same way it settles a steel collar from a shirt's.
     (r"(?:steel|metal|iron|chrome|brass|locking|lockable|restraint)\s+belts?",
      "steel belt", "waist"),
     (r"ankle\s+(?:cuffs?|chains?|straps?)", "ankle cuffs", "ankles"),
@@ -91,8 +69,6 @@ HARDWARE = (
     (r"cuffs?|cuffed", "cuffs", "wrists"),
     (r"tapes?|taped|taping", "tape", "wrists"),
 )
-# Preserve visual modifiers in continuity text. Hyphenated compounds pass whole;
-# arbitrary participles do not, because they are more often verbs than modifiers.
 _ADJ = (r"(?:[A-Za-z]+-[A-Za-z]+|"
         # materials
         r"steel|stainless|iron|metal|metallic|nickel|chrome|chromed|brass|"
@@ -111,13 +87,6 @@ _ADJ = (r"(?:[A-Za-z]+-[A-Za-z]+|"
         r"heavy|light|thin|thick|wide|narrow|short|long|small|large|broad|slim|"
         r"duct|packing|electrical|zip)")
 
-# Body parts, for the hardware whose part is NOT a property of the item.
-#
-# A collar is the neck and handcuffs are the wrists, and those never need
-# looking up. A chain, a rope, straps and tape go wherever the beat puts them,
-# and reading their part off the table gave "locks a chain around her ankles"
-# as a chain on the WRISTS -- where it then collided with the cuffs already
-# there, two things drawn in one place. That is chains interfering.
 PARTS = (
     (r"wrists?", "wrists"),
     (r"ankles?", "ankles"),
@@ -133,48 +102,10 @@ PARTS = (
     (r"hands?", "hands"),
     (r"feet|foot", "feet"),
 )
-# A LENGTH OF SOMETHING GOES WHEREVER IT IS PUT, so the table's default part is a
-# guess and the text's own word wins. A steel cable and a tether are as free as a
-# chain or a rope; left out of this set, a cable looped round a neck was recorded on
-# the wrists, because "wrists" is what the table says a cable usually holds.
 PART_VARIES = frozenset({"chain", "rope", "straps", "tape", "steel cable", "tether",
-                         # A belt goes where it is put, like every other length:
-                         # round a waist, a pair of wrists, or both thighs.
                          "steel belt", "cling film"})
 
-# Which region a garment leaves uncovered when it comes off. Only what can be
-# placed with certainty; a garment that cannot be placed gets no clause, because
-# a wrong region is worse than none.
-#
-# Lives here, with the other vocabularies, because the BARE state is state -- it
-# outlives the beat that caused it, and the clause that says so has to be
-# writable from any later shot.
 REGION_OF = (
-    # UNDERWEAR IS IN HERE TOO, on both halves of the body. The torso row has
-    # listed a bra since the day it was written -- that is the report it exists
-    # for, "a bra coming back on somebody topless" -- and the leg row never got
-    # its counterpart, so region_of("thong") answered "". A garment that cannot
-    # be placed latches no bare region, so underwear coming off said nothing
-    # about the hips in that shot or in any shot after it, and an unspecified
-    # region is filled by the model's own prior -- which for a hip is underwear.
-    #
-    # Worse, a beat saying somebody is NAKED looks each worn garment's region up
-    # to take it off the body, so the one garment it could not place stayed
-    # "worn" in the state while the text said she was nude. Reported as a thong
-    # restored a beat after she undressed to get in the shower.
-    #
-    # No hardware. A chastity belt is in the layering vocabulary, but it is a
-    # restraint: it is latched and held by its own mechanism, and a bare region
-    # read off it would argue with that.
-    # A GARMENT THAT IS THE WHOLE OUTFIT LEAVES TWO REGIONS, and it is in both rows
-    # for that reason -- see regions_of. There was no row for one at all, so the
-    # commonest full-body garment in any script came off, the sheet emptied to
-    # "Ana: she, 30.", and not one shot -- not even the removing shot -- said
-    # anything about the body it left. That is the unspecified region this whole
-    # table exists to prevent, over the whole figure at once.
-    #
-    # An apron, a cloak and a poncho are deliberately absent: they are worn OVER
-    # clothes, and taking one off leaves nobody bare.
     (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|tights|"
      r"pantyhose|jeggings|culottes|tracksuit\s+bottoms|sweatpants|pants|"
      r"dress|gown|dressing-?gown|robe|kimono|sari|nightdress|nightie|nightgown|"
@@ -186,11 +117,6 @@ REGION_OF = (
     (r"socks|stockings|hold-?ups|boots|shoes|trainers|sneakers|sandals|heels|"
      r"slippers|loafers|brogues|clogs|espadrilles|flats|moccasins|pumps|wedges",
      "feet", "The feet and ankles are bare"),
-    # THE CHEST IS THE POINT. This said "The arms and shoulders are bare" and
-    # stopped there, so a shirt coming off left the one region a bra occupies
-    # unspecified -- and an unspecified region is filled by the model's own
-    # prior. Reported as a bra coming back on somebody topless, on a character
-    # whose sheet never listed a bra: it was never restored, it was invented.
     (r"top|shirt|blouse|t-?shirt|tee|jumper|sweater|sweatshirt|hoodie|cardigan|"
      r"jacket|coat|tunic|bra|bralette|camisole|vest|"
      r"pullover|overcoat|raincoat|peacoat|windbreaker|blazer|anorak|parka|gilet|"
@@ -201,17 +127,9 @@ REGION_OF = (
      "torso",
      "The chest, shoulders and arms are bare skin"),
     (r"gloves|mittens", "hands", "The hands are bare"),
-    # THE HEAD HAD NO ROW AT ALL, so a hat coming off placed nothing: the sheet
-    # stopped listing it and no shot said what was there instead. Every other row
-    # here exists because an unspecified region gets filled from the model's prior,
-    # and a head is the one part of a body that prior will happily put a hat back
-    # on. Said as hair rather than as skin, which is what is actually uncovered.
     (r"hat|cap|beanie|beret|headscarf|headband|hood", "head",
      "The head is bare, the hair uncovered"),
 )
-# Being in that state rather than arriving at it. "Kate is topless" takes nothing
-# off, so every removal path had nothing to remove and no shot ever said what was
-# on her chest. "naked eye" and "naked flame" are not people.
 NUDITY = (
     (r"topless|bare-?chested|bare-?breasted|shirtless|"
      r"stripped\s+to\s+the\s+waist|strips\s+to\s+the\s+waist", ("torso",)),
@@ -220,8 +138,6 @@ NUDITY = (
      r"with\s+no\s+clothes|stark\s+naked", ("torso", "legs", "feet")),
 )
 
-# Where a limb is held. These all describe the ARMS -- that is why a limb
-# position may never be attached to a collar.
 POSITIONS = (
     (r"behind\s+(?:her|his|their|the)\s+backs?", "behind the back"),
     (r"(?:above|over)\s+(?:her|his|their|the)\s+heads?|overhead", "above the head"),
@@ -231,22 +147,12 @@ POSITIONS = (
     (r"at\s+(?:her|his|their|the)\s+waists?", "at the waist"),
 )
 
-# Fixed things hardware can be anchored to. A thing you cannot pick up and walk
-# away with.
 ANCHORS = (r"walls?|floors?|grounds?|ceilings?|pillars?|columns?|posts?|rails?|"
            r"railings?|bars?|rings?|hooks?|pipes?|radiators?|beams?|girders?|"
            r"struts?|stakes?|eye\s?bolts?|brackets?|cages?|fences?|grates?|"
            r"grilles?|bed\s?frames?|bed\s?posts?|headboards?|bedsteads?|beds?|"
            r"bunks?|benches?|chairs?|tables?|desks?|ladders?|anchors?|loops?")
 
-# Verbs, as VERBS. Participles and -ing forms are unambiguous. The -s forms are
-# also plural nouns, so they carry a lookbehind: "the guard chains her collar" is
-# a verb and "the chains on the floor" is not.
-# ...and "of" belongs in the list. "a pair OF handcuffs" put a determiner two words
-# back where the lookbehind could not see it, so the noun read as the verb
-# `handcuffs` -- and "Mara drops a pair of handcuffs into the toolbox" was a beat
-# that cuffed Mara. "pair" is there for the same reason, since an author writes
-# "the pair of cuffs" as often as "a pair".
 _DET = (r"(?<!\bthe\s)(?<!\ba\s)(?<!\ban\s)(?<!\bthese\s)(?<!\bthose\s)"
         r"(?<!\btwo\s)(?<!\bsome\s)(?<!\bmore\s)(?<!\bhis\s)(?<!\bher\s)"
         r"(?<!\bof\s)(?<!\bpair\s)(?<!\bset\s)")
@@ -255,11 +161,6 @@ APPLY_VERB = (
     r"secured|tethered|bound|tied|strapped|clipped|hooked|bolted|attached|"
     r"anchored|leashed|roped|gagged|blindfolded|collared|taped|trussed|lashed|"
     r"buckled|fettered|"
-    # THE HARDWARE USED AS A VERB, which is how half of these are written. "Mara
-    # hogties her", "Mara zip ties Ana's wrists", "Mara hobbles her" recorded NO
-    # hardware on anybody: the state never learned who was wearing it, so every
-    # later shot was told the restraint belonged to nobody it described and the
-    # hold was left out. Reported as restraints that simply stop working.
     r"hog-?(?:ties|tie|tied|tying|cuffs|cuffed|chains|chained)|"
     r"truss(?:es|ing)|zip[-\s]?(?:ties?|tied|tying)|cable[-\s]?(?:ties?|tied|tying)|"
     r"manacles|hobbl(?:es|ed|ing)|fetters|pinion(?:s|ed|ing)?|"
@@ -267,38 +168,17 @@ APPLY_VERB = (
     r"handcuffing|cuffing|chaining|locking|fastening|securing|tethering|tying|"
     r"strapping|clipping|bolting|attaching|gagging|blindfolding|collaring|"
     r"taping|buckling|binding|shackling|"
-    # The particle can sit four words from its verb, exactly as it can for
-    # garments: "puts the cuffs on her" is the ordinary way to write it, and
-    # requiring "puts on" adjacent read that as no application at all.
     r"(?:puts?|putting|slips?|slipped|snaps?|snapped|clicks?|clicked|clamps?|"
     r"clamped)(?:\s+\S+){0,4}?\s+(?:on|onto|around|shut|closed)|"
-    # A LENGTH OF SOMETHING GOES ON BY BEING PUT AROUND. "Mara loops a steel cable
-    # around her neck and down around her ankles" fastens nothing by these verbs
-    # alone -- loop, wrap, wind, thread, pass, run -- so the cable was never recorded
-    # on anybody, and every shot after the one that staged it had no cable in it at
-    # all. Reported as a steel cable that breaks and lets the legs drop. The particle
-    # is required: "she runs to the door" puts nothing on anybody.
-    # THE HARDWARE AS A BARE VERB, with a body part behind it. The branch below takes
-    # these only with a determiner in front, because "the cuffs" is a noun -- but
-    # "Mara tapes her wrists" has a verb, an object and no determiner, and recorded
-    # nothing at all. An object is what tells them apart.
     r"(?:tapes|cuffs|chains|straps|binds|ties|locks|shackles|clips|hooks|wraps)\s+"
     r"(?:\w+\s+){0,2}?(?:her|his|their|the)\s+(?:\w+\s+){0,2}?"
     r"(?:wrists?|ankles?|hands?|feet|legs?|arms?|neck|throat|waist|knees?|thumbs?)|"
     r"(?:loops?|looped|looping|wraps?|wrapped|wrapping|winds?|wound|winding|"
     r"coils?|coiled|coiling|threads?|threaded|threading|passes|passed|passing|"
     r"runs|ran|running|cinch(?:es|ed|ing)?|knots?|knotted|laces?|laced|"
-    # Tightening one ONTO somebody is fastening it: "Dan tightens the strap
-    # around her thighs" left no restraint recorded anywhere.
     r"tighten(?:s|ed|ing)?|"
     r"hitch(?:es|ed|ing)?|slings?|slung)(?:\s+\S+){0,5}?\s+"
     r"(?:around|round|through|under|over|about|behind|between)"
-    # ...AROUND A BODY. The particle on its own fastens nothing to anybody: "Mara
-    # runs the steel cable through the pulley" was read as a cable locked on Mara
-    # -- a steel cable's default part is the wrists -- and every shot after it was
-    # told the cable stays closed and fastened on her, a restraint on a character
-    # the script never restrained, latched for the rest of the film. What the
-    # length goes around has to be a person for this to be a person being tied.
     r"(?:\s+\S+){0,3}?\s+(?:" + "|".join(p for p, _n in PARTS)
     + r"|backs?|hips?|shoulders?|chests?|torsos?|heads?|thumbs?|bod(?:y|ies)|"
       r"her|him|them|herself|himself|themselves)\b|"
@@ -315,22 +195,6 @@ RELEASE_VERB = (
     r"slips?\s+off|slipped\s+off|takes?\s+off|took\s+off|pulls?\s+off|"
     r"lifts?\s+(?:off|away)|removes?|removed|undoes|undid|opens?\s+the)")
 
-# Rooms. A place is somewhere a scene can BE. "door" is not on this list and must
-# not go back on it: a door is a thing inside a room, and putting it here moved
-# the camera into a door whenever anybody looked at one.
-# THE PLACE VOCABULARY. One list, because there were two and they disagreed --
-# the engine knew a cell and a warehouse, the sampler did not, so a scene set in
-# either was a room to one reader and nowhere to the other. Same fault the
-# garment lists had, waiting to be reported.
-# MULTI-WORD ROOMS COME BEFORE BARE "room". _MOD is non-greedy, so it tries no
-# modifier first and the longest place wins -- but only if the long form is here to
-# win with. Without "locker\s+room", "heads to the locker room" read its destination
-# as "room": _MOD swallowed "locker" and the capture took what was left, so the film
-# was reported as entering "room" and the shot was told to arrive in one.
-#
-# A gym, a locker room and a court were in no list at all, which is worse than vague:
-# with the ORIGIN unknown, travel_anchor emitted nothing, so a beat walking out of a
-# gym was never told to walk and the set simply changed under the characters.
 PLACES = (r"hallway|hall|corridor|passage|landing|stairwell|staircase|stairs|"
           r"steps|bedroom|bathroom|washroom|kitchen|living\s+room|lounge|"
           r"dining\s+room|locker\s+rooms?|changing\s+rooms?|dressing\s+rooms?|"
@@ -340,33 +204,12 @@ PLACES = (r"hallway|hall|corridor|passage|landing|stairwell|staircase|stairs|"
           r"study|office|garage|basement|cellar|attic|loft|porch|"
           r"veranda|garden|yard|driveway|street|alley|car\s?park|lobby|foyer|"
           r"doorway|cell|warehouse|barn|shed|van|truck|room")
-# Place words that are also ordinary verbs or everyday nouns. A reader with a
-# preposition in front of it ("in the study") can tell which sense is meant; the
-# free-text one cannot, and "she steps out", "they study the map" and "he lands
-# badly" are all commoner than the rooms they collide with.
-# "bar" and "lift" are deliberately NOT places in this file at all: bars are
-# restraint hardware here ("chained to the bars") and lifting is what happens to a
-# garment or a body, so behind a preposition they would both read as journeys.
 PLACE_ALSO_A_VERB = {"steps", "landing", "study", "lounge", "garage", "porch",
                      "court", "pool", "shower", "showers", "store", "shop",
                      "studio", "reception"}
-# A room is usually described, not just named -- "the tiled bathroom", "the long
-# hallway". Up to three adjectives, non-greedy so the NEAREST room still wins.
 _ROOM_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|"
              r"his|their|its|my|our|your)\b)[A-Za-z][A-Za-z-]*\s+){0,3}?")
 
-# Multi-word undergarments come FIRST, so the alternation prefers "chastity belt"
-# over the bare "belt" further down -- otherwise the item was recorded as a belt
-# and lost the half that says which kind.
-# THE GARMENT VOCABULARY. One list, because there were two and they disagreed --
-# the sampler's had thong and no chastity belt, the engine's had chastity belt and
-# no thong and matched the bare "belt" inside it, so the item came back as a belt.
-# Both were fixed on the same day from opposite ends, which is what a second copy
-# of one idea costs.
-#
-# MULTI-WORD FIRST, always. Alternation is leftmost-first at each position, so
-# "chastity belt" has to be offered before "belt" or the shorter one wins and the
-# half that says which kind is lost.
 GARMENT_PHRASES = (r"chastity[\s-]*(?:belts?|devices?|cages?)|g[\s-]?strings?|"
                    r"boxer[\s-]+shorts?|sports?[\s-]+bras?|body[\s-]?suits?|"
                    r"suspender[\s-]+belts?|garter[\s-]+belts?")
@@ -376,18 +219,9 @@ GARMENT_WORDS = (r"shirt|blouse|top|t-shirt|tshirt|dressing-?gown|vest|waistcoat
                  r"poncho|cloak|dress|gown|skirt|kilt|sari|kimono|trousers|pants|"
                  r"jeans|slacks|chinos|shorts|leggings|joggers|tracksuit|tights|"
                  r"stockings|socks|shoes|boots|trainers|sneakers|sandals|heels|"
-                 # WORDS THE SAMPLER'S OWN FAMILIES NAME AND THIS LIST DID NOT.
-                 # Its positional reader takes a pullover or a pair of loafers off
-                 # happily -- scrubbed from the sheet, removal clause printed -- and
-                 # this list is what SceneState reads, so nothing was recorded and no
-                 # later shot was told what is on that region. Twenty-four of them,
-                 # found by walking the two lists against each other rather than by
-                 # noticing one at a time.
                  r"pullover|overcoat|raincoat|peacoat|windbreaker|sweatpants|tee|"
                  r"loafers|brogues|clogs|espadrilles|flats|moccasins|pumps|wedges|"
                  r"beret|"
-                 # ...and the ones REGION_OF knows that this list did not, which is
-                 # two vocabularies inside this one file disagreeing with each other.
                  r"culottes|hold-?ups|jeggings|pantyhose|tunic|headscarf|headband|hood|"
                  r"nightgown|playsuit|catsuit|bodysuit|leotard|onesie|boilersuit|"
                  r"coveralls|"
@@ -400,86 +234,35 @@ GARMENT_WORDS = (r"shirt|blouse|top|t-shirt|tshirt|dressing-?gown|vest|waistcoat
                  r"clothes|clothing|outfit")
 _GARMENT = GARMENT_PHRASES + r"|" + GARMENT_WORDS
 
-# Garment verbs. A garment has three states -- on, off, pulled aside -- and the
-# shot that CHANGES one has to say both ends of the change, or the model is free
-# to open the shot with it already done. Reported as a diaper turning into shorts
-# a beat before the beat that put the shorts on.
-# THE PARTICLE CAN BE FOUR WORDS AWAY. English puts the object between the verb
-# and its particle as happily as after it: "takes off her shorts" and "takes her
-# blue shorts off" are the same act, and "puts her blue shorts back on" has four
-# words in the gap. Requiring them adjacent read that last one as no change at
-# all, so the garment silently stayed off.
 _GAP = r"(?:\s+\S+){0,4}?\s+"
 # Shared with the removal readers in sampler.py: the sampler imports this one.
 _STRIP_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
                r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|tore|"
                r"slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
                r"toss(?:es|ed)?|throw[s]?|threw|"
-               # How clothes actually come off, in the words people write it in.
-               # Without these a beat took the garment off on screen while the scene
-               # kept saying it was worn -- and the scene is re-stamped into every
-               # later shot, so it came back on and stayed on.
                r"kick(?:s|ed|ing)?|step(?:s|ped|ping)?|lift(?:s|ed|ing)?|"
                r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?|work(?:s|ed)?")
-# ONE LIST, READ BY BOTH HALVES. This was a second hand-written list of removal
-# verbs, and it had drifted from the one above by FORTY-TWO forms: yank, tug, rip,
-# tear, toss, throw, cut, slide, wriggle, work and every participle of them. The
-# sampler took the garment off on those -- scrubbed it from the sheet, printed "the
-# red sweater comes off during this shot" -- while SceneState recorded nothing, so
-# p.bare never gained the region and no later shot said anything about her chest at
-# all. An unspecified region is one the model fills from its own prior, which is the
-# bug REGION_OF exists for: a bra coming back on somebody topless.
-#
-# "gets"/"got" are kept beside it because they are a removal only with a particle,
-# and are too ordinary a verb to put in the shared list.
-# The verbs above that stay a removal when the particle TRAILS the object -- "kicks
-# her boots off". The rest are removals only with the particle straight after them:
-# "steps out of her leggings" is one, "steps back" while a light goes off later in
-# the sentence is not, and the trailing form would read that as a removal.
 _TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
                   r"strip(?:s|ped|ping)?|cut(?:s|ting)?|rip(?:s|ped|ping)?|tear[s]?|"
                   r"tore|slip(?:s|ped)?|shrug(?:s|ged)?|yank(?:s|ed)?|tug(?:s|ged)?|"
                   r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
-                  # "works her sweater off" is how a tight garment comes off, and the
-                  # sampler's own positional reader has always taken it -- so leaving
-                  # it out here was the two halves disagreeing about one sentence,
-                  # which is the whole failure this pairing exists to stop.
                   r"work(?:s|ed)?|"
                   r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
 TAKES_OFF = (r"(?:" + _TRAILING_VERB + r"|gets?|got)" + _GAP + r"(?:off|out\s+of)\b"
-             # ...and the ones that need the particle straight after them, which is
-             # the same call the trailing list above makes and for the same reason:
-             # "lifts the lid off the box" must not take off the coat named later in
-             # the sentence.
              r"|\b(?:steps?|stepped|stepping|lifts?|lifted|lifting|"
              r"works?|worked|working)\s+(?:off|out\s+of)\b"
              r"|\b(?:removes?|removed|removing|discards?|discarded|sheds?|shedding|"
              r"undresses|undressed)")
 PUTS_ON = (r"(?:puts?|putting|pulls?|pulled|slips?|slipped|tugs?|tugged|"
-           # "draws the sweater back on" put it on for the sampler and not for this
-           # reader, so the shot said the sweater was on AND that the chest was bare
-           # -- in the same sentence block, and in every shot after it.
            r"draws?|drew|drawing|"
            r"steps?|stepped|climbs?|climbed|gets?|got|wriggles?)" + _GAP +
            r"(?:on|into|back\s+on)\b"
            r"|\b(?:dresses?\s+in|dressed\s+in|buttons?|zips?\s+up|fastens?)")
-# UNZIPPING A JACKET LEAVES IT ON. These were removals, so "Owen unzips his jacket"
-# took the jacket out of every later shot and called his chest bare -- and "rolls up
-# his sleeves" a beat later rolled the sleeves of a shirt that had gone with it. They
-# open a garment; a beat that also takes it off says so ("and takes it off").
 DISPLACES = (r"(?:pulls?|pulled|pushes?|pushed|tugs?|tugged|hikes?|hiked|"
              r"rolls?|rolled|lifts?|lifted|yanks?|yanked|shoves?|shoved)"
              + _GAP + r"(?:aside|up|down|open)\b"
              r"|\b(?:unzips?|unzipped|unbuttons?|unbuttoned|unfastens?|unfastened|"
              r"undoes|undid)\b")
-
-# POSTURES and the _POSTURE list built from it used to live here. Nothing read
-# _POSTURE -- it was a second, dead copy of the posture vocabulary, and it had
-# already drifted from the live one: it never learned squatting as distinct from
-# crouching, and it would not have learned rolling onto a side either. That is the
-# divergence the note above _POSTURE_OF warns about, sitting in the same file.
-# The live table is _POSTURE_OF, which sampler.py imports by reference
-# (sampler._POSTURE_OF IS engine._POSTURE_OF), so there is one of these now.
 
 
 def _rx(pattern):
@@ -501,17 +284,6 @@ def spoken_text(text):
     return " ".join(said)
 
 
-# WHICH LANGUAGE A LINE IS IN, read off the line itself.
-#
-# The node used to name English and only English. That clause is not decoration
-# -- H3 is joint and multilingual, and an audio branch told a line is spoken but
-# never told in WHAT picks one, which is where "sounds like gibberish" came from
-# -- but the language it named was hard-coded, so a script written in any other
-# language was told its own line is spoken in English and the delivery fought the
-# words. Naming nothing is not the way out of that. Naming what the author
-# actually wrote is.
-#
-# A script settles it outright; a Latin alphabet is shared, so common words vote.
 _BY_SCRIPT = (
     # Kana before Han: Japanese uses both, so Han alone is what makes it Chinese.
     ("Japanese", r"[぀-ヿ]"),
@@ -522,14 +294,10 @@ _BY_SCRIPT = (
     ("Arabic", r"[؀-ۿݐ-ݿ]"),
     ("Hindi", r"[ऀ-ॿ]"),
     ("Thai", r"[฀-๿]"),
-    # Letters Russian lacks, or words it spells differently -- Ukrainian written
-    # without і/ї/є still says "що" where Russian says "что".
     ("Ukrainian", r"[ЄЇєіїґ]|\b(?:що|це|ти|але|дуже|треба|дякую|немає)\b"),
     ("Russian", r"[Ѐ-ӿ]"),
 )
 _BY_SCRIPT_RX = tuple((n, re.compile(p)) for n, p in _BY_SCRIPT)
-# Function words. Content words are what a translator changes; these are what
-# stay, and a line or two of dialogue carries several.
 _BY_WORDS = (
     ("English", "the and is are you that not it to of in for with but what have"),
     ("Spanish", "el la los las que de y no se es por con para pero muy sí está"),
@@ -545,27 +313,6 @@ _BY_WORDS = (
 _BY_WORDS_SET = tuple((n, frozenset(w.split())) for n, w in _BY_WORDS)
 
 
-# THE AUTHOR SAYING WHICH LANGUAGE IT IS.
-#
-# The word vote needs two function words before it will name a language, and
-# ordinary speech often carries one:
-#
-#     "Oh, du siehst heute toll aus, Schatz!"      -- du
-#     "OK, das reicht mir jetzt wirklich!"         -- das
-#
-# Both are unmistakably German to a reader and both scored 1, so both fell back --
-# and in a script whose other lines are English, the fallback is English, so the
-# German line was actively TOLD it is English. The line then fights its own
-# delivery, which is the failure the whole language hold exists to prevent.
-#
-# But the author had already said which language it is, in the stage direction,
-# where anybody writing this puts it: "says in German". spoken_text() strips
-# everything outside the quotes before the vote ever sees it, so the one
-# unambiguous statement in the beat was the one thing thrown away.
-#
-# REQUIRES A SPEECH FRAME, so a nationality is not a language: "in German" and
-# "speaks German" match, "the German soldier" and "a German car" do not. Adjectives
-# people actually write are allowed between ("in broken German").
 _LANG_NAMES = tuple(n for n, _ in _BY_SCRIPT) + tuple(n for n, _ in _BY_WORDS)
 _LANG_ADJ = (r"(?:fluent|broken|perfect|rapid|halting|accented|flawless|bad|"
              r"basic|simple|quiet|loud|slow|fast)\s+")
@@ -606,13 +353,8 @@ def language_of(text, fallback="English", named=""):
         return fallback
     scores = sorted(((len(words & ws), n) for n, ws in _BY_WORDS_SET), reverse=True)
     best, runner = scores[0], scores[1]
-    # Two hits, and ahead of everything else. One shared word ("no" is Spanish and
-    # English both) is not a language.
     if best[0] >= 2 and best[0] > runner[0]:
         return best[1]
-    # The author said so, and the vote could not tell. A statement beats a guess
-    # that abstained -- but NOT a script: Cyrillic is not a matter of opinion, and
-    # that branch has already returned above.
     if named:
         return named
     return fallback
@@ -642,41 +384,16 @@ def staged_text(text):
     return " ".join(s for s in re.split(r"(?<=[.!?])\s+", staged) if not s.rstrip().endswith("?"))
 
 
-# THREE modifiers, not two: "mirrored stainless steel collar" is three words and
-# a noun, and the third was the first to be dropped.
 _HW_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
               + "|".join(p for p, _n, _pt in HARDWARE) + r")\b")
 _PART_ONE = _rx(r"\b(" + "|".join(p for p, _n in PARTS) + r")\b")
-# A NOUN carries a determiner, a number or an adjective; a VERB follows its
-# subject. "Sam chains her collar to the ring" introduces nothing to draw -- it
-# fastens the collar that is already named -- and reading that verb as an item
-# put a chain on the wrists of somebody with nothing on their wrists.
-#
-# "and" is deliberately absent: "...to the ring and chains her ankles together"
-# is a second verb, and letting a conjunction vouch for a noun brought the
-# phantom straight back.
 _NOUN_BEFORE = _rx(r"(?:\b(?:a|an|the|her|his|its|their|my|your|our|this|that|"
                    r"these|those|one|two|three|several|more|another|in|with|by|"
                    r"of|on|from)\b|[,;:(])\s*(?:" + _ADJ + r"\s+){0,3}$")
-# What takes a LENGTH to a second part of the body. See the _spread loop: a cable is
-# at the ankles as well as the neck because it was run "down around" them, and a beat
-# that merely names the hands afterwards ("...and wipes her own hands") takes nothing
-# anywhere. "on" and "at" are deliberately absent: they place a thing that is already
-# there, and "rests her hands on Ana's shoulders" is not a second fastening.
 _REACHES = _rx(r"\b(?:around|round|through|under|over|behind|between|across|to|onto)"
                r"\b(?:\s+[\w']+){0,2}\s*$"
-               # ...or it is simply the verb's SECOND OBJECT: "tapes her wrists and
-               # her ankles" is one roll of tape at two places, joined by nothing but
-               # "and". Only a determiner may stand between, which is what separates
-               # it from "...and wipes her own hands" -- a new verb, a new clause,
-               # and nothing of the tape in it.
                r"|\band\s+(?:her|his|their|its|the|a|an|both|each)?\s*$")
 _POSITION = [(_rx(r"\b" + p + r"\b"), name) for p, name in POSITIONS]
-# What can stand in front of an anchor. "one ring", "the other ring", "a second
-# hook" are the same fixture as "the ring", and the six-word list read them as no
-# anchor at all -- so a collar chained to ONE OF TWO rings was not a restraint at
-# all, nothing latched, and every later shot forgot it. Two people chained to two
-# rings lost both.
 ANCHOR_DET = (r"(?:the|a|an|her|his|its|their|one|another|each|either|that|"
               r"this|both)\s+(?:(?:other|second|third|first|far|near|nearest|"
               r"opposite|left|right|upper|lower|top|bottom|same|nearby|steel|"
@@ -693,10 +410,6 @@ _GARMENT_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
 _TAKES_OFF = _rx(r"\b" + TAKES_OFF + r"\b")
 _PUTS_ON = _rx(r"\b" + PUTS_ON + r"\b")
 _DISPLACES = _rx(r"\b" + DISPLACES + r"\b")
-# ...and the sentence can still finish the job after the garment is named. "Kate
-# unzips the denim skirt and steps out of it": the unzip opens it, the rest of the
-# sentence takes it off, and the removal verb comes after the item where the reader
-# above does not look.
 _OPENS_GARMENT = _rx(r"\b(?:unzips?|unzipped|unbuttons?|unbuttoned|unfastens?|unfastened|"
                      r"undoes|undid|unhooks?|unhooked|unclasps?|unclasped)\b")
 _COMPLETES_OFF = _rx(r"\b(?:off|out\s+of|away|lets?\s+(?:it|them)\s+(?:fall|drop|slide)|"
@@ -726,27 +439,15 @@ def hardware_spans(text):
         adj, noun = (m.group(1) or "").strip(), m.group(2)
         canon, part = next((n, pt) for p, n, pt in HARDWARE
                            if re.fullmatch(p, noun, re.I))
-        # A VERB IS NOT AN ITEM. Only the words that are also verbs need asking,
-        # and only "chain" is one that the table would otherwise turn into a
-        # restraint on a part the beat never mentions.
         if canon == "chain" and not noun.lower().endswith("ed") \
                 and not _NOUN_BEFORE.search(text[:m.start()]):
             verb_ats.append(m.start())
             continue
         written = f"{adj} {noun}".strip().lower()
-        # A PARTICIPLE FINDS IT AND DOES NOT NAME IT. "is handcuffed" is how the
-        # passive voice writes hardware, but an item recorded as "handcuffed"
-        # renders as "The handcuffed stay closed and fastened". Quote the noun.
-        # A VERB FORM FINDS IT AND DOES NOT NAME IT, the same way a participle does:
-        # "tapes her wrists" is the tape, and an item recorded as "tapes" renders as
-        # "The tapes stays closed". Quote the noun the table knows.
         if noun.lower().endswith(("ed", "ing")) or (
                 noun.lower() != canon and not canon.endswith("s")):
             written = f"{adj} {canon}".strip().lower()
         raw.append([canon, part, written, m.start()])
-    # WHERE IT GOES, for the things that go anywhere. Bound after every item is
-    # known, so the part attaches to the nearest one and a beat naming two of
-    # them does not give both the same place.
     _ats = [(c, at) for c, _pt, _w, at in raw]
     _tether = []
     for row in raw:
@@ -756,29 +457,7 @@ def hardware_spans(text):
         if _pt:
             row[1] = _pt
         elif any(c != row[0] for c, _a in _ats) and _runs_to(text, row[3]):
-            # NO PART OF ITS OWN, beside something that has one, and joined by
-            # "to": it is that thing's TETHER, not a restraint holding a pair of
-            # wrists nobody mentioned. "clips a chain to her collar" was a chain
-            # on the wrists AND a collar on the neck -- two things to draw where
-            # the beat put one.
-            #
-            # "to" matters. "gags her with duct tape" names the gag's MATERIAL
-            # by the same shape, and folding that away lost the tape entirely.
             _tether.append(row)
-    # ONE LENGTH, TWO PLACES. "loops a steel cable around her neck and down around
-    # her ankles" is one cable holding two parts of the body, and binding it to the
-    # NEAREST part alone recorded the neck and lost the ankles -- so the legs were
-    # held by nothing and dropped. Only for the things whose part varies: a pair of
-    # handcuffs named beside two body words is still one pair of handcuffs.
-    #
-    # ...AND ONLY WHERE THE LENGTH REACHES. Every part named after the item was
-    # taking a copy, with nothing asked about whether the two are joined and no
-    # clause boundary to stop at: "Mara straps Ana's wrists to the bench and wipes
-    # her own hands" recorded the straps on the wrists AND on the hands, which comes
-    # out as "The straps and straps go on during this shot. They hold the wrists and
-    # the hands." A length gets to a second part by being TAKEN there -- around it,
-    # behind it, to it -- so the joining word has to stand in front of the part, and
-    # the part has to be in the same sentence.
     _spread = []
     for row in raw:
         if row[0] not in PART_VARIES:
@@ -797,27 +476,14 @@ def hardware_spans(text):
             _spread.append([row[0], _pt, row[2], row[3]])
     raw += _spread
     raw = [r for r in raw if r not in _tether]
-    # A VERB STILL FASTENS SOMETHING, and what it fastens is either an item the
-    # beat names or a part of the body. "...chains her collar to the ring and
-    # chains her ankles together" is both, in that order: the first verb belongs
-    # to the collar and introduces nothing, the second puts a chain on the
-    # ankles. Recorded one and lost the other, which is two restraints becoming
-    # one -- chains interfering.
     for _vat in verb_ats:
         _pt = _nearest_part(parts, _vat, _ats)
         if _pt and not any(c == "chain" and pt == _pt for c, pt, _w, _a in raw):
             raw.append(["chain", _pt, "chain", _vat])
-    # Nothing named at all: somebody is chained somewhere and the beat never
-    # says where on them. The anchor is still real, so it holds the body rather
-    # than inventing a pair of wrists to hold.
     if verb_ats and not raw and anchor_in(text):
         raw.append(["chain", "body", "chain", verb_ats[0]])
     out, seen = [], {}
     for canon, part, written, at in raw:
-        # Keyed by the PAIR. Two chains on two parts are two restraints -- a
-        # beat chaining a collar and the ankles recorded one and lost the other
-        # -- while "collar" then "steel collar" is one collar, same part, and
-        # keeps the fuller wording.
         key = (canon, part)
         if key in seen:
             i = seen[key]
@@ -833,18 +499,6 @@ _REGION_RX = tuple((_rx(r"\b(?:" + p + r")\b"), region, said)
                    for p, region, said in REGION_OF)
 _NUDITY_RX = tuple((_rx(r"\b(?:" + p + r")\b"), regions) for p, regions in NUDITY)
 
-# ARRIVING AT IT, which the table above deliberately does not cover: those are states
-# a person is already in. Undressing is an ACT, and it names no garment, so every
-# removal path here had nothing to take off -- "Ana undresses completely." emptied her
-# sheet in the sampler while this reader recorded nothing at all, and from the next
-# shot on the prompt described a person with no clothes listed and no skin described.
-# Meanwhile "Ana strips naked." latched all three regions and held them on every shot,
-# so two spellings of one act behaved differently.
-#
-# Shared with sampler._NAKED_CUE rather than written twice: it is the same question,
-# and it is a careful pattern. "She strips off her coat" names a coat and must stay a
-# coat coming off; "she strips the paint off the door" undresses nobody. The object is
-# what tells them apart, which is why the bare forms demand a clause end.
 STRIPS_BARE = _rx(
     r"\bnaked\b(?!\s+(?:eye|flame))"
     r"|\bnude\b|\bin\s+the\s+nude\b"
@@ -975,8 +629,6 @@ def anchor_spans(text):
     latched a restraint over furniture somebody merely walked towards."""
     t, out = text or "", []
     for m in _ANCHOR_AT.finditer(t):
-        # The fastening verb has to be in THIS clause, not somewhere earlier in
-        # the paragraph.
         clause = re.split(r"[.;!?]", t[:m.start()])[-1]
         if _APPLY.search(clause) or re.search(
                 r"\b(?:chains?|ropes?|cords?|cables?|leash(?:es)?|straps?|"
@@ -1008,11 +660,6 @@ def place_in(text):
     if not _MOVES.search(clause) and not present:
         return ""
     got = re.sub(r"\s+", " ", m.group(1).lower()).strip()
-    # A BARE "room" NAMES NOWHERE. "Ana walks into the room" says she goes
-    # inside, not which room -- and taking it as a place produced "The shot is
-    # in the room, not the room the scene text names", which contradicts itself
-    # in one sentence. Modified, it is a real place: "the far room", "the back
-    # room" and "the next room" all distinguish themselves from where we were.
     return "" if got == "room" else got
 
 
@@ -1029,20 +676,9 @@ def garments_in(text):
     return out
 
 
-# A FULL STOP IS A CLAUSE BOUNDARY. It was not, and a beat is usually several
-# sentences, so "Ana takes off her boots. Mara hangs a coat on the hook." was ONE
-# clause: the boots were credited to Mara, and the coat -- which is on a hook and was
-# never worn by anybody -- was recorded as coming off her too. Mara's bare regions
-# became feet and torso, and every later shot described her barefoot and topless.
-# Writing the same beat with ", and" instead of the full stop gave the right answer,
-# which is the tell. All three of the sampler's own clause splitters have always
-# split on . ! ? -- this was the odd one out.
 _CLAUSE_BOUNDARY = re.compile(r"[,;.!?]|\b(?:and|while)\b", re.I)
 
 
-# A clause holding NOTHING but a determiner in front of its garment, which is what a
-# second object of a shared verb looks like: "...and her jeans". See the inheritance
-# in read(): anything else in front is a clause with business of its own.
 _ONLY_A_DETERMINER = re.compile(
     r"\s*(?:(?:her|his|their|its|the|a|an|my|your|our|both|two|all)\s+)?\s*", re.I)
 
@@ -1056,21 +692,12 @@ def _clause_at(text, at, boundaries=None):
     return text[lo:hi], lo
 
 
-
-# Hardware, not clothing. Taking clothes off does not unlock anything, so these
-# are kept out of the garment answer -- the standing rule is that hardware is
-# cleared by an explicit `remove:` and by nothing else.
 _NOT_CLOTHING = re.compile(
     r"^(?:handcuffs?|cuffs?|shackles?|manacles?|chains?|ropes?|cords?|straps?|"
     r"collars?|gags?|blindfolds?|restraints?|bindings?|tape|ties?|harness|"
     r"straitjacket|spreader|hogtie|clamps?|clips?)$", re.I)
 _PHRASE_ONE = _rx(r"\b(?:" + GARMENT_PHRASES + r")\b")
 _WORD_ONE = _rx(r"^(?:" + GARMENT_WORDS + r")s?$")
-# The same list with NO optional plural, which is what says whether a trailing "s"
-# belongs to the word or was added to it. The vocabulary is clean on this: garments that
-# are inherently plural are listed only in the plural (boots, jeans, shorts, panties,
-# tights, leggings, socks, knickers, trousers, gloves) and the rest only in the singular
-# (skirt, vest, top), so "stem is itself a garment" is an exact test and not a guess.
 _WORD_EXACT = _rx(r"^(?:" + GARMENT_WORDS + r")$")
 
 
@@ -1117,31 +744,11 @@ def garment_words(text):
             continue
         if not _WORD_ONE.match(low):
             continue
-        # The token the sheet wrote, not the one the beat happened to inflect. See
-        # singular_garment -- shared with infer_removals so the two cannot disagree.
         low = singular_garment(low)
         if low not in out:
             out.append(low)
     return out
 
-# A POSTURE DENIED IS NOT A POSTURE TAKEN.
-#
-# Reported: a woman chained by the ankles and forced into a squat stood up anyway.
-# The chain clauses were all correct -- the metal "already drawn to its full length,
-# so the position it fixes is the position that keeps" was on every shot after the
-# squat. What sat beside it was the posture latch saying she was STANDING, because
-# "She cannot stand." matched `stand` and nothing looked at the `cannot`. The latch
-# then carried that forward, so every later shot asserted, flatly and positively,
-# the one thing the chains were there to prevent. At cfg 1 a positive statement wins.
-#
-# The same shape as _in_a_request, which already suppresses a posture that is ASKED
-# for rather than taken. Attempts are here too: "tries to stand", "struggles to get
-# up", "strains to rise" are all bodies that have NOT got there, and reading them as
-# arrival is the same error in a friendlier disguise.
-#
-# A SHORT WINDOW on purpose -- the five words before the verb. The cue always sits
-# immediately in front of it ("cannot stand", "no longer able to stand"), and a wider
-# reach would let a `cannot` from a different clause silence a real posture.
 _POSTURE_DENIED = _rx(
     r"\b(?:cannot|can\s*not|can['\u2019]?t|could\s*not|could\s*n['\u2019]?t|"
     r"unable|never|not\s+able|no\s+longer\s+able|"
@@ -1155,10 +762,6 @@ _POSTURE_DENIED = _rx(
 def denied_posture(text, at):
     """Is the posture verb at `at` negated, or only attempted, by what precedes it?"""
     before = str(text or "")[:max(0, int(at))]
-    # A cue belongs to its OWN clause. Without stopping at the boundary, "McKenna
-    # cannot kneel, so she sits" reached back past the comma and silenced the sitting
-    # -- suppressing a posture the beat plainly states, which is the same class of
-    # error in the other direction.
     cut = 0
     for _m in re.finditer(r"[,;:.!?]|\b(?:so|and|but|then|yet|while|as|before|after)\b",
                           before, re.I):
@@ -1179,44 +782,17 @@ def posture_in(text):
     return hits[0][1] if hits else ""
 
 
-
-# A determiner, INCLUDING A POSSESSIVE NAME. "Dana lifts up McKenna's skirt" and
-# "enters McKenna's bedroom" both failed on a list of the/her/his/their/a/an, in
-# two different readers, fixed weeks apart. One constant, so the next reader that
-# needs it cannot get a narrower copy.
 DET_POSS = r"(?:the|her|his|their|its|a|an|\w+['’]s)"
 _DET_POSS = DET_POSS
 
-# ---------------------------------------------------------------------------
-# WARDROBE: what moved, and what was put back.
-#
-# Moved here from sampler.py, whole, because the pair went wrong three separate
-# ways while it was split across two files: a possessive name ("Dana lifts up
-# McKenna's skirt") matched neither reader, the restore verbs covered only the
-# direction nobody writes, and the layering read displacements a beat before the
-# latch recorded them. They name the same garments, they have to agree with the
-# same sheet, and they now sit beside the vocabulary they both read.
-# ---------------------------------------------------------------------------
 
-# _STRIP_VERB and _TRAILING_VERB are defined further up, beside TAKES_OFF, which is
-# now built from them.
-# ...and verbs that are a removal on their own, needing no particle.
 _UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|shed(?:s|ding)?|unzip(?:s|ped)?|"
               r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?|"
-              # Hardware comes off by being UNDONE, and these were missing: a beat
-              # saying "unlocks the belt" left it described as worn for the rest of
-              # the film, because nothing here read as a removal at all.
               r"unlock(?:s|ed)?|unbuckle[sd]?|unclip(?:s|ped)?|unstrap(?:s|ped)?|"
               r"unlace[sd]?|untie[sd]?|unties|unwrap(?:s|ped)?|"
               r"undo(?:es)?|undid")
 
 
-# WHERE A GARMENT ENDS UP ONCE IT IS OFF. A thing on the floor is not on a body,
-# and this is how a beat says so -- by DESTINATION, not by verb. Two readers need
-# the same list, for opposite reasons: the removal reader to call it a removal,
-# the restore reader to stop calling it one. "Lets the skirt fall" drops a lifted
-# skirt back over her legs; "lets the thong fall to the floor" is the thong coming
-# off, and the only difference between those two sentences is this list.
 FLOOR = (r"floor|ground|tiles?|tiling|lino|mat|bath\s*mat|rug|carpet|deck|boards|"
          r"concrete|grass|sand|bed|sofa|couch|chair|seat|stool|bench|basket|"
          r"hamper|laundry|pile|heap")
@@ -1231,10 +807,6 @@ _DISPLACE = re.compile(
     r"\b(?:" + _STRIP_VERB + r"|push(?:es|ed|ing)?|shove[sd]?|roll(?:s|ed|ing)?|"
     r"hitch(?:es|ed)?|hike[sd]?|open(?:s|ed)?|undo(?:es)?|undid|unzip(?:s|ped)?|"
     r"unbutton(?:s|ed)?|unfasten(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|"
-    # LIFTING A SKIRT IS DISPLACING IT, and none of these were here. Asked
-    # for directly: "when the skirt has been lifted up to show the chastity
-    # belt, that's when it should be shown". Lifting was not read as moving
-    # anything, so the belt stayed covered through the shot that uncovers it.
     r"lift(?:s|ed|ing)?|raise[sd]?|rais(?:es|ed|ing)|hoist(?:s|ed|ing)?|"
     r"hold(?:s|ing)?|held|gather(?:s|ed|ing)?|bunch(?:es|ed|ing)?)\s+"
     r"(?:(" + _DISPLACE_WAY + r")\s+)?"
@@ -1263,19 +835,8 @@ def scene_name_for(head, scene):
         # Only the wardrobe side of "Name: she, 22, blue jeans shorts".
         line = line.split(":", 1)[-1]
         for item in re.split(r"[,;.]", line):
-            # A <Picture N> tag is not part of the garment's NAME. "chastity belt
-            # <Picture 2>" ends in "2", so the head-noun match failed and the belt
-            # fell back to the beat's bare word -- while an untagged garment in the
-            # same sheet expanded correctly. The tagged garment is exactly the one
-            # a reference is pinning, so it is the worst one to describe loosely.
             item = re.sub(r"<\s*picture\s+\d+\s*>", " ", item, flags=re.I)
             item = re.sub(r"\s+", " ", item).strip()
-            # ONE ENTRY CAN HOLD SEVERAL GARMENTS, and the name is the garment's own
-            # part of it. "navy jacket over a white shirt" ends in "shirt", so the
-            # whole entry came back as the shirt's name and "the navy jacket over a
-            # white shirt open" was said about a shirt being unbuttoned. Split on the
-            # words that join garments, and cut a "with ..." tail, which describes a
-            # garment rather than naming it.
             for part in re.split(r"\s+(?:over|under|beneath|underneath|on\s+top\s+of|and)\s+",
                                  item, flags=re.I):
                 part = re.split(r"\s+with\s+", part, flags=re.I)[0].strip()
@@ -1283,14 +844,8 @@ def scene_name_for(head, scene):
                     continue
                 # Drop a leading article or possessive; they are not description.
                 part = bare_name(part)
-                # The longest entry wins: a sheet that names it twice described it
-                # most fully once, and the fuller name is the one worth carrying.
                 if len(part) > len(best):
                     best = part
-    # The author's OWN capitalisation. Lowercasing turned "PVC" into "pvc" and
-    # "Shiny white crop top" into all-lowercase -- a different token sequence than
-    # was written, for a brand or material name that is capitalised for a reason.
-    # Only the matching above is case-insensitive; what comes back is what they typed.
     return best
 
 
@@ -1307,35 +862,18 @@ def displaced_garments(beat, scene):
     for m in _DISPLACE.finditer(beat):
         way = (m.group(1) or m.group(4) or "").lower().strip()
         thing = re.sub(r"\s+", " ", (m.group(3) or "")).strip().lower()
-        # SOME VERBS CARRY THEIR OWN DIRECTION. "lifts her skirt" says which way
-        # by saying lift, and the direction word this pattern wants is simply not
-        # written -- so the match was thrown away for having no `way`, and the one
-        # beat that uncovers the layer beneath did nothing. Read on the matched
-        # text rather than a new capture group, which would renumber the rest.
         if not way and re.match(r"\s*(?:lift|rais|hoist|gather|bunch)", m.group(0),
                                 re.I):
             way = "up"
-        # ...and UNDOING a garment opens it. "Owen unzips his jacket" was a removal,
-        # then (once it was not) nothing at all -- the jacket went back to being
-        # described closed on the next shot, which is a jacket zipping itself up
-        # across a cut.
         if not way and re.match(r"\s*(?:unzip|unbutton|unfasten|unhook|unclasp|undo|undid)",
                                 m.group(0), re.I):
             way = "open"
         if not way or not thing or thing in seen:
             continue
-        # The garment has to be one the scene already dresses them in, and the head
-        # noun is what matches: "her denim shorts" is the scene's "blue denim shorts".
         head = thing.split()[-1]
         if len(head) < 3 or head not in low:
             continue
         seen.add(thing)
-        # ...and it is the SCENE'S name that gets carried forward, not the beat's.
-        # A beat says "pulls the shorts back up" for what the sheet calls "blue
-        # jeans shorts", and the guard echoed the beat: the shot then carried a
-        # bare "the shorts" beside the sheet's full name, and a model handed two
-        # differently-named garments draws two different garments. The shorts came
-        # back in a different colour and cut -- invented, from the node's own text.
         thing = scene_name_for(head, scene) or thing
         # "back up" and "back down" say the direction in their second word.
         way = re.sub(r"^back\s+", "", re.sub(r"\s+", " ", way))
@@ -1344,18 +882,6 @@ def displaced_garments(beat, scene):
     return out
 
 
-# Putting it right without naming it: "pulls them back up". A pronoun cannot be
-# matched against the wardrobe, but if exactly one garment is displaced there is only
-# one thing it can mean -- and leaving it displaced is the error that shows.
-# PUTTING IT BACK. A displaced garment is still worn and the node keeps saying
-# where the beat left it -- so the beat that puts it right has to be read, or the
-# skirt stays lifted for the rest of the film and whatever was under it stays on
-# show. Reported: "McKenna lets it fall" did nothing, because the only restores
-# recognised were pull/tug/hitch/hike/yank/push with a pronoun and a direction.
-#
-# What actually gets written is mostly the opposite: a lifted skirt is LET FALL,
-# DROPPED, LOWERED, SMOOTHED DOWN, STRAIGHTENED, FIXED or simply LET GO of, and
-# none of those has a direction word in it at all.
 _RESTORE_VERB = (r"(?:let(?:s|ting)?(?:\s+go\s+of)?|drop(?:s|ped|ping)?|"
                  r"lower(?:s|ed|ing)?|smooth(?:s|ed|ing)?|straighten(?:s|ed|ing)?|"
                  r"fix(?:es|ed|ing)?|rearrang(?:e|es|ed|ing)|"
@@ -1373,9 +899,6 @@ _PUT_BACK = re.compile(
     r"|\blet(?:s|ting)?\s+(?:it|them)\s+fall\b"
     r"|\b(?:cover(?:s|ed|ing)?\s+(?:herself|himself|themselves)\s+(?:back\s+)?up)\b",
     re.I)
-# ...and the same act with the garment NAMED: "lets the skirt fall", "smooths her
-# skirt down". The garment has to be one the sheet already dresses them in, which
-# is the same condition displaced_garments uses.
 _PUT_BACK_NAMED = re.compile(
     r"\b" + _RESTORE_VERB + r"\s+"
     + _DET_POSS + r"\s+([\w][\w\- ]{0,28}?)"
@@ -1399,24 +922,11 @@ def restored_garments(beat, scene):
         return []
     out, low = [], scene.lower()
     for m in _PUT_BACK_NAMED.finditer(beat):
-        # ...UNLESS IT LANDS ON THE FLOOR. These verbs are the restore vocabulary
-        # because that is what people write for a lifted skirt -- let fall, drop,
-        # lower, let go of -- and the identical words take a garment OFF when the
-        # sentence says where it lands. "Lets the thong fall to the floor" was read
-        # as putting the thong back on: the author's removal, enacted backwards, and
-        # from there the sheet described it as worn for the rest of the film.
-        # Reported as a thong restored after she undressed. See FLOOR.
         if _LANDS_OFF.match(beat[m.end():]):
             continue
         thing = re.sub(r"\s+", " ", (m.group(1) or "")).strip().lower()
         if not thing:
             continue
-        # ...AND THE CAPTURE CANNOT RUN THROUGH A PREPOSITION. The group takes
-        # spaces so a sheet's "long grey skirt" comes back whole, and on "drops the
-        # thong on the floor" it swallowed "thong on the floor" instead -- head
-        # "floor" -- so the restore was keyed to the ROOM. The scene named a wet
-        # floor, scene_name_for handed back "tiled bathroom with a wet floor", and
-        # the beat was recorded as putting the bathroom back on.
         if re.search(r"\b(?:on|onto|to|into|in|at|over|under|from|with|and)\b", thing):
             continue
         head = thing.split()[-1]
@@ -1428,43 +938,13 @@ def restored_garments(beat, scene):
     return out
 
 
-
-
-# ---------------------------------------------------------------------------
-# LAYERING: which garment goes under which.
-#
-# Moved here to sit beside the vocabulary it reads. It is the last piece of the
-# wardrobe that was living apart from the list of what a garment IS, and that
-# separation is what let "chastity belt" be underwear to one file and a bare
-# "belt" to the other.
-#
-# The CLAUSES stay in sampler.py -- under_clause, reveal_clause, bare_clause.
-# Knowing a belt is under a skirt belongs here; saying so in a sentence belongs
-# where a shot is assembled. Same split the restraint work settled on.
-# ---------------------------------------------------------------------------
-
 _UNDER_BY_REGION = {
-    # NO HARDWARE HERE. A chastity belt is a restraint, and a restraint left out of
-    # the text renders absent -- that is the bug the hardware latch exists for, and
-    # putting the belt in this list rebuilt it from the other side. Reported as the
-    # belt disappearing a few beats in, right after layering shipped.
-    #
-    # Cloth can be hidden and recovered from a description. Hardware cannot: a belt
-    # that stops being drawn does not come back looking slightly wrong, it is gone,
-    # and so is every beat that depended on it being there.
-    # Hyphens and the other names for it. "chastity-belt" and "chastity device" were
-    # not matched, so a sheet that spelled it either of those way showed it through
-    # the jeans while "chastity belt" was correctly hidden -- the fix looked done
-    # because the one spelling I tested worked.
     "lower": (r"panties|knickers|thong|g-?string|briefs|boxers|boxer\s+shorts|"
               r"underwear|undies|jockstrap|loincloth|"
               r"chastity[\s-]*(?:belts?|devices?|cages?)"),
     "upper": (r"bra|bralette|brassiere|camisole|undershirt|vest|corset|bustier"),
 }
 _OUTER_BY_REGION = {
-    # Tights and pantyhose DO cover a waistband; stockings and hold-ups do not --
-    # they stop at the thigh. Listing them together hid a chastity belt under a
-    # pair of stockings, which covers nothing of it.
     "lower": (r"shorts|trousers|jeans|slacks|chinos|skirt|kilt|leggings|joggers|"
               r"tights|pantyhose|jeggings|culottes|"
               r"tracksuit\s+bottoms|dungarees|overalls|dress|gown|robe"),
@@ -1479,25 +959,12 @@ def implied_layers(scene):
     Only where BOTH are named: underwear with nothing over it is on show, and saying
     it is hidden would be describing away something the author dressed them in."""
     covers = {}
-    # ONE PERSON AT A TIME. This read the whole scene as a single wardrobe, so one
-    # character's jeans covered another character's belt -- and which garment won
-    # depended on the ORDER the sheet lines happened to be written in. A sheet that
-    # put the man second hid her belt under his trousers.
-    #
-    # Split on lines so each entry is judged alone. Text that is not an entry -- the
-    # scene paragraph -- is still read as one block, since a location describing
-    # clothing is describing whoever is in it.
     for line in (scene or "").split("\n"):
         text = line.strip()
         if not text:
             continue
         for region, unders in _UNDER_BY_REGION.items():
             over = None
-            # The HEAD noun, which in English is the last one: "blue jeans shorts" is
-            # a pair of shorts, not a pair of jeans. Taking the first match recorded
-            # the cover as "jeans" while a removal names it "shorts", so the two never
-            # lined up -- the belt was hidden correctly and then never uncovered,
-            # because the garment that came off was not the one it was held under.
             for m in re.finditer(r"\b(?:" + _OUTER_BY_REGION[region] + r")\b",
                                  text, re.I):
                 over = m.group(0).lower()
@@ -1533,24 +1000,11 @@ def hidden_layers(covers, gone, moved=()):
     layer beneath stayed hidden while the beat was busy showing it off: "pulls
     her shorts down to show the thong" described the thong in that one shot,
     from the author's own words, and hid it again in the next."""
-    # Compared on the HEAD NOUN. `covers` holds the outer garment as implied_layers
-    # read it ("shorts") while a displacement is keyed by the sheet's full name
-    # ("denim shorts"), and an exact match between the two never fires -- the layer
-    # underneath stayed hidden on the very shot the beat pulled the cover off.
     aside = {str(m).lower().split()[-1] for m in (moved or ()) if str(m).strip()}
     return [u for u, o in (covers or {}).items()
             if o not in gone and u not in gone
             and str(o).lower().split()[-1] not in aside]
 
-
-
-
-# ---------------------------------------------------------------------------
-# POSTURE. Moved from sampler.py, which had the richer table -- "takes a
-# seat", "gets to her feet", "goes down on her knees" -- and the engine had
-# three the sampler lacked. Two tables, diverged, and the sampler's is the
-# one that drives the guard, so a crouch set no posture at all.
-# ---------------------------------------------------------------------------
 
 _POSTURE_OF = (
     ("sitting", re.compile(r"\b(?:sits?|sat|sitting|seats?\s+(?:her|him|them)self|"
@@ -1564,45 +1018,21 @@ _POSTURE_OF = (
                             r"(?:gets?|got)\s+(?:up|to\s+(?:her|his|their)\s+feet)|"
                             r"rises?|rose|risen)\b", re.I)),
 )
-# A posture verb that is really about somewhere else: "the chair stands in the
-# corner", "the case lies on the table". Those set nobody's pose.
 _NOT_A_BODY = re.compile(r"\b(?:it|chair|table|box|case|bag|door|house|room|"
                          r"building|tree|bottle|glass|book|light|lamp)\s+\w{0,8}?\s*"
                          r"(?:stands?|lies?|sits?)\b", re.I)
-# THE THREE THE ENGINE KNEW AND THIS DID NOT. Two tables, diverged, and this is
-# the one that drives the posture guard -- so "Ana crouches" set no posture at
-# all and the next shot was told nothing about how she was left.
 _POSTURE_OF = _POSTURE_OF + (
-    # SQUATTING IS NOT CROUCHING. Folded together, a script that said "squats"
-    # was held as "still crouching" -- a different shape of body, and not the
-    # word the author chose. The hold says back what was written.
     ("squatting", _rx(r"\b(?:squats?|squatting|squatted)\b")),
     ("crouching", _rx(r"\b(?:crouch(?:es|ing|ed)?)\b")),
     ("bent over", _rx(r"\b(?:bends?\s+over|bent\s+over|leans?\s+over|"
                       r"leaned\s+over|doubles?\s+over)\b")),
     ("curled up", _rx(r"\b(?:curled\s+up|curls?\s+up|foetal|fetal)\b")),
-    # ROLLING ONTO A SIDE IS STILL LYING DOWN. "McKenna rolls onto her side" set no
-    # posture at all -- the lying verbs are all lie/lay/sprawl and none of them is
-    # how you write a body that is ALREADY down changing which way it faces. So a
-    # beat that put her on her side left the hold saying nothing, and the shot after
-    # it was told nothing about how she was left.
-    #
-    # It also decides whether the weight gets named: the pose clause only says what
-    # is under a bound body when it knows the body is off its feet (see
-    # POSE_LYING_WEIGHT in sampler.py), and that reads this posture.
-    #
-    # The possessive is required. "the barrel rolls onto its side" is not a person,
-    # and _NOT_A_BODY does not cover roll.
     ("lying down", _rx(r"\broll(?:s|ed|ing)?\s+(?:over\s+)?(?:on)?to\s+"
                        r"(?:her|his|their)\s+"
                        r"(?:side|back|front|stomach|belly)\b")),
 )
 
 
-# Words that are capitalised at the start of a sentence whatever they mean, so
-# their capital says nothing about whether they are a name. "May I come in?"
-# staged a character called Aunt May. Mid-sentence the capital is informative
-# again, and these are accepted there.
 _SENTENCE_START_ALSO = frozenset("""
 may will can must might shall should would could does did was were are is
 let get go come take put look stop wait now then there here this that these
@@ -1645,12 +1075,6 @@ def names_in(beat, cast):
     names = [str(n) for n in (cast or []) if n]
     hits, found = [], set()
     for n in names:
-        # A NAME THAT IS ALSO A WORD. "Will he come?" and "May I come in?" open a
-        # sentence with the name followed by who the question is about, and read as
-        # the person they staged Will and May -- a second character in a shot about
-        # somebody waiting for them. A name followed straight away by a subject
-        # pronoun at the start of a sentence is the verb; the next use can still be
-        # the person ("Will opens the gate").
         for m in re.finditer(r"\b" + re.escape(n) + r"\b", staged):
             _opens = re.search(r"(?:^|[.!?]\s*[\"'\u201c]?)\s*$", staged[:m.start()])
             if _opens and _AUX_FOLLOWER.match(staged[m.end():]):
@@ -1658,14 +1082,6 @@ def names_in(beat, cast):
             hits.append((m.start(), n))
             found.add(n)
             break
-    # A SHEET NAME IS OFTEN LONGER THAN WHAT THE BEATS CALL HER. "Mistress Vale"
-    # on the sheet and "the Mistress" in every beat matched nothing, so her line
-    # was in no shot at all and the model invented her from scratch each time.
-    #
-    # One word of the name, and only when that word is hers alone: with both
-    # "Mistress" and "Mistress Vale" on the sheet, "Mistress" belongs to the
-    # first and picking either would be a guess. Titles are short and shared, so
-    # a word under three letters never stands in.
     for n in names:
         if n in found or " " not in n:
             continue
@@ -1681,12 +1097,6 @@ def names_in(beat, cast):
                 break
     return [n for _at, n in sorted(hits)]
 
-
-# ---------------------------------------------------------------------------
-# STATE. One object knows what is true, and everything a shot says is rendered
-# from it -- so two clauses cannot contradict each other, because there is only
-# one place a fact lives.
-# ---------------------------------------------------------------------------
 
 class Restraint:
     """One piece of hardware on one person.
@@ -1706,10 +1116,6 @@ class Restraint:
         self.position = position if part in ("wrists", "arms") else ""
         self.anchor = anchor
         self.applied_in = applied_in
-        # RIGID metal keeps its shape. Steel decoded and re-encoded once a shot
-        # has nothing in the text holding its links to a size, and it creeps --
-        # a chain grows slack, cuffs turn into bracelets. Soft goods do not need
-        # this and must not be given it: rope is tied, not held rigid.
         self.rigid = bool(rigid) or _is_rigid(item)
 
     def phrase(self):
@@ -1738,11 +1144,6 @@ class Person:
         self.displaced = []     # pulled aside but still on
         self.posture = ""
         self.place = ""
-        # Regions with nothing on them. A LATCH, not a one-shot fact: the beat
-        # that uncovered a region is the only shot that used to say so, and every
-        # shot after it left that region unspecified -- which the model fills
-        # from its own prior. Reported as a bra coming back on a topless
-        # character who never had one on the sheet.
         self.bare = []
 
     def restrained(self):
@@ -1773,8 +1174,6 @@ class SceneState:
 
     def __init__(self, place=""):
         self.place = place
-        # The room the SCENE paragraph names. A shot only needs telling where it
-        # is once the film has moved somewhere else.
         self.opened_in = place
         self.people = {}
         self.shot = 0
@@ -1810,17 +1209,9 @@ class SceneState:
             if canon in staged_later:
                 continue
             if (canon, part) not in p.hardware:
-                # applied_in = 0, so this never reads as "goes on during this
-                # shot" -- shots are numbered from 1.
                 p.hardware[(canon, part)] = Restraint(written or canon, part,
                                               position_in(description or ""),
                                               anchor_in(description or ""), 0)
-        # ...unless it has already come OFF. The sheet is re-read every shot and
-        # the character memory is never edited, so a garment removed in shot 2
-        # was put straight back on the body by the sheet in shot 3 -- and the
-        # clause saying that region is bare then went silent, because something
-        # "still worn" covered it. What the script did outranks what the sheet
-        # lists; the sheet says what she has, not what is on her now.
         _off = [_garment_key(x) for x in p.removed]
         for g in garments_in(description or ""):
             key = _garment_key(g)
@@ -1845,14 +1236,6 @@ class SceneState:
             self.place = here
             changed["moved_to"] = here
 
-        # IN SENTENCE ORDER, not cast order. Ordering by the sheet put "Ana"
-        # before "Guard" in "The guard handcuffs Ana", so the cuffs went on the
-        # guard -- the agent wearing what he is applying, which is the invented
-        # second figure all over again.
-        #
-        # ...and read from the STAGED half only. A name inside a line of dialogue
-        # is being said, not staged: "Dan says: 'McKenna, put the cuffs on'"
-        # would otherwise hand McKenna hardware in a shot she is not in.
         who = names_in(beat, cast)
         subject = who[0] if who else next(iter(list(self.people) or list(cast)
                                                or [""]))
@@ -1864,11 +1247,6 @@ class SceneState:
         releasing = bool(_RELEASE.search(beat))
 
         if applying or releasing:
-            # MODIFIERS BIND TO THE NEAREST ITEM. "handcuffs her wrists behind
-            # her back and locks a steel collar around her neck, chained to the
-            # wall" carries two modifiers and two items; giving both modifiers
-            # to both items produced handcuffs chained to a wall they were never
-            # near, and a collar held behind a back.
             for canon, part, written, at in spans:
                 clause, lo = _clause_at(beat, at, boundaries)
                 item_at = at - lo
@@ -1886,44 +1264,22 @@ class SceneState:
                     for key in keys:
                         changed["released"].append((wearer, p.hardware.pop(key)))
                     continue
-                # KEYED BY THE PAIR. A chain on the ankles and a chain on the
-                # wrists are two restraints; keyed by name alone the second
-                # overwrote the first and one of them was never drawn again.
                 p.hardware[(canon, part)] = Restraint(
                     written or canon, part,
                     _nearest(position_spans(beat), at, spans),
                     _nearest(anchor_spans(beat), at, spans), shot)
                 changed["applied"].append((wearer, p.hardware[(canon, part)]))
-            # A chain named beside another item is that item's TETHER, and it
-            # is folded in by hardware_spans now, where the parts are known.
-            # Doing it here meant popping "chain" whenever one was named with an
-            # anchor -- which also popped a chain that had a part of its OWN, so
-            # "chains her collar to the ring and chains her ankles together"
-            # kept the collar and lost the ankles.
-            # Its anchor needs no transferring either: with the tether gone from
-            # the spans, the anchor binds to the nearest remaining item, which
-            # is the one it was always describing.
         if releasing and not spans:
-            # Whoever is actually wearing it. "The guard unlocks the handcuffs"
-            # names only the agent, and taking the subject there tried to
-            # release hardware from the man holding the key.
             held = [n for n, q in self.people.items() if q.restrained()]
             wearer = next((n for n in who if n in held),
                           held[0] if len(held) == 1 else subject)
             p = self.person(wearer)
-            # Released by NAME, whatever part it is on: an unlocking beat says
-            # "unlocks the chain", not which of two chains, and matching the
-            # pair left one fastened forever.
             if re.search(r"\b(?:them|it|her|him|everything|all\s+of\s+it)\b",
                          beat, re.I):
                 # "the guard releases her" names no item, so all of it comes off.
                 while p.hardware:
                     changed["released"].append((wearer, p.hardware.popitem()[1]))
 
-        # Garments. The verb decides which way the change runs, and the item has
-        # to be named -- a bare "she undresses" says nothing about which garment,
-        # and guessing is how a garment came off a beat before the beat that
-        # took it off.
         if subject:
             for m in garments:
                 g = f"{(m.group(1) or '').strip()} {m.group(2)}".strip().lower()
@@ -1937,22 +1293,6 @@ class SceneState:
                 actions += [(x.start(), "aside") for x in _DISPLACES.finditer(clause)
                             if x.start() <= item_at]
                 action = max(actions, default=(-1, ""))[1]
-                # A SECOND OBJECT OF THE SAME VERB. "takes off her t-shirt and her
-                # jeans" puts the jeans in a clause of their own, because "and" is a
-                # boundary -- and that clause holds no verb, so the jeans were never
-                # recorded as coming off at all. The sampler scrubbed both from the
-                # sheet, so from the next shot on the legs were an unspecified region
-                # on a woman the prompt described with no trousers, and the model
-                # filled it from its own prior.
-                #
-                # Only where there is NOTHING in front of the garment but a
-                # determiner: "Ana takes off her boots and Mara hangs a coat on the
-                # hook" has a verb of its own, and a coat on a hook is not coming off
-                # anybody. The clause before must be in the same sentence, which is
-                # what makes a full stop a boundary worth having.
-                # A list of them walks back through each other object in turn:
-                # "her t-shirt, her jeans and her boots" is three clauses and one
-                # verb, and stopping at the first left the boots on.
                 if not action and _ONLY_A_DETERMINER.fullmatch(clause[:item_at]):
                     _lo = lo
                     for _ in range(6):
@@ -1988,20 +1328,12 @@ class SceneState:
                     p.removed = [x for x in p.removed if _garment_key(x) != key]
                     p.displaced = [x for x in p.displaced
                                    if _garment_key(x) != key]
-                    # Covered again: the latch has to release, or a character who
-                    # dresses is told for the rest of the film that the region is
-                    # bare, over the garment she just put on.
                     _bare_off(p, regions_of(g))
                 elif action == "aside":
                     if key not in [_garment_key(x) for x in p.displaced]:
                         p.displaced.append(g)
                         changed["displaced"].append((wearer_g, g))
 
-        # BEING in the state, rather than arriving at it. No garment is named and
-        # nothing comes off, so every removal path had nothing to do and no shot
-        # ever said what was on the chest.
-        # ...OR ARRIVING AT IT. Undressing names no garment either, so it took the
-        # same path or no path at all -- and it took no path at all. See STRIPS_BARE.
         _strip = STRIPS_BARE.search(beat or "")
         _nude = nudity_in(beat) or (["torso", "legs", "feet"] if _strip else [])
         if _nude:
@@ -2014,11 +1346,6 @@ class SceneState:
             for n in owners:
                 q = self.person(n)
                 _bare_on(q, _nude)
-                # ...and it takes the garments OFF. Saying somebody is topless
-                # names no garment, so nothing was removed and the sheet's shirt
-                # stayed on the body -- which then suppressed the very clause
-                # that says the chest is bare, because something "still worn"
-                # covered the region. The state has to agree with itself.
                 for g in list(q.worn):
                     if any(r in _nude for r in regions_of(g)):
                         q.worn.remove(g)
@@ -2060,9 +1387,6 @@ class SceneState:
                     f"shot: open and off the body at the first frame, closed on "
                     f"it by the last.")
             else:
-                # WHOSE. With more than one person described, a hold that does
-                # not say whose hardware it is describes cuffs on wrists
-                # belonging to nobody -- and the model draws a body to own them.
                 who = f" on {name}" if len(names) > 1 else ""
                 soft = all(not r.rigid for r in p.hardware.values())
                 shut = "tied and holding" if soft else "closed and fastened"
@@ -2077,10 +1401,6 @@ class SceneState:
                 out.append("The links keep their size and the run between them "
                            "stays taut.")
 
-        # GARMENTS. The shot that changes one says BOTH ENDS of the change --
-        # where it starts and where it finishes -- because a shot told only the
-        # result is free to open with the result already true, which is a
-        # garment coming off a beat before the beat that takes it off.
         off_now = {g for _w, g in changed.get("removed", [])}
         on_now = {g for _w, g in changed.get("worn", [])}
         aside_now = {g for _w, g in changed.get("displaced", [])}
@@ -2114,9 +1434,6 @@ class SceneState:
                 who = name if len(names) > 1 else "The body"
                 out.append(f"{who} is still {p.posture}.")
 
-        # WHERE. A journey moves the film, and every shot after it is in the new
-        # room -- the scene paragraph still names the old one, and without this
-        # the walk down the corridor arrives back in the room it left.
         if self.place and self.place != self.opened_in and not changed.get("moved_to"):
             out.append(f"The shot is in the {self.place}, "
                        f"not the room the scene text names.")
@@ -2159,35 +1476,14 @@ def _nearest(mods, at, spans):
     return mine
 
 
-# "hogties HER", "cuffs HIM", "ties THEM to the rail" -- the one being restrained,
-# written as a pronoun, which is how a beat writes the second mention of somebody.
-# The hardware used as a bare verb belongs here too. APPLY_VERB only takes those
-# with a determiner in front -- "the cuffs" is a noun and "she cuffs" is not -- and
-# that guard is right for deciding whether a beat APPLIES anything. It is not needed
-# here: a name in front and a pronoun behind is what makes this a sentence about one
-# person doing it to another.
 _HARDWARE_VERB = (r"cuffs|ties|chains|straps|tapes|binds|locks|padlocks|shackles|"
                   r"manacles|hobbles|leashes|collars|gags|blindfolds|trusses|"
                   r"hog-?ties|restrains|fetters|pinions|"
-                  # Fastening a thing TIGHTER is fastening it. These live in
-                  # APPLY_VERB only inside the branch that reaches for a particle,
-                  # so the pattern below -- which wants a plain verb, then the item,
-                  # then where it goes -- could not see them, and "Dan tightens a
-                  # steel collar around her wrists" put the collar on Dan.
                   r"tightens|cinches|buckles|fastens|clips|snaps")
 _APPLY_ANY = re.compile(r"\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b", re.I)
 _APPLIED_TO_PRONOUN = re.compile(
     r"\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b"
     r"(?:\s+\S+){0,3}?\s+(?:her|him|them)\b"
-    # ...OR WITH THE ITEM NAMED IN BETWEEN. "Dan locks a steel collar on her neck"
-    # puts four words between the verb and the pronoun -- the collar, and the
-    # preposition that places it -- so the window above could not reach, and the
-    # collar went onto DAN. Every shot of McKenna after it then had no wearer
-    # present, so the hold was left out of all of them: reported as restraints
-    # disappearing after they are applied, which is exactly what it looked like.
-    #
-    # The ITEM is what makes the longer reach safe. "Dan locks the door behind her"
-    # has the same shape and no hardware in it, and must stay a door.
     r"|\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b[^.;!?]{0,40}?"
     r"\b(?:" + "|".join(p for p, _n, _pt in HARDWARE) + r")\b"
     r"(?:\s+\S+){0,2}?\s+(?:on|onto|around|round|about|over|under|to|behind|"
@@ -2203,25 +1499,6 @@ def _wearer(beat, who, fallback, cast=()):
     wrists belonging to nobody, which is how a second figure gets invented to
     own them."""
     if len(who) < 2:
-        # ONE NAME AND A PRONOUN. "Mara hogties her with a steel cable" names only
-        # the person DOING it, and the wearer is the pronoun -- so the hardware was
-        # going onto the captor. Every later shot then described the restraint as
-        # hers, and the shots describing the person actually in it were told the
-        # hold belonged to nobody present and left it out. Reported as restraints
-        # that stop working from one shot to the next.
-        #
-        # Only where the scene leaves exactly one candidate: with two other people
-        # in the cast, which of them "her" is is a guess, and the guard's rule is
-        # that a guess about who wears a restraint is not worth making.
-        # ...and only when the name is the one DOING it. "The guard handcuffs Ana's
-        # wrists" names only the wearer -- the agent is a role, not a name -- and
-        # reading that sentence the other way round put the cuffs on the guard. So the
-        # name has to sit in FRONT of the verb, with the pronoun behind it.
-        # ...and only where the name is the SUBJECT of that verb: close in front of it,
-        # with no comma between. "Nora stands by the bench, the steel belt locked on
-        # her hips" has a name, a fastening and a pronoun, and the pronoun is Nora
-        # herself -- read as somebody doing it to somebody else it moved her own belt
-        # onto the other person in the room.
         hit = _APPLIED_TO_PRONOUN.search(beat or "") if who else None
         if hit:
             name = re.search(r"\b" + re.escape(who[0]) + r"\b", beat or "")
@@ -2238,15 +1515,6 @@ def _wearer(beat, who, fallback, cast=()):
         agent = next((n for n in who
                       if n.lower() == passive.group(1).lower()), None)
     if agent is None:
-        # ACTIVE VOICE: the one doing it comes first -- before the FASTENING, not
-        # before the paragraph. "Mara runs for the door. Dan catches her and cuffs her
-        # wrists" names Mara first and Dan is the one cuffing, so reading name order
-        # alone put the cuffs on him. The name nearest in front of the verb is the
-        # agent; with none in front of it, first is the best answer there is.
-        # The VERB, not the noun. "Bea's handcuffs" matches the hardware list as
-        # readily as "cuffs her" does, and counting it as the fastening put the agent
-        # on the wrong side of it -- the beat that unlocks Bea's cuffs released Ana's.
-        # A possessive or a determiner in front is what tells them apart.
         hit = None
         for m in _APPLY_ANY.finditer(beat or ""):
             before = (beat or "")[:m.start()].rstrip().split()
@@ -2265,10 +1533,6 @@ def _wearer(beat, who, fallback, cast=()):
     return next((n for n in who if n != agent), fallback)
 
 
-# A LEADING ARTICLE OR POSSESSIVE IS NOT DESCRIPTION. "the blue shorts" and "her
-# blue shorts" name the same garment as "blue shorts", and both halves of this node
-# had to strip one before comparing or printing a name. Written out in both files
-# before this, which is two places for one rule to drift.
 _LEADING_ARTICLE = re.compile(r"^(?:a|an|the|her|his|their|its)\s+", re.I)
 
 
@@ -2327,11 +1591,6 @@ def staged_applications(beats):
         if not _APPLY.search(b) or _RELEASE.search(b):
             continue
         for canon, _part, _w, at in hardware_spans(b):
-            # WHAT IS BEING FASTENED TO WHAT. "Dana clips a lead to the steel
-            # collar" puts a LEAD on; the collar is where it clips, and it has
-            # been round her neck all along. Counting it as the collar's own
-            # application dated the collar to that beat, and everything before
-            # it was then treated as before she had one.
             if re.search(r"\bto\s+(?:the|a|an|her|his|their)\s*$", b[:at], re.I):
                 continue
             out.setdefault(canon, i)

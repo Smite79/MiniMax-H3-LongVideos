@@ -61,18 +61,6 @@ class FrameAccumulator:
             if self.used == self.tensor.shape[0]:
                 out = self.tensor
             else:
-                # COMPACT, never a slice. A slice of a larger buffer keeps the WHOLE
-                # buffer's storage alive, which is the retention this class exists to
-                # prevent -- and test_the_chain_is_never_held_twice measures exactly
-                # that, demanding no unused bytes behind the returned tensor.
-                #
-                # There is slack because the capacity is now an upper bound: it can no
-                # longer assume trim_seam drops a frame at every seam, since a shot that
-                # opens on no keyframe keeps its first frame. Over-allocating by at most
-                # one frame per seam and compacting once is the bounded cost. The
-                # alternative -- an exact guess that can be too small -- drops into the
-                # overflow list, which with cleanup_between_shots off holds every shot's
-                # decoded frames live on the GPU until the end of the run.
                 out = torch.empty((self.used,) + tuple(self.tensor.shape[1:]),
                                   dtype=self.dtype, device=self.tensor.device)
                 out.copy_(self.tensor[:self.used])
@@ -219,44 +207,11 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
                            keep_loaded=_resident(keep or (vae,)))
         except Exception:
             pass
-    # A VAE THAT ALREADY TILES DOES NOT NEED TO BE ASKED TO, AND ASKING COSTS 3x.
-    #
-    # MiniMaxH3VideoVAE.decode_tiled is, in full:
-    #
-    #     def decode_tiled(self, z, **kwargs):
-    #         return self.decode(z)
-    #
-    # Every tile_t/overlap_t/tile_x/tile_y this function computes is discarded, so
-    # the tiling the widget promises is not happening here -- the model tiles
-    # internally either way (256px spatial, 17-frame temporal), which is why
-    # comfy/sd.py sets handles_tiling on it.
-    #
-    # What the detour costs is the OUTPUT BUFFER. comfy's VAE.decode preallocates
-    # ONE result at vae_output_dtype and hands it to the model as output_buffer=,
-    # and MiniMaxH3VideoVAE.decode_temporal writes finalized chunks straight into
-    # it. Going through decode_tiled instead reaches _decode_tiled_owned, which
-    # calls the model with output_buffer=None -- so decode_temporal allocates its
-    # own at torch.float32 -- and then makes an fp16 `copy=True` of that. Two
-    # buffers, the larger of them at double width:
-    #
-    #     tiled : fp32 2.60GB + fp16 copy 1.30GB = 3.90GB per shot
-    #     decode: one preallocated fp16          = 1.30GB per shot
-    #
-    # at 362 frames of 1056x608. Every shot, on the node's own default.
-    #
-    # So: when the VAE owns its tiling AND can be written into, the un-tiled call IS
-    # the tiled one, minus the copies. Anything else keeps the old path -- this is a
-    # detour around a detour, not a claim that tiling is useless.
     _owns_tiling = bool(getattr(vae, "handles_tiling", False) and getattr(
         getattr(vae, "first_stage_model", None), "comfy_has_chunked_io", False))
     if tiled and _owns_tiling:
         imgs = vae.decode(latent)
     elif tiled:
-        # Temporal + spatial tiling. Without tile_t the VAE expands the WHOLE latent
-        # clip at once, which on a 243-frame 1344x768 shot is the single largest
-        # allocation in the run -- and on an unpruned checkpoint that is already
-        # streaming, it is what tips the card over. Decoding in temporal chunks
-        # trades a little speed for a much lower peak; None keeps ComfyUI's defaults.
         args = {}
         tile_t = _auto_tile_t(latent.shape[2] if latent.ndim >= 5 else 0, tile_t)
         if tile_t:
@@ -455,8 +410,6 @@ def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent
         latent.get("downscale_ratio_spacial", None),
         latent.get("downscale_ratio_temporal", None))
     noise = comfy.sample.prepare_noise(latent_image, seed, latent.get("batch_index"))
-    # `steps` here only sizes the progress bar -- the schedule is `sigmas`, whose
-    # step count is one less than its length (the trailing 0.0 is an endpoint).
     callback = latent_preview.prepare_callback(model, max(len(sigmas) - 1, 1))
     samples = comfy.sample.sample_custom(
         model, noise, cfg, comfy.samplers.sampler_object(sampler_name), sigmas,
@@ -570,10 +523,6 @@ def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
         return frames, ""
     note = ""
     if mode == "rtx":
-        # NVIDIA RTX Video Super Resolution (Comfy-Org/Nvidia_RTX_Nodes_ComfyUI).
-        # Runs on RTX Tensor Cores -- far faster than ESRGAN-class models and
-        # generally cleaner on video, though like them it enhances/enlarges rather
-        # than reconstructing detail (an LTX 2.3 re-generation does that).
         try:
             rtx = (_find_node(["rtx", "video", "super"]) or _find_node(["rtxvideosuperresolution"])
                    or _find_node(["rtx", "upscale"]))
@@ -670,19 +619,6 @@ def _invoke_node(cls, **kwargs):
     return out[0] if isinstance(out, (tuple, list)) else out
 
 
-# --- THE GRADE THE CHAIN ADDS TO ITSELF -------------------------------------
-# Every shot boundary decodes a shot, hands its LAST frame over, and re-encodes that as
-# the next shot's keyframe. The distill reproduces the keyframe faithfully enough to
-# inherit whatever is already in it and SYNTHESISES frame 0 rather than copying it, so
-# its own bias lands on top: S_next = a*S + b, a near 1, b above 0. Linear at best,
-# geometric at worst, invisible shot to shot. And the VAE hard-clips every decode to
-# 0..1, which makes the expansion a RATCHET -- headroom spent is not recoverable, so it
-# shows as crushed blacks and blown highlights rather than merely as more contrast.
-#
-# These two are the measurement and the correction. Both work per colour channel,
-# because the clip is per channel: the VAE un-whitens with ImageNet stds before it
-# clamps, so the 0..1 rails sit at different distances in each channel and the blue
-# floor and red ceiling bite first. A single luma number would miss the colour half.
 LEVEL_POOL = 64                # cells per axis the level statistics are measured on
 
 
@@ -709,12 +645,6 @@ def frame_levels(img):
     x = x[..., :3].float().permute(2, 0, 1).unsqueeze(0)
     p = torch.nn.functional.adaptive_avg_pool2d(x, LEVEL_POOL)[0].reshape(3, -1)
     return p.mean(dim=1), p.std(dim=1)
-
-
-# The per-shot motion envelope lived here, measured so the built footsteps could be
-# timed off the picture. Nothing is built any more -- see the note at the top of
-# audio.py -- so there is nothing left to time, and a measurement with no reader is a
-# measurement that rots. Removed with the synthesiser it served.
 
 
 def apply_levels(img, gain, offset):

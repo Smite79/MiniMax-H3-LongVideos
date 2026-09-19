@@ -24,19 +24,12 @@ import torch
 
 BLEND_CHUNK = 64          # frames blended per slice -- bounds peak RAM on long chains
 
-# Auto-fit: text is wrapped, then shrunk in FIT_SHRINK steps until the block fits
-# inside the margins. MIN_FONT_PX is the point below which the text would be
-# unreadable anyway, so the loop stops there and lets PIL clip rather than spin.
 MIN_FONT_PX = 8
 FIT_SHRINK = 0.92
 FIT_STEPS = 48
 
-# Fonts to try when the requested one cannot be loaded. PIL resolves bare names
-# against the system font directory, so "arial.ttf" works on Windows as-is.
 FONT_FALLBACKS = ("arial.ttf", "segoeui.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf")
 
-# Anchor -> (x, y) as a fraction of the free space: 0 = hard against the left/top
-# margin, 1 = hard against the right/bottom, 0.5 = centered.
 POSITIONS = {
     "bottom-right":  (1.0, 1.0),
     "bottom-left":   (0.0, 1.0),
@@ -140,8 +133,6 @@ def render_text_layer(width, height, text, font_px, position="bottom-right",
     margin = int(min(width, height) * max(0.0, margin_pct) / 100.0)
     ax, ay = POSITIONS.get(position, POSITIONS["bottom-right"])
 
-    # Measure first, so the block is placed by its real size rather than a guess --
-    # and fit it to the space the margins actually leave.
     max_w = max(1, int(width) - 2 * margin)
     max_h = max(1, int(height) - 2 * margin)
     font, text, box, spacing, font_px = _fit(draw, text, font_name, font_px, max_w, max_h,
@@ -165,8 +156,6 @@ def render_text_layer(width, height, text, font_px, position="bottom-right",
     alpha = arr[..., 3:4]
     if not alpha.any():
         return None
-    # Tight bbox of drawn pixels: blending a whole 1344x768 frame for a corner
-    # watermark would cost ~50x more work on a 3000-frame chain.
     ys, xs = np.nonzero(alpha[..., 0] > 0.0)
     bbox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
     return (torch.from_numpy(arr[..., :3].copy()),
@@ -224,10 +213,6 @@ def apply_overlays(frames, fps, watermark="", wm_position="bottom-right", wm_siz
         return frames, ""
     n, h, w = frames.shape[0], frames.shape[1], frames.shape[2]
     frames = frames.contiguous()
-    # Size from the SHORT edge, not the height. Height is the long edge on every
-    # portrait preset, so a height-based percentage drew 9:16 text ~1.75x larger
-    # than the same setting at 16:9 -- on the canvas with the LEAST room for it.
-    # The short edge makes one setting mean the same apparent size at every ratio.
     short = min(int(w), int(h))
 
     if (watermark or "").strip():
@@ -259,13 +244,6 @@ def apply_overlays(frames, fps, watermark="", wm_position="bottom-right", wm_siz
     return frames, "; ".join(notes)
 
 
-# --- the node --------------------------------------------------------------
-# Overlays used to be eleven widgets on the sampler. They are compositing, not
-# generation: they run after the render, touch no conditioning, and most renders
-# never use them. Eleven widgets is a fifth of that node's surface spent on a
-# feature you reach for occasionally, so they live out here instead -- wire this
-# node when you want a watermark or a title card, and the sampler stays about
-# making video.
 class H3Overlay:
     @classmethod
     def INPUT_TYPES(cls):

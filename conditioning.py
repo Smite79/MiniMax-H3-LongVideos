@@ -47,22 +47,12 @@ def recoverable_subject(cast, tagged_names, returning_names, captured):
 
 KEYFRAME_SAFE_AUG = 0.99       # below this, a ref aug would soften the keyframe too
 
-# What ONE boundary is allowed to claim it measured. Wider than any real per-pass drift,
-# narrow enough that a bad frame -- a flash, a cut to black, a frame the model lost --
-# cannot swing the estimate. The median across boundaries does the real rejecting.
 LEVEL_GAIN_CAP = 0.12          # in log-gain, so +-12.7% of contrast
 LEVEL_OFFSET_CAP = 0.05
-# The within-shot term is believed only when boundaries AGREE on its sign, and even then
-# only this far: within-shot change is often the author's (a light switched off), so it is
-# the half of the signal that cannot be trusted on its own.
 LEVEL_SHOT_GAIN_CAP = 0.015
 LEVEL_SHOT_OFFSET_CAP = 0.010
 LEVEL_AGREE = 2.0 / 3.0
 LEVEL_MIN_OBS = 3
-# What the correction may do to one handoff, whatever it measured. A cut should not carry
-# a visible grade step: shot N's last frame reaches the video uncorrected while N+1 is
-# sampled from a corrected keyframe, so an uncapped correction trades burn-in for a pop at
-# every join -- the same class of complaint, differently shaped.
 LEVEL_GAIN_LO, LEVEL_GAIN_HI = 0.80, 1.25
 LEVEL_OFFSET_BOUND = 0.02
 # Below this a frame is too flat for a contrast RATIO to mean anything.
@@ -161,8 +151,6 @@ class HandoffLevels:
             return None, None
         gain = torch.exp(-float(strength) * g).clamp(LEVEL_GAIN_LO, LEVEL_GAIN_HI)
         off = (-float(strength) * o).clamp(-LEVEL_OFFSET_BOUND, LEVEL_OFFSET_BOUND)
-        # The next thing this frame meets is an 8-bit quantisation, so a correction under
-        # 1/255 would be erased on the way there. Claiming it would be worse than silence.
         if float((gain - 1.0).abs().max()) < 1e-3 and float(off.abs().max()) < 1.0 / 255.0:
             return None, None
         return gain, off
@@ -222,36 +210,7 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     if handoff is not None:
         hand_img = _resize(handoff[:1], width, height, "disabled")
 
-    # REFERENCES AND THE KEYFRAME RIDE TOGETHER. This is the arrangement the node
-    # had before I broke it, and the reason is in ComfyUI's own layout:
-    #
-    #   model_base.py:2183-2191  cond_video_latents = keyframe latents THEN ref latents
-    #   model.py PackedLayout    emits keyframe "cond" segments THEN ref "ref_img" ones
-    #
-    # The two orders agree, so both channels coexist. A shot takes its references AND
-    # a real keyframe: the keyframe ANCHORS the first frame, which is what continuity
-    # needs, while a reference only supplies identity. They are not alternatives.
-    #
-    # I had read "<Picture 1>" as MEANING the first frame on fl2va, and rearranged the
-    # roster around that. It does not. Which image is the first frame is decided by
-    # resolved_frame_index in minimax_keyframes, not by a label's number -- the labels
-    # are only how the images are shown to the VLM, and what they have to line up with
-    # is the <Picture N> tags in the prompt.
-    #
-    # So references come FIRST and keep slots 1..N, which is what a sheet line's
-    # `Name: <Picture 1>, ...` points at, and the handoff is appended AFTER them where
-    # it disturbs no numbering. It has to be in the list at all because
-    # tokenize_with_weights is either/or: passing minimax_ref_items makes it ignore
-    # `images` outright, so leaving the handoff out means the VLM is never shown where
-    # the shot left off and re-imagines the scenery -- same place, new room.
     keyframe_ok = ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG
-    # One aug covers every visual condition row, references AND the keyframe. Below
-    # KEYFRAME_SAFE_AUG the keyframe latent would be noised and labelled at the wrong
-    # timestep, so the handoff stops being an anchor and rides as an extra reference
-    # instead: weaker continuity, but nothing pretending to anchor while carrying noise.
-    # ...or because the caller asked for it. A shot that introduces somebody already
-    # in position wants the room this picture carries and NOT the first frame it
-    # would force, and that is a demotion the aug knows nothing about.
     carry_as_ref = bool(hand_img is not None
                         and (handoff_as_ref or (refs and not keyframe_ok)))
 
@@ -271,9 +230,6 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     vals = {}
     if blocks:
         vals["minimax_refs"] = blocks
-        # How CLEAN the references are shown. One aug covers every conditioning
-        # latent, keyframe included -- which is why softening references below
-        # KEYFRAME_SAFE_AUG would soften the anchor too.
         if ref_noise_aug is not None:
             vals["minimax_visual_cond_noise_aug"] = float(ref_noise_aug)
 
@@ -281,10 +237,6 @@ def build_conditioning(clip, vae, audio_vae, prompt, width, height, length,
     if hand_img is not None and not carry_as_ref:
         kfs.append({"resolved_frame_index": 0,
                     "latent": _keyframe_latent(vae, hand_img)})
-    # Audio keyframes are extra conditioning rows in H3's PackedLayout. Pin the
-    # generated target stream instead, so the joint model also sees a quiet mouth.
-    # A dialogue shot pins its opening (the lead) and, past the line's estimated end,
-    # its close (the tail); the span between is the model's.
     if silent or float(speech_lead_seconds or 0.0) > 0.0 or int(speech_tail_frames or 0) > 0:
         _SILENCE_STATUS["asked"] += 1
         if audio_vae is None:

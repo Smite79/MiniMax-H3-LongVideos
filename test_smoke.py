@@ -124,8 +124,6 @@ def _spellings(pattern, cap=32):
 # --- fakes ------------------------------------------------------------------
 
 W, H, FRAMES = 128, 96, 39            # small, on the 17k+5 grid
-# A scene and one wordless beat. Kept as a constant because it is checked twice, with
-# the mouth guard on and off, and the two spellings must not drift apart.
 TWO_LINE_ROOM = "A room.\n\nHe walks in."
 
 
@@ -165,16 +163,6 @@ class FakeVAE:
         return torch.zeros(1, 24, max(1, n), H // 16, W // 16)
 
     def decode(self, latent):
-        # H3'S OWN GRID, not t*4. The real VAE's upscale_ratio is
-        # (lambda a: max(1, (a - 2) // 5 * 17 + 5), 16, 16) -- comfy/sd.py -- so a
-        # shot planned at 73 frames encodes to 22 latents and decodes back to 73.
-        # t*4 gave 88, and nothing noticed because nothing asserted the round trip.
-        #
-        # It matters now: the shot loop is about to preallocate the finished chain
-        # from sum(lens), which is only a valid bound if a shot decodes to the
-        # length it was planned at. Against t*4 every shot overruns by 20%, the
-        # whole suite takes the overflow path, and a disable-check on the streaming
-        # fix would read "the fix does not work" when the fixture is what is wrong.
         t = latent.shape[2] if latent.ndim == 5 else 1
         return torch.rand(max(1, (t - 2) // 5 * 17 + 5), H, W, 3).to(_vae_out_dtype())
 
@@ -303,13 +291,6 @@ def test_render():
 
 def test_a_cut_keeps_its_own_first_frame():
     print("\n=== a shot that opens on no keyframe keeps frame one ===")
-    # Reported: the last frame and the first frame of the next beat not matching up.
-    # trim_seam drops a shot's first frame because it is "the model's own reproduction
-    # of the keyframe, so it is a duplicate" -- true only of a shot that OPENED on one.
-    # restart_after_removal breaks the chain after a garment comes off, so the next
-    # shot opens on nothing at all and its first frame is the genuine opening frame of
-    # a deliberate cut. Trimming it threw away real footage and left frame TWO meeting
-    # the shot before, which is what the mismatch looks like.
     mem = "Mara: she, 30, a grey coat, white top."
     P = ("A room.\n\nMara stands by the window.\n\n"
          "Mara pulls off her coat.\nremove: coat\n\n"
@@ -338,12 +319,6 @@ def test_a_cut_keeps_its_own_first_frame():
 
 def test_a_room_change_with_no_walk_is_a_cut():
     print("\n=== a shot that opens in another room starts fresh ===")
-    # Reported: at the end beat the living room turned into a bathroom. Every shot is
-    # anchored to the previous shot's last frame and a keyframe is a PICTURE, which
-    # outvotes any sentence -- so a living-room shot opening on a frame of the kitchen
-    # renders neither, it renders a blend, and a kitchen blended with the words "living
-    # room" is a bathroom: tiles, a sink, cabinets. There was no room-change case in the
-    # keyframe decision at all; only a removal or a newly placed character broke it.
     mem = "McKenna: she, 22, a grey t-shirt, black shorts."
     P = ("A small flat at night. Her bedroom has an unmade bed and a lamp.\n\n"
          "McKenna gets up and comes out of her bedroom.\n\n"
@@ -383,21 +358,11 @@ def test_a_room_change_with_no_walk_is_a_cut():
 
 def test_extras_are_not_forbidden_by_the_body_count():
     print("\n=== a beat that stages extras keeps them ===")
-    # Reported: character_guard turned off to get random girls into a scene, and the
-    # camera stayed fixated on the primary character. Two separate causes.
-    #
-    # The body-count clause is what forbade the extras. With exactly two described
-    # people, every shot was told "There are two people in the shot, with one body for
-    # each person" -- right against a duplicated character, wrong against "two women
-    # dance behind them", where it forbids as a positive fact the people the author
-    # just asked for.
     check("a pair still gets the count",
           "one body for each person" in S.cast_hold(["Dan", "Crystal"]))
     check("...but not when the beat stages extras",
           S.cast_hold(["Dan", "Crystal"], "Two women dance behind them.") == "")
     check("...nor a crowd", S.cast_hold(["Dan", "Crystal"], "A crowd watches.") == "")
-    # "both" and "they" are group cues about the NAMED cast -- group_beat owns those
-    # and they must not stand the count down.
     check("a group cue about the cast is not extras",
           "one body for each person" in S.cast_hold(["Dan", "Crystal"], "They both sit down."))
     check("extras_in reads plural people, not body parts",
@@ -413,9 +378,6 @@ def test_extras_are_not_forbidden_by_the_body_count():
     check("...and the shot staging extras does not",
           "one body for each person" not in sh[1], sh[1][-120:])
 
-    # THE CAMERA is the other half, and it is the guard itself: off, every sheet line
-    # goes into every shot -- including the one carrying <Picture N> -- so a near-clean
-    # reference rides all of them and the portrait's composition becomes the shot's.
     img = torch.rand(1, H, W, 3)
     P = "A bar.\n\nCrystal waits.\n\nCrystal turns."
     MEM1 = "Crystal: <Picture 1>, she, 26, a red dress."
@@ -432,13 +394,6 @@ def test_extras_are_not_forbidden_by_the_body_count():
 
 def test_a_walk_into_an_unlisted_room_is_still_walked():
     print("\n=== heading for the locker room is walked, not cut to ===")
-    # Reported: girls playing volleyball in a gym head to the locker room, and the
-    # scene shifted to a locker room instead of them walking into it. Four faults at
-    # once: "gym" and "locker room" were in no place list, so the ORIGIN was never
-    # established; travel_anchor returned nothing without an origin, so the shot was
-    # never told to walk; _MOD swallowed "locker" so the destination read as bare
-    # "room"; and the body-count clause re-forbade the other girls one beat after
-    # allowing them.
     check("a gym is a place", S.first_place("A school gym, hard light.") == "gym")
     check("a locker room is one room, not 'room'",
           S.travel_legs("They head to the locker room.")[2] == "locker room")
@@ -461,16 +416,9 @@ def test_a_walk_into_an_unlisted_room_is_still_walked():
           and "every step in frame" in sh[1], sh[1][-150:])
     check("the extras are not forbidden on the shot that stages them",
           "one body for each person" not in sh[0], sh[0][-110:])
-    # THE LATCH HOLDS past a beat that simply stops mentioning them. Read per beat,
-    # a shot whose beat said nothing about the extras got "There is one person in the
-    # shot: one body, one face" while five women stood in it -- asserting four of them
-    # out of existence. Background people do not leave because a sentence stopped
-    # mentioning them.
     check("...and the count stays down while they are still there",
           "one body for each person" not in sh[1]
           and "one person in the shot" not in sh[1], sh[1][-110:])
-    # ...and it comes back when the script says they have gone, which is the explicit
-    # transition every other state in this file has.
     _SH = "Dan: he, 40, a work coat.\nCrystal: she, 26, a red dress."
     back = [" ".join(x.split()) for x in run_node(
         "A bar.\n\nDan and Crystal sit with two women dancing behind them.\n\n"
@@ -485,12 +433,6 @@ def test_a_walk_into_an_unlisted_room_is_still_walked():
 
 def test_a_move_to_any_place_is_performed():
     print("\n=== a move to a place no list names is still walked ===")
-    # Asked for: this has to work for ANY scene. Adding room words one report at a
-    # time fixes one script each -- a dungeon, a cargo bay, a stable, a chapel would
-    # each hit the same wall the locker room did. So the gate is inverted: an unlisted
-    # destination is a PLACE unless it is furniture, a fitting, a body part, a vehicle
-    # or a person, and there are far fewer common object destinations in English than
-    # there are names for rooms.
     for where in ("dungeon", "cargo bay", "stable", "chapel", "morgue", "greenhouse",
                   "tent", "boiler room", "cockpit", "sauna", "vault", "crypt",
                   "laundromat", "observatory", "infirmary", "barracks"):
@@ -535,13 +477,6 @@ def test_a_move_to_any_place_is_performed():
 
 def test_an_unstated_frame_becomes_a_portrait():
     print("\n=== a shot that says nothing about the camera is told what the frame holds ===")
-    # Reported: the camera fixated on one character, staring into the lens -- WITH THE
-    # REFERENCE IMAGE REMOVED, which is what ruled the reference out and left the text.
-    # Measured on a volleyball beat: 15 words of appearance from the sheet and 9 of
-    # mouth guard against 8 words of action. The sheet describes a face in every shot
-    # because clothing continuity needs it there; nothing said how much of the person
-    # to show, and an unstated attribute is left to the model's PRIOR, which this file
-    # already records as "a portrait: facing the lens, pleasantly".
     check("a whole-body action gets a frame",
           "whole body" in S.frame_hold("McKenna serves the ball hard across the net."))
     check("...and so does a move", "whole body" in S.frame_hold("McKenna walks to the bench."))
@@ -549,11 +484,6 @@ def test_an_unstated_frame_becomes_a_portrait():
     # The author's camera always wins -- a close-up included, since somebody asked for it.
     check("a close-up in the beat stands it down",
           S.frame_hold("Close-up on her face as she serves.") == "")
-    # A SHOT SIZE stands it down; a lens, a stock or a camera move does not. This was
-    # any camera word at all, and that silenced the clause on every shot of any real
-    # script -- the README tells you to put the camera in the anchor, so "Shot on 35mm,
-    # handheld" disabled it everywhere. Reported as the framing fix doing nothing, and
-    # it was doing nothing: it never ran.
     check("a stated shot size stands it down",
           S.frame_hold("McKenna serves the ball.", "Shot on 35mm, wide shots throughout.") == ""
           and S.frame_hold("McKenna serves the ball.", "Medium shots, eye level.") == ""
@@ -575,9 +505,6 @@ def test_an_unstated_frame_becomes_a_portrait():
         check(f"shot {i} is told what the frame holds",
               "whole body, head to feet" in shot, shot[-90:])
     check("the reason is reported", "frame HOLDS" in out[2], "")
-    # REGRESSION: the destination capture must not run through a conjunction. It read
-    # "the bench and picks", whose head is a verb, so the blocklist never saw the
-    # bench -- and the shot was told to travel "to the bench and picks".
     check("a destination stops at a conjunction",
           S.moved_to("McKenna walks to the bench and picks up a towel.") == "")
     check("...and a compound room is still a room",
@@ -588,11 +515,6 @@ def test_an_unstated_frame_becomes_a_portrait():
 
 def test_an_interrupt_releases_the_frame_buffer():
     print("\n=== stopping a run drops the frame buffer before it unwinds ===")
-    # Reported: stopping a run aborted the process with a CUDA illegal memory access,
-    # thrown from cuMemFreeAsync inside a tensor destructor rather than from any line of
-    # Python. An interrupt is a BaseException, so it skips every `del` in the render loop
-    # and leaves a multi-gigabyte frame buffer for the collector to free in its own
-    # order, after ComfyUI has begun unloading the models it was sized against.
     acc = S.FrameAccumulator(8, torch.float32, True)
     acc.add(torch.zeros((4, 1, 1, 3)))
     acc.add(torch.zeros((4, 1, 1, 3)))
@@ -601,10 +523,6 @@ def test_an_interrupt_releases_the_frame_buffer():
     check("release drops the tensor", acc.tensor is None)
     check("...and the overflow list", acc.overflow == [] and acc.used == 0)
 
-    # THE CAPACITY IS AN UPPER BOUND. It used to subtract one frame per seam, assuming
-    # trim_seam drops one from every shot after the first -- and a shot that opens on no
-    # keyframe keeps its first frame, so the buffer filled and the overflow list started
-    # retaining whole shots of decoded frames, on the GPU, uncopied.
     acc2 = S.FrameAccumulator(6, torch.float32, False)
     acc2.add(torch.zeros((3, 1, 1, 3)))
     acc2.add(torch.zeros((3, 1, 1, 3)))
@@ -612,8 +530,6 @@ def test_an_interrupt_releases_the_frame_buffer():
 
     # An interrupt out of the render path releases the buffer and is re-raised intact.
     node = S.H3LongVideos()
-    # run() clears _frames on entry, so the buffer has to be published the way _render
-    # publishes it: assigned inside the render, then interrupted.
     held = S.FrameAccumulator(4, torch.float32, True)
     held.add(torch.zeros((4, 1, 1, 3)))
     import comfy.model_management as _mm
@@ -653,16 +569,6 @@ def _render_args():
 
 def test_a_posture_denied_is_not_a_posture_taken():
     print("\n=== chained into a squat, she is not told she is standing ===")
-    # Reported: chained by the ankles, forced into a squat she cannot stand out of --
-    # and she stands. The chains were read as stretching.
-    #
-    # Every chain clause was correct: CHAIN_POSE_HOLD, with the metal "already drawn to
-    # its full length, so the position it fixes is the position that keeps", was on
-    # every shot after the squat. What sat beside it was the posture latch saying she
-    # was STANDING -- because "She cannot stand." matched `stand` and nothing looked at
-    # the `cannot`. The latch carried it forward, so every later shot asserted, flatly
-    # and positively, the one thing the chains existed to prevent. At cfg 1 a positive
-    # statement wins, so the chains stretched.
     P = "Dan forces McKenna down into a squat. She cannot stand."
     check("the squat is what she is in, not standing",
           S.posture_in(P, ["McKenna"]) == {"McKenna": "squatting"},
@@ -675,8 +581,6 @@ def test_a_posture_denied_is_not_a_posture_taken():
     for b, w in (("McKenna stands up.", "standing"), ("McKenna sits down.", "sitting"),
                  ("McKenna squats down.", "squatting")):
         check(f"still read: {b[:22]!r}", S.posture_in(b, ["McKenna"]) == {"McKenna": w})
-    # The cue belongs to its OWN clause: reaching past the comma would silence a
-    # posture the beat plainly states.
     check("a cue does not cross a clause boundary",
           S.posture_in("McKenna cannot kneel, so she sits.", ["McKenna"]) == {"McKenna": "sitting"})
     check("...nor does a later strain undo a stated posture",
@@ -702,11 +606,6 @@ def test_a_posture_denied_is_not_a_posture_taken():
 
 def test_the_face_plays_the_feeling_the_author_named():
     print("\n=== a stated emotion is played, not clamped shut ===")
-    # Reported: under duress she does not act like it, and the same where she is
-    # supposed to be happy. The node was contradicting the beat in both directions.
-    # "Mia hugs Tess, beaming." got "Mouths in the shot stay closed" beside it, and
-    # "McKenna is terrified" got "The mood is grim; ... the mouth set" -- a generic
-    # clenched face stamped over the specific word the author chose.
     check("an emotion is read in the author's word",
           S.emotion_in("Mia is delighted with the news.") == "delighted"
           and S.emotion_in("McKenna is terrified and shaking.") == "terrified")
@@ -721,9 +620,6 @@ def test_the_face_plays_the_feeling_the_author_named():
     HMEM = "Mia: she, 24, red hair.\nTess: she, 25, dark hair."
     sh = [" ".join(x.split()) for x in
           run_node(HAPPY, plan_only=True, character_memory=HMEM)[3].split("---") if x.strip()]
-    # BOTH are the source, so there is nobody left to hold and voice_sources stays
-    # quiet -- which is the guarantee. Before, only Tess was credited and Mia was told
-    # her mouth stays closed in a beat that says she laughs.
     check("a compound subject makes both of them the source",
           [n for n, _ in S.vocal_sources_in("Mia and Tess laugh over breakfast.", HMEM)]
           == ["Mia", "Tess"])
@@ -747,8 +643,6 @@ def test_the_face_plays_the_feeling_the_author_named():
           "expression is desperate" in ds[2] and "the mouth set" not in ds[2], ds[2][-130:])
     check("a duress shot that names no feeling keeps the film's mood",
           "The mood is grim" in ds[0], ds[0][-130:])
-    # THE GUARD THAT EXISTS FOR A REASON still holds: `and` starting a new predicate
-    # must not credit the wrong mouth.
     _sheet = "Dan: he, 40.\nMcKenna: she, 22."
     check("a new predicate after `and` credits only its own subject",
           [n for n, _ in S.vocal_sources_in("Dan holds the door and McKenna sobs.", _sheet)]
@@ -757,13 +651,6 @@ def test_the_face_plays_the_feeling_the_author_named():
 
 def test_a_pronoun_pointing_away_keeps_the_person_it_means():
     print("\n=== 'Tess kneels beside her' keeps McKenna described ===")
-    # Reported: scene cohesion lost -- restraints not matching between shots, hair
-    # changing, a body not the same size twice. With two women on the sheet every
-    # pronoun collapsed onto whoever the beat named: "Tess kneels beside her" credited
-    # "her" to Tess, because Tess declares "she", so McKenna -- who is in the shot and
-    # is what "her" refers to -- lost her sheet line entirely. A person in frame with no
-    # description is a person the model dresses out of nothing, and with no reference
-    # image in the run the sheet text is the only thing holding her together.
     same = "McKenna: she, 22, long blonde hair.\nTess: she, 21, short dark hair."
     mixed = "McKenna: she, 22, long blonde hair.\nDan: he, 40, a work coat."
     three = same + "\nMara: she, 30, grey hair."
@@ -775,9 +662,6 @@ def test_a_pronoun_pointing_away_keeps_the_person_it_means():
     check("a pronoun aimed away keeps the person it means",
           kept(same, "Tess kneels beside her.") == ["McKenna", "Tess"])
     check("...and so does a look", kept(same, "Tess looks at her.") == ["McKenna", "Tess"])
-    # THE RECORDED REGRESSION ON THE OTHER SIDE. "behind" is deliberately not a
-    # proximity preposition here: a door is shut behind ONESELF, and reading that as
-    # another person present is the bug the resolver's own comment records fixing.
     check("a door shut behind him is still nobody else",
           kept(mixed, "Dan walks out and shuts the door behind him.") == ["Dan"])
     # A possessive is not an object pronoun, and an ordinary beat is untouched.
@@ -786,15 +670,10 @@ def test_a_pronoun_pointing_away_keeps_the_person_it_means():
           kept(same, "Tess watches from the door.") == ["Tess"])
     check("two named already leaves the pronoun alone",
           kept(same, "Tess and McKenna look at her hands.") == ["McKenna", "Tess"])
-    # A PRONOUN CAN ONLY POINT AT SOMEBODY IN THE SCENE, which is also what stops a
-    # random: off the sheet alone, "Tess looks at her" dragged in whichever other
-    # woman was written down, including one who had left or never appeared.
     check("somebody absent is not dragged in",
           S.sheet_for_beat(same, "Tess looks at her.", previous=["Tess"])[1] == ["Tess"])
     check("...nor when nothing is carried at all",
           S.sheet_for_beat(same, "Tess stares at her.", previous=[])[1] == ["Tess"])
-    # Three on the sheet but only two in the scene RESOLVES, because there is only one
-    # candidate present -- the sheet could not tell them apart and presence can.
     check("three on the sheet, two in the scene, resolved",
           sorted(S.sheet_for_beat(three, "Tess kneels beside her.",
                                   previous=["McKenna", "Tess"])[1]) == ["McKenna", "Tess"])
@@ -822,12 +701,6 @@ def test_a_pronoun_pointing_away_keeps_the_person_it_means():
 
 def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
     print("\n=== one person's feeling is not worn by everybody in the shot ===")
-    # Reported: actions performed by all the characters when that is not the case.
-    # mood_face was impersonal -- "The face carries it: the expression is terrified" --
-    # which in a two-hander is a sentence about whoever is on screen, so the captor
-    # wore his victim's terror. gaze_hold already makes this call: name the owner once
-    # a second person is in the shot. With one person there is nobody else it could be,
-    # and naming them again is a second mention, which has its own cost.
     cast = ["McKenna", "Dan"]
     check("the owner is the person the beat puts in front of it",
           S.emotion_owner("McKenna is terrified as Dan steps closer.", cast, "terrified")
@@ -839,8 +712,6 @@ def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
           S.emotion_owner("The room is terrified.", cast, "terrified") == "")
     check("a named clause names them", "McKenna's face carries" in S.mood_face("terrified", "McKenna"))
     check("a solo clause stays impersonal", S.mood_face("terrified").startswith(" The face"))
-    # TWO PEOPLE CAN FEEL DIFFERENT THINGS, and giving only the first left the other
-    # face to the prior -- the same half-fix as naming one of two speakers.
     pairs = S.emotion_pairs("Dan is furious and McKenna is terrified.", cast)
     check("both feelings are pinned", pairs == [("Dan", "furious"), ("McKenna", "terrified")],
           str(pairs))
@@ -872,13 +743,6 @@ def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
 
 def test_a_bare_region_says_whose_body_it_is():
     print("\n=== a bare region names the body, so the prior does not pick one ===")
-    # Reported: the wrong anatomy applied to a female character. This file already
-    # recorded the same failure for the chest -- "this said 'The arms and shoulders are
-    # bare' and stopped there, so the one region a bra occupies was unspecified, and an
-    # unspecified region is filled by the model's own prior". The hip-down clause had
-    # the identical gap and it was never closed: "The legs are bare from the hip down"
-    # names the region and says nothing about whose body it is, so the anatomy at the
-    # hip came from the prior too -- and at cfg 1 nothing later takes that back.
     check("the declared pronoun is what names the body",
           S.body_of("she") == "a woman's body" and S.body_of("he") == "a man's body")
     # `they` is an UNDECLARED body, not a licence to guess one.
@@ -889,11 +753,6 @@ def test_a_bare_region_says_whose_body_it_is():
     check("...and says nothing extra without it",
           "body" not in S.bare_hold(["legs"]).replace("nothing else worn", ""))
 
-    # THE AGE IS PART OF THE BODY NAMED, where the sheet states one. "A woman's body"
-    # is true of a woman of 22 and a woman of 62, so it settles nothing between them
-    # and the prior settles it instead -- always the twenties. These sheets declare an
-    # age, so that is what comes out; the bare phrases above are what a sheet with no
-    # age still gets. See body_of.
     for mem, beat, want in (
             ("McKenna: she, 22, a grey vest, denim shorts.",
              "McKenna takes off her shorts.\nremove: shorts", "the body of a woman of 22"),
@@ -903,14 +762,10 @@ def test_a_bare_region_says_whose_body_it_is():
             f"A bare room.\n\n{beat}\n\nThey stand still.",
             plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
         check(f"the uncovering shot names {want}", want in sh[0], sh[0][-120:])
-        # ...AND EVERY SHOT AFTER IT, from state: an unspecified region is refilled by
-        # the prior on every shot that leaves it unspecified, not only the first.
         check(f"...and so does the shot after it ({want})", want in sh[1], sh[1][-120:])
     nb = [" ".join(x.split()) for x in run_node(
         "A bare room.\n\nAlex takes off their jeans.\nremove: jeans\n\nThey stand still.",
         plan_only=True, character_memory="Alex: they, 30, a coat, jeans.")[3].split("---") if x.strip()]
-    # Scoped to the BARE clause: frame_hold legitimately says "the whole body" and a
-    # bare "body" substring would pass or fail on the wrong sentence.
     check("an undeclared pronoun gets the region without a body",
           "bare from the hip down" in nb[0]
           and "on a woman" not in nb[0] and "on a man" not in nb[0]
@@ -920,24 +775,12 @@ def test_a_bare_region_says_whose_body_it_is():
 
 def test_a_plural_removal_still_comes_off():
     print("\n=== skirts come off and stay off ===")
-    # Reported: a scene with the character and several unnamed women -- they take off
-    # their skirts and panties, and the garments are back in the next beat.
-    #
-    # Nothing to do with the unnamed women. "take off their skirtS" yields the token
-    # "skirts" while the sheet says "a denim skirt", and every reader downstream looks
-    # that token up in the sheet: the scrub by pattern, infer_removals by entry head. A
-    # plural garment matched nothing, so the removal did nothing at all, the sheet went
-    # on listing the skirt, and it was re-stamped into every later shot. One woman
-    # undressing wrote "her skirt" and worked; the moment the subject went plural so did
-    # the garment.
     SC = "A changing room.\nMcKenna: she, 22, a grey vest, a denim skirt, a black thong."
     for b in ("McKenna takes off her skirt.", "McKenna takes off her skirts.",
               "McKenna and the other girls take off their skirts.",
               "The other girls take off their skirts.", "They take off their skirts."):
         check(f"read as coming off: {b[:40]!r}", S.infer_removals(b, SC) == ["skirt"],
               str(S.infer_removals(b, SC)))
-    # INHERENTLY PLURAL GARMENTS KEEP THEIR "S". The vocabulary lists them only in the
-    # plural, so the stem is not a garment word and nothing is stripped.
     SC2 = ("A room.\nDan: he, 40, brown boots, blue jeans, white socks, a grey top.")
     for b, want in (("Dan kicks off his boots.", ["boots"]),
                     ("Dan steps out of his jeans.", ["jeans"]),
@@ -973,14 +816,6 @@ def test_a_plural_removal_still_comes_off():
 
 def test_a_removal_undresses_only_its_wearer():
     print("\n=== one woman taking her shirt off leaves the other's on ===")
-    # Reported: shirts looking half missing. Two women in white shirts, one takes hers
-    # off, and the token "shirt" was scrubbed from the WHOLE text -- so the other one's
-    # entry lost her shirt while the keyframe still showed her wearing it. That is the
-    # contradiction this file already describes: "the shot then says it is not worn,
-    # take it off, and the thing under it is already showing. The model renders that
-    # contradiction as a garment half present -- open, or partly cut". The strip-bare
-    # path has been scoped to "THEIR OWN entry" since it was written; the prose-removal
-    # path was not.
     MEM = ("McKenna: she, 22, a white shirt, a black bra, steel handcuffs.\n"
            "Tess: she, 21, a white shirt, blue jeans.\nDan: he, 40, a work coat.")
 
@@ -1008,10 +843,6 @@ def test_a_removal_undresses_only_its_wearer():
     check("the other way round too", "shirt" not in entry(other, "Tess")
           and "shirt" in entry(other, "McKenna"), entry(other, "McKenna"))
 
-    # THE WEARER, NOT THE REMOVER. "Dan unlocks McKenna's handcuffs" is Dan removing
-    # HER hardware, so scoping to whoever the beat names would strand it on her for
-    # ever -- which is the regression the hardware tests caught when this was first
-    # scoped by the remover.
     hw = last_shot("Dan unlocks McKenna's handcuffs.")
     check("somebody else's removal still reaches the wearer",
           "handcuff" not in entry(hw, "McKenna"), entry(hw, "McKenna"))
@@ -1026,19 +857,11 @@ def test_a_removal_undresses_only_its_wearer():
 
 def test_a_pairing_the_beat_wrote_is_said_back():
     print("\n=== who is with whom, where it could be read wrong ===")
-    # Reported: girls kissing each other when they should be kissing the boys. The beat
-    # said "Mia kisses Dan while Tess kisses Jon" and that was ALL the shot said about
-    # it -- one sentence among four appearance descriptions, and at cfg 1 the model
-    # reads the prompt as a bag of words and pairs by its own prior. This file names the
-    # owner of a gaze, a vocal, a feeling, a posture, a restraint and a body count;
-    # contact was the one relationship nothing restated.
     CAST = ["Mia", "Tess", "Dan", "Jon"]
     check("two pairs in one beat are both read",
           S.contact_pairs("Mia kisses Dan while Tess kisses Jon.", CAST)
           == [("Mia", "Dan"), ("Tess", "Jon")])
     check("one pair is read", S.contact_pairs("Mia kisses Dan.", CAST) == [("Mia", "Dan")])
-    # THE OBJECT HAS TO BE A NAME, which is what makes the verb list safe: furniture is
-    # never a partner, so hold/pull/take can be in it.
     check("furniture is not a partner",
           S.contact_pairs("Dan holds the door while Mia kisses Jon.", CAST) == [("Mia", "Jon")])
     check("...and a chain is not either", S.contact_pairs("Mia pulls the chain.", CAST) == [])
@@ -1066,8 +889,6 @@ def test_a_pairing_the_beat_wrote_is_said_back():
           "Mia with Dan" in sh[1] and "Tess with Jon" in sh[1], sh[1][-130:])
     check("...and a beat with no contact says nothing about it",
           "The contact is" not in sh[2], sh[2][-110:])
-    # WITH TWO PEOPLE nothing is said: there is nobody else to pair with, and naming
-    # them again costs a mention each.
     two = [" ".join(x.split()) for x in run_node(
         "A bar.\n\nMia and Dan stand together.\n\nMia kisses Dan.",
         plan_only=True, character_memory="Mia: she, 20, a red dress.\nDan: he, 22, a shirt.",
@@ -1079,12 +900,6 @@ def test_keyframe_handoff():
     print("\n=== the keyframe is encoded, once per boundary ===")
     vae = FakeVAE()
     run_node("A room.\n\nOne.\n\nTwo.\n\nThree.", vae=vae)
-    # Shot 1 has no previous frame; shots 2-4 each encode the frame handed to them.
-    # Passing the previous shot's own latent instead was tried and was wrong: a
-    # keyframe is ONE pixel frame, which lands on H3's 5f grid point and encodes to
-    # TWO latent frames, and a causal encoder's last latent is not a standalone
-    # opening frame anyway. It degraded every shot after the first.
-    # 3 shots = 2 boundaries; shot 1 has no previous frame and no first_frame here.
     check("one encode per boundary, none for shot 1", vae.encodes == 2,
           f"{vae.encodes} encodes")
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
@@ -1098,34 +913,15 @@ def test_references_and_silence():
              ref_image_1=torch.rand(1, 64, 64, 3))
     # seen[0] is the empty negative prompt, encoded once before the loop.
     shots_seen = clip.seen[1:]
-    # No <Picture N> tag anywhere, so placing by tag would place the reference on no
-    # shot at all -- a connected input that silently does nothing. It falls back to
-    # every shot instead. Shot 1 carries the reference alone (no previous frame yet);
-    # shot 2 carries the reference AND its keyframe.
     check("an untagged reference still reaches every shot",
           [len(i) for _, i in shots_seen] == [1, 2],
           str([len(i) for _, i in shots_seen]))
     clip2 = FakeCLIP()
-    # auto_sound OFF: with it on, an ambient bed read from the scene opens every
-    # branch, and this is the silence path.
     run_node("A room.\n\nHe walks in.\n\nShe says: \"Now.\"", clip=clip2,
              auto_sound=False)
     check("both shots reached the encoder", len(clip2.seen) == 3)   # + the negative
     check("the beat text is what was sent",
           "He walks in." in clip2.seen[1][0] and "Now." in clip2.seen[2][0])
-    # auto_sound appends a sound sentence -- "He walks in." implies footsteps. Your
-    # words are still never rewritten; the node only ever adds after them, and every
-    # addition has a switch.
-    # The beat has no line and no sound of its own, so it is pinned silent and gets no
-    # sound sentence: a clause would describe an acoustic the conditioning removes,
-    # and a free branch there is what put a voice in the mouth.
-    # It carries the mouth clause and nothing else: no sound sentence, because a
-    # clause would describe an acoustic the conditioning removes. The mouth clause is
-    # the picture half of the same guarantee and has its own switch.
-    # THE GUARANTEE, not the whole string -- the same lesson the clip4 check below
-    # records: "asserting the whole string made this fail every time an unrelated
-    # clause was added beside it". What matters here is that a silenced shot gets no
-    # sound sentence, and that the mouth clause is the picture half of it.
     check("...with no sound sentence added to a silenced shot",
           "It sounds like" not in clip2.seen[1][0]
           and "the only sound" not in clip2.seen[1][0]
@@ -1139,13 +935,8 @@ def test_references_and_silence():
           and "the only sound" not in clip2b.seen[1][0]
           and S.MOUTH_HOLD not in clip2b.seen[1][0]
           and "A room. He walks in." in clip2b.seen[1][0], clip2b.seen[1][0])
-    # The shot that DOES speak gets the open form: closing the list there would be
-    # telling the model the line is not in it.
     clip4 = FakeCLIP()
     run_node("A room.\n\nShe walks in and says: \"Now.\"", clip=clip4)
-    # The GUARANTEE, not the exact sentence: the sound clause is the open form,
-    # and the beat and its line are there untouched. Asserting the whole string
-    # made this fail every time an unrelated clause was added beside it.
     check("a shot with a line is not told that is all there is",
           "It sounds like" in clip4.seen[1][0]
           and "footsteps" in clip4.seen[1][0]
@@ -1175,11 +966,6 @@ def test_first_frame():
 
 def test_aug_protects_the_keyframe():
     print("\n=== ref_noise_aug must not corrupt the keyframe ===")
-    # comfy/ldm/minimax/model.py applies visual_cond_noise_aug to BOTH the
-    # reference rows and the keyframe rows: below 1.0 it noises the keyframe
-    # latent and labels it max(t_v, aug) instead of 0.999. Softening references
-    # would therefore corrupt the anchor of every shot after the first, and that
-    # shows up during SAMPLING.
     P = "A room.\n\nOne.\n\nTwo."
     ref = torch.rand(1, 64, 64, 3)
     vae_hi = FakeVAE()
@@ -1187,15 +973,10 @@ def test_aug_protects_the_keyframe():
     check("at a safe aug the handoff is a real keyframe",
           "riding as an extra reference" not in info_hi)
     check("...and it is encoded", vae_hi.encodes >= 1, f"{vae_hi.encodes}")
-    # One aug covers every visual condition row. Below KEYFRAME_SAFE_AUG it would
-    # noise the keyframe too, so there the handoff stops anchoring and rides as an
-    # extra reference: weaker continuity, but nothing pretending to anchor.
     info_lo = run_node(P, ref_image_1=ref, ref_noise_aug=0.90)[2]
     check("a soft aug demotes the keyframe rather than noising it",
           "riding as an extra reference" in info_lo)
     check("...and the note says what it costs", "weaker continuity" in info_lo)
-    # With nothing connected there is no reference to soften, so the keyframe is safe
-    # whatever the widget says.
     info_noref = run_node(P, ref_noise_aug=0.90)[2]
     check("no references means the keyframe is never demoted",
           "riding as an extra reference" not in info_noref)
@@ -1203,9 +984,6 @@ def test_aug_protects_the_keyframe():
 
 def test_beat_reviving_a_garment():
     print("\n=== a later beat that names a removed garment ===")
-    # Beats go to the model word for word. The scene can be perfectly scrubbed
-    # and the removal honoured, and then beat 5 says "her coat" and it is
-    # back. Ten beats in, that reads as the removal randomly failing.
     P = ("A basement. Kate is 20, blonde, grey wool coat, black jumper." + "\n\n"
          "Dan pulls off her coat.\nremove: coat" + "\n\n"
          "Kate lies still." + "\n\n"
@@ -1224,10 +1002,6 @@ def test_beat_reviving_a_garment():
 
 def test_restart_after_removal():
     print("\n=== a shot after a removal starts fresh ===")
-    # Every shot is anchored to the previous shot's last frame. If the model
-    # does not finish taking the garment off inside its own shot, that frame
-    # still shows it -- and a keyframe is a PICTURE, which outvotes any
-    # sentence. Inherit it once and every later shot inherits it too.
     P = ("A basement. Kate is 20, blonde, grey wool coat, black jumper." + "\n\n"
          "Dan pulls off her coat.\nremove: coat" + "\n\n"
          "Kate lies still." + "\n\n"
@@ -1257,13 +1031,8 @@ def test_auto_removal():
          "Kate lies still.")
     script = run_node(P)[3]
     sh = script.split("\n---\n")
-    # Shot 1 takes the boots off and has NO keyframe, so the text is the only thing
-    # saying they were on to start with and it keeps saying so. Gone from shot 2.
     check("the removing shot still says the boots are on", "black boots" in sh[0])
     check("...and shot 2 has lost them", "black boots" not in sh[1])
-    # The scarf is under the boots -- read from "showing the wool scarf" -- so it is
-    # not described as visible until they come off. Only the scene text counts here;
-    # the beat names it either way, because beats go to the model word for word.
     _scene1 = sh[0].split("Dan pulls")[0]
     check("the covered scarf is not described yet", "wool scarf" not in _scene1)
     check("...and is once the boots are off", "wool scarf" in sh[1])
@@ -1287,14 +1056,6 @@ def test_fall_keeps_the_hardware():
               if b.strip()]
     check("three shots planned", len(blocks) == 3)
     fall = S.FALL_HOLD.strip()
-    # The hold latches: once a restraint goes on it is held for the rest of the run.
-    # Cuffs are rigid hardware, so the chain clause carries the guarantee here -- it
-    # says "whole and closed" itself, and emitting both would say it twice.
-    #
-    # Shot 1 is the shot that PUTS them on, and it gets both ends instead of the
-    # standing hold. The standing hold asserts the cuffs are fastened as they were put
-    # on and still fastened at the last frame, which read at frame 1 says they are
-    # already closed -- so they close first and the catching happens around them.
     check("the applying shot is told both ends",
           S.RESTRAINT_GOING_ON.strip() in blocks[0], blocks[0][-90:])
     check("...and keeps the metal rigid while it goes on",
@@ -1316,12 +1077,6 @@ def test_fall_keeps_the_hardware():
 
 def test_anchor_is_the_scene():
     print("\n=== an anchor makes every paragraph a beat ===")
-    # Reported as "the character memory is not being passed" and "the first line is
-    # ignored". One cause: with the framing moved into the anchor, the prompt starts
-    # with an ACTION -- and paragraph 1 was still being taken as the scene. That beat
-    # was then prepended to every shot, repeated to the end of the film, never given
-    # a shot of its own, and any removal in it could never stick because the scene
-    # restated the garment on every later shot.
     P = "Jon walks in and takes her scarf off.\n\nMaya lies still.\n\nJon leaves."
     sh = [x for x in re.split(r"(?=\[Shot )", run_node(
         P, plan_only=True, anchor="Wide lens, night.",
@@ -1332,8 +1087,6 @@ def test_anchor_is_the_scene():
     check("the anchor leads every shot", all("Wide lens, night." in s for s in sh))
     check("...and the character sheet follows it",
           all(s.index("Wide lens") < s.index("Maya: 27") for s in sh))
-    # Shot 1 removes the scarf and has no keyframe, so it still says the scarf is on
-    # -- otherwise the shot reads "it is not worn, take it off". Gone after that.
     check("the removal sticks", all("grey scarf" not in s for s in sh[1:]))
     check("...and what was never removed is still described",
           all("black boots" in s for s in sh))
@@ -1378,12 +1131,6 @@ def test_guard_and_layers_end_to_end():
 
 def test_removing_shot_without_a_keyframe():
     print("\n=== a removal in a shot that has no keyframe ===")
-    # Reported: the garment rendering half-off -- opened up, with the layer under it
-    # showing. The scrub applies to the removing shot too, which is right when that
-    # shot has a KEYFRAME: the picture already shows the garment on at the start, so
-    # text saying it is worn would put it back at the end. Shot 1 has no keyframe.
-    # Scrubbing there left the shot saying: it is not worn, take it off, and the
-    # thing under it is already showing -- and the model rendered the contradiction.
     P = ("A basement.\n\n"
          "Maya: 27, grey wool scarf, black quilted jacket, brown boots.\n\n"
          "Jon cuts off her jacket to expose the scarf.\n\n"
@@ -1392,32 +1139,16 @@ def test_removing_shot_without_a_keyframe():
     sh = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3]) if x.strip()]
     check("the removing shot still says the garment is worn",
           "quilted jacket" in sh[0])
-    # IN THE SHEET, which is what "not yet showing" means here: the scarf must not be
-    # listed as WORN on the shot that is still taking the jacket off. The reveal
-    # clause is a different sentence and belongs -- the author's own beat says "to
-    # expose the scarf" -- and it now names the garment in the sheet's words rather
-    # than as a bare head noun, which this whole-shot substring check caught.
     check("...and the layer under it is not yet showing",
           "grey wool scarf" not in " ".join(sh[0].split()).split("There is")[0])
-    # WHOSE HANDS, where the beat names them. An agentless "the jacket comes off"
-    # describes a garment removing itself, which is what a belt dropping to the floor
-    # on its own looked like.
     check("...and it is still told to come off",
           "jacket off during this shot" in sh[0] or "jacket comes off during this shot" in sh[0])
-    # WHOSE HANDS -- and the limit on that. The agent can only be somebody the SHEET
-    # describes, because that is the cast the guard resolves. Jon acts in this beat
-    # but has no entry, so the only person in the shot is Maya and the clause names
-    # her. Undressing herself is a defensible reading of a prompt that never says who
-    # Jon is; naming a person the shot does not describe would be worse, since a
-    # described person is a person the model draws.
     check("...by the hands of somebody the sheet describes",
           "Maya takes the black quilted jacket off during this shot" in sh[0],
           sh[0][-120:])
     check("the next shot has lost it", "quilted jacket" not in sh[1])
     check("...and shows what was under it", "grey wool scarf" in sh[1])
     check("info explains the exception", "no keyframe" in run_node(P, plan_only=True)[2])
-    # A removing shot that DOES have a keyframe still scrubs in place -- the picture
-    # carries the starting state there, so the text does not have to.
     check("a later removing shot still scrubs itself",
           "grey wool scarf" not in sh[2].split("Jon pulls")[0])
     # With a first_frame wired, shot 1 has a keyframe and behaves like the rest.
@@ -1455,8 +1186,6 @@ def test_chain_hold_end_to_end():
     sh = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3]) if x.strip()]
     chain = "links keeping their size"
     check("every shot with the hardware holds it rigid", all(chain in s for s in sh))
-    # It REPLACES the restraint hold instead of joining it -- both say "whole and
-    # closed", and two clauses for one guarantee is twice the stasis in the prompt.
     check("...instead of repeating the restraint hold",
           all("the run between them" in s for s in sh))
     check("...while still carrying its guarantee",
@@ -1466,29 +1195,13 @@ def test_chain_hold_end_to_end():
     soft = run_node("A basement.\n\nMaya: 27, a rope around her wrists.\n\n"
                     "Maya lies still.", plan_only=True)[3]
     check("rope is not claimed to be rigid", chain not in soft)
-    # ...and it is TIED, not closed and fastened. restraint_sentence has said so
-    # since it was written -- "rope is not closed and it is not fastened, and
-    # saying so of a cord describes a mechanism that is not there" -- but the
-    # rope was declared in the SHEET and nothing read the sheet, so no hardware
-    # was found and the shot fell through to the generic wording this assertion
-    # was pinned to. The engine reads the sheet, so the soft branch now fires.
-    # The check keeps its intent: whatever the mechanism is called, it is whole.
     check("...but it is still held whole",
           "tied and holding as" in soft or "closed and fastened as" in soft, soft[-120:])
     check("...and a cord is tied rather than fastened shut",
           "tied and holding as" in soft, soft[-120:])
-    # Steel locked on in shot 1 is still steel in shot 5. Tested per shot rather than
-    # latched, the shot naming the chain got the rigid clause and every shot after it
-    # fell back to the soft one -- which is where the slack came back from.
     later = [x for x in re.split(r"(?=\[Shot )", run_node(
         "A basement.\n\nMaya: 27, grey coat.\n\nJon locks a chain around her waist.\n\n"
         "Maya walks to the window.\n\nMaya looks down.", plan_only=True)[3]) if x.strip()]
-    # The shot that locks it on gets both ends rather than the standing clause, but
-    # the METAL is rigid throughout -- steel is steel while it is being closed, and
-    # letting it go soft on the shot that introduces the object is where the model's
-    # idea of the object gets set.
-    # The content, not the exact sentence: the applying shot carries it as its own
-    # sentence and the standing clause carries it after a semicolon.
     _rigid = "the run between them"
     check("the metal is rigid from the shot that names it",
           all(_rigid in s for s in later))
@@ -1498,8 +1211,6 @@ def test_chain_hold_end_to_end():
           S.RESTRAINT_GOING_ON.strip() in later[0], later[0][-90:])
     check("...and the soft clause is not used instead",
           all("the run between them" in s for s in later))
-    # A position the hardware enforces latches too: the chain that put a body in a
-    # squat is still that length three shots later, so the squat is still the position.
     posed = [x for x in re.split(r"(?=\[Shot )", run_node(
         "A basement.\n\nMaya: 27, grey coat. Wrists cuffed behind back.\n\n"
         "Jon locks a chain from her ankles to her collar, forcing her into a squat.\n\n"
@@ -1520,9 +1231,6 @@ def test_chain_hold_end_to_end():
 
 def test_every_paragraph_accounted_for():
     print("\n=== no beat quietly goes missing ===")
-    # Two ways a beat disappears: it reads as a character sheet and is folded into
-    # the scene, or it was never a separate paragraph. Both look like beats being
-    # absorbed into other beats, and both were silent.
     P = ("A basement.\n\n"
          "Maya: 27, grey coat\nJon: 34, navy overalls\n\n"
          "Maya walks in.\nMaya sits down.\nMaya stands up.\n\n"
@@ -1537,8 +1245,6 @@ def test_every_paragraph_accounted_for():
     check("...naming what became shots", "3 rendered as shots" in info)
     check("...what was folded in", "2 folded in as character sheet(s)" in info)
     check("...and what became the scene", "1 kept as the scene" in info)
-    # Lines joined by a single newline are ONE beat. That is not changed -- it is
-    # reported, because three actions in one shot look like two were absorbed.
     check("a merged beat is flagged", "carry more than one line" in info)
     check("...naming the shot", "shot(s) 1 carry" in info)
     check("...and saying what to do", "put an empty line between them" in info)
@@ -1555,13 +1261,9 @@ def test_person_described_once_end_to_end():
     check("the person is described once", shot.count("Maya:") == 1)
     check("...and the duplicate is reported", "described more than once" in info)
     check("...naming who", "Maya described" in info)
-    # No terminator on a sheet line welds it onto the beat: "grey coat Maya lies
-    # still", which reads as one more item in the attribute list.
     s2 = run_node("A basement.\n\nMaya lies still on the floor.", plan_only=True,
                   character_memory="Maya: 27, silver hair, grey coat")[3]
     check("the sheet does not run into the beat", "grey coat Maya" not in s2)
-    # THE GUARANTEE is the terminator, not what happens to sit after it: beat_leads
-    # puts the beat ahead of the sheet, so the sheet no longer runs into it at all.
     check("...it is ended properly", "grey coat." in s2)
     # Using one channel only is unaffected.
     s3 = run_node(P, plan_only=True)[3]
@@ -1584,15 +1286,9 @@ def test_undressing_completely_end_to_end():
     check("she is dressed to begin with", "green canvas jacket" in sh[0])
     for _g in ("jacket", "jumper", "t-shirt", "jeans", "boots"):
         check(f"{_g} is gone from the undressing shot", _g not in sh[1])
-    # It has to STAY off: the scene is re-stamped into every later shot, so a garment
-    # left in it is a garment back on.
     check("...and stays gone afterwards",
           not any(g in sh[2] for g in ("jacket", "jumper", "jeans", "boots")))
-    # Scoped to the people the beat names. Undressing one person must not take the
-    # other one's clothes off.
     check("the other character keeps his clothes", "navy overalls" in sh[3])
-    # Said once, rather than reciting the wardrobe back at a shot whose point is that
-    # there is none of it.
     check("one sentence, not five", sh[1].count("comes off during this shot") == 1)
     check("...and it is the bare one", "leaving bare skin" in sh[1])
     check("info names what it cleared", "read off the character sheet" in info)
@@ -1601,10 +1297,6 @@ def test_undressing_completely_end_to_end():
 
 def test_a_tagged_object_comes_off_and_goes_back_on():
     print("\n=== an object's reference follows the object ===")
-    # A <Picture N> can be attached to a THING, not only a person: "a silver locket
-    # <Picture 2>" is a picture of the locket. It has to come off when the locket does
-    # -- left behind, the reference keeps asserting what was just removed -- and come
-    # back when an 'add:' puts it on again.
     mem = "Nora: <picture 1>, 34, she, red hair, a silver locket <picture 2>, green jacket"
     P = "\n\n".join([
         "Nora stands by the bench.",
@@ -1623,9 +1315,6 @@ def test_a_tagged_object_comes_off_and_goes_back_on():
           tags[2] == ["<Picture 1>"], str(tags[2]))
     check("...and the person's stays throughout",
           all("<Picture 1>" in t for t in tags), str(tags))
-    # Putting it back on. This could not work before: the token stayed in `gone` for
-    # the rest of the film, so an 'add:' naming it was suppressed by the very removal
-    # it was undoing.
     check("an add puts the object and its reference back",
           tags[3] == ["<Picture 1>", "<Picture 2>"], str(tags[3]))
     check("...and it stays on after that",
@@ -1634,9 +1323,6 @@ def test_a_tagged_object_comes_off_and_goes_back_on():
 
 def test_hardware_stays_on_its_owner():
     print("\n=== hardware does not spread to the other character ===")
-    # Reported: a belt locked onto one character turned up on the other, over their
-    # clothes. The hold named nobody, so in a two-person shot it was an instruction
-    # about whoever was on screen.
     mem = ("Nora: 34, she, red hair, bare skin, a locked steel waist belt.\n"
            "Victor: he, 41, dark hair, navy overalls, work boots")
     P = ("Nora stands by the bench, the steel belt locked on her hips.\n\n"
@@ -1648,9 +1334,6 @@ def test_hardware_stays_on_its_owner():
           "Every restraint stays closed" in sh[0])
     check("...and spends no words naming whose", "Every restraint on Nora" not in sh[0])
     check("the shot with two names the wearer", "Every restraint on Nora" in sh[1])
-    # Once. The second sentence saying the same thing cost another naming of her, and
-    # a described person is a person the model draws -- reported as a second girl
-    # appearing at the moment of cuffing.
     check("...naming her once, not twice",
           len(re.findall(r"\bNora\b", sh[1].split("Nora:")[-1])) == 1, sh[1][-90:])
     check("...pinning the other to his own entry",
@@ -1661,10 +1344,6 @@ def test_hardware_stays_on_its_owner():
 
 def test_a_state_in_the_scene_is_not_reasserted():
     print("\n=== a state changed in one beat is not re-asserted later ===")
-    # The van usually stands in the SCENE paragraph, which is prepended to every
-    # shot. So the text saying "doors closed" is in shot 3 as much as shot 1 -- and
-    # by shot 3 the doors have been opened. Asserting the written state there would
-    # shut them again, which is the reported bug wearing the other shoe.
     P = ("Daylight. A yard, and a van with its doors closed.\n\n"
          "Mara and Dom stand behind the van.\n\n"
          "Mara opens the van doors and climbs in.\n\n"
@@ -1673,15 +1352,10 @@ def test_a_state_in_the_scene_is_not_reasserted():
     check("three shots", len(shots) == 3, "")
     check("shot 1 is told the doors are already closed",
           "already closed at the first frame" in shots[0], "")
-    # The beat that opens them is asking for that motion. Holding the state here
-    # would be the node arguing with the script. It gets the two ENDS of the change
-    # instead, which is a different sentence and the subject of its own test.
     check("the shot that opens them is not told the state holds",
           "already closed" not in shots[1], "")
     check("...and the shot after is not told the old state",
           "first frame" not in shots[2], "")
-    # The author's own words still reach the model verbatim -- the node adds nothing
-    # and takes nothing away. It is only the ADDED sentence that stops.
     check("the scene text itself is untouched",
           all("doors closed" in s for s in shots), "")
     info = run_node(P, plan_only=True)[2]
@@ -1709,10 +1383,6 @@ def _prompts_sent(P, **kw):
 
 def test_the_cuffs_stay_in_the_picture():
     print("\n=== the hardware is named on every shot it is on ===")
-    # Reported after the sheet stopped listing the item: the cuffs disappeared while
-    # she still looked restrained. The sheet had been the thing naming the object in
-    # every shot. Taking it off the sheet is right -- it put the cuffs in the shots
-    # before they went on -- and naming it here is what that costs.
     mem = "Mara: she, 22, grey dress.\nDan: he, 41."
     P = ("A bare room.\n\nMara backs away from Dan.\n\n"
          "Dan catches her and cuffs her wrists behind her back.\n\n"
@@ -1741,12 +1411,6 @@ def test_the_cuffs_stay_in_the_picture():
 
 def test_a_sheet_that_claims_hardware_too_early():
     print("\n=== the sheet listing cuffs she has not been put in yet ===")
-    # Why the applying fix does not reach a scene written this way: the sheet lists
-    # the hardware, the sheet goes into EVERY shot, so she is restrained from shot 1
-    # and the cuffing shot is told the restraint is already fastened. That renders as
-    # restrained first and caught afterwards. The sheet is the author's standing
-    # description and the beat is the author's action -- the node reports the clash
-    # rather than picking a winner.
     mem = "Mara: she, 22, grey dress, handcuffs on her wrists.\nDan: he, 41."
     P = ("A bare room.\n\nMara backs away from Dan.\n\n"
          "Dan catches her and cuffs her wrists behind her back.")
@@ -1806,17 +1470,11 @@ def test_what_comes_off_in_the_bathroom_stays_off():
               "legs are bare from the hip down" in sh[_i], sh[_i][-160:])
         check(f"...and the chest too", "chest, shoulders and arms are bare" in sh[_i],
               sh[_i][-160:])
-    # Positively phrased, to the last clause: this sentence exists to keep the prior
-    # out of a region, and at cfg 1 a negation in it hands the prior the word back.
     check("the bare clause names skin rather than what is absent",
           all("outermost surface there" in s for s in sh[1:]), sh[1][-90:])
     check("...and carries no negation",
           all(not re.search(r"\bnothing\b|\bno longer\b", s.split("] ", 1)[1])
               for s in sh[1:]), sh[1][-120:])
-    # THE BRA HALF OF THE SAME REPORT. bare_hold was written for "a bra coming back on
-    # somebody topless", and the suppression meant it only ever worked for a sheet
-    # that did not layer the bra under anything -- which is the commonest way to
-    # write one.
     bra = "Kate: she, 28, a grey t-shirt, a black bra, jeans."
     sh2 = _shots("A bedroom.\n\nKate pulls off the t-shirt and unhooks the bra.\n\n"
                  "Kate sits on the end of the bed.\n\nKate looks at the window.",
@@ -1824,9 +1482,6 @@ def test_what_comes_off_in_the_bathroom_stays_off():
     for _i in (1, 2):
         check(f"topless shot {_i + 1} says the chest is bare",
               "chest, shoulders and arms are bare" in sh2[_i], sh2[_i][-160:])
-    # AND THE LAYER THAT IS STILL ON MUST NOT GET THIS. reveal_clause speaks when
-    # something is underneath; this clause speaks when nothing is, and the two may
-    # never both speak about one region.
     sh3 = _shots("A bedroom.\n\nKate unzips the denim skirt and lets it fall.\n\n"
                  "Kate sits down.\n\nKate looks up.",
                  character_memory="Kate: she, 28, a denim skirt, a black thong.")
@@ -1853,10 +1508,6 @@ def test_the_thong_comes_off_however_it_is_written():
                   "Kate lets the thong fall to the floor.",
                   "Kate shimmies out of the thong.",
                   "Kate pushes the thong off her hips."):
-        # The skirt goes first, in a wording that always worked, so what is under
-        # test is the second beat alone. It matters that the skirt IS off: while it
-        # is on, the hips are covered by it and calling them bare would be a lie --
-        # which is the one thing the suppression this work relaxed was right about.
         sh = _shots("A tiled bathroom with a wet floor.\n\n"
                     "Kate unzips the denim skirt and steps out of it.\n\n" + _beat
                     + "\n\nKate steps into the shower.\n\nKate turns under the water.",
@@ -1866,12 +1517,6 @@ def test_the_thong_comes_off_however_it_is_written():
         check(f"...and the hips are named instead: {_beat[5:34]!r}",
               all("legs are bare from the hip down" in s for s in sh[2:]),
               sh[2][-150:])
-    # A FIXTURE IS NOT A GARMENT. A removal is read by POSITION, not by vocabulary,
-    # so that an author can write a garment this file has never heard of -- and
-    # position cannot tell a shower from a shirt. "Kate steps out of the shower" is
-    # the same sentence shape as "Kate steps out of the thong", and the scene lists
-    # the shower the way a sheet lists a skirt, so the shower was undressed off her
-    # and scrubbed out of every later shot. In a bathroom scene.
     room = ("A tiled bathroom. A glass shower, a bath, a wooden stool.\n\n"
             "Kate steps out of the shower.\n\nKate reaches for the towel.\n\n"
             "Kate looks in the mirror.")
@@ -1893,17 +1538,12 @@ def test_a_breath_does_not_hold_the_branch_open():
                  "Dana takes a deep breath and turns to her.",
                  "Dana catches her breath."):
         check(f"closed: {beat!r}", not S.sound_described(beat))
-    # SUSTAINED breathing is the sound of its shot and stays. So does everything
-    # somebody asked for by name -- silencing those would be taking away what was
-    # written, which is a different bug from the one being fixed.
     for beat in ("She breathes hard through the gag.", "Dana is breathing hard.",
                  "Dana sighs.", "Dana gasps.", "Dana moans.", "The door slams."):
         check(f"open: {beat!r}", S.sound_described(beat))
     # ...and not when something else in the beat lasts.
     check("a breath beside a chain still opens it",
           S.sound_described("Dana takes a breath as the chain rattles."))
-    # The trade is REPORTED: a breath that will not be heard is a change to what
-    # was written, and finding that out from the render is worse than reading it.
     info = run_node("A room.\n\nDana takes a breath.\n\nDana says: \"Listen.\"",
                     plan_only=True, character_memory="Dana: she, 35.")[2]
     check("the silenced breath is reported", "stage a breath" in info)
@@ -1932,8 +1572,6 @@ def test_appearing_is_not_arriving():
                        ("McKenna appears.", False)):
         check(f"{beat!r} arrives={want}", S.arrives_in(beat) is want,
               str(S.arrives_in(beat)))
-    # "appears" is also the ordinary word for SEEMS, and cancelling a real
-    # entrance on it loses the arrival it was describing.
     check("a real entrance survives an opinion",
           S.arrives_in("McKenna walks in and appears calm.") is True)
     check("...and so does this one",
@@ -1959,13 +1597,6 @@ def test_a_line_is_marked_however_it_is_punctuated():
                  'The sign said "exit" in red.'):
         check(f"not a line: {beat!r}", "<d>" not in S.mark_dialogue(beat),
               S.mark_dialogue(beat))
-    # A SHORT LINE IN A LONG SHOT is where doubled dialogue comes from: the audio
-    # branch runs the whole shot and fills what is left with the line again.
-    # Reported, not clause -- "the line said once" as prompt text made it worse.
-    # The shot has to BE long, and this file's own harness asks for 1.6s shots. It
-    # used to get long ones anyway, because a shot_seconds below one action's worth
-    # was silently ignored and every shot came out at the 3.0s floor instead. Said
-    # out loud here now that the ceiling is honoured.
     mem = "Dana: she, 35."
     thin = run_node("A room.\n\nDana says: \"No.\"\n\nDana waits.",
                     plan_only=True, character_memory=mem, shot_seconds=6.0)[2]
@@ -2042,8 +1673,6 @@ def test_the_camera_is_held_where_nothing_places_it():
           f"{len(said.split())} words")
     check("...phrased positively, like every other guard here",
           not re.search(r"\bnot\b|\bnever\b|\bno\b|\bwithout\b", said, re.I), said)
-    # It names no camera: naming one is asking for one, and the lens is what the gaze
-    # guards spend their words getting people to stop looking at.
     check("...and names no camera", not re.search(r"camera|lens", said, re.I), said)
     check("a journey keeps its moving camera",
           S.camera_hold("Maya walks through to the hall.", moving=True) == "")
@@ -2145,8 +1774,6 @@ def test_the_count_counts_who_the_text_names():
                               character_memory=mem, plan_only=True))
     check("a two-hander still counts two",
           "There are two people in the shot" in pair[0], pair[0][-120:])
-    # ...and a person the frame merely carries, with nothing said about them, is not
-    # counted: a body the text cannot identify is the one the model fills in.
     carried = _shots_of(run_node("A kitchen.\n\nAna and Ben sit at the table.\n\nBen drinks.",
                                  character_memory=mem, plan_only=True))
     check("a carried person nothing says anything about is not counted",
@@ -2198,8 +1825,6 @@ def test_a_length_goes_where_it_is_put():
                        ("the lamp above her head", "")):
         check(f"legs_anchor {text[:40]!r}", S.legs_anchor(text) == want, S.legs_anchor(text))
 
-    # END TO END: the cuffs do not go anywhere when the cable arrives, and the legs
-    # are held on every shot after it.
     mem = ("Ana: she, 30, a grey t-shirt, steel handcuffs on her wrists behind her back.\n"
            "Mara: she, 41, overalls.")
     P = ("A workshop.\n\nAna kneels on the floor.\n\n"
@@ -2247,18 +1872,10 @@ def test_any_restraint_holds_from_shot_to_shot():
     check(f"every kind of hardware holds on every shot ({len(HARDWARE)} kinds)",
           not bad, "; ".join(bad[:4]))
 
-    # THE TWO VOCABULARIES WALKED TOGETHER. Anything the engine names as hardware must
-    # arm this file's restraint reader too -- ambiguous items ("belt") with the
-    # binding context they need, the rest on their own.
     missed = [n for _p, n, _pt in S.engine.HARDWARE
               if not S.restraint_present(f"Ana: she, 30, {n} locked on her wrists.")]
     check("the engine's hardware is hardware to this file too", not missed, str(missed))
 
-    # EVERY SPELLING, not just the canonical name. Walking the canon names only, all
-    # 26 passed while twine, a choker, harnesses, steel wire, baling wire and the
-    # participle "hobbled" -- all of them in those same patterns -- reached neither
-    # of this file's lists. The item sat in the state and in the sheet with nothing
-    # holding it shut: hardware tracked and never held.
     gaps = [(n, form) for pat, n, part in S.engine.HARDWARE
             for form in _spellings(pat)
             if not S.restraint_present(
@@ -2267,18 +1884,12 @@ def test_any_restraint_holds_from_shot_to_shot():
           f"({sum(len(_spellings(p)) for p, _n, _pt in S.engine.HARDWARE)} of them)",
           not gaps, str(gaps[:6]))
 
-    # THE VERBS TOO. engine.APPLY_VERB applies these and this file's reader could not
-    # see the -s forms, which are the ones an author writes: "Mara restrains Ana"
-    # produced no hold, no arm position and no legs, beside a "Mara trusses Ana up"
-    # that produced all three.
     deaf = [v for v in ("restrains", "immobilises", "immobilizes", "pinions",
                         "fetters", "collars", "hobbles", "trusses")
             if not S.restraint_present(f"Mara {v} Ana.")]
     check("a verb the engine applies is a restraint to this file too",
           not deaf, str(deaf))
 
-    # APPLIED MID-SCENE, by any of the ways a beat writes it, and the hold follows the
-    # person WEARING it rather than the person doing the tying.
     mem = "Ana: she, 30, a grey t-shirt.\nMara: she, 41, overalls."
     for beat, legs in (("Mara hogties her with a steel cable.", True),
                        ("Mara cuffs her wrists behind her back.", False),
@@ -2293,9 +1904,6 @@ def test_any_restraint_holds_from_shot_to_shot():
             check(f"...and the legs are placed by {beat[:26]!r}",
                   all("Both legs are" in sh for sh in shots[2:]), shots[-1][-140:])
 
-    # WHO IS WEARING IT, which is what decides whose shots carry the hold. A beat
-    # naming only the person DOING it recorded the restraint on them, so every shot
-    # about the person actually in it was told the hold belonged to nobody present.
     for beat, cast, want in (("Mara hogties her with a steel cable.", ["Ana", "Mara"], "Ana"),
                              ("Mara cuffs her to the bed frame.", ["Ana", "Mara"], "Ana"),
                              ("The guard handcuffs Ana's wrists.", ["Ana", "Guard"], "Ana"),
@@ -2305,8 +1913,6 @@ def test_any_restraint_holds_from_shot_to_shot():
                              ("Ana unlocks Bea's handcuffs.", ["Ana", "Bea"], "Bea")):
         check(f"wearer of {beat[:34]!r}", S.engine.wearer_of(beat, cast) == want,
               S.engine.wearer_of(beat, cast))
-    # ...and no guess where the scene leaves two candidates, or where the pronoun is
-    # the subject's own.
     check("three people and a pronoun is not guessed at",
           S.engine.wearer_of("Mara hogties her.", ["Ana", "Mara", "Vic"]) in ("", "Mara"))
     check("a belt locked on her own hips stays hers",
@@ -2403,9 +2009,6 @@ def test_one_photographed_face_and_two_people():
     check("...and that tagging her does the same from the first shot",
           "does the same thing from the first shot" in info)
 
-    # NOT WHEN THERE IS NOTHING CLEAN TO SEND. She is never alone, so no frame of her
-    # exists that does not also carry him -- and a frame with two people in it is the
-    # duplicate, not the cure.
     never = ("A kitchen.\n\nDan and Crystal talk.\n\nDan pours coffee.\n\nCrystal laughs.")
     quiet = str(run_node(never, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))[2])
     check("nothing is sent when no solo frame of her exists",
@@ -2413,8 +2016,6 @@ def test_one_photographed_face_and_two_people():
     check("...and the state is still reported as the hazard it is",
           "no <Picture N> of their own" in quiet, quiet[-200:])
 
-    # NOT A FRAME FROM BEFORE SHE CHANGED. A picture is a picture of the clothes in
-    # it, and a reference puts them back on -- the same rule the recovered face keeps.
     changed = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
                "Crystal takes off her jacket.\nremove: jacket\n\nDan and Crystal talk.")
     stale = str(run_node(changed, character_memory=mem + ", a denim jacket",
@@ -2460,8 +2061,6 @@ def test_an_untagged_reference_is_claimed_or_held():
     two = [n for _p, n in _encoded_refs(P, character_memory=mem, ref_image_1=img(), ref_image_2=img())]
     check("two untagged pictures are never placed", two == [0, 0, 0], str(two))
 
-    # NOBODY TO DUPLICATE. A shot with no person described cannot grow a second
-    # character, so a look or location reference rides as it always did.
     plate = [n for _p, n in _encoded_refs("A kitchen with white tiles.\n\nThe kettle boils.\n\n"
                                           "Steam rises from the spout.", ref_image_1=img())]
     check("a script with nobody in it keeps its reference", plate == [1, 1], str(plate))
@@ -2606,9 +2205,6 @@ def test_an_exact_line_is_yours_untouched():
           _share(out[2], "the beat") > _share(bare[2], "the beat")
           and _share(out[2], "continuity clauses") < _share(bare[2], "continuity clauses"),
           f"with {_share(out[2], 'the beat')}% vs without {_share(bare[2], 'the beat')}%")
-    # NOTHING READS IT. Otherwise "say this exactly" would quietly mean "stage this
-    # too", and the one instruction guaranteed to reach the model verbatim would be
-    # the one with the least predictable side effects.
     read = run_node("A depot at night.\n\nAna waits.\n"
                     "exact: Mara's van is parked behind her with its side door open.\n",
                     plan_only=True, character_memory=mem)
@@ -2622,8 +2218,6 @@ def test_an_exact_line_is_yours_untouched():
                     "Ana looks up.", plan_only=True, character_memory="Ana: she, 29, grey jacket.")
     check("...and it does not set the mood of the film",
           "mood is grim" not in mood[3], mood[3][-160:])
-    # IT HAS NO BUDGET TO LOSE. Squeeze the guard budget until clauses are dropped and
-    # the author's own line is still there.
     floor, ratio = S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD
     try:
         S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD = 6, 1
@@ -2634,9 +2228,6 @@ def test_an_exact_line_is_yours_untouched():
     check("...and never the exact line",
           "Ana's wrists stay behind her back the whole way." in _shots_of(tight)[0],
           _shots_of(tight)[0][:200])
-    # The keywords, and the one that is NOT a keyword: a beat writes speech as
-    # `Mara says: "Wait here."` and a directive that swallows dialogue is worse than
-    # one word less convenient.
     for word in ("exact", "exactly", "verbatim"):
         check(f"{word}: is a directive", S.exact_lines(f"{word}: hold the frame") == ["hold the frame"])
     check("say: is not", S.exact_lines('say: "wait here"') == [])
@@ -2665,14 +2256,10 @@ def test_a_walk_is_not_its_own_reverse():
     arriving = S.travel_anchor("", "", "hallway", "", "Ana walks into the hallway.")
     check("...and so does an arrival with no origin",
           "each body facing the way it goes" in arriving, arriving)
-    # A BEAT THAT WALKS BACKWARDS ON PURPOSE keeps its own direction, like every
-    # other inference here that the author's own words stand down.
     for beat in ("Ana backs away to the office door.", "Ana walks backwards to the door.",
                  "Ana retreats to the office door."):
         check(f"the author's direction wins: {beat[:30]!r}",
               "facing the way it goes" not in S.move_clause("office door", beat), beat)
-    # TAKING SOMEBODY SOMEWHERE is a journey. "escorts" was in no verb list, so the
-    # one shot that had to perform a walk was told nothing about performing it.
     for beat, want in (("Mara escorts Ana to the entrance.", True),
                        ("Mara ushers Ana to the gate.", True),
                        ("Mara marches Ana to the depot entrance.", True),
@@ -2701,10 +2288,6 @@ def test_a_thing_that_opens_itself_is_a_staged_change():
                        ("The door is opening.", [("door", "open")]),
                        ("Ana pulls the door open.", [("door", "open")])):
         check(f"{text[:38]!r}", S.state_changes(text) == want, str(S.state_changes(text)))
-    # A STATE IS STILL A STATE. The same two words in the same order say both things
-    # -- "the door closed" works it, "a van with its doors closed" describes it -- so
-    # the backwards reader takes only words that are verbs and nothing else, and
-    # leaves a bare state word to stated_states and the first frame.
     for text in ("The window is open.", "Mara and Dom stand behind a van with its doors closed.",
                  "The curtains are still drawn.", "They stand by the closed doors of the van."):
         check(f"still a state: {text[:34]!r}", S.state_changes(text) == []
@@ -2872,8 +2455,6 @@ def test_a_carried_room_is_not_a_second_picture_of_somebody():
     check("the shot that introduces somebody carries no second picture of her",
           not any(as_ref for _n, as_ref in sent), str(sent))
     check("...and her own portrait still goes in", sent[1][0] == 1, str(sent))
-    # Untagged: nothing carries her identity, so the room IS carried -- that is
-    # the continuity fix and it has to survive this.
     sent2 = []
     S.build_conditioning = lambda c, v, a, p, w, h, l, **kw: (
         sent2.append(bool(kw.get("handoff_as_ref"))) or _bc(c, v, a, p, w, h, l, **kw))
@@ -2909,11 +2490,6 @@ def test_a_bare_region_is_said_on_every_shot():
                  "Kate looks at the door.\n\nKate listens.", character_memory=mem)
     check("a removal is held the same way",
           all("chest" in s for s in off), " ".join(off[-1].split())[-120:])
-    # THE BEAT THAT NAMES ONLY THE OTHER PERSON. Reported after the first fix
-    # shipped: "bra still popped into ONE beat". That beat is this one -- she is
-    # not in its cast, so the clause was skipped, and the keyframe still shows
-    # her, so the region went unspecified for exactly one shot and the prior
-    # filled it. Attributed, because the shot describes somebody else.
     other = _shots("A bare room with a crate.\n\n"
                    "Kate takes off her shirt and drops it on the crate.\n\n"
                    "Sam watches from the doorway.\n\n"
@@ -2943,16 +2519,12 @@ def test_a_squat_survives_speech_and_undressing():
     got = _shots("A bare room.\n\nKate squats down beside the crate.\n\n"
                  "Kate says: \"Someone is coming.\"\n\n"
                  "Kate takes off her shirt.\n\nKate listens.", character_memory=mem)
-    # got[0] stages the squat and has the author's own words for it; the hold
-    # starts on the shot after.
     check("the author's word is kept, not swapped for a crouch",
           "is squatting" in got[1], " ".join(got[1].split())[-120:])
     check("a spoken travel word does not stand her up",
           "is squatting" in got[2], " ".join(got[2].split())[-120:])
     check("...nor does taking a garment off",
           "is squatting" in got[3], " ".join(got[3].split())[-120:])
-    # Real travel still clears it: a hold that survives walking away is a hold
-    # arguing with its own shot.
     walk = _shots("A bare room.\n\nKate squats down beside the crate.\n\n"
                   "Kate walks to the door.\n\nKate listens.", character_memory=mem)
     check("walking away does clear it", "is squatting" not in walk[2],
@@ -2965,38 +2537,24 @@ def test_the_audit_findings_stay_fixed():
     def sh(P, **kw):
         return [s for s in run_node(P, plan_only=True, **kw)[3].split("---") if s.strip()]
 
-    # 1. restrained_who latched only at the FIRST transition, so a second person
-    #    cuffed later was never recorded and their hardware went undescribed forever.
     got = sh("A room.\n\nDan cuffs Mara's wrists.\n\nDan cuffs Kate's wrists too.\n\n"
              "Kate sits alone.\n\nMara looks up.", character_memory=mem3)
     check("a second person cuffed later is held too",
           all("closed and fastened" in s or "hardware goes on" in s for s in got),
           str([("closed and fastened" in s) for s in got]))
 
-    # 2. worn_item was one string, so a second item overwrote the first and the cuffs
-    #    stopped being named from the gag onward.
-    # Two people, not three: with two women on the sheet "her" is ambiguous, the guard
-    # resolves nobody, and that is a separate problem the node already reports.
     last = sh("A room.\n\nDan cuffs her wrists.\n\nDan gags her with duct tape.\n\n"
               "Mara sits still.",
               character_memory="Mara: she, 22.\nDan: he, 41.")[-1].lower()
     check("both items stay named", "cuff" in last and "tape" in last, last[-90:])
-    # Mixed hardware and soft goods is described as hardware: steel that is only
-    # "tied and holding" is steel nobody has said is closed.
     check("...and cuffs with tape are still closed and fastened",
           "closed and fastened" in last, last[-90:])
 
-    # 3. A displaced outer garment never uncovered what was under it: the beat showed
-    #    the thong in its own words and the layering hid it again the next shot.
     m = "Mara: she, 22, denim shorts, a black thong."
     got = sh("A room.\n\nMara stands.\n\nMara pulls her shorts down to show the thong.\n\n"
              "Mara waits.\n\nMara pulls them back up.\n\nMara stands.", character_memory=m)
     check("displacement uncovers what is under it",
           "thong" in got[2].lower(), got[2][-80:])
-    # UNDERWEAR IS PLACED, NOT DELETED, as of the report that said so for
-    # the third time. It stays in the text and the node says where it is;
-    # the fact protected is the same one, that it is not rendered on top of
-    # what covers it. A locket or a scarf under a coat still waits.
     check("...and putting it back covers it again",
           "whole, opaque and unbroken" in got[4].lower(), got[4][-130:])
 
@@ -3013,8 +2571,6 @@ def test_the_audit_findings_stay_fixed():
     check("...while tights do",
           S.implied_layers("Mara: she, tights, a chastity belt.").get("chastity belt"))
 
-    # 6. One of two speaking made the shot a speaking shot, so the LISTENER's mouth
-    #    was left free -- which is where invented lip-sync lands.
     one = sh('A room.\n\nMara says: "Wait." Dan listens.',
              character_memory="Mara: she, 22.\nDan: he, 41.")[0]
     check("the listener's mouth is closed", "Only Mara speaks" in one, one[-80:])
@@ -3044,9 +2600,6 @@ def test_the_audit_findings_stay_fixed():
 
 def test_no_cuffs_described_without_their_wearer():
     print("\n=== a shot without the restrained person is not told about cuffs ===")
-    # Reported as nasty duplicates. The hold latched for the whole film, so a shot
-    # describing only the other character still said cuffs were closed on wrists --
-    # and with nobody in the text to own those wrists, the model draws one.
     mem = "Mara: she, 22, grey dress.\nDan: he, 41, dark coat."
     P = ("A bare room.\n\nMara waits by the window.\n\n"
          "Dan walks in and cuffs her wrists behind her back.\n\n"
@@ -3078,8 +2631,6 @@ def test_caught_first_then_restrained():
     check("the applying shot is told both ends", got[0] == "APPLY", str(got))
     check("...and every shot after gets the standing hold",
           got[1:] == ["HOLD", "HOLD"], str(got))
-    # Already wearing it: the standing hold is right and "off at the first frame"
-    # would be a lie about somebody who has been in cuffs since the scene began.
     worn = kinds("A room. Mara is handcuffed to the rail.\n\n"
                  "Mara pulls against the cuffs.\n\nMara looks at the door.")
     check("hardware already worn is never called new", "APPLY" not in worn, str(worn))
@@ -3100,17 +2651,10 @@ def test_a_television_keeps_its_own_voice():
     sh = [s for s in script.split("---") if s.strip()]
     check("the voice is given back to the set", "the TV's" in sh[0], sh[0][-90:])
     check("...and the mouths are held closed", "Mouths in the shot" in sh[0], "")
-    # The branch must STAY OPEN. The set is supposed to be heard -- silencing it
-    # would trade one wrong thing for another. Checked on its own, because the empty
-    # room later in this prompt IS silenced and should be.
     solo = run_node('A living room.\n\nMara sits on the sofa. '
                     'The TV says: "Storms tonight."',
                     plan_only=True, character_memory=mem)[2]
     check("the shot is not silenced", "conditioned on real silence" not in solo, "")
-    # The WORDS reach the model unchanged. The quotation marks do not: they are
-    # exchanged for H3's own <d>...</d>, which is the token pair that says a span
-    # is spoken. Quote marks say nothing to the model, and a quoted imperative was
-    # reaching it as an imperative sentence and being performed.
     check("...and the line reaches the model as written",
           "Storms tonight." in sh[0] and "<d>Storms tonight.</d>" in sh[0], "")
     # Her own line is untouched: she is speaking, and her mouth must move.
@@ -3126,9 +2670,6 @@ def test_a_television_keeps_its_own_voice():
 
 def test_a_shifted_workflow_stops_before_rendering():
     print("\n=== a slid workflow fails with an explanation, not a bad render ===")
-    # The exact shape from the report: values slid up one slot after a widget was
-    # converted to an input. Rendering anyway would use a scheduler as a sampler and
-    # settings nobody picked, and the output would look like a broken model.
     try:
         run_node("A room.\n\nMara waits.", plan_only=True,
                  resolution=0.7, sampler_name="beta", scheduler=48,
@@ -3144,8 +2685,6 @@ def test_a_shifted_workflow_stops_before_rendering():
     # It must not fire on a healthy graph, or nobody can render at all.
     ok = run_node("A room.\n\nMara waits.", plan_only=True)
     check("a healthy workflow is untouched", "PLAN ONLY" in ok[2], "")
-    # A NaN in a NUMBER is still repaired rather than refused -- that one is
-    # recoverable, and sane_widgets says so in info.
     num = run_node("A room.\n\nMara waits.", plan_only=True, pace=float("nan"))
     check("a NaN number is still repaired, not refused",
           "not usable numbers" in num[2], "")
@@ -3153,11 +2692,6 @@ def test_a_shifted_workflow_stops_before_rendering():
 
 def test_the_removal_shot_says_what_is_under():
     print("\n=== taking the shorts off shows the panties, not skin ===")
-    # Reported: the shorts come off and the render goes straight to bare, past the
-    # underwear the sheet named. The removal clause is emphatic and specific -- off
-    # the body, dropped out of frame -- while the layer beneath is one entry in an
-    # attribute list, and against a prior that says trousers coming off means bare
-    # skin, a list entry does not compete.
     mem = "Mara: she, 22, blue denim shorts, white top, black panties."
     P = "A room.\n\nMara stands.\n\nMara pulls off her shorts.\n\nMara turns."
     info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
@@ -3169,14 +2703,10 @@ def test_the_removal_shot_says_what_is_under():
     check("said only on the shot that uncovers it",
           "what shows there now" not in sh[0] and "what shows there now" not in sh[2], "")
     check("info names the shot", "take off a garment that was covering" in info, "")
-    # Nothing underneath: there is nothing to promise, and promising anyway would
-    # dress her in something the sheet never gave her.
     bare = run_node("A room.\n\nMara pulls off her shorts.\n\nMara turns.",
                     plan_only=True,
                     character_memory="Mara: she, 22, blue denim shorts, white top.")[3]
     check("nothing underneath, nothing claimed", "what shows there now" not in bare, "")
-    # A full strip takes the cover AND what was under it. Saying the panties show
-    # would put back the garment the beat was most explicit about removing.
     strip = run_node("A room.\n\nMara undresses completely.\n\nMara turns.",
                      plan_only=True, character_memory=mem)[3]
     check("a full strip promises nothing", "what shows there now" not in strip, "")
@@ -3184,23 +2714,11 @@ def test_the_removal_shot_says_what_is_under():
 
 def test_a_beat_can_name_what_the_layering_hid():
     print("\n=== a beat naming a covered garment puts it back, and is reported ===")
-    # Three fixes into "the belt is on top of the jeans", with the sheet correct, the
-    # tag correct and the picture correctly withheld. This is the route none of them
-    # could touch: beats are passed through word for word and are never scrubbed, so
-    # the layering takes the belt out of the sheet and the beat puts it straight back.
-    # A described thing is a drawn thing, drawn over whatever is on top of it -- and
-    # the next shot starts from this one's last frame, so it is carried forward from
-    # there and looks permanent rather than like one bad shot.
     mem = "Mara: <Picture 1>, she, 22, blue jeans, a chastity belt <Picture 2>."
     P = ("A room.\n\nMara stands by the window.\n\n"
          "Mara runs a hand over the chastity belt under her jeans.\n\nMara waits.")
     info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
     sh = [s for s in script.split("---") if s.strip()]
-    # The sheet KEEPS it and the node says where it is. Deleting it was what
-    # put the author's own words out of the prompt, three reports running.
-    # The WORDS wait too. One mention at cfg 1 is enough to draw it, and the
-    # sheet's was the last one left after the picture and the clause stopped
-    # naming it. It returns on the shot the cover moves.
     check("the covered shot does not name it",
           "chastity belt" not in sh[0].lower(), sh[0][:200])
     # The clause names the COVER. The belt is named once, by the sheet.
@@ -3211,8 +2729,6 @@ def test_a_beat_can_name_what_the_layering_hid():
           "blue jeans" in sh[0].lower(), sh[0][:240])
     check("...and the jeans are described as covering it",
           "whole, opaque and unbroken" in sh[0].lower(), sh[0][:260])
-    # The PICTURE waits even though the words do not: a reference reproduces
-    # an image and outweighs any sentence about what is on top of what.
     check("...and its picture waits for the cover to come off",
           "<Picture 2>" not in sh[0], sh[0][:220])
     check("the beat still says it", "chastity belt" in sh[1].lower(), "")
@@ -3229,11 +2745,6 @@ def test_a_beat_can_name_what_the_layering_hid():
 
 def test_a_removal_says_whose_hands():
     print("\n=== a garment does not take itself off ===")
-    # Reported: she asks to have the chastity belt taken off, and it drops off on its
-    # own. The removal clause named no agent -- "the belt comes off during this shot
-    # and is away by the last frame, dropped out of frame" is true of a belt falling
-    # to the floor by itself, and that is what it rendered. The beat named the person;
-    # the clause was simply not carrying it.
     mem = ("McKenna: she, 22, Shiny white crop top, chastity belt, blue jeans shorts.\n"
            "Dan: he, 41, dark coat.")
     P = ("A room.\n\nMcKenna stands.\n\n"
@@ -3245,8 +2756,6 @@ def test_a_removal_says_whose_hands():
     check("she undresses herself with her own hands",
           "McKenna takes off her shorts" in sh[1]
           and "away by the last frame" in sh[1], sh[1][-110:])
-    # ASKING gives the hands to the other person. "She asks Dan to take it off" is
-    # Dan's doing -- reading the asker as the agent is what put them back on her.
     check("asking hands it to the other person",
           "Dan takes the chastity belt off during this shot" in sh[2], sh[2][-110:])
     check("...and not to the one who asked",
@@ -3271,18 +2780,11 @@ def test_the_only_tag_being_on_a_covered_thing():
     # The reported sheet, verbatim. Two faults met in it, and each hid the other.
     sheet = ("McKenna: she, 22, Shiny white crop top, chastity belt <picture 2>, "
              "blue jeans shorts.")
-    # 1. "blue jeans shorts" is a pair of SHORTS. Taking the first outer match made the
-    #    cover "jeans" while a removal names it "shorts", so the two never lined up and
-    #    the belt was hidden correctly and then never uncovered.
     check("the cover is the head noun, not the first word",
           S.implied_layers(sheet) == {"chastity belt": "shorts"},
           str(S.implied_layers(sheet)))
     check("...so taking the shorts off uncovers it",
           S.hidden_layers(S.implied_layers(sheet), ["shorts"]) == [])
-    # 2. The belt's tag is the ONLY tag. Layering scrubs the belt on every covered
-    #    shot and the tag goes with it -- correctly -- and the node then saw no tags
-    #    anywhere and fell back to "untagged references ride EVERY shot", sending the
-    #    belt's picture into exactly the shots that had just hidden it.
     BELT = torch.full((1, H, W, 3), 0.80)
     rows = []
     ob = S.build_conditioning
@@ -3296,17 +2798,11 @@ def test_the_only_tag_being_on_a_covered_thing():
                  character_memory=sheet + "\nDan: he, 41.", ref_image_2=BELT)
     finally:
         S.build_conditioning = ob
-    # The picture travels with the words. The tag is how ref_image_N reaches
-    # the shot at all, so withholding it lost the reference -- and a picture
-    # the text never claims is read as an extra subject.
     check("the picture waits while it is covered",
           rows[0][1] == 0 and rows[1][1] == 0, str([n for _, n in rows]))
     check("...and the words wait with it",
           not any("chastity" in p.lower() for p, _ in rows[:2]),
           rows[0][0][-160:])
-    # The occlusion is carried by the COVER, since a reference cannot be
-    # weakened for one image. If the belt still shows through, ref_noise_aug
-    # is the only lever left and it moves every reference at once.
     check("...with the cover described as opaque over it",
           all("whole, opaque and unbroken" in p.lower() for p, _ in rows[:2]),
           rows[0][0][-200:])
@@ -3320,11 +2816,6 @@ def test_the_only_tag_being_on_a_covered_thing():
 
 def test_an_object_tag_works_without_a_face_picture():
     print("\n=== a tagged object is placed even when nobody is tagged ===")
-    # A picture is not always somebody's face. With the person untagged, the belt's
-    # own tag was the only one in the entry -- and once the layering scrubbed the
-    # belt's WORDS, ownership was decided on the leftover comma fragment, which has
-    # nothing in front of it. So the tag read as the person's, survived, and went on
-    # fetching the belt's picture into every shot where the belt was covered.
     FACE = torch.full((1, H, W, 3), 0.10)
     BELT = torch.full((1, H, W, 3), 0.80)
     which = lambda t: "FACE" if abs(float(t.mean()) - 0.10) < 0.01 else "BELT"
@@ -3347,9 +2838,6 @@ def test_an_object_tag_works_without_a_face_picture():
             ("nobody tagged, belt tag last",
              "Mara: she, 22, blue jeans, a chastity belt <Picture 2>.")):
         got = imgs(mem)
-        # The tag is how ref_image_N reaches the shot, so withholding it lost
-        # the reference altogether -- and a picture the text never claims is
-        # read as an extra subject. It travels with the words now.
         check(f"{label}: picture waits while covered",
               "BELT" not in got[0] and "BELT" not in got[1], str(got))
         check(f"{label}: and arrives when uncovered", "BELT" in got[2], str(got))
@@ -3363,11 +2851,6 @@ def test_an_object_tag_works_without_a_face_picture():
 
 def test_an_untagged_picture_defeats_the_layering():
     print("\n=== an untagged reference is sent even where its garment is covered ===")
-    # Reported: the belt drawn on top of the jeans, with "chastity belt" spelled the
-    # way the layering matches. The words were right -- the belt had stopped being
-    # described -- and the PICTURE was still going in. An untagged reference rides
-    # every shot, so an image of something currently underneath something else is
-    # sent on the shots where it is covered, and the model draws what it is shown.
     img = lambda v: torch.full((1, H, W, 3), v)
     P = "A room.\n\nMara stands.\n\nMara pulls off her jeans."
     untagged = run_node(P, plan_only=True, ref_image_1=img(0.1), ref_image_2=img(0.8),
@@ -3383,8 +2866,6 @@ def test_an_untagged_picture_defeats_the_layering():
                                        "a chastity belt <Picture 2>.")[2]
     check("a tagged wardrobe raises nothing",
           "not one <Picture N> tag anywhere" not in tagged, "")
-    # No layers to defeat: an untagged reference is then just an untagged reference,
-    # which the node already warns about separately.
     flat = run_node(P, plan_only=True, ref_image_1=img(0.1),
                     character_memory="Mara: she, 22, a white top and boots.")[2]
     check("no layers, no layer warning",
@@ -3398,21 +2879,12 @@ def test_underwear_is_hidden_until_it_is_not():
          "Mara pulls off her shorts.\n\nMara turns around.")
     info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
     sh = [s.lower() for s in script.split("---") if s.strip()]
-    # UNDERWEAR IS PLACED, NOT DELETED, as of the report that said so for
-    # the third time. It stays in the text and the node says where it is;
-    # the fact protected is the same one, that it is not rendered on top of
-    # what covers it. A locket or a scarf under a coat still waits.
     check("while the shorts are on, the shorts are the outermost layer",
           "whole, opaque and unbroken" in sh[0], sh[0][-150:])
     check("...and the panties are not named",
           "panties" not in sh[0], sh[0][-150:])
-    # The belt goes under as well: worn beneath jeans it is COVERED, not forgotten,
-    # and it comes back by the same route as any other layer -- the cover comes off,
-    # the reveal clause names it, and it stays in the scene from then on.
     check("...nor the belt", "chastity belt" not in sh[0], sh[0][-150:])
     check("...while the shorts themselves are", "shorts" in sh[0], "")
-    # The shot that takes them off is where both become visible, and it has to say so
-    # or the reveal happens against a body the text says is bare.
     check("the reveal shot describes them", "panties" in sh[1] and "chastity belt" in sh[1], "")
     check("...and every shot after", "panties" in sh[2] and "chastity belt" in sh[2], "")
     check("info explains the layering", "read as layers" in info, "")
@@ -3424,12 +2896,6 @@ def test_underwear_is_hidden_until_it_is_not():
 
 def test_a_garment_moved_is_not_a_garment_gone():
     print("\n=== shorts pulled down stay on, and stay described ===")
-    # Reported: the shorts changed appearance in the next beat. "Pulls down her
-    # shorts" was read as a full removal, so the shot was told they come off and are
-    # "dropped out of frame", and the entry was scrubbed from the scene -- leaving
-    # every later shot describing nothing where something still was. An undescribed
-    # garment is one the model re-invents, which is the same pair coming back a
-    # different pair.
     mem = "Mara: she, 22, blue denim shorts, white top."
     P = ("A room.\n\nMara stands and pulls down her shorts.\n\n"
          "Mara steps to the window.\n\nMara looks back.")
@@ -3456,10 +2922,6 @@ def test_a_garment_moved_is_not_a_garment_gone():
     # A real removal still empties the wardrobe and says so.
     off = run_node("A room.\n\nMara pulls off her shorts.\n\nMara waits.",
                    plan_only=True, character_memory=mem)[3]
-    # The guarantee is that the removal FINISHES in the shot -- the last frame is
-    # the next shot's keyframe. Not the exact sentence: where the beat already
-    # stages the act, the clause says only the part the beat leaves out, because
-    # restating who and what was the same removal written twice.
     check("a real removal still removes",
           "away by the last frame" in off and "fully removed" in off, "")
     check("...and stops describing them", "shorts" not in off.split("---")[1].lower(), "")
@@ -3467,9 +2929,6 @@ def test_a_garment_moved_is_not_a_garment_gone():
 
 def test_undressing_does_not_drop_her():
     print("\n=== taking a garment off does not put a body on the floor ===")
-    # Whole-path, because the unit test cannot show the clause reaching the shot. The
-    # fall cue read "pulls down her shorts" as a body being put on the floor, and the
-    # shot was then told what takes the landing and how the legs fold under it.
     mem = "Mara: she, 22, denim shorts.\nDan: he, 41."
     P = ("A room.\n\nMara stands and pulls down her shorts.\n\n"
          "Dan pushes her down onto the floor.")
@@ -3486,9 +2945,6 @@ def test_undressing_does_not_drop_her():
 
 def test_an_unbound_fall_is_told_what_catches_it():
     print("\n=== a fall with no hardware in it still names the landing ===")
-    # FALL_HOLD only ever fired on a RESTRAINED fall -- the concern there was the
-    # hold giving way when the hands came up to break it. A free body falling had
-    # nothing said about it at all, and that is the shot the spare leg turned up on.
     mem = "Mara: she, 30."
     free = run_node("A room.\n\nMara trips and falls to the floor.",
                     plan_only=True, character_memory=mem)[3]
@@ -3501,8 +2957,6 @@ def test_an_unbound_fall_is_told_what_catches_it():
     last = [s for s in bound.split("---") if s.strip()][-1]
     check("a bound fall keeps the bound wording", "A bound body falls" in last, "")
     check("...and not both at once", "The body falls as one piece" not in last, "")
-    # It must not fire on shots that are not a fall -- every clause costs the beat
-    # some of the shot.
     still = run_node("A room.\n\nMara walks to the window.\n\nMara drops the keys.",
                      plan_only=True, character_memory=mem)[3]
     check("no fall, no clause",
@@ -3520,8 +2974,6 @@ def test_a_named_look_target_is_restated():
     sh = [s for s in script.split("---") if s.strip()]
     check("the named target is restated",
           "The eyes and the head are turned to the TV" in sh[0], sh[0][-70:])
-    # It follows the beat rather than leading it -- ca75672: anatomy in the opening
-    # tokens is what a distilled LoRA settles composition on.
     check("...after the beat, not before it",
           sh[0].index("looking at the TV") < sh[0].index("The eyes and the head"), "")
     check("a pronoun target adds nothing", "The eyes and the head" not in sh[1], "")
@@ -3535,9 +2987,6 @@ def test_a_named_look_target_is_restated():
 
 def test_a_line_with_no_look_turns_the_faces_to_each_other():
     print("\n=== a dialogue shot that names no look faces the speakers to each other ===")
-    # Reported: "it looks like they are talking to a camera and not to each other."
-    # gaze_hold only restates a look the beat NAMED; a line with none left both
-    # faces to the portrait prior. Two people and a line get one impersonal sentence.
     mem = "Dan: he, 40, a grey jacket.\nMara: she, 30, a red coat."
     P = ("A kitchen.\n\nDan and Mara stand at the counter. Dan asks: \"Is that the last one?\"\n\n"
          "Mara looks at the window and says: \"Nearly.\"\n\n"
@@ -3557,10 +3006,6 @@ def test_a_line_with_no_look_turns_the_faces_to_each_other():
 
 def test_a_walk_along_a_place_arrives_in_it():
     print("\n=== a beat that travels along a place ends in it ===")
-    # Reported: she leaves the bedroom, walks down the hallway, comes across a BED,
-    # then reaches the kitchen. "down the hallway" is a via with no destination;
-    # travel_anchor said nothing, `here` stayed "bedroom", and the kitchen beat was
-    # told it opened in the bedroom -- two shots after she had left it.
     mem = "McKenna: she, 22, a grey t-shirt, black shorts."
     P = ("A small flat at night. Her bedroom has an unmade bed and a lamp.\n\n"
          "McKenna gets up and comes out of her bedroom.\n\n"
@@ -3583,11 +3028,6 @@ def test_a_walk_along_a_place_arrives_in_it():
 
 def test_a_rooms_description_waits_outside_that_room():
     print("\n=== the scene's description of a room waits outside that room ===")
-    # Reported: a scene paragraph reading "Her bedroom has an unmade bed and a lamp",
-    # a walk from the bedroom down the hallway TO THE LIVING ROOM (which worked -- the
-    # room label was right), then a beat from the living room to the kitchen -- and a
-    # BED IN THE LIVING ROOM. The paragraph is stamped into every shot, so the bed was
-    # described in the living-room shot, and at cfg 1 nothing takes a named thing back.
     SCENE = "A small flat at night. Her bedroom has an unmade bed and a lamp."
     out, held, blocked, waited = S.scene_for_here(SCENE, "kitchen")
     check("another room's description is held", "unmade bed" not in out, out)
@@ -3611,8 +3051,6 @@ def test_a_rooms_description_waits_outside_that_room():
     same, held2, _, _ = S.scene_for_here(SCENE, "bedroom")
     check("the room we are IN keeps its description", "unmade bed" in same, same)
     check("...and reports nothing held", held2 == [], str(held2))
-    # HOLDING NOTHING CHANGES NOTHING, byte for byte -- a script that never leaves one
-    # room must not be touched, and every other suite depends on that.
     for txt, room in (("A kitchen. She is at the sink.", "kitchen"),
                       ("Shot on 35mm, shallow depth of field.", "bedroom"),
                       ("Two people, late evening.", "kitchen")):
@@ -3627,17 +3065,10 @@ def test_a_rooms_description_waits_outside_that_room():
                            "kitchen")[0]
     check("the other room goes and this one stays",
           "unmade bed" not in two and "small and white" in two, two)
-    # A sentence WELDING the film's framing to one room's furniture is kept, and the
-    # caller is told, because holding it would take the night with the bedroom.
     weld, weld_held, weld_blocked, _ = S.scene_for_here(
         "A small flat at night, her bedroom with an unmade bed.", "kitchen")
     check("a welded sentence is kept rather than losing the film's framing",
           "at night" in weld and weld_blocked and weld_held == ["bedroom"], weld)
-    # THE ANCHOR IS NEVER HELD. build_scene fuses the anchor and the scene paragraph
-    # before either reaches a shot, and an anchor is what belongs to the WHOLE film --
-    # "look, camera, lighting, location". An anchor naming a room was being held on
-    # every shot outside it, so the film lost its stock and its lens to a rule about
-    # furniture.
     ANCH = "Shot on 35mm in a cramped kitchen"
     a_in = S.scene_for_here(ANCH + ".\nHer bedroom has an unmade bed.", "bedroom", ANCH)
     check("an anchor naming another room is kept", "35mm" in a_in[0] and a_in[1] == [], a_in[0])
@@ -3669,12 +3100,6 @@ def test_a_rooms_description_waits_outside_that_room():
     check("a script that never leaves one room reports nothing",
           "WAITS OUTSIDE" not in info1, "")
 
-    # TWO ROOMS IN ONE SENTENCE, joined by a semicolon -- which is how a scene
-    # paragraph describes a flat. Split on full stops alone that is one unit naming
-    # both rooms, and the rule that a sentence naming BOTH stays then kept the whole
-    # flat in every shot: the model may render either room, or change its mind
-    # halfway through the shot and render the other. Reported as the scene shifting
-    # into a different form of itself mid-shot.
     FLAT = "A small apartment. The living room has a red sofa; the kitchen has white tiles."
     lounge = S.scene_for_here(FLAT, "living room", "", ["Maya"], "")
     kitchen = S.scene_for_here(FLAT, "kitchen", "", ["Maya"], "")
@@ -3703,10 +3128,6 @@ def test_a_rooms_description_waits_outside_that_room():
 
 def test_a_covered_object_does_not_send_its_picture():
     print("\n=== an object out of view does not carry its reference ===")
-    # Reported: the object looked different when it came back into view. While it was
-    # covered, the scrubber removed its WORDS and left its <Picture N> -- so the shot
-    # still sent the reference, unclaimed, and whatever the model made of a picture
-    # nothing accounted for became the keyframe the next shot was built on.
     FACE = torch.full((1, H, W, 3), 0.10)
     OBJ = torch.full((1, H, W, 3), 0.80)
     which = lambda t: "FACE" if abs(float(t.mean()) - 0.10) < 0.01 else "OBJ"
@@ -3750,16 +3171,10 @@ def test_the_anchor_survives_a_close_shot():
     # The staging shot has the author's own words and gets no second sentence about it.
     check("the staging shot is not argued with",
           "the wrists" not in sh[0], "")
-    # Both facts still reach the shot; they are two sentences now. The POSITION is
-    # a pose about the body, because buried in the hardware sentence it was the
-    # least prominent thing in it and the wrists rendered in front. The POINT
-    # stays with the hardware, which is what is fastened to the frame.
     check("the next shot is told where the arms are",
           "wrists together above the head" in sh[1], sh[1][-120:])
     check("...and what they are fastened to",
           "fast at the bed frame" in sh[1], sh[1][-120:])
-    # The one that matters: a close shot crops the anchor out of the picture, so the
-    # text is the only thing still carrying it.
     check("...including the close shot", "the wrists" in sh[1], "")
     check("...and the shot after that", "the wrists" in sh[2], "")
     # It latches like the hardware and is released by the same `remove:`.
@@ -3774,17 +3189,6 @@ def test_the_anchor_survives_a_close_shot():
 
 def test_a_grin_is_not_a_closed_mouth():
     print("\n=== the guard stops countermanding the beat ===")
-    # Reported as bad acting. The mouth guard lands on every shot with a person and
-    # no line, and for a face doing nothing that is right. But it was landing on the
-    # beats that ARE the performance:
-    #
-    #     Dana grins, wide and mean.   -> Mouths in the shot stay closed, jaws still.
-    #     Dana's mouth falls open.     -> Mouths in the shot stay closed, jaws still.
-    #     Dana yawns.                  -> Mouths in the shot stay closed, jaws still.
-    #
-    # The second one is contradicted word for word. Only the VOCAL reactions stood
-    # down -- laughs, sobs -- because exertion_in covers those; every silent facial
-    # performance was answered with an instruction to freeze it.
     MEM = "Dana: she, 34, red coat."
 
     def held(beat):
@@ -3801,27 +3205,17 @@ def test_a_grin_is_not_a_closed_mouth():
                "Dana licks her lips.",
                "Dana mouths the words."):
         check(f"the beat keeps its mouth: {_b!r}", not held(_b), "")
-    # ONLY the mouth. A stare or a wince is a face acting with its mouth shut, and
-    # the guard costs it nothing -- standing down for those would free a mouth for
-    # no gain, and a free mouth on an open branch is where lip-sync lands.
     for _b in ("Dana stares at the door.",
                "Dana walks to the window.",
                "Dana finds her sister's body."):
         check(f"a shut mouth is still held: {_b!r}", held(_b), "")
 
-    # ...and ordinary English that happens to use these verbs is left alone. Every
-    # one of these was in the first draft of the pattern: a dog bites, a mill
-    # grinds, a tongue licks an envelope, an engine spits.
     for _b in ("The dog bites the postman.", "She grinds the coffee.",
                "He licks the envelope.", "The engine spits and dies.",
                "She mouths off at the guard.", "The jaw of the vice opens."):
         check(f"ordinary English is quiet: {_b!r}", not S.mouth_performs(_b), "")
     check("...and a person spitting is not", S.mouth_performs("He spits on the floor."))
 
-    # THE BRANCH MUST NOT MOVE. exertion_in stands the guard down AND unpins the
-    # audio; a smile is silent, so this frees the picture only. If a silent
-    # expression started opening branches it would be the babble hole all over
-    # again, on the most common beat in any script.
     info = run_node("A kitchen.\n\nDana grins, wide and mean.", plan_only=True,
                     character_memory=MEM, auto_sound=False)[2]
     check("...and a silent expression opens no audio branch",
@@ -3830,12 +3224,6 @@ def test_a_grin_is_not_a_closed_mouth():
     check("info says which shots kept their mouths",
           "the beat itself puts the mouth to work" in info, info[:300])
 
-    # The guard no longer orders the lower face to hold still. "Mouths stay closed"
-    # is the whole of the lip-sync guarantee; "jaws still" was a stillness
-    # instruction riding along on it, on every quiet shot in the film.
-    # ONE_VOICE is the sentence a shot actually gets when a line has no name on it;
-    # MOUTH_HOLD_OTHERS was a constant of the same wording that nothing emitted, and
-    # it went with the dead-code pass.
     for _c in (S.MOUTH_HOLD, S.ONE_VOICE):
         check(f"no stillness ordered: {_c[:34]!r}",
               not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", _c, re.I), _c)
@@ -3845,26 +3233,6 @@ def test_a_grin_is_not_a_closed_mouth():
 
 def test_nothing_tells_the_cast_to_hold_still():
     print("\n=== the guards stopped ordering stillness ===")
-    # Reported: characters look lifeless. This file already knows why, in
-    # RESTRAINT_HOLD's own comment -- an earlier wording let the body "reach only as
-    # far as the metal allows before it stops", and "read plainly, that is an
-    # instruction to hold still ... The performance died under its own continuity
-    # guards." It was fixed there and left standing everywhere else. Eight clauses
-    # were still carrying it, three of them freezing PEOPLE by name:
-    #
-    #     Mara listens, still, wearing what the sheet already lists.
-    #     ...and the people listening hold still and let it play.
-    #     ...every other jaw in the shot stays still.
-    #     McKenna is still lying down.
-    #     Still on the body and the shorts pulled down...
-    #     ...beginning at the first frame and still finishing on the last.
-    #     ...untouched and still fastened.
-    #     The thong underneath is what shows there now, still on and unchanged.
-    #
-    # Five of those meant "as before" and one meant "nevertheless". The model does
-    # not get the distinction -- `still` is one token and it damps motion wherever
-    # it is pointed. The first two are the worst of them, because they land on the
-    # LISTENER: the reaction shot, which is where acting actually happens.
     STILL = re.compile(r"\bstill\b|\bmotionless\b|\bfrozen\b|\bunmoving\b|"
                        r"\brigid\b|\bstatic\b", re.I)
     _tv = 'The TV says: "x"'
@@ -3882,18 +3250,12 @@ def test_nothing_tells_the_cast_to_hold_still():
     ]
     for _n, _c in built:
         check(f"no stillness ordered by {_n}", not STILL.search(_c), _c)
-    # ...and every clause CONSTANT in the file, so the next one added cannot quietly
-    # bring it back. The filter is the clause idiom: an upper-case name holding real
-    # prose rather than a regex source.
     for _n in sorted(dir(S)):
         _v = getattr(S, _n, None)
         if (isinstance(_v, str) and _n.isupper() and len(_v.split()) >= 4
                 and not re.search(r"\(\?|\\b|\|", _v)):
             check(f"no stillness ordered by {_n}", not STILL.search(_v), _v)
 
-    # EVERY GUARANTEE SURVIVES. This is a vocabulary change, not a retreat: each of
-    # these clauses exists because of a report, and none of them stops saying what
-    # it was added to say.
     check("the listener is still given something to do",
           "listens" in S.told_hold(["Mara"]))
     check("...and is still held to the sheet's wardrobe",
@@ -3921,17 +3283,6 @@ def test_nothing_tells_the_cast_to_hold_still():
 
 def test_a_face_under_duress_is_not_a_portrait():
     print("\n=== the face stops being left to the model's prior ===")
-    # Reported: she smiles at the camera in a situation of duress. Dumped, a
-    # four-shot scene of a woman handcuffed in the back of a van -- pulling at the
-    # cuffs, struggling, going limp -- contained NOT ONE WORD about anybody's face.
-    # Every clause in it was hardware, limbs, or mouths-closed.
-    #
-    # SILENCE IS NOT NEUTRAL. An attribute the prompt does not state is filled from
-    # the model's prior, and the prior for a named, described person is a PORTRAIT:
-    # facing the lens, pleasantly. This file already knows the half of that about
-    # the eyes -- it is the whole reason gaze_hold exists -- but gaze_hold only
-    # fires when the beat NAMES something to look at, which most beats do not, and
-    # nothing has ever spoken for the expression at all.
     MEM = "McKenna: she, 26, dark hair, a red jacket, handcuffs behind her back."
     PLAIN = "Kate: she, 30, a grey coat."
 
@@ -3945,26 +3296,16 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...and so does a beat staging unambiguous duress",
           "shows the strain" in face("Kate is bound and gagged on the floor.",
                                      mem=PLAIN), "")
-    # ...but an ambiguous one alone does NOT, and that is deliberate. See
-    # _DURESS_STRONG: "struggles" is a maths homework as often as a restraint, and
-    # one such beat used to stamp a grim mood on a whole comedy.
     check("...while one ambiguous beat alone does not",
           "shows the strain" not in face("Kate struggles and twists away.",
                                          mem=PLAIN), "")
     check("...unless the anchor says what the film is",
           "shows the strain" in face("Kate struggles and twists away.", mem=PLAIN,
                                      anchor="Handheld. A tense, grim abduction."), "")
-    # NOT INVENTED. Only what the scene already establishes -- hardware the sheet
-    # lists, or the author's own distress verbs. A shot staging neither gets
-    # nothing: a node that decides how everybody feels is a node writing the film.
     check("an ordinary scene is left alone",
           "shows the strain" not in face("Kate makes the coffee.", mem=PLAIN), "")
     check("...and so is an ordinary beat about a calm person",
           "shows the strain" not in face("Kate reads the letter.", mem=PLAIN), "")
-    # A COLLAR ALONE IS NOT DURESS. restraint_present is right for the continuity
-    # holds -- a collar must stay fastened and stay the object it was -- but it is
-    # worn in scenes that are not distressing, and stamping strain on one of those
-    # faces is the mouth guard's bug in a new place.
     check("a collar alone does not stage duress",
           "shows the strain" not in face("McKenna sits on the bed.",
                                          mem="McKenna: she, 26, a leather collar."), "")
@@ -3974,15 +3315,9 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...and so does rope",
           "shows the strain" in face("McKenna sits on the bed.",
                                      mem="McKenna: she, 26, rope around her wrists."), "")
-    # The author's own face beat wins, exactly as it does against the mouth guard:
-    # where the beat says what the face does, the node has nothing to add over it.
     check("a written smile is not argued with",
           "shows the strain" not in face("McKenna smiles at him."), "")
 
-    # IMPERSONAL, even with two people in the shot. Naming her here is a SECOND
-    # naming -- the hardware hold has already said "Every restraint on McKenna" --
-    # and a named person is a person the model draws: that is what put a second girl
-    # in frame at the moment of cuffing. gaze_hold made the same call.
     two = run_node("A van interior, night.\n\nMcKenna pulls at the cuffs while Dan "
                    "watches.", plan_only=True,
                    character_memory=MEM + "\nDan: he, 40, a work coat.")[3]
@@ -3990,8 +3325,6 @@ def test_a_face_under_duress_is_not_a_portrait():
           "the face shows the strain" in two and "McKenna's face" not in two,
           two[-200:])
 
-    # PICTURE ONLY. The audio branch must not move: a face is not a sound, and a
-    # wordless duress shot is still pinned to silence.
     info = run_node("A van interior, night.\n\nMcKenna lies against the wheel arch.",
                     plan_only=True, character_memory=MEM, auto_sound=False)[2]
     check("...and it opens no audio branch",
@@ -3999,8 +3332,6 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("info names the shots it spoke for",
           "left to the model's prior" in info, info[:200])
 
-    # Positively phrased: at cfg 1 there is no negative prompt, so "not smiling"
-    # would name the smile. A set mouth is a thing that can be drawn.
     cl = S.DURESS_FACE
     check("the clause is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b|\bun\w+ing\b", cl, re.I), cl)
@@ -4009,11 +3340,6 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...and names no camera", not re.search(r"camera|lens", cl, re.I), cl)
     check("...in one sentence", cl.count(".") == 1, cl)
 
-    # THE SWITCH IS hold_gaze, not one of its own. Every inference in this file has
-    # an off switch, but the widget count is capped by a test whose comment says the
-    # old node had 38 and nobody could find anything -- so this rides the
-    # switch that already exists for the same prior. hold_gaze is the portrait's
-    # POSE; this is the portrait's EXPRESSION.
     off = face("McKenna lies against the wheel arch.", hold_gaze=False)
     check("off with hold_gaze, the face is left alone again",
           "shows the strain" not in off, "")
@@ -4021,19 +3347,6 @@ def test_a_face_under_duress_is_not_a_portrait():
 
 def test_her_whimper_does_not_free_his_mouth():
     print("\n=== a vocal belongs to somebody ===")
-    # Reported: "her whimpering is opening up his ability to babble. Dialogue is
-    # not being localized to the characters."
-    #
-    # _voiced is a SHOT-LEVEL flag with no owner. exertion_in(body) says this beat
-    # stages a vocal, and both mouth guards then stand down -- for EVERYBODY in the
-    # shot. The comment says why they stand down: "straining is vocal and that mouth
-    # should be open." That mouth. Not every mouth.
-    #
-    # So "McKenna sobs while Dan watches" left Dan's mouth as free as hers on a shot
-    # whose audio branch her sob had just opened, which is the exact machinery the
-    # speech guard exists to stop -- and it fires for a spoken line while a vocal
-    # switched it off entirely. Measured on a six-shot scene: not one shot had any
-    # mouth guard at all.
     MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
            "Dan: he, 40, a work coat.")
 
@@ -4046,8 +3359,6 @@ def test_her_whimper_does_not_free_his_mouth():
     check("...and the other mouth is closed",
           "every other mouth in the shot stays closed" in a, a[-200:])
 
-    # LOCALIZATION. Two sound sources in one shot and nothing saying which is which:
-    # the model is free to give her the words and him the whimper.
     b = shot('McKenna whimpers, and Dan says: "Nearly there."')
     check("the line is localized to the speaker", "Only Dan speaks" in b, b[-220:])
     check("...and the vocal to the other character",
@@ -4055,23 +3366,16 @@ def test_her_whimper_does_not_free_his_mouth():
     check("...and neither of their mouths is held shut",
           "Mouths in the shot stay closed" not in b, b[-220:])
 
-    # The person MAKING the sound is never muted -- that was the whole reason the
-    # guard stood down, and it is still right for her.
     c = shot("McKenna whimpers behind the gag.")
     check("a lone vocaliser is not told to close her mouth",
           "Mouths in the shot stay closed" not in c, c[-200:])
     check("...and with nobody else in the beat, nothing is claimed",
           "every other mouth" not in c, c[-200:])
 
-    # UNATTRIBUTABLE STAYS UNGUARDED. If the beat does not say whose the sound is,
-    # closing mouths could close the mouth of whoever is making it -- and muting a
-    # real sound is worse than a mouth moving, which is this file's standing rule.
     d = shot("Somebody sobs in the dark while Dan waits.")
     check("an unattributed vocal holds nobody",
           "every other mouth in the shot stays closed" not in d, d[-200:])
 
-    # THE BRANCH IS UNTOUCHED. Her sob is still heard: this changes which faces move,
-    # never what the audio is conditioned on.
     info = run_node("A van interior, night.\n\nMcKenna sobs while Dan watches.",
                     plan_only=True, character_memory=MEM, auto_sound=False)[2]
     check("the vocal still keeps its audio",
@@ -4089,16 +3393,6 @@ def test_her_whimper_does_not_free_his_mouth():
 
 def test_her_look_does_not_land_on_him():
     print("\n=== a held look belongs to whoever is doing the looking ===")
-    # Reported: "Girl is stuck gazing at a camera while the other character does his
-    # part." The gaze latch has no owner. `looking_at` is ONE string held across
-    # shots, and gaze_hold is impersonal by design, so a look staged by one person
-    # goes on being said in shots that person is not even in -- landing on whoever
-    # IS there.
-    #
-    # Measured: McKenna looks at the lane in shot 3; shot 4 describes only Dan and
-    # was still told "The eyes and the head are turned to the lane behind them."
-    # That is his head being turned to her sightline. Same class of defect as the
-    # vocal flag: a per-person fact kept in a shot-level variable.
     MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
            "Dan: he, 40, a work coat.")
     P = ("A white van parked facing away down the lane, rear doors open, night.\n\n"
@@ -4113,19 +3407,12 @@ def test_her_look_does_not_land_on_him():
     check("...and the shot she is not in never claims it impersonally",
           "The eyes and the head are turned to the lane" not in sh[2], sh[2][-160:])
 
-    # ...and where she IS still in the shot, the look is hers by name, because a
-    # second person in frame is a second pair of eyes the impersonal wording could
-    # land on. One person in the shot keeps the impersonal wording: naming somebody
-    # is a second mention of them, and that has its own cost.
     P2 = ("A lane, night.\n\n"
           "McKenna looks at the treeline.\n\n"
           "Dan checks the wheel while McKenna waits.")
     sh2 = [" ".join(x.split()) for x in
            re.split(r"(?=\[Shot )", run_node(P2, plan_only=True,
                                              character_memory=MEM)[3]) if x.strip()]
-    # Attributed -- by name, or by her pronoun where another clause in the same
-    # shot has already spent the naming. Either way it is HERS and cannot be read
-    # as his, which is the guarantee. A bare "The eyes and the head" cannot.
     check("the held look is attributed once two people are in the shot",
           ("McKenna's eyes and head are turned to the treeline" in sh2[1]
            or "Her eyes and head are turned to the treeline" in sh2[1]), sh2[1][-200:])
@@ -4147,20 +3434,6 @@ def test_her_look_does_not_land_on_him():
 
 def test_an_anchor_says_when_it_has_taken_the_scenes_place():
     print("\n=== the scene paragraph that quietly became a shot ===")
-    # Reported: "van was not in the same direction as the beat prior. Van direction
-    # moved."
-    #
-    # Filling in `anchor` makes EVERY paragraph a beat -- the anchor is then the
-    # scene. That is deliberate and the tooltip says so. What it means in practice
-    # is that a prompt whose first paragraph is scene text loses that text after
-    # shot 1: the van's heading, the location, the time of night are stated once,
-    # rendered as their own shot, and never carried again.
-    #
-    #     no anchor    4 shots   van direction carried: yes yes yes yes
-    #     with anchor  5 shots   van direction carried: yes NO  NO  NO  NO
-    #
-    # Nothing said so at runtime. The tooltip is in the widget; the person hits this
-    # after a render, and what they see is the van turning round between shots.
     P = ("A white van parked facing away down the lane, rear doors open, night.\n\n"
          "Dan lifts her into the back.\n\n"
          "Dan closes one of the rear doors.")
@@ -4174,8 +3447,6 @@ def test_an_anchor_says_when_it_has_taken_the_scenes_place():
     check("...and says what that costs",
           "not carried into any other shot" in info, info[:300])
 
-    # NOT when the first paragraph stages an action -- that IS a beat, and telling
-    # somebody to move it into the anchor would be wrong.
     P2 = ("Dan opens the rear doors.\n\nDan lifts her into the back.")
     q = run_node(P2, plan_only=True, character_memory=MEM,
                  anchor="Handheld, night exterior.")[2]
@@ -4194,19 +3465,6 @@ def test_an_anchor_says_when_it_has_taken_the_scenes_place():
 
 def test_a_grim_film_is_grim_in_every_shot():
     print("\n=== the scene stops reading as a happy one ===")
-    # Reported: "the last run had them smiling and thinking this was a happy scene,
-    # when indeed it was not." THEM -- plural. 8418805 gave the restrained person a
-    # face and stopped there, and measured on a five-shot kidnapping it shows:
-    #
-    #     shot 1  cast=          -- NOTHING --
-    #     shot 2  cast=McKenna   strain
-    #     shot 3  cast=McKenna Dan   strain      <- impersonal; Dan gets nothing
-    #     shot 4  cast=Dan       -- NOTHING --
-    #     shot 5  cast=Dan       -- NOTHING --
-    #
-    # Every shot the captor is alone in had no tone at all, so it was filled from
-    # the prior, and the prior for a man in a work coat is a pleasant one. A film
-    # has a MOOD and it does not belong to one character's face.
     MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
            "Dan: he, 40, a work coat.")
     P = ("A van interior, night.\n\nMcKenna pulls at the cuffs.\n\n"
@@ -4223,8 +3481,6 @@ def test_a_grim_film_is_grim_in_every_shot():
     check("...and the shot with only the captor gets the mood alone",
           "The mood is grim" in sh[3] and "shows the strain" not in sh[3], sh[3][-140:])
 
-    # NOT INVENTED, and not everywhere. A film that stages no duress is left alone
-    # in every shot -- the node does not get to decide that your film is bleak.
     PLAIN = "Kate: she, 30, a grey coat.\nSam: he, 33."
     Q = ("A kitchen, morning.\n\nKate makes the coffee.\n\n"
          "Sam reads the paper.\n\nKate sits down.")
@@ -4235,17 +3491,12 @@ def test_a_grim_film_is_grim_in_every_shot():
     check("an ordinary film gets no mood anywhere",
           not any("mood is grim" in x for x in qs), qs[0][-140:])
 
-    # It reads the FILM, not just this beat: a shot of the captor alone is grim
-    # because of what the sheet says is on her wrists, three beats ago.
     check("the mood is read from the sheet's hardware",
           S.film_stages_duress(["Dan closes the hatch."],
                                "McKenna: she, 26, cuffs on her wrists."))
     check("...or from unambiguous duress in any beat",
           S.film_stages_duress(["Kate makes the coffee.",
                                 "Kate is held captive in the cellar."], PLAIN))
-    # AND NOT from an ambiguous one. Measured over 512 beats of six scenario
-    # families, inferring from ambiguous verbs called an ORDINARY film grim as often
-    # as a duress one -- 87.8% against 73.5% at two weak beats -- so it does not.
     check("...but never from an ambiguous verb alone",
           not S.film_stages_duress(["Kate makes the coffee.", "Kate sobs."], PLAIN))
     # THE ANCHOR SETTLES IT, both ways, and outranks everything.
@@ -4276,27 +3527,6 @@ def test_a_grim_film_is_grim_in_every_shot():
 
 def test_a_look_survives_the_next_beat():
     print("\n=== the look she was given does not evaporate ===")
-    # Reported: "when she looks at the van in one beat, she's gazing at the camera in
-    # the next beat and not looking at the van."
-    #
-    # ed0d2a6 gave the latch an owner. It did not make the latch SURVIVE. Measured
-    # over seven plausible next-beats, the look held in two:
-    #
-    #     McKenna waits.                    -> held
-    #     McKenna pulls at the cuffs.       -> held
-    #     McKenna watches him.              -> LOST
-    #     Dan opens the driver's door.      -> LOST
-    #     Dan walks to the driver's door.   -> LOST
-    #     Dan lifts the case into the back. -> LOST
-    #
-    # Two different causes, neither of them the latch:
-    #
-    #   1. "watches him" clears the look -- she IS looking somewhere else -- but
-    #      `him` is refused as a target, so nothing replaces it and the shot says
-    #      nothing about her eyes at all. Nothing is the lens.
-    #   2. A beat that names only Dan drops her from the shot text completely, so
-    #      she has no sheet line, no pose and no look, while still being in the
-    #      van in the picture the next shot starts from.
     MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
            "Dan: he, 40, a work coat.")
 
@@ -4308,17 +3538,11 @@ def test_a_look_survives_the_next_beat():
                                 anchor="Handheld, night exterior.")[3]) if x.strip()]
         return sh[1], sh[2]
 
-    # 1. A LOOK AT A PERSON IS A LOOK. The old rule -- "restating a pronoun says
-    # nothing the beat did not" -- is true against a neutral model and false against
-    # one whose prior is a portrait: the choice is not between the beat's word and a
-    # restatement, it is between the beat's word and the lens.
     _, b = two("McKenna watches him.")
     check("a look at a person is said, not dropped",
           "turned to Dan" in b, b[-200:])
     _, b2 = two("McKenna looks at Dan.")
     check("...and a look at a NAME is a look too", "turned to Dan" in b2, b2[-200:])
-    # Only where it is unambiguous. Three people and a bare "him" resolves to
-    # nobody, and guessing which is worse than saying nothing.
     THREE = MEM + "\nSam: he, 35, a hood."
     amb = " ".join(run_node("A lane at night.\n\nMcKenna watches him while Dan and "
                             "Sam wait.", plan_only=True, character_memory=THREE,
@@ -4326,17 +3550,11 @@ def test_a_look_survives_the_next_beat():
     check("an ambiguous pronoun resolves to nobody",
           "turned to Dan" not in amb and "turned to Sam" not in amb, amb[-200:])
 
-    # 2. SHE IS STILL IN THE VAN. A beat about Dan does not take her out of the
-    # frame -- the next shot starts from a picture with her in it -- so a look she
-    # was given goes on being hers. Named, because the shot's own text describes
-    # only Dan and an impersonal sentence would land on him: that was ed0d2a6.
     for _second in ("Dan opens the driver's door.",
                     "Dan lifts the case into the back."):
         _, c = two(_second)
         check(f"her look is carried past {_second[:22]!r}",
               "McKenna's eyes and head are turned to the van" in c, c[-200:])
-    # ...for ONE shot, not forever. Two beats she is absent from and the claim
-    # stops: the node knows she was in the previous picture, not where she is now.
     sh = [" ".join(x.split()) for x in
           re.split(r"(?=\[Shot )",
                    run_node("A lane at night.\n\nMcKenna looks at the van.\n\n"
@@ -4353,27 +3571,6 @@ def test_a_look_survives_the_next_beat():
 
 def test_the_bed_survives_an_anchor():
     print("\n=== the room tone that was supposed to fill the lead-in ===")
-    # Reported: "there is still babble at the opening stages of the beat."
-    #
-    # This file already knows the mechanism and wrote it down: "a line is a second
-    # or two; the shot is five to ten, and the audio branch is open for all of it
-    # ... the only thing it knows is happening in this shot is somebody talking, so
-    # it invents more talking to occupy the lead-in." Its answer was that "what
-    # occupies the time around it is ROOM TONE. A branch with a bed to lay down does
-    # not need to invent a voice to fill the space."
-    #
-    # The bed was not there. scene_ambient reads the anchor and the SCENE -- and
-    # with `anchor` filled in there is no scene paragraph, because every paragraph
-    # is a beat. Measured on the same prompt:
-    #
-    #     anchor set   3 shots   ambient bed per shot: NO  NO  NO
-    #     no anchor    2 shots   ambient bed per shot: yes yes
-    #
-    # room_tone already has the fallback for exactly this and says so at its call
-    # site: "The opening beat is the fallback: with `anchor` set there is no scene
-    # paragraph, and an anchor describes the camera rather than the room."
-    # scene_ambient never got one, so the film's bed died whenever anyone filled in
-    # the widget the tooltips tell them to fill in.
     MEM = "McKenna: she, 26, dark hair.\nDan: he, 40, a work coat."
     P = ("A van interior, night. The engine is running.\n\n"
          "Dan looks back and says: \"Sit still.\"\n\n"
@@ -4396,8 +3593,6 @@ def test_the_bed_survives_an_anchor():
           and S.scene_ambient("Handheld, tight interior.",
                               "A van interior, night. The engine is running.")
           == "an engine idling")
-    # It still cannot OPEN a branch -- that is the one thing an inference may never
-    # do here, and it is why every wordless shot does not get a voice with its bed.
     Q = ("A van interior, night. The engine is running.\n\nMcKenna waits.")
     q = [" ".join(x.split()) for x in
          re.split(r"(?=\[Shot )", run_node(Q, plan_only=True, character_memory=MEM,
@@ -4413,34 +3608,6 @@ def test_the_bed_survives_an_anchor():
 
 def test_the_audio_branch_gets_a_soft_landing():
     print("\n=== the audio branch stops landing from a great height ===")
-    # Reported repeatedly: babble at the opening of the beat, and prose was not
-    # fixing it. It cannot. Every clause in this file changes what the branch is
-    # TOLD; none of them changes how much noise it still has to clear when it
-    # stops. Computed from ComfyUI's own scheduler code at shift 12/3:
-    #
-    #     scheduler     5 steps   8 steps      <- last AUDIO sigma before zero
-    #     simple         0.4286    0.3000
-    #     beta           0.2981    0.1559
-    #     normal         0.0348    0.0348
-    #     kl_optimal     0.0030    0.0030
-    #     exponential    0.0030    0.0030
-    #
-    # On `simple` at 5 steps the audio branch resolves 43% of its denoising in ONE
-    # final jump -- 140x what kl_optimal leaves. A branch resolving that much at
-    # once invents whatever is easiest to invent, and for a branch conditioned on
-    # "somebody speaks" that is a voice. It surfaces at the OPENING because that is
-    # where the branch has the least conditioning to anchor it: the line has not
-    # started yet.
-    #
-    # The audio branch has no schedule of its own -- comfy/ldm/minimax/model.py
-    # derives it per step, sigma_a = time_shift_sigma(sigma_v, shift_v, shift_a) --
-    # so the audio tail is decided by the VIDEO schedule, and picking a scheduler
-    # for the audio means giving up the one chosen for the picture. Inserting one
-    # step does not: it splits the final jump and leaves every earlier sigma alone.
-    #
-    # Pure arithmetic, deliberately. comfy is not importable in this suite, which
-    # is why last_audio_sigma silently falls back here -- so the schedule build
-    # lives apart from the maths, and the maths is what gets tested.
     f = S.audio_sigma_of
     g = S.video_sigma_for_audio
     for want in (0.20, 0.10, 0.05, 0.03, 0.01):
@@ -4464,12 +3631,8 @@ def test_the_audio_branch_gets_a_soft_landing():
     check("the audio's last jump drops from 43% to about 3%",
           abs(f(out[-2], 12.0, 3.0) - 0.03) < 1e-6, str(f(out[-2], 12.0, 3.0)))
 
-    # A schedule that already lands softly is left completely alone -- picking
-    # kl_optimal or exponential is the better fix and must not be taxed a step.
     FINE = [1.0, 0.5, 0.154, 0.062, 0.0109, 0.0]
     check("a soft tail is not touched", S.insert_audio_landing(FINE, 12.0, 3.0) == FINE)
-    # ...and neither is anything malformed. This runs inside the render path, so it
-    # returns the input unchanged rather than raising on anything unexpected.
     for _bad in ([], [0.0], [1.0], [1.0, 0.5], None):
         check(f"malformed input is returned as-is: {_bad!r}",
               S.insert_audio_landing(_bad, 12.0, 3.0) == (_bad if _bad else _bad))
@@ -4482,25 +3645,6 @@ def test_the_audio_branch_gets_a_soft_landing():
 
 def test_a_kidnapping_reads_as_one_without_being_declared():
     print("\n=== the beats are allowed to say what the film is ===")
-    # Reported: "she is still smiling in every beat, despite this being a kidnapping
-    # situation that was not defined in the anchor."
-    #
-    # That last clause is the whole bug. film_stages_duress read binding hardware
-    # from the CHARACTER SHEET and distress verbs from the beats -- and a kidnapping
-    # is neither. Nobody writes "McKenna: she, 26, handcuffs" for an abduction; the
-    # hardware goes on during the film, in the beats, and the beats use coercion
-    # verbs that were nowhere in the distress list. Ten beats of an explicit
-    # abduction returned False:
-    #
-    #     Dan grabs McKenna from behind and covers her mouth.
-    #     Dan drags McKenna towards the van.
-    #     Dan ties McKenna's wrists behind her back.
-    #     Dan puts a strip of tape over McKenna's mouth.
-    #     McKenna is bound and gagged in the back.
-    #     Dan pulls a hood over McKenna's head.
-    #
-    # Not one of them registered, so the film had no mood, so every face came from
-    # the portrait prior, which is pleasant. She smiled through her own abduction.
     MEM = "McKenna: she, 26, dark hair, a red jacket.\nDan: he, 40, a work coat."
     SCRIPT = ["Dan grabs McKenna from behind and covers her mouth.",
               "Dan drags McKenna towards the van.",
@@ -4514,8 +3658,6 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
               "McKenna tries to get away."]
     check("the whole script reads as an abduction",
           S.film_stages_duress(SCRIPT, MEM), "")
-    # Graded, because the words differ in how much they prove. Hardware on a body
-    # says duress on its own; grabbing and dragging are equally a garden centre.
     for _b in ("Dan ties McKenna's wrists behind her back.",
                "Dan puts a strip of tape over McKenna's mouth.",
                "McKenna is bound and gagged in the back.",
@@ -4530,8 +3672,6 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
                "McKenna tries to get away."):
         check(f"seen, but ambiguous: {_b[:40]!r}",
               S.beat_duress_strength(_b) == "weak", S.beat_duress_strength(_b))
-    # PASSIVE VOICE, which is how half an abduction gets written and which every
-    # active pattern missed: the victim is the subject, so nothing follows the verb.
     for _b in ("She was grabbed from behind on the towpath.",
                "She is bundled into the back of the van.",
                "They were hauled out of the church one at a time.",
@@ -4541,8 +3681,6 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
         check(f"passive voice is seen: {_b[:40]!r}",
               S.beat_duress_strength(_b) != "", "")
 
-    # AND IT IS NOT JUST THE FILM'S MOOD -- the shot he drags her in is a shot her
-    # face is in, so that shot gets the face clause too, not only the tone.
     sh = [" ".join(x.split()) for x in
           re.split(r"(?=\[Shot )",
                    run_node("A lane at night.\n\nDan drags McKenna towards the van."
@@ -4555,8 +3693,6 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
     check("...and the beat without her still carries the film's mood",
           "The mood is grim" in sh[2], sh[2][-170:])
 
-    # STILL NOT INVENTED. The verbs need a PERSON: an object being grabbed, dragged
-    # or forced is a prop, not a victim, and a film of those is not a grim film.
     for _b in ("Kate grabs a coffee and leaves.",
                "Kate drags the case to the door.",
                "Kate forces the window open.",
@@ -4572,19 +3708,6 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
 
 def test_a_line_is_locked_to_the_person_who_says_it():
     print("\n=== the line belongs to one mouth and the others are shut ===")
-    # Asked for: "an algorithm that keeps dialogue locked to who says it and nobody
-    # else talks." Attribution was not the problem -- speakers_in reads 19 of 20
-    # phrasings, including inverted ('"Wait," says Dan'), interrupted and
-    # addressee forms. What was missing is that the LOCK was only emitted when
-    # somebody else was described in the same beat:
-    #
-    #     Dan says: "Wait here."                        -> no lock at all
-    #     Dan says: "Wait." Mara says: "No."            -> no lock at all
-    #     Dan says: "Wait here." Mara says nothing.     -> no lock at all
-    #
-    # The first is the commonest beat in any script. Mara is standing there from
-    # the previous shot -- the picture this shot starts from has her in it -- and
-    # nothing told the shot she is not the one talking.
     MEM = "Dan: he, 40, a work coat.\nMara: she, 33, a green scarf."
 
     def shot(second, first="Dan and Mara stand by the door."):
@@ -4594,24 +3717,16 @@ def test_a_line_is_locked_to_the_person_who_says_it():
                                anchor="Wide, day.")[3])
         return " ".join([x for x in sc if x.strip()][-1].split())
 
-    # 1. THE CARRIED CAST IS STILL IN THE ROOM. A beat naming only the speaker does
-    # not empty the frame, and the person it does not name is exactly the mouth an
-    # invented voice lands on.
     a = shot('Dan says: "Wait here."')
     check("a lone speaking beat still locks the line",
           "Only Dan speaks" in a, a[-190:])
     check("...and closes the mouth of whoever else is in the room",
           "every other mouth in the shot stays closed" in a, a[-190:])
 
-    # 2. TWO SPEAKERS, TWO LINES. Nothing said which was whose, so they could be
-    # swapped between the two faces.
     b = shot('Dan says: "Wait." Mara says: "No."')
     check("two speakers are put in order",
           "Dan speaks first, then Mara" in b, b[-190:])
 
-    # 3. "SAYS NOTHING" IS NOT SPEAKING. It read as a second speaker, which left
-    # nobody silent and so cancelled the lock entirely -- a negation turning the
-    # guard off is the worst possible reading of it.
     check("saying nothing is not saying something",
           S.speakers_in('Dan says: "Wait here." Mara says nothing.', MEM) == ["Dan"],
           str(S.speakers_in('Dan says: "Wait here." Mara says nothing.', MEM)))
@@ -4621,8 +3736,6 @@ def test_a_line_is_locked_to_the_person_who_says_it():
     c = shot('Dan says: "Wait here." Mara says nothing.')
     check("...so the lock is not cancelled by it", "Only Dan speaks" in c, c[-190:])
 
-    # NOT INVENTED. With nobody else anywhere in the film there is no second mouth
-    # to close, and the shot is left alone rather than told about absent people.
     solo = " ".join([x for x in re.split(r"(?=\[Shot )",
                      run_node('A hallway.\n\nDan says: "Wait here."', plan_only=True,
                               character_memory="Dan: he, 40, a work coat.",
@@ -4637,48 +3750,26 @@ def test_a_line_is_locked_to_the_person_who_says_it():
 
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
-    # H3 is joint: the face follows the audio branch. A shot with no line but a sound
-    # the AUTHOR wrote -- "a low hum off the strip light" -- kept its branch open, and
-    # an open branch invents a voice the picture lip-syncs to. Nobody is speaking and
-    # the mouth moves anyway. That was the hole; a written sound was enough to open it.
     P = ('A workshop.\n\n'
          'Kate walks to the window.\n\n'
          'Kate says: "Wait there."\n\n'
          'A low hum comes off the strip light.\n\n'
          'Kate strains against the cuffs.')
-    # With a sheet, because that is how the node knows Kate is a person. It does not
-    # scan prose for capitals on purpose -- a sheet LABELS people and guessing from
-    # capitalisation picks up place names. A beat with a bare pronoun still works
-    # without one; a beat with only an unlisted name does not, and that is the
-    # conservative direction: no clause rather than a clause about nobody.
     MEM = "Kate: she, 30, red coat."
-    # auto_sound OFF: the trade this reports -- a written sound given up so the
-    # mouth can be held -- only arises when the branch would otherwise be pinned.
     info, script = run_node(P, plan_only=True, character_memory=MEM,
                             auto_sound=False)[2:4]
     sh = [s for s in script.split("---") if s.strip()]
     mouth = [i + 1 for i, s in enumerate(sh) if "Mouths in the shot stay closed" in s]
     check("the wordless shot with a person is told to close", mouth == [1], str(mouth))
     check("the speaking shot is not", "Mouths in the shot stay closed" not in sh[1], "")
-    # ca75672, which this must not undo: a mouth sentence on a beat with nobody in it
-    # describes a person who is not there, and the only way to satisfy it is to draw a
-    # face into an empty frame. The AUDIO half has no such limit -- an empty room still
-    # babbles -- so shot 3 is silenced without being told anything about mouths.
     check("the scenery beat is told nothing about mouths",
           "Mouths in the shot stay closed" not in sh[2], "")
     check("...but is still silenced", "sound is" not in sh[2], "")
-    # Effort is vocal and its mouth SHOULD be open. Silencing a straining body was a
-    # bug once already -- it renders as a flat, unreacting face.
     check("a straining body is left alone", "Mouths in the shot stay closed" not in sh[3], "")
-    # ...and its branch stays OPEN. With auto_sound off there is no sound sentence
-    # to look for, so the guarantee is read from the report: shot 4 is one of the
-    # shots whose audio is left free, which is what "keeps its audio" means.
     check("...and keeps its audio",
           "either describe a sound IN THE BEAT or stage EFFORT" in info
           and re.search(r"shot\(s\) [^|]*\b4\b[^|]*stage EFFORT", info) is not None,
           "")
-    # The written sound on a wordless shot is given up, because conditioning the
-    # branch is the only thing that actually settles the mouth.
     check("the wordless sound shot is silenced", "sound is" not in sh[2], "")
     check("info names the shots held closed", "mouths held closed on shot(s) 1" in info, "")
     check("...and names what it cost", "gave up the sound you wrote" in info, "")
@@ -4688,8 +3779,6 @@ def test_mouths_stay_shut_with_no_line():
     check("off, nothing is told to close", "Mouths in the shot stay closed" not in off, "")
     check("off, the written sound comes back",
           "sound" in [s for s in off.split("---") if s.strip()][2].lower(), "")
-    # Positively phrased: at cfg 1 no negative is evaluated, so an absence cannot be
-    # asked for -- only a closed mouth can be drawn.
     check("the clause is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b|\bnobody\b", S.MOUTH_HOLD, re.I), "")
     check("...and is one short sentence",
@@ -4698,15 +3787,7 @@ def test_mouths_stay_shut_with_no_line():
 
 def test_script_is_what_was_sent():
     print("\n=== script reports the text the model was actually given ===")
-    # script is documented as the exact per-shot text, and it is what the reader is
-    # told to check when a shot renders somebody they did not ask for. It was built
-    # before the render loop and never touched again, while the recovered-face claim
-    # was written onto the loop's own copy -- so on exactly the shot most likely to
-    # be under investigation, the model got "Dom: <Picture 1>, he, 41" and script
-    # said "Dom: he, 41". Diagnosing a duplicate from that leads to the wrong fix.
     mem = "Mara: <Picture 1>, she, 30, red coat.\nDom: he, 41, grey jacket."
-    # Dom LEAVES: a person a beat merely stops mentioning is still in the frame, and
-    # somebody still in the frame is not back after a shot away.
     P = ("Daylight. A yard.\n\nDom stands by the gate.\n\nDom walks out through the gate.\n\n"
          "Mara walks along the fence.\n\nDom comes back and looks at the sky.")
     sent, script = _prompts_sent(P, character_memory=mem,
@@ -4720,11 +3801,6 @@ def test_script_is_what_was_sent():
 
 def test_every_reference_is_claimed():
     print("\n=== no shot carries a picture its text never names ===")
-    # The node's own rule, and the cause of every duplicate reported so far: a
-    # picture the prompt refers to is that subject, and one it never mentions is
-    # ANOTHER subject -- a second person with the same face and clothes. So the
-    # count of references sent must equal the count of tags in the prompt, and the
-    # numbers must run 1..n with no gaps, or a tag points at the wrong image.
     img = lambda: torch.rand(1, H, W, 3)
     cases = [
         ("one tagged, one untagged returning",
@@ -4746,8 +3822,6 @@ def test_every_reference_is_claimed():
                                "Dom: he, 41.",
               ref_image_1=img(), ref_image_2=img())),
     ]
-    # Counted at the ENCODER: a frame carried as a reference is added inside
-    # build_conditioning, so counting what is handed to it misses exactly that picture.
     for name, P, kw in cases:
         sent = _encoded_refs(P, **kw)
         bad = []
@@ -4782,15 +3856,6 @@ def _encoded_refs(P, **kw):
 
 def test_the_demoted_handoff_is_claimed():
     print("\n=== below the safe aug, the handoff is named too ===")
-    # Reported as a duplicate Dan at the END of the video. Below KEYFRAME_SAFE_AUG
-    # the handoff stops being a keyframe and is encoded as an extra reference -- and
-    # it went in unclaimed, on the reasoning that a first frame is not a subject. In
-    # the reference rows it is not a first frame any more: it is picture N of N, and
-    # a picture the prompt never names is read as ANOTHER subject. The picture is the
-    # previous shot, so the other subject wears that shot's face and clothes.
-    #
-    # Later shots only, because a shot needs BOTH a handoff and a reference to demote
-    # anything -- which is exactly "at the end of the video".
     mem = "Dan: <Picture 1>, he, 41, grey jacket.\nMara: she, 30, red coat."
     P = "A yard.\n\nDan waits.\n\nMara arrives.\n\nDan and Mara talk.\n\nDan looks up."
     img = torch.rand(1, H, W, 3)
@@ -4819,9 +3884,6 @@ def test_the_demoted_handoff_is_claimed():
 
 def test_a_gapped_socket_still_sends_its_image():
     print("\n=== wiring ref_image_1 and ref_image_3 sends both ===")
-    # Whole-path, because the unit test cannot show the image being dropped. Wire a
-    # gap and the second picture used to vanish: its tag matched nothing in a roster
-    # of two, so it was stripped, and a reference nothing claims is not sent.
     img = lambda: torch.rand(1, H, W, 3)
     P = "A yard.\n\nMara waits.\n\nMara walks."
     sent, _ = _prompts_sent(P, character_memory="Mara: <Picture 1>, she, a locket <Picture 3>.",
@@ -4835,17 +3897,11 @@ def test_a_gapped_socket_still_sends_its_image():
                             ref_image_2=img())
     p, n = sent[0]
     check("a lone image on socket 2 is sent", n == 1 and "<Picture 1>" in p, f"{n} {p[:60]}")
-    # Sockets filled from the top are untouched -- this must not move anybody's
-    # working setup.
     sent, _ = _prompts_sent(P, character_memory="Mara: <Picture 1>, she, a locket <Picture 2>.",
                             ref_image_1=img(), ref_image_2=img())
     p, n = sent[0]
     check("no gap, nothing changes",
           n == 2 and sorted(re.findall(r"<Picture (\d+)>", p)) == ["1", "2"], f"{n}")
-    # The renumbered tag must still fetch the RIGHT image. Two pictures that can be
-    # told apart by value, so a mix-up shows up as the wrong face rather than as a
-    # number that merely looks tidy. This is the check that matters: renumbering is
-    # only safe if the image follows the number.
     A = torch.full((1, H, W, 3), 0.10)
     B = torch.full((1, H, W, 3), 0.70)
     val = lambda t: round(float(t.mean()), 2)
@@ -4877,11 +3933,6 @@ def test_a_gapped_socket_still_sends_its_image():
 
 def test_a_modified_state_is_not_read_as_an_act():
     print("\n=== 'closed rear doors' is not somebody closing them ===")
-    # Reported after the state hold shipped: the doors were STILL opening and being
-    # closed on camera. The node was doing it. A word between the state and its noun
-    # made "closed" parse as the verb, and the shot was handed "the doors are open at
-    # the first frame and shut by the last" -- the inverted guard, asking for exactly
-    # the render it exists to prevent. Whole-path, because that is where it bit.
     for _beat in ("Mara and Dom walk out from behind a van with closed rear doors.",
                   "Mara and Dom step out from behind the van, its back doors closed.",
                   "Mara and Dom stand behind a van with shut cargo doors."):
@@ -4892,13 +3943,9 @@ def test_a_modified_state_is_not_read_as_an_act():
     s = run_node("Daylight. A yard.\n\nMara closed the van's doors.", plan_only=True)[3]
     check("a possessive act is still an act",
           "The doors are open at the first frame and shut by the last." in s, "")
-    # And the state is bounded: "stays closed" with no end on it is a state something
-    # can happen to before the shot is out.
     s = run_node("Daylight. A yard.\n\nThey stand by a van with its doors closed.",
                  plan_only=True)[3]
     check("the held state is bounded", "for the whole shot" in s, "")
-    # Whole-path: the auto sound must not ask for the swing the hold forbids. Needs a
-    # line in the beat, because a silent shot gets no sound clause at all.
     P = ('Daylight. A yard.\n\nMara stands behind a van with closed rear doors. '
          'Mara says: "We wait here."')
     s = run_node(P, plan_only=True)[3]
@@ -4913,9 +3960,6 @@ def test_a_modified_state_is_not_read_as_an_act():
 
 def test_a_staged_change_gets_both_ends():
     print("\n=== a staged change is anchored at both ends ===")
-    # The shot that WORKS the thing gets no held state -- it is asking for that
-    # motion -- but it is exactly the shot a reversing LoRA renders backwards. It
-    # gets the two ends instead.
     P = ("Daylight. A yard, and a van with its doors closed.\n\n"
          "Mara and Dom stand behind the van.\n\n"
          "Mara opens the van doors and climbs in.\n\n"
@@ -4934,8 +3978,6 @@ def test_a_staged_change_gets_both_ends():
     check("...and says where reversal is likeliest", "shot 1, which has no previous" in info, "")
     off = run_node(P, plan_only=True, hold_scene_state=False)[3]
     check("the switch turns it off too", "by the last" not in off, "")
-    # Continuity and beat share one shot. Two anchors plus two held states would be
-    # four continuity sentences on a beat that is one line long.
     B = ("A yard. The gate is open and the blinds are drawn.\n\n"
          "Mara opens the van doors and Dom lifts the lid of the crate.")
     one = run_node(B, plan_only=True)[3]
@@ -4946,10 +3988,6 @@ def test_a_staged_change_gets_both_ends():
 
 def test_dialogue_headroom():
     print("\n=== how much of a speaking shot the line does not fill ===")
-    # The audio branch is open for the WHOLE shot once there is a line in it, so the
-    # seconds the line does not cover are unconditioned audio in a shot the model
-    # already knows has a voice. That is where speech carries on past the line and
-    # turns into babble.
     P = "\n\n".join([
         'Dan says: "Wait."',
         'Dan says: "Wait there a moment, I need to check the cable before you '
@@ -4974,11 +4012,6 @@ def test_dialogue_headroom():
 
 def test_introducing_somebody_already_in_position():
     print("\n=== a character introduced in position starts fresh ===")
-    # Reported: a character is thrown into the shot and then moved to where they
-    # belong. Every shot continues from the previous shot's LAST FRAME, and somebody
-    # appearing for the first time is not in it -- so the beat says where they are and
-    # the picture says they are nowhere. The picture wins, and they have to arrive out
-    # of nothing and travel to the spot.
     mem = "Nora: 34, she, red hair.\nDan: 41, he, dark hair, navy overalls"
     tail = "\n\nNora picks up the spanner."
 
@@ -4988,11 +4021,6 @@ def test_introducing_somebody_already_in_position():
                         anchor="A workshop.", character_memory=mem, vae=vae)[2]
         return vae.encodes, info
 
-    # In position: the shot cannot inherit a frame that has him in it, so it starts
-    # fresh. Three shots, and only shot 3 encodes a keyframe.
-    # The frame stops being frame ONE -- and is still carried, as a reference, so the
-    # room comes with it. Dropping it outright is what re-imagined the scenery
-    # between shots, which build_conditioning's own note calls "same place, new room".
     n_placed, info = encodes("Dan is already sitting on the crate, watching her.")
     check("an in-position introduction still carries the frame",
           "carries the previous frame as a REFERENCE" in info)
@@ -5001,12 +4029,6 @@ def test_introducing_somebody_already_in_position():
     check("...and how to keep it as the anchor", "Write the entrance" in info)
     check("intentional room carry does not report a low-strength reference",
           "anchor would be noised" not in info)
-    # CLAIMED, and claimed differently. The standing handoff claim says the shot is
-    # "carried forward rather than joined by anybody new" -- exactly wrong in the one
-    # case where somebody new is the reason the frame was demoted. Unclaimed, a
-    # picture of Nora is a second Nora.
-    # The full path on purpose: the carry is decided in the render loop, because it
-    # needs a frame to carry. plan_only has none and reports none.
     _s2 = re.split(r"\[Shot ", run_node(
         "Nora sets a toolbox on the bench.\n\nDan is already sitting on the crate, "
         "watching her." + tail, anchor="A workshop.", character_memory=mem)[3])[2]
@@ -5016,9 +4038,6 @@ def test_introducing_somebody_already_in_position():
     check("...and who is already in place", "Dan is in this room too" in _s2)
     check("...without the claim that nobody new joins",
           "joined by anybody new" not in _s2)
-    # Somebody in that frame the beat does not name is STILL IN THE ROOM. The frame
-    # used to be dropped for them -- a cut to a re-imagined room, with Nora gone from
-    # it. Now the claim accounts for her.
     _run3 = run_node(
         "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
         "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
@@ -5028,13 +4047,8 @@ def test_introducing_somebody_already_in_position():
           "carries the previous frame as a REFERENCE" in _run3[2])
     check("...claimed with everyone in it", "Nora and Ada are the people there" in _s3,
           _s3[-220:])
-    # The count is about the people the shot DESCRIBES -- Dan and Ada here. Nora is in
-    # the carried frame and claimed by its own sentence, which is what accounts for
-    # her without asserting a body the text cannot identify.
     check("...and counted as the two it describes",
           "There are two people in the shot" in _s3, _s3[-220:])
-    # NOT claimable: somebody in that frame has a portrait riding this shot, so the
-    # frame would be a second picture of her. The old fresh start stands.
     _info4 = run_node(
         "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
         "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
@@ -5058,11 +4072,6 @@ def test_introducing_somebody_already_in_position():
 
 def test_back_after_a_shot_away():
     print("\n=== somebody back after a shot away ===")
-    # Reported: a character's appearance is lost when they walk out of frame and
-    # return. Every shot starts from the PREVIOUS shot's last frame, so somebody who
-    # was not in that shot is not in the picture this one begins from -- their
-    # appearance comes from the sheet text and nothing else, and text drifts where a
-    # picture does not.
     P = "\n\n".join(["Nora sets a toolbox on the bench.",
                      "Nora walks out through the side entrance.",
                      "Victor walks in and kneels by the cable, alone in the workshop.",
@@ -5087,9 +4096,6 @@ def test_back_after_a_shot_away():
     check("a chain nobody leaves reports nothing",
           "back after a shot away" not in straight)
 
-    # And the fix: a frame from the middle of the last shot they WERE in, sent as a
-    # reference on the shot they come back to. The middle because somebody walking
-    # out is gone by the last frame and somebody walking in is missing from the first.
     seen = []
     orig = FakeCLIP.tokenize
 
@@ -5110,8 +4116,6 @@ def test_back_after_a_shot_away():
               str(seen[1:]))
         check("...and the run says whose face and from where",
               "recovered a face for Nora on shot 4, from shot 2" in info)
-        # NARROW: the recovered frame carries whoever else was on screen, so a return
-        # into company is reported and left alone rather than risking a second person.
         seen.clear()
         multi = run_node("\n\n".join(
             base + ["Nora comes back in and Victor hands her the spanner."]),
@@ -5128,10 +4132,6 @@ def test_back_after_a_shot_away():
                           ref_image_1=torch.rand(1, H, W, 3))[2]
         check("a tagged character is not given a second picture",
               "recovered a face" not in tagged)
-        # THE RECOVERED FRAME HAS TO BE CLAIMED IN THE PROSE. A picture the prompt
-        # refers to is that subject; one it never mentions is ANOTHER subject. Sent
-        # unclaimed, a frame of somebody is read as a second person who looks exactly
-        # like them -- same face, same clothes -- beside the one the beat asked for.
         tagseen = []
         _o = FakeCLIP.tokenize
 
@@ -5159,10 +4159,6 @@ def test_back_after_a_shot_away():
               str(_tags))
         check("...on the entry of the person it depicts",
               "Dan: <Picture 1>," in _txt, _txt[:80])
-        # THE SOURCE has to be solo too, not just the destination. A frame is a
-        # picture of everyone in it, so one captured from a shared shot brings the
-        # other person back into a shot that does not call for them -- which is the
-        # second character turning up uninvited.
         shared = ["Nora walks into the workshop.",
                   "Victor comes in and Nora hands him the spanner.",
                   "Victor walks in and kneels by the cable, alone.",
@@ -5171,8 +4167,6 @@ def test_back_after_a_shot_away():
         src = re.search(r"recovered a face for Nora on shot 4, from shot (\d+)", info2)
         check("the frame comes from a shot that was hers alone",
               bool(src) and src.group(1) == "1", src.group(1) if src else "none")
-        # Never on screen alone: no clean frame exists, so nothing is sent. Leaving
-        # the sheet text to carry her beats importing somebody who is not in the shot.
         only_shared = run_node("\n\n".join(shared[1:]), anchor="A room.",
                                character_memory=mem)[2]
         check("no solo frame anywhere means nothing is recovered",
@@ -5192,8 +4186,6 @@ def test_a_name_with_no_entry_end_to_end():
     check("the run reports the undescribed person", "Alex, who has no entry" in info)
     check("...naming the shots", "shot(s) 2, 3, 4 name Alex" in info)
     check("...and what to do about it", "use one name throughout" in info)
-    # Nothing is acted on: whether Alex is Jon under another name or a third person
-    # is not answerable from the text, and guessing would rewrite the script.
     shots = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     check("the script is not rewritten", "Alex says hello to Maya." in shots[1])
     check("...and no entry is invented for them", "Alex:" not in script)
@@ -5205,18 +4197,6 @@ def test_a_name_with_no_entry_end_to_end():
 
 def test_references_ride_with_the_keyframe():
     print("\n=== a reference and the keyframe ride together ===")
-    # I broke this, then removed it, on the conclusion that fl2va could not carry an
-    # identity reference at all. Wrong, and the old node's own comment said so:
-    # ComfyUI packs both channels in AGREEING orders -- model_base.py:2183-2191 builds
-    # cond_video_latents as keyframe latents then ref latents, and PackedLayout emits
-    # keyframe "cond" segments then ref "ref_img" ones -- so a shot takes references
-    # AND a real keyframe. The keyframe anchors the first frame; a reference only
-    # says who somebody is. They were never alternatives.
-    #
-    # Which image is the first frame is decided by resolved_frame_index in
-    # minimax_keyframes, NOT by a label's number. The labels only have to line up with
-    # the <Picture N> tags in the prompt, so references keep slots 1..N and the
-    # handoff is appended after them where it disturbs no numbering.
     seen = []
     orig = FakeCLIP.tokenize
 
@@ -5229,31 +4209,22 @@ def test_references_ride_with_the_keyframe():
     try:
         mem = "Kate: <picture 1>, 22, she, blonde hair.\nMike: he, 35, jeans"
         seen.clear()
-        # Mike ARRIVES, so the chain is kept and this stays a test of the picture
-        # roster rather than of the fresh-start rule for an in-position introduction.
         run_node("Kate walks in.\n\nMike walks in and Kate sits beside him.\n\n"
                  "Mike stands up.",
                  anchor="A room.", character_memory=mem,
                  ref_image_1=torch.rand(1, H, W, 3))
         shots = seen[1:]                     # seen[0] is the negative
-        # shot 1: the reference only -- no previous frame to hand over yet.
-        # shot 2: the reference AND the keyframe. This is the pairing I forbade.
-        # shot 3: the guard drops Kate, so no tag, so no reference; keyframe only.
         check("the roster is ref + keyframe, not one or the other",
               [p for p, _ in shots] == [1, 2, 1], str([p for p, _ in shots]))
         check("the shot carrying both still names exactly one picture",
               shots[1] == (2, 1), str(shots[1]))
         check("a shot the guard trimmed carries no reference", shots[2][1] == 0)
-        # The tag stays IN the prompt: it is the binding between the picture and the
-        # person, which comfy_extras/nodes_minimax_h3.py tells you to write there.
         info, script = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
                                 anchor="A room.", character_memory=mem,
                                 ref_image_1=torch.rand(1, H, W, 3))[2:4]
         check("the binding survives into the script", "<Picture 1>" in script)
         check("...on the person it depicts", "Kate: <Picture 1>, 22" in script)
         check("the run explains the pairing", "ride alongside the keyframe" in info)
-        # No reference connected: the handoff is the only picture, which is H3's own
-        # first-frame shape.
         seen.clear()
         run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
         check("a chain with no reference keeps the keyframe picture",
@@ -5264,16 +4235,6 @@ def test_references_ride_with_the_keyframe():
 
 def test_audio_sigma_reads_the_scheduler():
     print("\n=== the last audio sigma follows the SCHEDULER, not just the formula ===")
-    # The closed form a/(steps + a - 1) is exact for `simple` and WRONG for every
-    # other scheduler. Measured on a real ComfyUI at 5 steps, shift_audio 3.0:
-    #     simple      0.4286   (the formula agrees)
-    #     beta        0.2981
-    #     kl_optimal  0.0030   <- 143x smaller than the formula claims
-    # The note that fires above 0.40 therefore warned about babble that a scheduler
-    # had already fixed, and advised lowering shift_audio -- the wrong lever, when
-    # the fix was one dropdown away. comfy/ldm/minimax/model.py:569 derives the
-    # audio sigma from the VIDEO sigma (time_shift_sigma), so the ladder the
-    # scheduler produces is what decides this, not a closed form.
     import comfy.samplers as _cs
     _ms_mod = sys.modules.setdefault("comfy.model_sampling",
                                      types.ModuleType("comfy.model_sampling"))
@@ -5305,8 +4266,6 @@ def test_audio_sigma_reads_the_scheduler():
 
 def test_audio_sigma_falls_back_to_the_closed_form():
     print("\n=== ...and without a real ComfyUI it still gives the `simple` answer ===")
-    # The stub has no calculate_sigmas. The closed form is exact for `simple`, which
-    # is the shipped default, so nothing regresses where the formula was right.
     got = S.last_audio_sigma(5, 3.0)
     check("closed form still exact for simple", abs(got - 3.0 / 7.0) < 1e-6, f"{got:.4f}")
     check("...and 8 steps still gives the documented 0.30",
@@ -5314,48 +4273,22 @@ def test_audio_sigma_falls_back_to_the_closed_form():
 
 def test_a_hidden_garments_lettering_goes_with_it():
     print("\n=== the print on a covered garment is covered too ===")
-    # Reported from a real render: a thong under shorts, with lettering on the
-    # thong, and the lettering came out ON THE SHORTS.
-    #
-    # hide_item took the item plus up to three words IN FRONT of it and nothing
-    # behind, so
-    #     "denim shorts, a black thong with \"PRINCESS\" across the front."
-    # became
-    #     "denim shorts, with \"PRINCESS\" across the front."
-    # -- the garment deleted out from under its own modifier, which then sits in
-    # the list directly after the shorts. A described print is a drawn print, and
-    # it is drawn on whatever garment is still there to carry it.
-    #
-    # The fragment survived because the emptiness test only strips articles: what
-    # was left read as '"PRINCESS"acrossthefront', which is not empty.
     T = 'McKenna: she, 26, denim shorts, a black thong with "PRINCESS" across the front.'
     got = S.hide_item(T, ["a black thong"])
     check("the lettering leaves with the garment", "princess" not in got.lower(), got)
     check("...and the outer garment stays", "denim shorts" in got.lower(), got)
     check("...and the person keeps her line", "McKenna" in got, got)
 
-    # Lettering written BEFORE the noun fails the same way, because the adjective
-    # window is \\w-only and a quoted word breaks it: it left 'a "PRINCESS" .'
     T2 = 'McKenna: she, 26, denim shorts, a "PRINCESS" lettered thong.'
     got2 = S.hide_item(T2, ["thong"])
     check("...also when the print is written first",
           "princess" not in got2.lower(), got2)
 
-    # THE NARROW HALF. A fragment naming a SECOND garment must not be dropped
-    # whole -- that is the bug hide_item exists to avoid ("green dress, steel
-    # collar" going to nothing), so only a fragment with no garment left in it goes.
     T3 = "McKenna: she, 26, a thong and denim shorts."
     got3 = S.hide_item(T3, ["thong"])
     check("a fragment naming another garment keeps it",
           "denim shorts" in got3.lower(), got3)
 
-    # THE PRINT IN ITS OWN FRAGMENT. Above, the lettering sits inside the
-    # garment's fragment, so the removal empties it and it goes whole. Written
-    # after the comma -- which is how a sheet lists attributes -- nothing was
-    # removed from it, so it stayed, right before the shorts with no garment to
-    # carry it. Reported as the thong's lettering on the shorts, again. A
-    # sentence of its own failed worse: the fragment kept the shorts, so the
-    # whole of it stayed, shipping "She . BRAT is printed across the back."
     for label, T in (
             ("its own fragment",
              'McKenna: she, 26, a black thong, "BRAT" printed across the back, denim shorts.'),
@@ -5372,8 +4305,6 @@ def test_a_hidden_garments_lettering_goes_with_it():
               "brat" not in got.lower() and "bow" not in got.lower()
               and "denim shorts" in got.lower() and "McKenna" in got
               and "She ." not in got, got)
-    # ...and only what CONTINUES the garment. An item that merely follows it in
-    # the list stands on its own, or a covered thong would take the lipstick with it.
     T5 = "McKenna: she, 26, a black thong, red lipstick, a tattoo across the lower back, denim shorts."
     got5 = S.hide_item(T5, ["thong"])
     check("an unrelated item after the garment stays",
@@ -5382,17 +4313,6 @@ def test_a_hidden_garments_lettering_goes_with_it():
 
 def test_camera_framing_is_read_from_the_anchor():
     print("\n=== a close frame written in the ANCHOR is still a close frame ===")
-    # The anchor is the documented home for camera -- "Framing that belongs to the
-    # whole film -- look, camera, lighting, location" -- and it is carried at the
-    # front of every shot. But tight_framing() was only ever handed the BEAT, so a
-    # film shot entirely in close-up, declared once in the anchor the way the
-    # tooltip asks for, registered as no close framing anywhere.
-    #
-    # What that cost: the note warning that a tight frame crops the anchor point
-    # out of the frame the NEXT shot inherits -- the one thing that still knows
-    # where the limbs are fastened -- never fired for anybody who put their camera
-    # where they were told to put it. It fired only for people who wrote "close-up"
-    # into a beat, which the tooltip does not ask them to do.
     check("the anchor's framing is seen", S.tight_framing("Close-up on her face."))
     check("...and a beat's still is", S.tight_framing("She leans in, tight on her eyes."))
     check("...and a wide anchor is not", not S.tight_framing("Wide shot, night."))
@@ -5412,17 +4332,6 @@ def test_camera_framing_is_read_from_the_anchor():
 
 def test_a_tight_frame_drops_wardrobe_it_cannot_contain():
     print("\n=== a close-up stops describing what is outside it ===")
-    # Reported: camera types written in the anchor did not take. The anchor text
-    # was reaching the model verbatim -- it is 11-13% of a shot -- but the other
-    # 87% asserted denim shorts, wrists at the small of the back and the weight on
-    # shoulder and hip, none of which a close-up on a face can contain. The camera
-    # was not ignored, it was outvoted.
-    #
-    # So a frame that names its SUBJECT drops the wardrobe that subject's frame
-    # cannot hold. Only wardrobe: the limb and restraint prose STAYS, because on a
-    # tight shot it is the only thing that still knows where the limbs are
-    # fastened -- the node's own warning says so, and the picture the next shot
-    # inherits has already lost it.
     mem = "McKenna: she, 26, dark hair, a red jacket, denim shorts, black boots."
     P = "McKenna lies on the bed, wrists cuffed behind her back.\n\nShe turns her head."
     tight = run_node(P, plan_only=True, character_memory=mem,
@@ -5444,8 +4353,6 @@ def test_a_tight_frame_drops_wardrobe_it_cannot_contain():
     check("a hand frame keeps the gloves", "gloves" in hands.lower(), hands[:200])
     check("...and drops the shorts", "denim shorts" not in hands.lower(), hands[:200])
 
-    # THE NARROW HALVES. A wide film changes nothing, and a close-up that names no
-    # subject changes nothing either -- there is no way to know what it is close ON.
     wide = run_node(P, plan_only=True, character_memory=mem, anchor="Wide shot, night.")[3]
     check("a wide film keeps everything", "denim shorts" in wide.lower(), wide[:200])
     bare = run_node(P, plan_only=True, character_memory=mem, anchor="Close-up. 85mm.")[3]
@@ -5474,9 +4381,6 @@ def test_the_soundtrack_is_the_models_own():
          "Kate stands under the water.")
 
     def _run(**kw):
-        # The fake decoder draws unseeded noise, so two runs differ unless the global
-        # generator is pinned. Without this the comparison below cannot mean anything
-        # -- and it quietly did not, the first time it was written.
         torch.manual_seed(12345)
         return run_node(P, character_memory="Kate: she, 28, a towel.", **kw)[1]["waveform"]
 
@@ -5486,8 +4390,6 @@ def test_the_soundtrack_is_the_models_own():
     for _al, _fl in ((0.9, 0.9), (0.25, 0.35), (1.0, 0.0), (0.0, 1.0)):
         check(f"ambient_level={_al} foley_level={_fl} changes not one sample",
               torch.equal(base, _run(ambient_level=_al, foley_level=_fl)))
-    # THE BUILDERS ARE GONE, not merely unreachable. A dead synthesiser behind a
-    # level of 0 is a thing that comes back.
     for _n in ("foley_for", "synth_ambient", "plain_bed", "_FOLEY", "phrase_seed",
                "bed_recipe", "_BED_RECIPE", "_BED_EVENTFUL", "_BED_RMS", "_MODES",
                "_band", "_hits", "_even", "_contact", "_flow", "_creak",
@@ -5496,25 +4398,16 @@ def test_the_soundtrack_is_the_models_own():
     check("ShotAudio no longer offers to accept built foley",
           not hasattr(S.ShotAudio(False, True, False, True, 0.0, S.AUDIO_LATENT_FPS),
                       "accepts_built_foley"))
-    # ...and no call site is left behind either. The same check test_verbatim makes on
-    # the guard text it banned: the source is the evidence.
     _src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
     for _gone in ("foley_for(", "synth_ambient(", "plain_bed(", "motion_envelope(",
                   "_foley_on", "accepts_built_foley"):
         check(f"no call site remains: {_gone!r}", _gone not in _src)
-    # WIDGET POSITIONS ARE UNTOUCHED. Both levels stay where they are even though one
-    # of them now does nothing: widgets are restored BY POSITION out of a saved
-    # workflow, so deleting one in the middle loads the wrong number into every widget
-    # after it -- here that would be four, ending at hold_levels.
     _opt = list(S.H3LongVideos.INPUT_TYPES()["optional"].keys())
     check("ambient_audio, ambient_level and foley_level keep their positions",
           _opt[34:37] == ["ambient_audio", "ambient_level", "foley_level"])
     check("...and the four after them have not shifted",
           _opt[37:41] == ["speech_lead_seconds", "speech_tail_seconds", "beat_leads",
                           "hold_levels"])
-    # A WIRED FILE STILL PLAYS. That is the user's own recording, which is a different
-    # thing from ambience the node invents: not synthesised, conditions nothing, and it
-    # cannot put a voice in a wordless shot. It is the path the info note points at.
     _bed = {"waveform": torch.full((1, 2, 8000), 0.5), "sample_rate": 44100}
     _mixed, _note = S.mix_ambient(torch.zeros((1, 2, 16000)), 44100, _bed, 0.5)
     check("a wired bed reaches the soundtrack", float(_mixed.abs().max()) > 0.1)
@@ -5524,9 +4417,6 @@ def test_the_soundtrack_is_the_models_own():
     check("...as is no bed at all",
           torch.equal(S.mix_ambient(torch.zeros((1, 2, 16000)), 44100, None, 0.9)[0],
                       torch.zeros((1, 2, 16000))))
-    # THE CONSEQUENCE IS REPORTED rather than left to be discovered: a wordless shot is
-    # pinned to silence and is now silent, and the pin is deliberately untouched -- it
-    # is what stops a free branch filling itself with a voice.
     _info = run_node(P, character_memory="Kate: she, 28.", foley_level=0.35)[2]
     check("info says the level does nothing now", "does nothing any more" in _info)
     check("...and says what that costs", "is SILENT" in _info)
@@ -5580,20 +4470,11 @@ def test_shot_one_is_the_only_unpinned_shot():
     check("shot 1's opening frame is pinned by NOTHING", bare[0][0] == "nothing")
     check("...while every later shot has a keyframe",
           all(p == "keyframe" for p, _ in bare[1:]))
-    # The reference IS there on shot 1 -- it is not a missing input, it is the wrong
-    # kind of input for this job.
     check("...and shot 1 does carry the reference anyway",
           all(n == 1 for _p, n in bare))
-    # RAISING THE AUG CHANGES NOTHING ABOUT THE PINNING. This is the dial the report
-    # reached for, at the top of its range, and it cannot move this.
     for _aug in (0.90, 0.95, 0.999, 1.0):
         _p = _pins(ref_image_1=ref, ref_noise_aug=_aug)
         check(f"at ref_noise_aug {_aug} shot 1 is still unpinned", _p[0][0] == "nothing")
-    # WIRING first_frame IS WHAT REACHES SHOT 1 -- but what it then does depends on
-    # whether the script reads it as an opening frame or as the SET. This beat places
-    # her and she has a portrait, so it is the set: see
-    # test_a_first_frame_can_be_the_set_instead_of_frame_one. An entrance in beat 1
-    # leaves it as the hard keyframe it always was.
     _ff = _pins(ref_image_1=ref, first_frame=ref, ref_noise_aug=0.999)
     check("first_frame reaches shot 1 either way", _ff[0][0] != "nothing")
     _ent = _pins(ref_image_1=ref, first_frame=ref, ref_noise_aug=0.999,
@@ -5622,10 +4503,6 @@ def test_shot_one_is_the_only_unpinned_shot():
     check("...and says nothing once first_frame is wired",
           "NO first_frame" not in run_node(P, plan_only=True, character_memory=mem,
                                           ref_image_1=ref, first_frame=ref)[2])
-    # NOT SAID TWICE. With a reference wired, the ref_noise_aug note already explains
-    # at length what to put in first_frame and why a portrait there is a trap; this one
-    # defers to it rather than repeating it. Two notes making the same point is the
-    # same vice as two clauses making it -- and info is already long.
     check("with a reference wired it defers rather than repeating",
           "see the ref_noise_aug note above" in _n
           and "subject, pose, framing, background" not in _n)
@@ -5684,23 +4561,13 @@ def test_a_first_frame_can_be_the_set_instead_of_frame_one():
     # THE REPORTED CASE. A plate, a beat that places her, a portrait of her.
     _how, _n, _pr = _first(TAG, PLACED, first_frame=plate, ref_image_1=ref)
     check("a plate with the cast placed and portrayed rides as the SET", _how == "set")
-    # BOTH pictures are there and both are claimed. Her portrait keeps slot 1 -- which
-    # is what her sheet tag points at -- and the plate is appended after it, so the
-    # numbering the author wrote still lands on the author's image.
     check("...her portrait keeps <Picture 1>", "<Picture 1>, she, 24" in _pr)
     check("...the plate is claimed as the set, after her",
           "<Picture 2> is the set this shot takes place in" in _pr)
     check("...and claimed as having nobody in it",
           "a picture of the place only, with nobody in it" in _pr)
-    # An unclaimed picture is another subject, which is this file's oldest bug. A plate
-    # claimed with room_claim's wording would be worse than unclaimed: it says "this
-    # room a moment earlier" and names who was standing in it, and on shot 1 there is
-    # no earlier and nobody was.
     check("...and not as a room a moment earlier", "a moment earlier" not in _pr)
 
-    # THE THREE CASES THAT MUST NOT CHANGE.
-    # An entrance WANTS a frame she is absent from -- walking in is the one case where
-    # starting from a picture without her is right.
     check("an entrance in beat 1 still pins frame one",
           _first(TAG, ARRIVES, first_frame=plate, ref_image_1=ref)[0] == "keyframe")
     check("no portrait means the frame is her only picture, so it stays frame one",
@@ -5759,12 +4626,8 @@ def test_the_age_reaches_the_shot_and_the_floor_holds():
     check("a different age says something different",
           "the body of a woman of 58" in _58 and "hanging low" in _58, _58[-90:])
     check("...so two ages are not one description", _22 != _58)
-    # A sheet with no age keeps exactly what it had: there is nothing to be consistent
-    # with, and the old silence beats a guess.
     check("no age keeps the plain phrasing",
           "on a woman's body" in _none and "the breasts" not in _none, _none[-90:])
-    # THE FLOOR, end to end. The scene renders -- children are in films -- and not one
-    # clause names a body for the entry that declares one.
     mem = "Kate: she, 38, a grey vest, denim shorts.\nSam: he, 9, a school jumper."
     info, script = run_node(
         "A kitchen.\n\nSam eats breakfast.\n\nKate reads the paper.",
@@ -5781,8 +4644,6 @@ def test_the_age_reaches_the_shot_and_the_floor_holds():
           "declared under 18" not in run_node(
               P, plan_only=True,
               character_memory="Kate: she, 38, a grey vest, denim shorts.")[2])
-    # ...AND THE REFUSAL IS A REFUSAL: it raises before anything is sampled, so there is
-    # no half-rendered output and no quietly-softened one either.
     _raised = ""
     try:
         run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
@@ -5803,29 +4664,16 @@ def test_the_age_reaches_the_shot_and_the_floor_holds():
 
 def test_sound_survives_silencing():
     print("\n=== a described sound is not silenced away ===")
-    # No space named, so no room tone -- this test is about the SILENCE path, and a
-    # bed under every shot would mean nothing is silenced and there is nothing to see.
     P = ("Two people, late evening.\n\n"
          "Maya: 27, grey coat.\n\n"
          "Maya lies still.\n\n"
          "The chain drags and rattles beside her.\n\n"
          'Jon says: "Get up."')
     vae = FakeAudioVAE()
-    # mouths_shut_when_no_line OFF. That switch trades a written sound away so the
-    # mouths can be held shut on a wordless shot, and this test is about the other
-    # side of the bargain: what happens to a sound when it is KEPT. The two used to
-    # be testable together only because the trade was never completed -- the sound
-    # was stripped from the text and the branch was left open anyway, so the shot
-    # paid the cost and got none of the benefit. Both halves are checked now, each
-    # in the setting that means it.
     info = run_node(P, audio_vae=vae, auto_sound=False,
                     mouths_shut_when_no_line=False)[2]
     check("the beat that describes a sound keeps its audio",
           "describe a sound IN THE BEAT" in info)
-    # NAMED, not counted. "2 shot(s) have an open branch" tells a reader that two
-    # of eleven can babble and gives no way to find out which two -- and the note's
-    # own advice is that the beat's own sound wording opened it, which cannot be
-    # acted on without knowing which beat.
     check("...and is named", "shot(s) 2 have no line but either describe a sound" in info)
     check("the beat with none is silenced",
           "shot(s) 1 have no quoted line and no sound" in info)
@@ -5836,8 +4684,6 @@ def test_sound_survives_silencing():
     # With silencing off, nothing is silenced and nothing is claimed about it.
     off = run_node(P, silence_nonspeech=False)[2]
     check("silencing off silences nothing", "conditioned on real silence" not in off)
-    # ...and with the mouth guard ON -- the default -- the trade IS made: the written
-    # sound goes, and the shot is actually pinned rather than merely told about it.
     traded = run_node(P, audio_vae=FakeAudioVAE(), auto_sound=False)[2]
     check("the mouth guard gives the written sound up", "gave up the sound you wrote" in traded)
     check("...and the shot it took it from is really silenced",
@@ -5846,22 +4692,12 @@ def test_sound_survives_silencing():
 
 def test_auto_sound_end_to_end():
     print("\n=== sound generated from the prompt ===")
-    # No space named: this test isolates the sound a beat's own ACTION implies, and
-    # room tone would put a bed on every shot including the ones meant to be bare.
-    #
-    # Derived sound is TEXT ONLY and can never unsilence a shot, so it lands only on
-    # shots whose audio branch is already open: ones with a line, or with a sound the
-    # author wrote. A shot with neither stays pinned to silence -- the mouth follows
-    # the audio, and an inference is not reason enough to let it move.
     P = ("Two people, late evening.\n\n"
          "Maya: 27, grey coat. Wrists cuffed behind back.\n\n"
          "Jon walks in holding a pair of scissors and says: \"Hold still.\"\n\n"
          "Jon walks to the bench and looks at the box.\n\n"
          "Maya lies still.\n\n"
          "The chain drags and rattles beside her.")
-    # mouths_shut_when_no_line OFF, so the last beat's WRITTEN sound survives to be
-    # checked here. With it on -- the default -- that sound is deliberately traded
-    # away to hold the mouths shut, which test_sound_survives_silencing covers.
     imgs, audio, info, script = run_node(P, plan_only=True,
                                          mouths_shut_when_no_line=False)[:4]
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
@@ -5869,11 +4705,6 @@ def test_auto_sound_end_to_end():
     check("walking is heard on the shot that speaks", "footsteps" in sh[0])
     check("...and the scissors", "blades through fabric" in sh[0])
     check("...in the open form, because it has a line", "It sounds like" in sh[0])
-    # Shots 2 and 3 have no line and no sound of their own. With auto_sound OFF
-    # they are pinned silent and told nothing about sound, since the clause would
-    # describe an acoustic that is not there. This is the one that was babbling,
-    # and it is still the behaviour with the switch off -- an ambient bed read from
-    # the anchor is what opens them now, chosen deliberately.
     q_info, q_script = run_node(P, plan_only=True, auto_sound=False,
                                 mouths_shut_when_no_line=False)[2:4]
     q_sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", q_script)
@@ -5889,8 +4720,6 @@ def test_auto_sound_end_to_end():
           "either describe a sound IN THE BEAT or" in info)
     check("info lists the shots it scored", "were given the sound" in info)
     check("...saying it can never unsilence one", "never unsilence a shot" in info)
-    # Sound is counted apart from the continuity guards, which ask for the opposite
-    # thing -- for something to stay as it is rather than to happen.
     check("the balance separates sound from guards", "sound " in info.split("balance")[1][:120])
     # Off, nothing is added and those shots go back to being silenced.
     off = run_node(P, plan_only=True, auto_sound=False)[3]
@@ -5899,8 +4728,6 @@ def test_auto_sound_end_to_end():
 
 def test_room_tone_under_every_shot():
     print("\n=== the room is heard even when nothing happens ===")
-    # Real footage has a bed under the events. Digital silence between them is what
-    # makes a scene sound staged rather than recorded.
     P = ("A cold concrete basement with bare walls.\n\n"
          "Maya: 27, grey coat.\n\n"
          "Jon walks in and says: \"Get up.\"\n\n"
@@ -5912,25 +4739,10 @@ def test_room_tone_under_every_shot():
           "hard walls giving the sound back" in sh[0])
     check("the acting shot still gets its events", "footsteps" in sh[0])
     check("info names the acoustic", "room tone read from the scene" in info)
-    # The ambient bed goes under shots whose audio branch is ALREADY open -- ones
-    # with a line, or with a sound the author wrote. It is NOT put under a wordless
-    # shot, and that reversal is the point.
-    #
-    # "Ambience everywhere" was tried and does not work. The bed was allowed to open
-    # a branch, which is the one thing nothing inferred here may do: an open branch
-    # on a joint model fills itself, and at 4-8 steps the last audio step clears
-    # 50%-30% of the denoising in a single jump, so what it fills with is a voice.
-    # Ambience everywhere and silence are mutually exclusive by construction -- the
-    # silence latent IS the audio, and there is no room in it for a room tone.
     check("the speaking shot carries the bed", "low hum off the strip light" in sh[0])
     check("the wordless shot is left silent",
           "low hum off the strip light" not in sh[1])
     check("...and info says so", "ambient bed read from the anchor" in info)
-    # THE CONDITIONING, not just the text. `sounded` decides whether the silence
-    # latent is applied at render time, and the bed used to be counted into it --
-    # so a wordless shot was reported as one that "describes a sound IN THE BEAT",
-    # which it does not, and its branch was left open. plan_only shows the text
-    # either way, so this reads the node's own account of which shots are pinned.
     _pin = re.search(r"shot\(s\) ([\d, ]+) have no quoted line and no sound described",
                      info)
     _open = re.search(r"shot\(s\) ([\d, ]+) have no line but either", info)
@@ -5940,13 +4752,6 @@ def test_room_tone_under_every_shot():
           _open is None or "2" not in _open.group(1),
           _open.group(1) if _open else "none")
 
-    # THE SILENCE PATH, which is still the path with auto_sound OFF.
-    #
-    # Reported twice: auto_sound was moving the mouth and babbling. H3 is joint, so
-    # a free audio branch fills itself with a VOICE and the face lip-syncs to it. No
-    # wording suppresses that -- only the silent keyframe does, and it pins the
-    # whole shot. Scoring the film from the anchor re-opens that branch on purpose,
-    # chosen on 2026-09-06 with the trade stated; auto_sound is the way back.
     q_info, q_script = run_node(P, plan_only=True, auto_sound=False)[2:4]
     q_sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", q_script)
             if x.strip()]
@@ -5956,12 +4761,6 @@ def test_room_tone_under_every_shot():
           "hard walls" not in q_sh[1], q_sh[1][-70:])
     check("...and it is told nothing about sound",
           "sounds like" not in q_sh[1] and "only sound" not in q_sh[1])
-    # A sound the AUTHOR wrote used to keep that shot open even with no line -- and
-    # an open branch is exactly where the invented voice and the lip-sync came from.
-    # mouths_shut_when_no_line, on by default, silences it instead. The old rule is
-    # still the rule with the switch off, and that is the trade, stated both ways.
-    # auto_sound stays ON here: the room tone this asserts comes from it, and the
-    # point is the MOUTH guard, not the bed.
     off = run_node(P, plan_only=True, mouths_shut_when_no_line=False)[3]
     off_sh = [b for b in off.split("---") if b.strip()]
     check("a sound you wrote keeps the branch open, guard off",
@@ -5982,11 +4781,6 @@ def test_room_tone_under_every_shot():
 
 def test_the_decode_keeps_the_vae_it_is_about_to_use():
     print("\n=== eviction does not throw away the VAE it needs ===")
-    # Reported: forced eviction costing 37% of wall-clock on a 3090. The half that is
-    # wrong on EVERY card is this one -- free_memory ran with keep_loaded=[], which
-    # unloads every resident model including the video VAE, and ComfyUI then reloads
-    # it three lines later to run the decode. Peak VRAM is identical either way (the
-    # VAE has to be resident to decode), so the round trip was pure cost.
     class _LM:                      # stands in for ComfyUI's LoadedModel
         def __init__(self, m):
             self.model = m
@@ -6028,16 +4822,6 @@ def test_the_decode_keeps_the_vae_it_is_about_to_use():
 
 def test_a_vocal_shot_says_what_fills_the_gaps():
     print("\n=== between the moans ===")
-    # Reported as babble between the moans. A named vocal opens the audio branch on
-    # purpose -- it is meant to be heard -- and the clause then named nothing but the
-    # vocal. A moan is INTERMITTENT and the branch is open for the whole shot, so the
-    # list described the peaks and left the troughs blank; a blank trough on a joint
-    # model, next to a face, fills itself with speech.
-    #
-    # There is no way to ask for the absence of speech at cfg 1, so the fix is to say
-    # what IS in the troughs. Room tone does not answer it -- the ambient bed already
-    # appended two continuous phrases and the babble was reported anyway, because the
-    # gap is a PERSON's audio presence and a soft room is not a person. Breath is.
     def _clause(_beat, _scene="Inside a van at night."):
         _sh = run_node(f"{_scene}\n\n{_beat}", plan_only=True)[3]
         _m = re.search(r"(The only sound[^.]*\.|It sounds like[^.]*\.)", _sh)
@@ -6056,17 +4840,11 @@ def test_a_vocal_shot_says_what_fills_the_gaps():
               S._VOCAL_BETWEEN in _c, f"{_beat!r} -> {_c!r}")
         check(f"...with the author's word first: {_word}",
               _c.index(_word) < _c.index(S._VOCAL_BETWEEN), _c)
-    # The list stays CLOSED on a shot with no line -- that exclusivity is the only
-    # lever against speech this model has, and it is what the breath now backs up.
     check("the clause is still exclusive with no line spoken",
           _clause("She moans.").startswith("The only sound"), _clause("She moans."))
-    # A beat naming NO vocal must gain nothing. The node does not start inventing
-    # breath on shots that never opened a branch for a voice.
     check("a beat with no vocal gains no breath", _clause("He walks in.") == "")
     check("...nor does a written NON-vocal sound, which takes the muted path",
           _clause("The chain rattles against the frame.") == "")
-    # A shot that also carries a LINE is not closed, and the breath rides along
-    # harmlessly -- the line is what occupies the branch there.
     _both = _clause('McKenna moans, and Dan says: "Nearly there."')
     check("a vocal beside a line keeps an open list",
           _both.startswith("It sounds like"), _both)
@@ -6075,24 +4853,12 @@ def test_a_vocal_shot_says_what_fills_the_gaps():
     # The breath is the node's own existing vocabulary, not a new word invented here.
     check("the between-vocal sound is a phrase the node already used elsewhere",
           S._VOCAL_BETWEEN in S._VOCAL_RETIRES, S._VOCAL_BETWEEN)
-    # And a pinned-silent shot must never gain a clause -- the conditioning says
-    # there is no sound at all, so describing one would contradict it.
     _sil = run_node("A quiet room.\n\nShe stands by the window.", plan_only=True)[3]
     check("a silenced shot gains no breath", S._VOCAL_BETWEEN not in _sil, _sil[-200:])
 
 
 def test_an_exclusive_sound_clause_never_denies_the_beat():
     print("\n=== the closed list names the sound the author wrote ===")
-    # REPRODUCED, then fixed. sound_described("She screams.") is true, so _own zeroes
-    # the inferred list; exertion_in is ALSO true, so _voiced keeps the branch open
-    # instead of letting the shot be muted; then the ambient bed is appended and
-    # only=not _speaks CLOSES the list. The shot was conditioned on
-    #
-    #     "The only sound is an engine idling."
-    #
-    # against a beat that says she screams -- an exclusive claim that the scream is
-    # not happening, made on exactly the shots whose branch is open and which
-    # therefore have to fill themselves with something.
     def _clause(_beat):
         _sh = run_node(f"Inside a van at night.\n\n{_beat}", plan_only=True)[3]
         _m = re.search(r"(The only sound[^.]*\.|It sounds like[^.]*\.)", _sh)
@@ -6107,16 +4873,12 @@ def test_an_exclusive_sound_clause_never_denies_the_beat():
         check(f"the clause names it: {_word}", _word in _c, f"{_beat!r} -> {_c!r}")
         check(f"...and no longer claims the bed is the only sound: {_word}",
               not re.match(r"The only sound is an? [a-z ]+\.$", _c), _c)
-    # A NON-VOCAL written sound is a different path and must stay on it: it is muted
-    # outright by _mute_written, reaches no clause, and the info reports the trade.
     _chain = "The chain rattles against the frame."
     check("a written non-vocal sound still takes the muted path", _clause(_chain) == "",
           _clause(_chain))
     _info = run_node(f"Inside a van at night.\n\n{_chain}", plan_only=True)[2]
     check("...and the trade is still reported",
           "gave up the sound you wrote" in _info)
-    # And a beat that names NO sound is untouched -- the node must not start
-    # inventing vocals here.
     check("a silent beat gains no vocal", _clause("He walks in.") == "")
     # named_vocals_in is the author's own word, matched literally -- not an inference.
     check("named_vocals_in reads the beat", S.named_vocals_in("She screams.") == ["screaming"])
@@ -6129,8 +4891,6 @@ def test_an_exclusive_sound_clause_never_denies_the_beat():
 
 def test_the_chain_is_never_held_twice():
     print("\n=== the chain is one allocation from first shot to return ===")
-    # The planned capacity accounts for the frame removed at each seam.
-    # The returned tensor should not retain storage for those discarded frames.
     for _n in (2, 4, 8):
         _P = "A room.\n\n" + "\n\n".join(f"Beat {_i}." for _i in range(_n))
         _out = run_node(_P)
@@ -6145,10 +4905,6 @@ def test_the_chain_is_never_held_twice():
     check("...and still in range", float(_v.min()) >= 0.0 and float(_v.max()) <= 1.0)
     check("...and the frame count is unchanged", _v.shape[0] == _out[5])
 
-    # THE OVERFLOW PATH. Not reachable on the real VAE, which decodes a shot to
-    # exactly the length it was planned at -- but "not reachable" is a claim about
-    # somebody else's code, so a VAE that over-decodes must still return a correct
-    # chain, just by the slower route.
     _real_decode = FakeVAE.decode
     try:
         FakeVAE.decode = lambda self, latent: torch.rand(
@@ -6165,13 +4921,6 @@ def test_the_chain_is_never_held_twice():
 
 def test_the_position_may_only_be_written_once_in_the_scene():
     print("\n=== the wrists are placed even when only the scene says where ===")
-    # restrained is set by the beat OR the scene; the anchor was read from the beat
-    # alone. So the ordinary way of writing this -- said once in the scene or on the
-    # sheet, never repeated in a beat -- marked her restrained with no position, and
-    # pose_clause looks its argument up in a dict, so empty is NO sentence rather
-    # than a shorter one. Never told the wrists are together, never told the arms are
-    # behind her, and never told what carries her weight when she lies down. Reported
-    # twice as her arm propping her up.
     _p = ("Inside a van at night. McKenna lies in the back, wrists cuffed behind her back.\n"
           "McKenna: she, 26, dark hair.\n\n"
           "Dan gets into the van and looks at her.\n\n"
@@ -6186,9 +4935,6 @@ def test_the_position_may_only_be_written_once_in_the_scene():
                       "Dan cuffs her wrists above her head.")[3]
     check("a beat that moves the wrists overrides the scene",
           "above the head" in _moved and "small of the back" not in _moved.split("Both arms")[-1])
-    # THE POSTURE HAD THE SAME ASYMMETRY. A scene reading "McKenna lies in the back"
-    # put nobody in a posture, so a restrained body the script never lays down ON
-    # SCREEN was never known to be off its feet and the weight clause could not fire.
     def _weight(_p):
         return ["take the weight" in _s for _s in run_node(_p)[3].split("\n---\n")]
     check("the scene alone can say she is lying",
@@ -6199,10 +4945,6 @@ def test_the_position_may_only_be_written_once_in_the_scene():
           _weight("Inside a van. McKenna lies in the back, wrists cuffed behind her "
                   "back.\nMcKenna: she, 26, dark hair.\n\nDan gets into the van."
                   "\n\nHe watches her.") == [True, True])
-    # AND A BEAT OUTRANKS IT. The scene paragraph is stamped into every shot, so
-    # believing it over a beat that stands her up would hold her down for the rest of
-    # the film. Note the latch cannot carry this when the script names no cast --
-    # posture_in needs people -- so the guard is "no beat has stated a posture yet".
     check("a beat that stands her up ends it, for good",
           _weight("Inside a van. McKenna lies in the back, wrists cuffed behind her "
                   "back.\n\nShe gets to her feet.\n\nDan looks at her.") == [False, False])
@@ -6219,11 +4961,6 @@ def test_the_position_may_only_be_written_once_in_the_scene():
 
 def test_finished_shots_are_held_in_half_precision():
     print("\n=== the chain does not crowd the weights out of RAM ===")
-    # ComfyUI offloads models to system RAM rather than discarding them, so a shot
-    # boundary is a PCIe copy while that RAM is there and a disk read once it is not.
-    # The finished chain is the largest thing this node holds and the one thing it can
-    # shrink: a 107s chain at 1056x608 is 18.5GB as float32 and 9.3GB as float16,
-    # against ~39GB of weights on a 64GB machine.
     imgs = run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")[0]
     check("what comes out is still float32", imgs.dtype == torch.float32, str(imgs.dtype))
     check("...and still in range",
@@ -6232,17 +4969,8 @@ def test_finished_shots_are_held_in_half_precision():
     x = torch.rand(100000)
     err = (x - x.half().float()).abs().max().item()
     check(f"fp16 error {err:.1e} is inside one 8-bit step {1 / 255:.1e}", err < 1 / 255)
-    # With cleanup off the frames stay where they were; nothing is converted, and the
-    # concat must not trip over a dtype it did not expect.
     off = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
     check("cleanup off still returns float32", off.dtype == torch.float32, str(off.dtype))
-    # ...and float32 because THAT is what this ComfyUI asks for between nodes, not
-    # because the number is written into the node. An install run with
-    # --fp16-intermediates has a VAE whose own decode returns fp16
-    # (VAE.vae_output_dtype is model_management.intermediate_dtype), so widening the
-    # chain to fp32 there is 9.3GB of system RAM spent against the staged weights to
-    # hand fp16-native nodes something they never asked for. That machine was killed
-    # by the OOM killer at 96% twice.
     check("no flag at all -> float32, as before", S._image_out_dtype() == torch.float32)
     _mm.intermediate_dtype = lambda: torch.float16
     try:
@@ -6254,11 +4982,6 @@ def test_finished_shots_are_held_in_half_precision():
         check("...still in range", float(_h.min()) >= 0.0 and float(_h.max()) <= 1.0)
         _o = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
         check("...cleanup off too", _o.dtype == torch.float16, str(_o.dtype))
-        # THE AUDIO DOES NOT FOLLOW IT. fp16 is 16x finer than the 8 bits an image
-        # goes out at and 8x COARSER than the 16 a waveform does -- ~12 effective
-        # bits -- and the whole soundtrack is 0.018GB against 9.3GB of frames, so
-        # following the flag here would trade an audible loss for nothing. The bed is
-        # mixed on after the join, so a narrow accumulator adds up coarse as well.
         _pair = run_node("A room.\n\nOne.\n\nTwo.")
         _w = _pair[1]["waveform"] if isinstance(_pair[1], dict) else _pair[1]
         check("images follow the flag, audio does not",
@@ -6322,8 +5045,6 @@ def test_the_chain_does_not_burn_in():
 
     s_off = [s for _, s, _ in off.seen]
     s_on = [s for _, s, _ in on.seen]
-    # THE DISABLE CHECK FIRST. Without it the rest could pass on a fixture incapable of
-    # producing the defect, which is the mistake FakeVAE.decode's own comment records.
     check("the fixture really does cook the chain with the correction off",
           len(s_off) >= 3 and s_off[-1] > s_off[0] * 1.10, f"{[round(v, 4) for v in s_off]}")
     check("...and hold_levels holds it down",
@@ -6370,11 +5091,6 @@ def test_the_chain_does_not_burn_in():
 
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
-    # Every boundary decodes a shot, takes its LAST frame and re-encodes it as the
-    # next shot's keyframe. That round trip is lossy and it runs on the model's own
-    # output, so shot 11 is sampled from a picture that has been through ten
-    # decode/encode cycles. The softening is invisible shot to shot and obvious end
-    # to end, which is exactly the kind of thing to measure rather than argue about.
     sharp = torch.rand(48, 48, 3)
     soft = sharp.clone()
     for _ in range(4):
@@ -6400,10 +5116,6 @@ def test_detail_trend():
 
 def test_av_stays_in_sync():
     print("\n=== the sound is as long as the picture ===")
-    # Reported: video and audio out of sync. Each shot's audio latent is
-    # round(frames / 24 * 40), exact only when the frame count divides by 3, so most
-    # lengths leave the sound up to 8.3 ms off its own picture -- and concatenated
-    # with equal shot lengths that error has the same sign every time and adds up.
     for n_beats in (2, 3, 5):
         P = "A room.\n\n" + "\n\n".join(f"Beat {i}." for i in range(n_beats))
         imgs, audio, info, script, fps_shot, total, shots, secs = run_node(P)
@@ -6415,8 +5127,6 @@ def test_av_stays_in_sync():
               f"({drift_ms:.3f} ms)", drift_ms < 1.0)
         check(f"...and the frame count is what the video reports",
               imgs.shape[0] == total)
-    # It is corrected per shot, so every interior cut lands too -- not just the
-    # total duration at the end.
     check("the correction is reported", "realigned to the picture" in
           run_node("A room.\n\nOne.\n\nTwo.")[2])
 
@@ -6449,8 +5159,6 @@ def test_nothing_wearable_is_ever_added():
         r"shoes|trainers|sneakers|sandals|heels|gloves|mittens|scarf|hat|belt|"
         r"apron|cape|poncho|shawl|swimsuit|bikini|leotard)\b", re.I)
     wardrobes = (
-        # A tagged entry: the <Picture N> made the head noun "2" and broke the
-        # name lookup for exactly the garment a reference was pinning.
         "McKenna: <Picture 1>, she, 22, Shiny white crop top, "
         "chastity belt <Picture 2>, blue jeans shorts.",
         "Kate: she, 30, blouse, panties, skirt.",
@@ -6469,9 +5177,6 @@ def test_nothing_wearable_is_ever_added():
         "{N} walks out of frame.",
         "{N} comes back in.",
         "{N} is stripped bare.",
-        # Plain removals that leave a region with nothing named under it -- the
-        # bare-region clause fires here, and it is the one guard that talks about
-        # an uncovered part of the body, so it is the likeliest to name a garment.
         "{N} takes off the skirt.",
         "{N} takes off her tights.",
         "{N} takes off the dress.",
@@ -6493,8 +5198,6 @@ def test_nothing_wearable_is_ever_added():
                 x = x.lower().replace("-", "")
                 if x not in allowed:
                     invented.setdefault(x, P[:60])
-            # ...and every word the node ADDS, so a garment word nobody listed
-            # above still surfaces.
             src = {t for t in re.findall(r"[a-z][a-z-]{2,}", P.lower())}
             for word in re.findall(r"[a-z][a-z-]{2,}", script.lower()):
                 if word not in src:
@@ -6612,23 +5315,12 @@ def test_a_removal_always_names_hands():
     check("...and he does it when the beat says so",
           "Dan pulls off her jean shorts" in s2
           and "away by the last frame" in s2)
-    # WHOSE HANDS has to be somewhere in the shot -- that is the guarantee, and
-    # the beat supplies it here. The completion clause may then be agentless:
-    # restating who and what is the same removal written twice, which rendered
-    # it twice. What must never happen is a shot where NOBODY has the hands, so
-    # a beat that does not stage the removal still gets the named clause.
     for _s, _who in ((s1, "McKenna"), (s2, "Dan")):
         check("the hands are named in the shot (%s)" % _who, _who in _s)
     _unstaged = run_node(two + "remove: shorts\nMcKenna stands by the door.",
                          plan_only=True)[3]
     check("a removal the beat does not stage still names the hands",
           "McKenna takes the blue jean shorts off during this shot" in _unstaged)
-    # THE ACTION, not just the end state. This clause exists because scrubbing the
-    # scene stops a garment being DESCRIBED and does not tell the model to complete
-    # the removal -- the last frame is the next shot's keyframe, and a cut still in
-    # progress hands on a garment half worn. A version that said only "the shorts
-    # are away by the last frame" asserted the outcome and never the act, and
-    # garments stopped coming off.
     for _s, _lbl in ((s1, "hers"), (s2, "his"), (_unstaged, "unstaged")):
         check("the clause says the removal HAPPENS (%s)" % _lbl,
               "off during this shot" in _s)
@@ -6721,17 +5413,8 @@ def test_one_line_is_one_voice():
     check("the speaker is named", "Only Kate speaks" in named)
     check("...and the other jaws are held",
           "every other mouth in the shot stays closed" in named)
-    # SHORT on purpose. Every word in this clause is speech vocabulary, and on a
-    # joint model the prose conditions the audio branch: a longer version ("one
-    # voice in the shot, the line said once, with room tone either side of it")
-    # was added to stop a listener babbling and was reported as causing it.
     check("...and says no more than that",
           "room tone either side" not in named and "said once" not in named)
-    # A line is a second or two in a shot of five to ten, and the branch is open for
-    # all of it: told only that there is ONE voice, the model still had seconds to
-    # fill on either side and invented more talking to fill them. Reported as babble
-    # before the dialogue starts.
-    # <d>...</d> is the same case.
     tag = run_node("A room.\n\nKate turns to Sam. <d>Come here.</d>",
                    plan_only=True, character_memory=mem)[3]
     check("a <d> line is attributed too", "Only Kate speaks" in tag)
@@ -6742,14 +5425,10 @@ def test_one_line_is_one_voice():
         check(f"unattributed still gets one voice: {_b[:26]!r}",
               "Only the person speaking" in _s)
         check("...and says so in info", "names no speaker" in _info)
-    # One person alone needs no guard: there is nobody else to babble, and a
-    # sentence about other mouths implies other people.
     solo = run_node('A room.\n\nKate waits alone. "Now?"', plan_only=True,
                     character_memory=mem)[3]
     check("one person alone gets no mouth guard",
           "One voice in the shot" not in solo and "Only Kate speaks" not in solo)
-    # The speaker is named ONCE. Naming a person twice in one shot is what put a
-    # second copy of them in frame.
     check("the speaker is named once in the guard",
           named.split("Only Kate speaks")[1].split(".")[0].count("Kate") == 0)
 
@@ -6769,8 +5448,6 @@ def test_the_plan_says_whether_silence_can_be_applied():
     none = run_node(P, plan_only=True, character_memory=mem, audio_vae=None)[2]
     check("a missing audio VAE is called out", "SILENCE CANNOT BE APPLIED" in none)
     check("...naming the input", "audio_vae input" in none)
-    # The likeliest wiring mistake: the VIDEO vae on the audio input. It loads
-    # without complaint and reports no sample rate.
     S._SILENT_UNIT["lat"] = None
 
     class NotAnAudioVae:
@@ -6925,23 +5602,15 @@ def test_a_softened_handoff_is_not_a_keyframe():
     the premise is false and scrubbing took the belt out of the text of the very
     shot that removes it. It was gone a beat early with nothing holding it on."""
     print("\n=== a softened handoff is not a keyframe ===")
-    # No outer garment over the belt: implied_layers would keep it out of the sheet
-    # until that garment came off, which is a different rule and would mask what
-    # this test is about.
     P = ("A room.\n\nMcKenna: she, 22, crop top, chastity belt.\n\n"
          "Dan: he, 30, shirt.\n\nMcKenna walks in.\n\nDan looks at her.\n\n"
          "Dan unlocks the chastity belt.\n\nMcKenna sits down.")
     soft = [x for x in re.split(r"(?=\[Shot )",
                                 run_node(P, plan_only=True, ref_noise_aug=0.95)[3])
             if x.strip()]
-    # Wherever the carried sheet sits in the shot -- beat_leads moves it after the
-    # beat -- what matters is that the removing shot still carries the belt and the
-    # shot after it does not.
     check("softened: the removing shot still says it is worn",
           "chastity belt" in soft[2])
     check("...and the next shot does not", "chastity belt" not in soft[3])
-    # At an anchoring aug the keyframe does hold the first frame, and scrubbing the
-    # removing shot is right: text saying it is worn would put it back at the end.
     hard = [x for x in re.split(r"(?=\[Shot )",
                                 run_node(P, plan_only=True, ref_noise_aug=0.999)[3])
             if x.strip()]
@@ -7005,9 +5674,6 @@ def test_a_line_is_spoken_in_one_language():
     # Positively phrased: naming the unwanted language would ask for it.
     check("no language is named but the wanted one",
           not any(w in sh[1] for w in ("not in", "Spanish", "French", "Chinese")))
-    # ...AND IT IS NOT ALWAYS ENGLISH. The clause named English and only English,
-    # so a script written in anything else was told its own line is spoken in a
-    # language it is not, and the delivery fought the words. Read from the line.
     def said_in(script_text, which=1):
         s = [x for x in re.split(r"(?=\[Shot )",
                                  run_node(script_text, plan_only=True)[3]) if x.strip()]
@@ -7025,24 +5691,10 @@ def test_a_line_is_spoken_in_one_language():
     ):
         got = said_in("A room.\n\nKate waits.\n\n" + _line)
         check(f"a line in {_lang} is called {_lang}", got == _lang, got)
-    # A line too short to carry evidence takes the language of the script it is in,
-    # not English on a technicality.
-    # Shot 3 is the short one -- "Si." carries no evidence of its own, and read
-    # alone it would be called English inside a Spanish script.
     short = said_in('Una habitación.\n\nKate espera.\n\n'
                     'Kate dice: "No sé lo que estás haciendo con eso."\n\n'
                     'Kate dice: "Sí."', which=2)
     check("...and the short line follows the script", short == "Spanish", short)
-    # ...AND ORDINARY SPEECH CARRIES ONE FUNCTION WORD, NOT TWO. The vote needs two
-    # before it will name a language, and these are unmistakably German to a reader:
-    #     "Oh, du siehst heute toll aus, Schatz!"   -- du
-    #     "OK, das reicht mir jetzt wirklich!"      -- das
-    # Both scored 1 and abstained. Inside a script whose other lines are English the
-    # fallback is English, so the German line was actively TOLD it is English and the
-    # delivery then fights its own words. The author had already said which language
-    # it is, in the stage direction -- and spoken_text() strips everything outside
-    # the quotes before the vote sees it, so that statement was the one thing thrown
-    # away. Reported by a user reading the code.
     for _line in ('Klaus approaches her and says in German '
                   '"Oh, du siehst heute toll aus, Schatz!"',
                   'Klaus angrily stares at her and says in German '
@@ -7050,8 +5702,6 @@ def test_a_line_is_spoken_in_one_language():
         _got = said_in("A kitchen.\n\nKlaus waits.\n\n" + _line)
         check(f"one function word, but the author said German: {_line[42:62]!r}",
               _got == "German", _got)
-    # The worst case is a mixed script, where the fallback is not merely uninformed
-    # but wrong: this beat's own stage direction has to outrank it.
     _mixed = ('A kitchen.\n\nMara says: "Where have you been all evening, exactly?"\n\n'
               'Klaus says in German "OK, das reicht mir jetzt wirklich!"\n\n'
               'Mara says: "That is not what I asked you and you know it."')
@@ -7061,8 +5711,6 @@ def test_a_line_is_spoken_in_one_language():
     check("...and the English ones stay English",
           said_in(_mixed, 0) == "English" and said_in(_mixed, 2) == "English",
           f"{said_in(_mixed, 0)}/{said_in(_mixed, 2)}")
-    # A NATIONALITY IS NOT A LANGUAGE. A speech frame is required, so these say
-    # nothing and the line is read the way it always was.
     for _t in ("The German soldier looks up.", "A German car pulls in.",
                "She pets the German shepherd.", "Klaus is German.",
                "The Spanish tiles are cold.", "A French window stands open."):
@@ -7072,8 +5720,6 @@ def test_a_line_is_spoken_in_one_language():
                    ("She switches to Spanish.", "Spanish"),
                    ("He asked in Russian where the key was.", "Russian")):
         check(f"named: {_t[:34]!r}", S.engine.language_named(_t) == _w)
-    # A CONFIDENT VOTE STILL WINS. The statement resolves an abstention; it does not
-    # overrule the words, because naming the wrong language is the failure here.
     check("the vote is not overruled by a stray mention",
           S.engine.language_of("Je ne sais pas ce que vous faites",
                                named="German") == "French")
@@ -7131,8 +5777,6 @@ def test_a_working_character_is_not_still_lying_down():
     sh2 = [x for x in re.split(r"(?=\[Shot )",
                                run_node(P2, plan_only=True, character_memory=mem)[3])
            if x.strip()]
-    # Held either way: named when the poses differ, impersonal when everybody in the
-    # shot shares one -- naming somebody twice is what draws a second copy of them.
     check("a pose nothing contradicts is still held",
           bool(re.search(r"\b(?:is|are) sitting", sh2[1])), sh2[1][-160:])
 
@@ -7145,8 +5789,6 @@ def test_pacing_reaches_the_thin_shots():
     P = ("A room.\n\nKate waits.\n\n"
          "Kate walks in, drops her bag, takes off her coat, hangs it up and "
          "crosses the room.\n\nKate looks at the window.")
-    # 'fixed' gives every shot the same length regardless of content, which is
-    # where a three second action lands in a ten second shot.
     out = run_node(P, plan_only=True, character_memory=mem,
                    shot_length="fixed", shot_seconds=10.0)
     info, script = out[2], out[3]
@@ -7155,8 +5797,6 @@ def test_pacing_reaches_the_thin_shots():
     check("the thin shots are paced", paced == [1, 3], str(paced))
     check("...and the full one is not", 2 not in paced)
     check("info names them", "stage less than their length" in info)
-    # Sizing from the beat already matches content, so nothing is thin and the
-    # clause stays out of the way.
     fitted = run_node(P, plan_only=True, character_memory=mem)[3]
     check("sizing from the beat needs no pacing",
           "even pace across the whole shot" not in fitted)
@@ -7172,15 +5812,10 @@ def test_an_instruction_is_not_the_action():
          '"Take off your shorts and lie down on the change table." '
          "Dana puts the bag on the change table.\n\n"
          "McKenna takes off her shorts and lies down on the change table.\n\n"
-         # She has to be IN the last shot for her pose to be stated: a pose for
-         # somebody the text does not describe is a pose for nobody.
          "Dana opens the bag and looks at McKenna.")
     sh = [x for x in re.split(r"(?=\[Shot )",
                               run_node(P, plan_only=True, character_memory=mem)[3])
           if x.strip()]
-    # The sheet entry itself, not the bare word: the quoted ORDER says "shorts" too,
-    # so a plain substring would pass even if the wardrobe had been scrubbed. Asserted
-    # on the entry because beat_leads moves the sheet after the beat.
     check("the shorts are still on while she is only told",
           re.search(r"McKenna: she, 22,[^.]*shorts", sh[0]) is not None)
     check("...and nothing is taken off yet",
@@ -7191,22 +5826,14 @@ def test_an_instruction_is_not_the_action():
     # ...and the pose it sets is held afterwards, for her only.
     check("the pose is held after that", "McKenna is lying down" in sh[2])
     check("...and the speaker is not lying down", "Dana is still lying" not in sh[2])
-    # ...and with NOTHING happening after the instruction, so a wrongly latched
-    # pose has nothing to clear it. Without the guard both of them are laid down
-    # by a sentence Dana only spoke.
     idle = ("A public bathroom.\n\nMcKenna and Dana walk in. Dana says to McKenna: "
             '"Take off your shorts and lie down on the change table."\n\n'
             "McKenna and Dana wait.")
     idle_sh = [x for x in re.split(r"(?=\[Shot )",
                                    run_node(idle, plan_only=True,
                                             character_memory=mem)[3]) if x.strip()]
-    # The words of the order are still in the shot -- they have to be, beats go to
-    # the model verbatim -- so the LISTENER is given something to be doing, or the
-    # instruction is the only thing in the frame about their body.
     check("the listener is given something to do",
           "McKenna listens" in sh[0])
-    # Split defensively: with the clause absent this used to raise IndexError
-    # rather than report a failure, which hides the result behind a traceback.
     _tail = sh[0].split("McKenna listens")
     check("...and is named once, not twice",
           len(_tail) > 1 and _tail[1].split(".")[0].count("McKenna") == 0)
@@ -7229,8 +5856,6 @@ def test_the_scene_does_not_reset():
     out = run_node(P, plan_only=True, character_memory=mem)
     info, script = out[2], out[3]
     sh = [x for x in re.split(r"(?=\[Shot )", script) if x.strip()]
-    # The journey has an origin, which it only has because `here` is seeded from
-    # the scene: stated as a destination alone it renders as a cut.
     check("the move begins where the scene says", "opens in the living room" in sh[1])
     check("...and ends in the new room", "arrives in the bedroom" in sh[1])
     # ...and the shots after it stay there.
@@ -7249,10 +5874,6 @@ def test_a_described_room_still_holds():
     stayed behind in the room they left."""
     print("\n=== a described room still holds ===")
     mem = "Kate: she, 30, coat.\nSam: he, 34, shirt."
-    # The shots that check the acoustic carry a LINE, because the bed and the room
-    # tone go under shots whose audio branch is already open. A wordless shot is
-    # pinned to silence and is given no acoustic at all -- see
-    # test_room_tone_under_every_shot for why ambience everywhere does not work.
     P = ("A carpeted living room, lamps low.\n\n"
          "Kate and Sam sit on the sofa and she says: \"Come with me.\"\n\n"
          "Kate walks him down the hallway to the tiled bathroom.\n\n"
@@ -7290,9 +5911,6 @@ def test_the_sound_clause_is_inside_the_budget():
     checks the node's own report names what went."""
     print("\n=== the sound clause is inside the budget ===")
     mem = "Kate: she, 30, coat, scarf.\nSam: he, 34, shirt."
-    # Beats carry LINES, because a sound clause only exists on a shot whose audio
-    # branch is open -- a wordless shot is pinned to silence and gets none, so there
-    # would be nothing for the budget to drop.
     P = ("A living room.\n\nKate and Sam sit on the sofa and she says: \"Sit down.\"\n\n"
          "Kate takes off her scarf and says: \"It is warm in here.\"\n\n"
          "Kate walks him down the hallway to the tiled bathroom.\n\n"
@@ -7305,12 +5923,8 @@ def test_the_sound_clause_is_inside_the_budget():
     finally:
         S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD = floor, ratio
     check("a squeezed budget drops something", "guard clauses dropped for room" in info)
-    # ...and the thing it drops is the sound clause, because it ranks last. If it
-    # were still appended after the cap it could not be dropped at all.
     check("the sound clause is what gives way", re.search(r"dropped for room[^|]*sound",
                                                           info) is not None)
-    # At the SHIPPED budget nothing is dropped: the cap catches runaways and does
-    # not trim routinely, so no current render changes because of this.
     clean = run_node(P, plan_only=True, character_memory=mem)[2]
     check("the shipped budget drops nothing", "guard clauses dropped for room" not in clean)
 
@@ -7347,12 +5961,6 @@ def test_the_anchor_is_not_read_as_a_room():
                      "Kate walks him down the hallway to the bedroom.",
                      plan_only=True, character_memory=mem)[3]
     check("a real scene room still seeds the origin", "opens in the living room" in named)
-    # THE HALF THAT CAUGHT A WRONG FIX. Excluding the anchor from the room reader
-    # looks right -- a lens line is not a location -- but the anchor is DOCUMENTED
-    # to carry the location, and with one set there is no scene paragraph for the
-    # room to live in instead. Excluded, this loses the origin of its first journey,
-    # which is the destination-with-no-origin case that renders as a cut. The word
-    # boundary was the whole fix; the anchor was never at fault.
     located = run_node(P, plan_only=True, character_memory=mem,
                        anchor="A carpeted living room. Shot on 35mm, "
                               "shallow depth of field, handheld.")[3]
@@ -7384,8 +5992,6 @@ def test_a_garment_does_not_appear_at_the_first_frame():
           "off the body as the shot opens" in sh[4] and "by the last frame" in sh[4])
     # ...and does NOT also list them as already worn. The add phrase is held back.
     check("...and does not also list them as worn", "Her blue shorts." not in sh[4])
-    # From the next shot they are simply worn, the way a removal scrubs from its own.
-    # Said on Kate, now that the sheet makes her the only owner of blue shorts.
     check("the next shot wears them", "Kate is wearing the blue shorts." in sh[5])
     check("info names the shot", "put a garment back ON" in info)
     # The OTHER use of add: -- revealing a layer already underneath -- is untouched.
@@ -7398,10 +6004,6 @@ def test_a_garment_does_not_appear_at_the_first_frame():
     check("a reveal stages no dressing", "off the body as the shot opens" not in rev)
     check("...and is described in its own shot", "Her white shirt underneath." in
           [x for x in re.split(r"(?=\[Shot )", rev) if x.strip()][1])
-    # ...and the case the beat_stages_wearing guard actually protects: the SAME
-    # garment coming back, on a beat that does not stage anybody putting it on. It
-    # went back on between shots, so there is no dressing to give both ends to, and
-    # the shot should simply describe it as worn.
     off = run_node("A changing room.\n\nKate stands by the bench.\n\n"
                    "Kate takes off her shorts.\n\nKate walks to the door.\n\n"
                    "Kate is at the door.\nadd: her blue shorts\n\n"
@@ -7483,8 +6085,6 @@ def test_a_collar_chained_to_a_wall_stays_on():
     check("no shot claims the wrists", not any("the wrists" in s for s in shots))
     check("the hardware stays fastened in every later shot",
           all("closed and fastened" in s for s in shots[1:]))
-    # The shot that STAGES the chaining says it in the author's own words and must
-    # not get the clause back a second time.
     check("the staging shot is not told twice", "at the wall" not in shots[0])
     # A scene with no anchor in it must not sprout one.
     plain = run_node("A room.\n\nThe guard cuffs Ana's wrists.\n\n"
@@ -7554,12 +6154,6 @@ def test_moving_towards_something_is_not_being_chained_to_it():
                "he runs to the fence", "a chain-link fence runs along the wall",
                "the rope runs to the mast", "she leans back against the wall",
                "the dog runs to the gate",
-               # HARDWARE BEING MOVED, not fastened. These are the ones the first
-               # attempt let through: _FASTEN_TO was written as bare stems with an
-               # optional suffix, and "chain", "rope", "clip" and "lock" are nouns
-               # as well as verbs, so the pattern matched its own hardware and called
-               # it a fastening. With the restraint gate leaning on the anchor, each
-               # of these then latched a hold over hardware lying on the ground.
                "She drops the rope to the floor.", "He throws the chain to the floor.",
                "She kicks the cuffs to the wall.", "The rope lies next to the bed.",
                "He carries the chain to the table.", "The clip fell to the floor.",
@@ -7582,8 +6176,6 @@ def test_two_restraints_put_on_together_both_survive():
          "collar around her neck, chained to the wall.\n\n"
          "Ana sits against the wall.\n\n"
          "Ana pulls at the chain.\n\n"
-         # This beat calls them "the cuffs" where shot 1 said "handcuffs". Same
-         # pair, and the worn list has to know that.
          "Ana twists her wrists in the cuffs.\n\n"
          "Ana looks at the door.")
     script = run_node(P, plan_only=True,
@@ -7593,8 +6185,6 @@ def test_two_restraints_put_on_together_both_survive():
     check("...and the collar with them", "collar" in shots[1])
     check("both stay fastened in every later shot",
           all("closed and fastened" in x for x in shots[1:]))
-    # The merged anchor used to read "holding the neck behind the back, at the
-    # wall" -- a neck behind a back.
     check("no neck is behind a back",
           not any("neck behind the back" in x for x in shots))
     # A limb position is a POSE sentence of its own now.
@@ -7606,9 +6196,6 @@ def test_two_restraints_put_on_together_both_survive():
     # "Ana looks at the door" must not relocate the camera into a door.
     check("a door does not move the shot",
           not any("in the door," in x for x in shots))
-    # ONE pair of handcuffs, however the beats word it. An exact-match dedupe on the
-    # worn list produced "The handcuffs, steel collar, chain and cuffs stay closed",
-    # which reads as four things and invites the model to draw a spare set.
     held = [x.split(" stay closed")[0].split(" stays closed")[0] for x in shots[1:]]
     check("the cuffs are listed once", all(h.count("cuffs") <= 1 for h in held),
           f"{[h[-90:] for h in held]}")
@@ -7648,11 +6235,6 @@ def test_a_name_that_is_only_spoken_is_not_in_the_shot():
           == {"Dana", "McKenna"})
     check("staged with no speech at all",
           described("Dana and McKenna walk together.") == {"Dana", "McKenna"})
-    # And the same rule where hardware is concerned. Asserted on the SHOT, not on
-    # restrained_by_beat: that one deliberately returns everybody when it cannot
-    # tell who is applying what -- a hold that fires needlessly is a wasted
-    # sentence, one that fails to fire is hardware that stops being described --
-    # so the guarantee lives in who gets DESCRIBED, not in that set.
     hw = run_node('A cell.\n\nDan says: "McKenna, put the cuffs on."'
                   '\n\nDan waits.', plan_only=True,
                   character_memory="Dan: he, 40, uniform.\n"
@@ -7732,8 +6314,6 @@ def test_entering_a_room_is_a_journey_not_a_cut():
           "played out on screen" in sh[1], sh[1][:220])
     check("...starting where she was", "opens in the living room" in sh[1])
     check("...and ending where she goes", "arrives in the bedroom" in sh[1])
-    # The room the film is in follows her, or the scene paragraph keeps saying
-    # living room over a shot standing in the bedroom.
     check("the next shot is in the bedroom",
           "takes place in the bedroom" in sh[2], sh[2][:220])
     # The shot before the journey is untouched.
@@ -7781,13 +6361,6 @@ def test_no_guard_sentence_carries_a_negation():
         "A room.\n\nAna pulls her scarf aside.\n\nAna puts the scarf back on."
         "\n\nAna stands up.",
     ]
-    # A scene may bring its own sheet, because the shared one cannot cover
-    # every shape. This one is an UNDERGARMENT under an outer layer with both
-    # coming off, and it went unswept for two commits: the shared memory has
-    # no jeans and no belt, so the beats matched nothing and the agentless
-    # branch of the removal clause was never reached. It held a live negation
-    # -- "fully removed and no longer on the body", naming the body it is
-    # clearing. Three copies of that sentence exist and the fix caught two.
     scenes = [(sc, mem) for sc in scenes] + [
         ("A room.\n\nAna stands.\n\nAna takes off her jeans.\n\n"
          "Ana takes off the chastity belt.\n\nAna sits.",
@@ -7801,8 +6374,6 @@ def test_no_guard_sentence_carries_a_negation():
             body = block.split("]", 1)[1]
             for sent in re.split(r"(?<=[.!?])\s+", body):
                 sent = sent.strip()
-                # The author's own beat and sheet go through verbatim and are
-                # theirs to phrase; only what the NODE writes is in scope.
                 if not sent or any(sent in b for b in beats):
                     continue
                 if NEGATION.search(sent) and "<d>" not in sent:
@@ -7833,16 +6404,6 @@ def test_hardware_waits_for_the_beat_that_puts_it_on():
     mem = "Dana: she, 31, blue jacket.\nMcKenna: she, 27, green dress, handcuffs."
     sh = [b.split("]", 1)[1] for b in
           run_node(P, plan_only=True, character_memory=mem)[3].split("[Shot ")[1:]]
-    # THE SHEET IS NOT EDITED. This asserted the cuffs were absent from shots 1
-    # and 2 entirely, which was achieved by scrubbing them out of the character
-    # memory -- the wrong lever, and the user said so plainly: "Stop removing
-    # items from the character memory!" It was also destructive beyond the item,
-    # because scrub_removed drops the whole comma-separated entry and took the
-    # person's line with it.
-    #
-    # What the node owes is narrower and is what this checks now: it must not
-    # ASSERT the hardware is fastened before the beat that fastens it. The
-    # author's own words stay exactly as written, and the clash is reported.
     check("shot 1 keeps the author's sheet line",
           "handcuffs" in sh[0], sh[0][:200])
     check("...but claims nothing is fastened yet",
@@ -7857,9 +6418,6 @@ def test_hardware_waits_for_the_beat_that_puts_it_on():
     check("...held, not re-applied",
           "closed and fastened" in sh[3] and "first frame" not in sh[3], sh[3][:240])
 
-    # A sheet with hardware the script NEVER stages is somebody who walks in
-    # already wearing it. That still has to hold from shot 1 -- hardware nobody
-    # mentions is hardware the model stops drawing.
     worn = [b.split("]", 1)[1] for b in
             run_node("A cell.\n\nKate sits on the bunk.\n\nKate waits.",
                      plan_only=True,
@@ -7988,9 +6546,6 @@ def test_an_undergarment_keeps_its_words_and_waits_for_its_picture():
           run_node(P, plan_only=True, character_memory=mem,
                    ref_image_1=img, ref_image_2=img)[3].split("[Shot ")[1:]]
     covered, bare = sh[0], sh[2]
-    # On the SHEET LINE, not merely somewhere in the shot: the under-clause names
-    # the belt too, so checking the whole shot passed even with the sheet scrubbed
-    # -- green for the wrong reason, and the wrong reason was the actual report.
     sheet_line = [l for l in covered.split(chr(10)) if l.strip().startswith("Ana:")]
     check("the character memory line survives", bool(sheet_line), covered[:200])
     check("...with the rest of it intact",
@@ -8102,8 +6657,6 @@ def test_the_picture_arrives_when_the_cover_moves():
         check(f"{how}: face only until the cover moves", got[0] == 1, str(got))
         check(f"{how}: and the belt from THAT shot, not the next",
               got[1] == 2, str(got))
-    # Nothing touches it: the picture never arrives, and the words are there all
-    # along -- that is the half that must never wait.
     quiet = refs("A home.\n\nMcKenna waits.\n\nMcKenna sits.\n\nMcKenna stands.")
     check("untouched: the picture never arrives", quiet == [1, 1, 1], str(quiet))
     words = run_node("A home.\n\nMcKenna waits.\n\nMcKenna sits.", plan_only=True,
@@ -8132,8 +6685,6 @@ def test_letting_the_cover_fall_puts_it_back():
                  "McKenna lowers her skirt.", "McKenna straightens her skirt.",
                  "McKenna drops her skirt.", "McKenna puts her skirt back."):
         got = S.restored_garments(beat, sheet)
-        # The SHEET's name comes back, not the beat's -- a displacement is stored
-        # under "long grey skirt" and a restore keyed on "skirt" has to clear it.
         check(f"restores: {beat[:38]!r}", got == ["long grey skirt"], str(got))
     for beat in ("McKenna lifts her skirt.", "McKenna lets the door close.",
                  "McKenna waits."):
@@ -8200,13 +6751,9 @@ def test_somebody_else_can_lift_your_skirt():
         check(f"restored: {beat[:44]!r}",
               bool(S.restored_garments(beat, sheet)),
               str(S.restored_garments(beat, sheet)))
-    # A possessive is not a licence to match anything: a chin is still not a
-    # garment, and a name with no garment after it displaces nothing.
     check("a chin is not displaced",
           not S.displaced_garments("Dana lifts McKenna's chin.", sheet))
 
-    # END TO END on the reported shot: the belt shows while the skirt is up, and
-    # goes back under when it falls.
     mem = ("McKenna: she, <Picture 1>, 22, a chastity belt <Picture 2>, "
            "a mini-skirt.\nDana: she, 35, black t-shirt, blue jeans.")
     FACE, BELT = torch.rand(1, H, W, 3), torch.rand(1, H, W, 3)
@@ -8226,9 +6773,6 @@ def test_somebody_else_can_lift_your_skirt():
           str([n for _, n in rows]))
     check("...and does not call the skirt opaque over it",
           "whole, opaque" not in rows[0][0], rows[0][0][-200:])
-    # ...and it STAYS up, because nothing in the next beat puts it back. That is
-    # the documented behaviour of a displacement and the reason restore verbs
-    # exist at all -- not an oversight to assert away.
     check("...and stays up while nothing puts it back",
           rows[1][1] == 2 and "whole, opaque" not in rows[1][0],
           str([n for _, n in rows]))
@@ -8247,9 +6791,6 @@ def test_timing_report():
 
 def test_upscale_paths():
     print("\n=== upscale wiring ===")
-    # Neither pack is installed here, so both fall back. What is under test is that
-    # the calls are wired correctly and a render still completes -- the failure mode
-    # that shipped twice was a signature mismatch, not a bad upscale.
     P = "A room.\n\nOne.\n\nTwo."
     try:
         imgs, _a, info, _s, _p, total, _sh, _sec = run_node(
@@ -8263,13 +6804,7 @@ def test_upscale_paths():
         check("no upscale leaves the frames alone", imgs2.ndim == 4)
     except Exception as e:
         check("no upscale leaves the frames alone", False, f"{type(e).__name__}: {e}")
-    # The latent handoff must come from the SAMPLED latent, never the upscaled one,
-    # or the chain inherits the upscaler's guess and it compounds.
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
-    # The chain must not inherit the upscaler's reinterpretation: the shot's own
-    # frames stay upscaled, but the handoff is decoded from the SAMPLED latent.
-    # Eleven boundaries of upscaled-then-downscaled frames compounds into colour
-    # cast and mush.
     check("the handoff comes from the pre-upscale latent",
           "pre_up[:, :, -n:]" in src and "hand_src = tail" in src)
     check("...and is clamped before it is re-encoded",
@@ -8322,9 +6857,6 @@ def test_a_sheet_written_first_is_a_sheet():
                                plan_only=True))
     check("the sheet is not a shot of its own", len(shots) == 2)
     check("Owen's shot does not describe Maya", "Maya:" not in shots[1] and "Owen:" in shots[1])
-    # Maya is still on the bench, and the keyframe carries her. The COUNT is about
-    # what the text describes: asserting a second body it cannot identify is how a
-    # stranger gets drawn to own it.
     check("...and counts the one person it describes",
           "There is one person in the shot" in shots[1], shots[1][-160:])
     check("the park is still the scene", all(sh.startswith("A park.") for sh in shots))
@@ -8411,8 +6943,6 @@ def test_a_room_the_film_returns_to_is_carried():
     check("...claimed as that room", "is the living room as the film last showed it" in last)
     check("...naming who is in it", "Maya is the person in it." in last)
     check("...and the author is told", "carried a room back" in str(result[2]))
-    # A walk back keeps the keyframe with Maya in it: a frame of the room with Maya in
-    # it too would be a second picture of her.
     clip = FakeCLIP()
     result = run_node("A small apartment. The living room has a red sofa; the kitchen has white tiles.\n\n"
                       "Maya reads on the red sofa.\n\nMaya walks into the kitchen and fills the kettle.\n\n"
@@ -8610,8 +7140,6 @@ def test_one_garment_is_named_once_when_it_comes_off():
          "Dan: he, 30, shirt.\n\nMcKenna walks in.\n\nDan looks at her.\n\n"
          "Dan unlocks the chastity belt.\n\nMcKenna sits down.")
     shot = _shots_of(run_node(P, plan_only=True, ref_noise_aug=0.999))[2]
-    # The BEAT names it too, and that one is the author's. Counted in the sentence
-    # this node writes, which is the one that had it twice.
     said = next((s for s in re.split(r"(?<=\.)\s+", " ".join(shot.split()))
                  if "comes off" in s or "come off" in s), "")
     check("the removal names the belt once",
@@ -8648,9 +7176,6 @@ def test_hardware_in_a_hand_is_not_hardware_on_a_body():
                                             "Mara: she, 41, overalls.", plan_only=True))
     check("picking them up and locking them on is still a restraint",
           HOLD.search(both[-1]) is not None, both[-1][-120:])
-    # HELD UP is the third case: not worn, but still drawn -- so the sentence that
-    # says where a collar belongs is wanted and the one that says it is closed on a
-    # body is not.
     shown = _shots_of(run_node("A workshop.\n\nMara holds up the steel collar.\n\n"
                                "Mara turns.", character_memory="Mara: she, 41, overalls.",
                                plan_only=True))
@@ -8693,8 +7218,6 @@ def test_a_length_reaches_only_what_it_is_taken_around():
           parts("Mara loops a steel cable around her neck and down around her ankles.")
           == [("steel cable", "ankles"), ("steel cable", "neck")])
 
-    # THE LEGS. The line has to run between the neck and them for the body to be
-    # held up by it, and "around" on its own is not evidence that anything is tied.
     for text, want in (("Mara loops a steel cable around her neck and down around "
                         "her ankles.", "ankles to the neck"),
                        ("a cable from her neck to her ankles", "ankles to the neck"),
@@ -8756,8 +7279,6 @@ def test_a_layer_the_author_shows_stops_waiting():
         check(f"shot {i} keeps it once it has been shown", "thong" in head, head[-70:])
         check(f"...and shot {i} no longer calls the skirt the only thing in view",
               "only one in view" not in sh, sh[:170])
-    # ...and a script that never shows it still holds it back, which is the whole
-    # point of the wait: naming a covered garment is what draws it through the cover.
     quiet = _shots_of(run_node("A room.\n\nAna stands.\n\nAna waits.\n\nAna sits.",
                                character_memory=mem, plan_only=True))
     check("a thong nothing shows still waits",
@@ -8794,8 +7315,6 @@ def test_underwear_is_described_and_comes_all_the_way_off():
     check("...and every shot after it still does",
           all("genitals uncovered" in sh for sh in shots[3:]), shots[-1][-150:])
 
-    # SILENT WHILE ANYTHING STILL COVERS IT. Taking the jeans off a woman still in a
-    # thong says what shows, not what is bare.
     covered = _shots_of(run_node(
         "A room.\n\nAna stands.\n\nremove: jeans\nAna steps out of the jeans.\n\n"
         "Ana lies down.",
@@ -8806,8 +7325,6 @@ def test_underwear_is_described_and_comes_all_the_way_off():
     check("...and the thong is named as what shows, in the sheet's words",
           "black thong underneath" in " ".join(covered[1].split()))
 
-    # THE SAME GATE body_of AND figure_of KEEP. No declared adult age, or no declared
-    # pronoun, and this file describes no body at all.
     check("a declared adult gets the clause", S.groin_of("she", 30) != "")
     check("...and so does a man", S.groin_of("he", 40) != "")
     for pron, age in (("she", 17), ("she", 0), ("they", 30), ("", 30)):
@@ -9516,8 +8033,6 @@ def test_the_two_wardrobe_readers_agree():
     check("every garment the sampler names, the engine can place",
           not unplaceable, str(unplaceable[:8]))
 
-    # ...and engine.REGION_OF against engine.GARMENT_WORDS, which are two lists in
-    # one file and had drifted from each other by seven words.
     orphan = [w for pat, _r, _s in E.REGION_OF for w in _spellings(pat, cap=80)
               if not E.garments_in(f"Ana takes her white {w} off.")]
     check("...and every word with a region is a word the engine calls a garment",
@@ -9577,8 +8092,6 @@ def test_the_shot_that_takes_it_off_is_not_told_where_it_sits():
     check("the removing shot says they come off", "come off during this shot" in shot)
     check("...and is not also told where they sit",
           "sits where it belongs" not in shot, shot)
-    # ...and a plural item takes a plural verb. "cuffs" was only matched as a whole
-    # word, so "handcuffs" read as singular: "The handcuffs comes off ... and is away".
     check("a plural item takes a plural verb", "handcuffs come off" in shot)
     check("...and a singular one does not", S.plural_item("chastity belt") is False)
     check("...and a dress is not a plural", S.plural_item("a red dress") is False)
