@@ -10487,6 +10487,10 @@ class H3LongVideos:
         # the owner is kept. Anything the SCENE paragraph implies has no owner and
         # is left unattributed, which is right: it belongs to the set, not a body.
         deferred_shots = []       # (shot, items whose picture waits this shot)
+        # Under-layers the author's own prose has put ON SCREEN. Holding one back is
+        # right while nothing has shown it; once a beat says it shows, it is in the
+        # picture, and every shot after opens on that frame. See _worn_under.
+        _shown_under = []
         covers, cover_owner = {}, {}
         for _who, _line in sheet_lines(sheet):
             for _u, _o in implied_layers(_line).items():
@@ -11204,11 +11208,36 @@ class H3LongVideos:
             # expression, evaluated where it is needed.
             _here = set(active if character_guard
                         else [n for n, _ in sheet_lines(shot_sheet) if n])
+            # ...AND NOT ONCE THE AUTHOR HAS PUT IT ON SCREEN. A beat that says "her
+            # black thong shows above the waistband" has shown it: it is in that
+            # shot's picture, and the next shot opens on that frame. Going back to
+            # holding it there tells the model the skirt is "the outermost layer and
+            # the only one in view" one frame after the thong was visible in it --
+            # and a picture outvotes a sentence, so what renders is the garment half
+            # there. The author's own words are the one thing here that is not an
+            # inference, so they end the wait the same way lifting the skirt does.
+            # An `add:` says so too, and says it more plainly than prose: its second,
+            # older job is exactly this -- putting back a layer that was under
+            # something all along. It restored the garment to the sheet and left the
+            # occlusion clause running, so the prompt named the thong and called the
+            # skirt "the only one in view" in the same breath.
+            for _u in list(covered):
+                if (is_undergarment(_u)
+                        and (names_any(body, [_u])
+                             or _u in restored
+                             or any(names_any(a, [_u]) for a in (adds or [])))
+                        and _u not in _shown_under):
+                    _shown_under.append(_u)
             _worn_under = [u for u in covered
                            if is_undergarment(u)
+                           and u not in _shown_under
                            and (cover_owner.get(u) in _here
                                 or u not in cover_owner)]
-            _hidden = [u for u in covered if u not in _worn_under]
+            # ...and an item the author has shown belongs in NEITHER list: dropping it
+            # out of _worn_under alone pushed it into this one, which is the scrub
+            # path -- a harsher deletion than the wait it was released from.
+            _hidden = [u for u in covered
+                       if u not in _worn_under and u not in _shown_under]
             # A REMOVAL TAKES THE GARMENT OFF THE PERSON WHO REMOVED IT, AND NOBODY
             # ELSE.
             #

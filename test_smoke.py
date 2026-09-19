@@ -8735,6 +8735,37 @@ def test_the_shot_that_puts_it_on_says_so():
     check("...and what is already on is not put on again", not already, str(already))
 
 
+def test_a_layer_the_author_shows_stops_waiting():
+    """An under-layer waits while nothing has shown it. A beat that shows it ends the
+    wait, the same way lifting the skirt does.
+
+    "Her black thong shows above the waistband" puts the thong in that shot's picture,
+    and the next shot opens on that frame -- so going back to holding it told the
+    model the skirt is "the outermost layer there and the only one in view" one frame
+    after the thong was visible in it. A picture outvotes a sentence, and what renders
+    is the garment half there."""
+    print("\n=== a layer the author shows stops waiting ===")
+    mem = "Ana: she, 30, a denim skirt over a black thong, a grey t-shirt."
+    shown = _shots_of(run_node(
+        "A room.\n\nAna stands.\n\nHer black thong shows above the waistband.\n\n"
+        "Ana waits.\n\nAna sits.", character_memory=mem, plan_only=True))
+    check("it waits before the beat shows it",
+          "thong" not in shown[0].split("There is")[0])
+    for i, sh in enumerate(shown[1:], 2):
+        head = " ".join(sh.split()).split("There is")[0]
+        check(f"shot {i} keeps it once it has been shown", "thong" in head, head[-70:])
+        check(f"...and shot {i} no longer calls the skirt the only thing in view",
+              "only one in view" not in sh, sh[:170])
+    # ...and a script that never shows it still holds it back, which is the whole
+    # point of the wait: naming a covered garment is what draws it through the cover.
+    quiet = _shots_of(run_node("A room.\n\nAna stands.\n\nAna waits.\n\nAna sits.",
+                               character_memory=mem, plan_only=True))
+    check("a thong nothing shows still waits",
+          not any("thong" in sh.split("There is")[0] for sh in quiet))
+    check("...and the cover is still described as unbroken",
+          all("only one in view" in sh for sh in quiet), quiet[-1][:150])
+
+
 def test_underwear_is_described_and_comes_all_the_way_off():
     """REPORTED: described underwear renders black whatever it was written as, and
     taking it off does not leave the body bare.
@@ -9625,6 +9656,7 @@ def main():
     test_hardware_in_a_hand_is_not_hardware_on_a_body()
     test_a_length_reaches_only_what_it_is_taken_around()
     test_the_shot_that_puts_it_on_says_so()
+    test_a_layer_the_author_shows_stops_waiting()
     test_underwear_is_described_and_comes_all_the_way_off()
     test_the_ranking_decides_what_survives()
     test_a_dropped_clause_is_not_reported_as_sent()
