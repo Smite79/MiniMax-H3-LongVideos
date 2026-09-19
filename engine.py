@@ -66,6 +66,14 @@ HARDWARE = (
     # says so -- it was kept OUT of the under-garment list for exactly that reason --
     # and it was in no hardware list either, so nothing held it on.
     (r"chastity\s+belts?", "chastity belt", "hips"),
+    # A BELT MADE OF HARDWARE. Plain "belt" is clothing and stays clothing --
+    # that distinction is pinned by this file's own tests -- but a steel one
+    # locked round a waist or a pair of wrists is a restraint, and it was in no
+    # list at all: "Dan locks a steel belt on her" recorded nothing, put the
+    # wearer on DAN, and every shot after it held nothing shut. The material is
+    # what settles it, the same way it settles a steel collar from a shirt's.
+    (r"(?:steel|metal|iron|chrome|brass|locking|lockable|restraint)\s+belts?",
+     "steel belt", "waist"),
     (r"ankle\s+(?:cuffs?|chains?|straps?)", "ankle cuffs", "ankles"),
     (r"shackles?|shackled", "shackles", "ankles"),
     (r"manacles?|manacled", "manacles", "wrists"),
@@ -130,7 +138,9 @@ PARTS = (
 # chain or a rope; left out of this set, a cable looped round a neck was recorded on
 # the wrists, because "wrists" is what the table says a cable usually holds.
 PART_VARIES = frozenset({"chain", "rope", "straps", "tape", "steel cable", "tether",
-                         "cling film"})
+                         # A belt goes where it is put, like every other length:
+                         # round a waist, a pair of wrists, or both thighs.
+                         "steel belt", "cling film"})
 
 # Which region a garment leaves uncovered when it comes off. Only what can be
 # placed with certainty; a garment that cannot be placed gets no clause, because
@@ -278,6 +288,9 @@ APPLY_VERB = (
     r"(?:loops?|looped|looping|wraps?|wrapped|wrapping|winds?|wound|winding|"
     r"coils?|coiled|coiling|threads?|threaded|threading|passes|passed|passing|"
     r"runs|ran|running|cinch(?:es|ed|ing)?|knots?|knotted|laces?|laced|"
+    # Tightening one ONTO somebody is fastening it: "Dan tightens the strap
+    # around her thighs" left no restraint recorded anywhere.
+    r"tighten(?:s|ed|ing)?|"
     r"hitch(?:es|ed|ing)?|slings?|slung)(?:\s+\S+){0,5}?\s+"
     r"(?:around|round|through|under|over|about|behind|between)"
     # ...AROUND A BODY. The particle on its own fastens nothing to anybody: "Mara
@@ -2155,11 +2168,30 @@ def _nearest(mods, at, spans):
 # person doing it to another.
 _HARDWARE_VERB = (r"cuffs|ties|chains|straps|tapes|binds|locks|padlocks|shackles|"
                   r"manacles|hobbles|leashes|collars|gags|blindfolds|trusses|"
-                  r"hog-?ties|restrains|fetters|pinions")
+                  r"hog-?ties|restrains|fetters|pinions|"
+                  # Fastening a thing TIGHTER is fastening it. These live in
+                  # APPLY_VERB only inside the branch that reaches for a particle,
+                  # so the pattern below -- which wants a plain verb, then the item,
+                  # then where it goes -- could not see them, and "Dan tightens a
+                  # steel collar around her wrists" put the collar on Dan.
+                  r"tightens|cinches|buckles|fastens|clips|snaps")
 _APPLY_ANY = re.compile(r"\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b", re.I)
 _APPLIED_TO_PRONOUN = re.compile(
     r"\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b"
-    r"(?:\s+\S+){0,3}?\s+(?:her|him|them)\b", re.I)
+    r"(?:\s+\S+){0,3}?\s+(?:her|him|them)\b"
+    # ...OR WITH THE ITEM NAMED IN BETWEEN. "Dan locks a steel collar on her neck"
+    # puts four words between the verb and the pronoun -- the collar, and the
+    # preposition that places it -- so the window above could not reach, and the
+    # collar went onto DAN. Every shot of McKenna after it then had no wearer
+    # present, so the hold was left out of all of them: reported as restraints
+    # disappearing after they are applied, which is exactly what it looked like.
+    #
+    # The ITEM is what makes the longer reach safe. "Dan locks the door behind her"
+    # has the same shape and no hardware in it, and must stay a door.
+    r"|\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b[^.;!?]{0,40}?"
+    r"\b(?:" + "|".join(p for p, _n, _pt in HARDWARE) + r")\b"
+    r"(?:\s+\S+){0,2}?\s+(?:on|onto|around|round|about|over|under|to|behind|"
+    r"between)\s+(?:her|him|them)\b", re.I)
 
 
 def _wearer(beat, who, fallback, cast=()):

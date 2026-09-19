@@ -5268,6 +5268,15 @@ GUARD_FLOOR_WORDS = 90
 # where the arms AND the legs are held about 50. A hogtie on a shot that takes a
 # garment off needs all of it, and that is the shot this was reported on.
 RESTRAINT_FLOOR_WORDS = 200
+# ...AND A FALL NEEDS ITS OWN ROOM ON TOP OF THAT. The fall clause is not a
+# continuity detail, it is a body-integrity guard: its own note records why it
+# exists -- "a third leg on the shot where she fell, grown to brace a landing nothing
+# in the text was taking" -- and a restrained body going down is the worst case for
+# exactly that, because the hands cannot break the fall. Measured on the shot it was
+# reported on: removal 58, layers 50, hardware hold 66, fall 38. The first three fill
+# a 200-word floor on their own, so the guard against an invented limb was the one
+# thing refused, on the one shot that most needs it. 45 is the clause plus a margin.
+FALL_FLOOR_WORDS = 45
 GUARD_WORDS_PER_BEAT_WORD = 5
 
 
@@ -5288,15 +5297,20 @@ def fit_guards(clauses, beat_words, floor=None):
             continue
         cost = len(text.split())
         if spent + cost > budget and spent > 0:
-            # ...AND EVERYTHING BELOW IT, which is what a ranking is for. This
-            # skipped the clause and kept scanning, so a cheap LOW-ranked clause
-            # slipped into room an expensive HIGH-ranked one had just been refused:
-            # on a plain wardrobe script the rank-10 state clause was dropped while
-            # rank-11 gaze, rank-12 mouth and rank-13 camera all survived. The
-            # budget then decided by price what the ranking is there to decide by
-            # importance. The first clause is still always kept, whatever it costs,
-            # so a shot is never left with no guard at all.
-            break
+            # SKIP IT AND KEEP SCANNING. Stopping here was tried -- the argument
+            # being that a ranking should decide what survives, not a price -- and
+            # measured on a real shot it was plainly worse: a restrained body being
+            # stripped spent 174 of its 200 words on the removal, the layers and the
+            # hardware hold, refused the 38-word fall guard, and then threw away
+            # posture (3), duress (14), mouth (9) and camera (12) behind it. All
+            # four fit. One of them is the clause that keeps mouths shut on a
+            # wordless shot, which is the whole babble guard.
+            #
+            # So the greedy fill stands. A budget that binds is a budget that has to
+            # buy as many guarantees as it can, and the ranking's job is to choose
+            # what goes first, not to veto everything cheaper behind one expensive
+            # refusal.
+            continue
         spent += cost
         keep.add(name)
     kept = "".join(t for _, n, t in clauses if n in keep and t)
@@ -8011,6 +8025,37 @@ def handoff_claim(n):
             f"anybody new.")
 
 
+_COUNT_ONE = " There is one person in the shot: one body, one face."
+_COUNT_TWO = " There are two people in the shot, with one body for each person."
+
+
+def recount_with_claim(prompt, described, added):
+    """Put the people a carried frame's claim NAMES into that shot's body count.
+
+    The count is written a whole phase before the carry is decided -- the carry needs
+    a frame to carry, and the plan has none -- so it only ever counted the cast the
+    shot describes. A shot of McKenna alone then went out saying "There is one person
+    in the shot: one body, one face" AND carrying a picture of the shot before it,
+    claimed as "Dan is the person there. McKenna is in this room too". One body
+    counted, two people named, and a photograph of the one who is not counted. A
+    picture is a subject and no sentence outranks it: reported as duplicate
+    characters, and as a face arriving in a shot that never asked for it.
+
+    The objection recorded against counting the people a FRAME carries was that it
+    "asserted bodies the text could not identify at all, and that is how a stranger
+    arrives". That is the whole difference here: this claim names them.
+
+    Three or more is left uncounted, which is what cast_hold does with the same
+    number and for the same reason -- the more people the count holds, the likelier
+    one of them is described without being in frame, and asserting four bodies is a
+    request for a fourth."""
+    total = list(dict.fromkeys([n for n in (described or []) if n]
+                               + [n for n in (added or []) if n]))
+    if not added or len(total) < 2 or _COUNT_ONE not in prompt:
+        return prompt
+    return prompt.replace(_COUNT_ONE, _COUNT_TWO if len(total) == 2 else "", 1)
+
+
 def room_claim(n, present, joining):
     """Claim a handoff carried as a reference because somebody NEW is in the shot.
 
@@ -8153,6 +8198,18 @@ def restraint_present(text):
     body part alongside it, so a chain-link fence and a leather belt do not arm a
     continuity rule about restraints."""
     t = text or ""
+    # THE ENGINE RECORDED IT GOING ON, so it is on. "Dan puts the cuffs on her"
+    # names hardware and an applying verb, and the state writes the cuffs onto
+    # McKenna -- while this reader said no restraint was present at all, because
+    # "cuffs" is an ambiguous noun and the clause has neither a binding verb nor a
+    # body part in it. So the latch never armed and no shot after it held anything
+    # shut. Reported as restraints disappearing once they are applied.
+    # ...ONTO A BODY. applies_hardware asks only whether hardware is being fastened,
+    # and "Dan tapes the box shut" fastens tape to a box. A person has to be on the
+    # other end of it: a body part named, or the pronoun the verb is applied to.
+    if engine.applies_hardware(t) and (_BODY_PART.search(t)
+                                       or engine._APPLIED_TO_PRONOUN.search(t)):
+        return True
     for part in re.split(r"(?<=[.;!?])\s+", t):
         if not _RESTRAINT_PLAIN.search(part):
             continue
@@ -12645,9 +12702,13 @@ class H3LongVideos:
             # A shot with hardware on a body in it is allowed more room: see
             # RESTRAINT_FLOOR_WORDS. Only when it HAS hardware to hold -- an ordinary
             # shot keeps the budget that stops guards drowning the beat.
-            _kept, _dropped = fit_guards(
-                _guards, len(body.split()),
-                floor=RESTRAINT_FLOOR_WORDS if (hold or _pose or anchors) else None)
+            # ...and a FALL adds its own room on top, because the clause that keeps a
+            # body from growing a limb to break its landing must not be the thing the
+            # budget refuses. See FALL_FLOOR_WORDS.
+            _floor = RESTRAINT_FLOOR_WORDS if (hold or _pose or anchors) else None
+            if fall:
+                _floor = (_floor or GUARD_FLOOR_WORDS) + FALL_FLOOR_WORDS
+            _kept, _dropped = fit_guards(_guards, len(body.split()), floor=_floor)
             if _dropped:
                 crowded.append((len(plan) + 1, _dropped))
             # ...AND THE NOTES MUST NOT GO ON CLAIMING A DROPPED CLAUSE LANDED. Every
@@ -14518,7 +14579,17 @@ class H3LongVideos:
                           if n and n not in _tagged_names
                           and _captured.get(n) is not None
                           and _captured_gen.get(n) == _wardrobe_gen]
-                if len(_short) == 1 and f"{_short[0]}:" in shot_prompt:
+                # ...AND NOT SOMEBODY THE CARRIED FRAME ALREADY PICTURES. The exact
+                # check the recovered face makes above, for the exact reason: that
+                # frame is a picture of them and its claim names them, so a solo
+                # frame on top is a SECOND picture of one person -- which is how a
+                # second one gets drawn, and is the failure this evening-up frame
+                # exists to prevent. A shot went out with three pictures for two
+                # people: McKenna's portrait, Dan's solo frame, and the room frame
+                # claimed as "Dan is the person there".
+                if (len(_short) == 1 and f"{_short[0]}:" in shot_prompt
+                        and not ((_carry_rooms is not None or _handoff_ref)
+                                 and _short[0] in _prev_people)):
                     _extra = [_captured[_short[0]]]
                     _evened_who = _short[0]
                     _evened.append((i + 1, _short[0], _captured_from.get(_short[0], 0)))
@@ -14609,6 +14680,10 @@ class H3LongVideos:
                 else:
                     shot_prompt = shot_prompt + room_claim(len(_shot_refs) + 1,
                                                            _prev_people, [])
+                # The claim NAMES them, so the count has to hold them. See
+                # recount_with_claim.
+                shot_prompt = recount_with_claim(shot_prompt, plan.shots[i].cast,
+                                                 _prev_people)
                 _handoff_claimed.append(i + 1)
             elif _handoff_ref:
                 # Carried for the ROOM, with somebody new in the shot -- so the
@@ -14617,6 +14692,7 @@ class H3LongVideos:
                 _was, _join = next(((w, j) for s, w, j in _carried if s == i + 1),
                                    ([], []))
                 shot_prompt = shot_prompt + room_claim(len(_shot_refs) + 1, _was, _join)
+                shot_prompt = recount_with_claim(shot_prompt, plan.shots[i].cast, _was)
                 _handoff_claimed.append(i + 1)
             elif handoff_rides_as_ref(shot_handoff, _shot_refs, ref_noise_aug):
                 shot_prompt = shot_prompt + handoff_claim(len(_shot_refs) + 1)

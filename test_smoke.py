@@ -8815,27 +8815,108 @@ def test_underwear_is_described_and_comes_all_the_way_off():
               S.groin_of(pron, age) == "")
 
 
-def test_the_ranking_decides_what_survives():
-    """fit_guards is ranked, and a greedy fill let price decide instead.
+def test_a_restraint_stays_on_after_it_is_applied():
+    """REPORTED: restraints disappear from the shots after they are applied.
 
-    Skipping an over-budget clause and carrying on meant a cheap LOW-ranked clause
-    slipped into room an expensive HIGH-ranked one had just been refused: the rank-10
-    state clause dropped while rank-11 gaze, rank-12 mouth and rank-13 camera all
-    survived. The first clause is still always kept, whatever it costs, so a shot is
-    never left with no guard at all."""
-    print("\n=== the ranking decides what survives ===")
+    Every earlier restraint test declares the hardware on the SHEET -- already on --
+    so the whole applying path went unwalked. Three things were wrong in it, and each
+    one silently emptied every shot that followed:
+
+      - "Dan locks a steel collar on her neck" put the collar on DAN. The reader that
+        decides who wears it looks for the verb, then up to three words, then the
+        pronoun -- and the ITEM and its preposition are four. With the wearer wrong,
+        every shot describing McKenna had no wearer present and the hold was left out
+        of all of them.
+      - "Dan puts the cuffs on her" was not read as a restraint at all: "cuffs" is an
+        ambiguous noun and that clause has neither a binding verb nor a body part, so
+        the latch never armed even though the state recorded the cuffs on her.
+      - A steel belt was in no vocabulary anywhere, and "tightens" was not a
+        fastening verb."""
+    print("\n=== a restraint stays on after it is applied ===")
+    E = S.engine
+    HELD = re.compile(r"stays? (?:closed and fastened|tied and holding)")
+    mem = "McKenna: she, 22, a white crop top.\nDan: he, 30, a brown coat."
+    beats = ["Dan handcuffs McKenna.",
+             "Dan cuffs her wrists behind her back.",
+             "Dan locks a steel collar on her neck.",
+             "Dan buckles a leather collar around her throat.",
+             "Dan puts the cuffs on her.",
+             "Dan locks a steel belt around her waist.",
+             "Dan tightens a strap around her thighs.",
+             "Dan ties her wrists with rope.",
+             "Dan hogties her."]
+    for beat in beats:
+        shots = _shots_of(run_node(
+            f"A room.\n\nMcKenna stands.\n\n{beat}\n\nMcKenna breathes.\n\n"
+            "McKenna waits.", character_memory=mem, plan_only=True))
+        check(f"it is still on after {beat[:38]!r}",
+              all(HELD.search(sh) for sh in shots[2:]), shots[-1][-130:])
+        check("...and it went on the person it was applied to",
+              E.wearer_of(beat, ["McKenna", "Dan"]) == "McKenna",
+              E.wearer_of(beat, ["McKenna", "Dan"]))
+    # ...and none of that makes a restraint out of an ordinary sentence.
+    for beat in ("Dan locks the door behind her.", "Dan shuts the gate behind her.",
+                 "Dan tapes the box shut.", "Dan puts the kettle on."):
+        shots = _shots_of(run_node(
+            f"A room.\n\nMcKenna stands.\n\n{beat}\n\nMcKenna breathes.",
+            character_memory=mem, plan_only=True))
+        check(f"nothing is fastened by {beat[:34]!r}",
+              not any(HELD.search(sh) for sh in shots), shots[-1][-110:])
+
+
+def test_the_budget_buys_as_many_guarantees_as_it_can():
+    """fit_guards is a greedy fill, and that is deliberate.
+
+    Stopping at the first refusal was tried -- the argument being that a ranking
+    should decide what survives, not a price -- and measured on a real shot it was
+    plainly worse. A restrained body being stripped spends 174 of its 200 words on
+    the removal, the layers and the hardware hold, refuses the 38-word fall guard,
+    and then throws away posture (3), duress (14), mouth (9) and camera (12) behind
+    it. All four fit. One of them is the clause that keeps mouths shut on a wordless
+    shot, which is the whole babble guard.
+
+    A budget that binds has to buy as many guarantees as it can. The ranking chooses
+    what goes first; it does not veto everything cheaper behind one refusal."""
+    print("\n=== the budget buys what it can ===")
     clauses = [(1, "first", " one two three four five"),
                (5, "big", " " + " ".join(["word"] * 200)),
                (9, "cheap", " tiny clause here")]
     kept, dropped = S.fit_guards(clauses, 2)
     check("the top-ranked clause is kept", "first" not in dropped)
     check("...the one that does not fit is dropped", "big" in dropped, str(dropped))
-    check("...and nothing below it sneaks in", "cheap" in dropped, str(dropped))
-    check("the kept text is what survived", kept.strip() == "one two three four five",
-          repr(kept))
+    check("...and a cheap one behind it still fits", "cheap" not in dropped, str(dropped))
+    check("the kept text holds both", "one two three four five" in kept
+          and "tiny clause here" in kept, repr(kept))
     # An expensive FIRST clause is still kept: something always survives.
     only_big = S.fit_guards([(1, "big", " " + " ".join(["word"] * 200))], 2)
     check("a shot is never left with no guard", only_big[1] == [], str(only_big[1]))
+
+
+def test_a_fall_keeps_its_landing_guard():
+    """The clause that says what takes a landing is a body-integrity guard, not a
+    continuity detail: without it the model frees the hands to break the fall, and on
+    a body that cannot free them it grows a limb that can. Its own note records the
+    report -- "a third leg on the shot where she fell".
+
+    A restrained body being stripped is the worst case for it, and the worst case is
+    where the budget ran out: removal, layers and hardware hold fill a 200-word floor
+    on their own, so the one guard against an invented limb was the one thing
+    refused. A fall buys its own room now."""
+    print("\n=== a fall keeps its landing guard ===")
+    mem = ("McKenna: she, 22, a white crop top over a lace bra, blue jeans over a "
+           "black thong, boots, steel handcuffs locked on her wrists, ankle irons.\n"
+           "Dan: he, 30, a brown coat.")
+    shots = _shots_of(run_node(
+        "A workshop.\n\nMcKenna kneels.\n\nremove: crop top\nremove: jeans\n"
+        "remove: thong\nDan strips her and she falls.\n\nMcKenna strains.",
+        character_memory=mem, plan_only=True))
+    fell = shots[1]
+    check("the falling shot says what takes the landing",
+          "landing" in fell or "takes the weight" in fell, fell[-200:])
+    check("...and still holds the hardware shut",
+          "closed and fastened" in fell, fell[-200:])
+    check("...and still keeps the mouths shut",
+          "Mouths in the shot stay closed" in fell, fell[-200:])
 
 
 def test_a_dropped_clause_is_not_reported_as_sent():
@@ -8849,7 +8930,7 @@ def test_a_dropped_clause_is_not_reported_as_sent():
            "Mara: she, 41, navy overalls.")
     info = str(run_node(
         "A workshop with white tiles.\n\nAna and Mara walk in from the yard.\n\n"
-        "Ana looks at Mara.\n\nremove: t-shirt\nAna pulls it off and falls.\n\n"
+        "Ana looks at Mara.\n\nremove: t-shirt\nAna pulls it off.\n\n"
         "Ana waits.", character_memory=mem, plan_only=True)[2])
     drop = next((n for n in info.split(" | ") if "dropped for room" in n), "")
     check("the run reports a shot whose clauses were dropped", "shot 3:" in drop, drop[:90])
@@ -9018,6 +9099,45 @@ def test_a_sound_given_up_is_really_silenced():
     check("...and the shot it was taken from is pinned",
           "shot(s) 1, 2 have no quoted line and no sound described" in info,
           info[-240:])
+
+
+def test_a_carried_frame_does_not_add_an_uncounted_body():
+    """REPORTED: duplicate characters. Two causes, both about pictures.
+
+    A shot of McKenna alone counted ONE body and carried a picture of the shot before
+    it, claimed as "Dan is the person there". The count is written a whole phase
+    before the carry is decided -- the carry needs a frame to carry -- so it never saw
+    the claim. One body counted, two people named, and a photograph of the one who is
+    not counted.
+
+    And a shot went out with THREE pictures for two people: McKenna's portrait, Dan's
+    evening-up frame, and the room frame that also shows Dan. Two pictures of one
+    person is this file's own recipe for drawing a second. The recovered-face path
+    already skipped a person the carried frame pictures; the evening-up path did
+    not."""
+    print("\n=== a carried frame does not add an uncounted body ===")
+    img = lambda: torch.rand(1, H, W, 3)
+    mem = ("McKenna: she, <Picture 1>, 22, a white crop top, steel handcuffs locked "
+           "on her wrists.\nDan: he, 30, a brown coat.")
+    rows = _encoded_refs(
+        "A workshop.\n\nDan walks to the bench.\n\nMcKenna strains against the chain."
+        "\n\nDan kneels beside her.", character_memory=mem, ref_image_1=img())
+    said = " ".join(rows[1][0].split())
+    check("the shot naming two people counts two bodies",
+          "Dan is the person there" not in said or "two people" in said, said[-190:])
+    # THREE PICTURES FOR TWO PEOPLE, on the shape that produced them.
+    rows2 = _encoded_refs(
+        "A workshop.\n\nDan walks to the bench.\n\nDan kneels beside her.\n\n"
+        "McKenna lies still.", character_memory=mem, ref_image_1=img())
+    for i, (txt, n) in enumerate(rows2, 1):
+        t = " ".join(txt.split())
+        dan = t.count("Dan: <Picture") + len(re.findall(r"Dan is the person", t))
+        check(f"shot {i} sends at most one picture of Dan", dan <= 1, t[-170:])
+        people = len({x for x in ("McKenna", "Dan")
+                      if re.search(rf"\b{x}:", t.split("There is")[0].split("There are")[0])
+                      or re.search(rf"\b{x} is the person", t)})
+        check(f"...and no more pictures than people it identifies",
+              n <= max(1, people), f"{n} pictures, {people} identified")
 
 
 def test_one_person_gets_one_picture():
@@ -9658,7 +9778,9 @@ def main():
     test_the_shot_that_puts_it_on_says_so()
     test_a_layer_the_author_shows_stops_waiting()
     test_underwear_is_described_and_comes_all_the_way_off()
-    test_the_ranking_decides_what_survives()
+    test_a_restraint_stays_on_after_it_is_applied()
+    test_the_budget_buys_as_many_guarantees_as_it_can()
+    test_a_fall_keeps_its_landing_guard()
     test_a_dropped_clause_is_not_reported_as_sent()
     test_a_promoted_clause_opens_in_upper_case()
     test_the_reports_say_what_happened()
@@ -9667,6 +9789,7 @@ def main():
     test_the_machine_with_the_line_is_the_one_that_speaks()
     test_a_written_sound_is_not_denied()
     test_a_sound_given_up_is_really_silenced()
+    test_a_carried_frame_does_not_add_an_uncounted_body()
     test_one_person_gets_one_picture()
     test_an_untagged_picture_is_not_a_stranger()
     test_a_beat_that_moves_a_garment_keeps_the_cast()
