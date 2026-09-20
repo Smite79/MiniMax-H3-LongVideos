@@ -76,6 +76,8 @@ RESIZE_CHUNK = _runtime_module.RESIZE_CHUNK
 _stream_chunks = _runtime_module._stream_chunks
 _resize_short_edge = _runtime_module._resize_short_edge
 _upscale_frames = _runtime_module._upscale_frames
+decode_fits_untiled = _runtime_module.decode_fits_untiled
+upscale_batch_for = _runtime_module.upscale_batch_for
 _find_node = _runtime_module._find_node
 _invoke_node = _runtime_module._invoke_node
 build_conditioning = _cond_module.build_conditioning
@@ -2604,6 +2606,175 @@ def shift_audio_for(steps, target=None):
     return min(max(s * (n - 1) / (1.0 - s), lo), hi)
 
 
+# What shift_video 12 -- ComfyUI's own H3 default, nodes_minimax_h3.py -- leaves on
+# the final step at the ~20 steps the UNDISTILLED model is sampled at. 12 is not a
+# wrong number; it is a number that was chosen against a step count, and it stops
+# being right the moment a turbo LoRA drops that count. This is the target every
+# correction below aims at, so "corrected" means "the schedule H3's own default
+# already produces when it has the steps it was picked for".
+REFERENCE_FINAL_JUMP = 0.40
+
+# A distilled step target lives in the FILENAME and nowhere else. Digits BEFORE the
+# word, so `4step`, `8step` and `3step` match and `step600` does NOT: that is a
+# training checkpoint -- minimax_h3_turbo_v4_step600 and the lightx2v dareties build
+# both carry it -- and reading it as a sampling target would advise 600 steps off a
+# 4-step LoRA. Two digits max for the same reason.
+_LORA_STEPS_RX = re.compile(r"(?<![a-z0-9])(\d{1,2})\s*[-_ ]?step(?![a-z0-9])", re.I)
+
+
+def lora_step_targets(graph):
+    """[(steps, filename)] for every LoRA in the workflow whose NAME states a step count.
+
+    NOTHING INSIDE A LORA SAYS WHAT SCHEDULE IT WANTS. The safetensors metadata of a
+    distilled H3 LoRA carries rank, alpha, baked_scale and conversion provenance --
+    and no sigma, no shift and no step count. comfy stores only that metadata dict
+    (comfy/sd.py, set_attachments("lora_metadata")) and keeps the path it loaded from
+    in the loader's own cache, so by the time a MODEL reaches this node the file name
+    is gone. lora_facts() can still count the stack and read its strengths; it cannot
+    say what any of them were trained for.
+
+    Which leaves the file name as the only machine-readable statement of intent a
+    turbo LoRA makes, and the hidden PROMPT as the only place it survives. `graph` is
+    that dict: {node_id: {"class_type": str, "inputs": {...}}}. Every input whose key
+    contains "lora_name" is read, which covers LoraLoader, LoraLoaderModelOnly and the
+    stacker nodes that number their slots lora_name_1, lora_name_2 and so on.
+
+    Returns newest-first by nothing in particular -- order is the graph's -- and drops
+    duplicates, so the same LoRA wired to model and CLIP is one entry, not two.
+    """
+    out = []
+    if not isinstance(graph, dict):
+        return out
+    for node in graph.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for key, value in inputs.items():
+            if "lora_name" not in str(key).lower() or not isinstance(value, str):
+                continue
+            m = _LORA_STEPS_RX.search(value)
+            if not m:
+                continue
+            try:
+                n = int(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= n <= _WIDGET_RANGE["steps"][2] and (n, value) not in out:
+                out.append((n, value))
+    return out
+
+
+def final_video_jump(steps, shift_video, scheduler="simple"):
+    """How much VIDEO noise the last sampling step has to clear on its own.
+
+    comfy's schedules end at zero, so whatever sigma stands before that zero is
+    removed in ONE evaluation. That number, not the step count, is what decides
+    whether structure resolves: at shift 12 the video branch spends every step but
+    the last nibbling the top of the schedule --
+
+        steps=8   1.0  0.988  0.973  0.952  0.923  0.878  0.8  0.632  0.0
+
+    -- and then crosses 0.632 in a single jump. Seven steps of polish on top of noise,
+    one step to invent the anatomy underneath. Reported as limbs and faces that render
+    partially: half an arm, a hand that stops. At the 3-4 steps a distilled LoRA wants
+    the same shift leaves 0.86 and 0.80, which is nearly the whole denoise in one move.
+
+    For `simple` this is exactly shift / (steps + shift - 1) -- the same inversion
+    last_audio_sigma() runs on the audio branch -- but the real schedule is asked for
+    when comfy is importable so any scheduler answers honestly.
+    """
+    try:
+        n = max(1, int(steps))
+        v = float(shift_video)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= 0.0:
+        return 0.0
+    try:
+        import comfy.samplers as _cs
+        import comfy.model_sampling as _cms
+        _ms = _cms.ModelSamplingDiscreteFlow()
+        _ms.set_parameters(shift=v)
+        sig = [float(x) for x in _cs.calculate_sigmas(_ms, str(scheduler), n)]
+        last = next((x for x in reversed(sig) if x > 0.0), 0.0)
+        if last > 0.0:
+            return last
+    except Exception:
+        pass
+    return v / (n + v - 1.0) if (n + v - 1.0) > 0 else 0.0
+
+
+def shift_video_for_jump(steps, scheduler="simple", target=None):
+    """The shift_video that leaves `target` on the final step at THIS step count.
+
+    Inverting sigma = v / (steps + v - 1), the same shape shift_audio_for() inverts:
+
+        v = sigma * (steps - 1) / (1 - sigma)
+
+    and the DIRECTION is the half worth stating: sigma rises with shift, so FEWER
+    steps need a SMALLER shift_video, not a larger one. The instinct runs the other
+    way -- a short schedule feels like it needs more shift to hold structure -- and
+    following it is what turns 4 steps into a 0.8 final jump.
+
+    Bisected against the real schedule where comfy is importable, because only the
+    shift-honouring schedulers (use_ms True, the ones scheduler_that_finishes_audio
+    already restricts itself to) have a closed form at all; the analytic inverse is
+    the fallback. Clamped to the widget's own range so the number reported is one
+    that can be typed in.
+    """
+    lo, hi = _WIDGET_RANGE["shift_video"][1], _WIDGET_RANGE["shift_video"][2]
+    s = REFERENCE_FINAL_JUMP if target is None else float(target)
+    try:
+        n = max(1, int(steps))
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 < s < 1.0 or n < 2:
+        return None                       # one step clears everything; nothing to aim at
+    if final_video_jump(n, lo, scheduler) > s:
+        return lo                         # even the floor overshoots: take the floor
+    if final_video_jump(n, hi, scheduler) <= s:
+        return hi
+    a, b = lo, hi
+    for _ in range(40):
+        mid = (a + b) / 2.0
+        if final_video_jump(n, mid, scheduler) <= s:
+            a = mid
+        else:
+            b = mid
+    # FLOORED, not rounded. The jump rises with shift, so rounding 4.6666 up to 4.67
+    # puts the result back OVER the target it was just solved for -- by 0.0002, which
+    # is nothing to look at and enough to make the caller report a shortfall that is
+    # not there. Two decimals because that is what the widget steps in.
+    return min(max(math.floor(a * 100.0) / 100.0, lo), hi)
+
+
+def upstream_h3_shift(model):
+    """(shift_video, shift_audio) if something upstream already set H3's schedule, else None.
+
+    REPLACES A WIDGET THAT ASKED THE READER TO REPORT THIS. apply_model_sampling said
+    "turn off only if you patch it upstream yourself" -- a question about the graph,
+    put to the person least able to be sure of the answer, whose wrong answer patches
+    the schedule twice or leaves it unset.
+
+    comfy's own MiniMaxH3SigmaShift stamps what it applied into transformer_options
+    (nodes_minimax_h3.py: to["minimax_h3_sigma_shift_video"] = shift_video), so a
+    deliberate upstream patch announces itself and carries its own numbers.
+
+    THE MODEL_SAMPLING OBJECT IS NOT THE TEST, and reading it instead is the trap
+    this function exists to avoid: an H3 checkpoint already loads with the correct
+    FLOW_AV 12/3 schedule on it, so "is a shift set" is true before anybody has
+    touched anything and would stand the node's own patch down on every clean run.
+    The stamp is the only thing that distinguishes a patch from a default."""
+    try:
+        to = (getattr(model, "model_options", None) or {}).get("transformer_options")
+        if not isinstance(to, dict) or "minimax_h3_sigma_shift_video" not in to:
+            return None
+        return (float(to["minimax_h3_sigma_shift_video"]),
+                float(to.get("minimax_h3_sigma_shift_audio", 0.0)))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def apply_h3_model_sampling(model, shift_video, shift_audio):
     """Apply H3's dual video/audio flow schedule from INSIDE the node so a missing
     upstream patch can't silently gibberish the audio.
@@ -3549,7 +3720,28 @@ def fit_guards(clauses, beat_words, floor=None):
     survives, not where it sits in the sentence.
 
     `floor` raises the minimum for a shot that cannot afford to lose what it is
-    carrying. See RESTRAINT_FLOOR_WORDS."""
+    carrying. See RESTRAINT_FLOOR_WORDS.
+
+    NO NAMING BUDGET, AND THE ATTEMPT IS WORTH RECORDING. Over-naming is what draws a
+    duplicate -- a person named three times in one shot -- and every clause here pays
+    a naming to say whose fact it is, so shedding the lowest-ranked clauses until
+    nobody is over a cap looks like the obvious automation. It does not work, and the
+    reason is structural rather than a matter of tuning.
+
+    A clause names somebody for one of two reasons. Either the person is its SUBJECT
+    -- "McKenna is lying down", "McKenna listens", "Only Kate speaks" -- and dropping
+    it throws the fact away with the naming, which on a speaking shot is a face
+    lip-syncing to a line it was never given. Or the clause is about the room, the
+    take, the framing, the scene state, and mentions nobody at all. Measured on real
+    shots: the second kind names NO ONE, so a pass restricted to them is a no-op, and
+    a pass allowed past them costs a fact every time it fires. There is no clause
+    that both names a person and is safe to drop.
+
+    What the node's own over-naming note says is the way out, and it is not this
+    function's to take: "a pronoun costs nothing". Replacing a name with a pronoun
+    keeps the fact and spends no naming -- safe wherever the person is the only one
+    of their gender in the shot, and ambiguous exactly where it is not. That is a
+    rewrite of the clause, not a choice of which to keep."""
     budget = max(int(floor or GUARD_FLOOR_WORDS), GUARD_FLOOR_WORDS,
                  int(beat_words) * GUARD_WORDS_PER_BEAT_WORD)
     spent, keep = 0, set()
@@ -3712,6 +3904,92 @@ def lora_name_of(patcher):
         if value:
             return value
     return ""
+
+
+_PRONOUN_FORMS = {"she":  {"subject": "she",  "object": "her",  "possessive": "her"},
+                  "he":   {"subject": "he",   "object": "him",  "possessive": "his"},
+                  "they": {"subject": "they", "object": "them", "possessive": "their"}}
+
+# A name straight after one of these is the OBJECT of it -- "looks at Mara", "beside
+# Mara" -- and takes the object form. Only prepositions are listed. Verbs would catch
+# more ("watches Mara") and cost more when wrong, and the subject form is the safe
+# default: "she is lying down" reads as intended where "her is lying down" does not.
+_TAKES_OBJECT = frozenset((
+    "at", "to", "with", "behind", "beside", "on", "of", "for", "from", "near", "over",
+    "under", "against", "between", "into", "onto", "around", "toward", "towards",
+    "past", "beneath", "above", "below", "across", "alongside", "opposite", "facing",
+    "beyond", "through", "along", "before", "after", "inside", "outside", "upon"))
+
+
+def pronoun_rewrite(text, people, extras=False):
+    """(text, [(name, swaps)]) with REPEATED namings in the node's own clauses
+    turned into pronouns.
+
+    Naming somebody three times in one shot is what draws a second copy of them, and
+    every clause that owns a fact pays a naming to say whose fact it is. Dropping the
+    clause to save the naming does not work -- the fact goes with it, and fit_guards
+    records why -- so the naming is spent differently instead. This is the node taking
+    its own advice: the over-naming report has always ended "a pronoun costs nothing".
+
+    THE AUTHOR'S WORDS ARE NEVER TOUCHED. Only the clause text this node wrote is
+    rewritten, and the FIRST naming in it survives: something has to say whose fact it
+    is before a pronoun can point back at it. What goes is the second and the third.
+
+    SAFE ONLY WHERE THE PRONOUN RESOLVES, which is the whole of the restraint here.
+    "She is lying down" in a shot with two women is not a saving, it is the ambiguity
+    the naming existed to prevent -- and unresolved_pronouns() already refuses to guess
+    on the author's behalf for exactly this reason. So a name is rewritten only when
+    nobody else in the shot declares the same pronoun, and nothing is rewritten at all
+    on a shot staging EXTRAS, where the people who could answer to "she" are not on the
+    sheet to be counted.
+
+    Form follows position: "Mara's hands" takes the possessive, a name straight after
+    a preposition takes the object form, everything else takes the subject form, and a
+    name that opened a sentence hands its capital to the pronoun.
+
+    A NAME IN PREDICATE-POSSESSIVE POSITION IS LEFT ALONE -- "the sobbing is Mara's",
+    with nothing after the 's. Two reasons, and either would do. The form there is the
+    absolute possessive, "hers", not the determiner "her", and "the sobbing is her" is
+    not English. And that clause is the attribution itself: it exists to say whose
+    vocal this is so that nobody else's mouth is opened for it, which is the one place
+    a name is doing work no pronoun can take over."""
+    rows = [(n, g) for n, g in (people or ()) if n and g in _PRONOUN_FORMS]
+    if extras or not text or not rows:
+        return text, []
+    sole = {}
+    for _, g in rows:
+        sole[g] = sole.get(g, 0) + 1
+    swapped = []
+    for name, group in rows:
+        if sole[group] != 1:
+            continue
+        forms = _PRONOUN_FORMS[group]
+        hits = list(re.finditer(r"\b" + re.escape(name) + r"\b('s\b)?", text))
+        if len(hits) < 2:
+            continue
+        out, last, done = [], 0, 0
+        for hit in hits[1:]:                  # the first naming stays a name
+            before = text[:hit.start()]
+            lead = re.search(r"(\w+)\W*$", before)
+            if hit.group(1):
+                if not re.match(r"\s+\w", text[hit.end():]):
+                    continue              # predicate possessive: the attribution itself
+                word = forms["possessive"]
+            elif lead is not None and lead.group(1).lower() in _TAKES_OBJECT:
+                word = forms["object"]
+            else:
+                word = forms["subject"]
+            if re.search(r"(?:^|[.!?])[\s\"']*$", before):
+                word = word[:1].upper() + word[1:]
+            out.append(text[last:hit.start()])
+            out.append(word)
+            last = hit.end()
+            done += 1
+        out.append(text[last:])
+        text = "".join(out)
+        if done:
+            swapped.append((name, done))
+    return text, swapped
 
 
 def cast_hold(names, beat="", extras=False):
@@ -6234,13 +6512,11 @@ _WIDGET_RANGE = {
     "megapixels": (1.0, 0.0, 2.0, float),
     "shot_seconds": (10.0, 1.0, 15.0, float),
     "steps": (8, 1, 100, int),
-    "cfg": (1.0, 1.0, 20.0, float),
     "shift_video": (12.0, 1.0, 20.0, float),
     "shift_audio": (3.0, 1.0, 20.0, float),
     "ref_noise_aug": (0.999, 0.5, 1.0, float),
     "latent_upscale_scale": (2.0, 1.0, 4.0, float),
     "upscale_target_short_edge": (0, 0, 4096, int),
-    "upscale_batch": (4, 1, 64, int),
     "pace": (1.0, 0.25, 2.0, float),
     "ambient_level": (0.25, 0.0, 1.0, float),
     "foley_level": (0.35, 0.0, 1.0, float),
@@ -6387,9 +6663,6 @@ class H3LongVideos:
                                "length. Snapped to H3's 17k+5 frame grid."}),
                 "steps": ("INT", {"default": 8, "min": 1, "max": 100,
                     "tooltip": "6-8 with a turbo/distill LoRA; 20+ without one."}),
-                "cfg": ("FLOAT", {"default": 1.0, "min": 1.0, "max": 20.0, "step": 0.1,
-                    "tooltip": "H3 is CFG-free. At 1.0 the negative prompt is never evaluated -- "
-                               "which is why nothing here is phrased as a negation."}),
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "res_multistep"}),
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "simple"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff,
@@ -6432,17 +6705,6 @@ class H3LongVideos:
                 "shift_audio": ("FLOAT", {"default": 3.0, "min": 1.0, "max": 20.0, "step": 0.1,
                     "tooltip": "Keep video:audio near 4:1. H3 carries the audio latent on the "
                                "video schedule scaled by that ratio; flattening it breaks audio."}),
-                "apply_model_sampling": ("BOOLEAN", {"default": True,
-                    "tooltip": "Patch the dual video/audio schedule inside the node. Turn off only "
-                               "if you patch it upstream yourself."}),
-                "silence_nonspeech": ("BOOLEAN", {"default": True,
-                    "tooltip": "Anchor the audio branch to real silence on any shot with no quoted "
-                               "line. H3 is joint -- an unconditioned audio stream invents a voice "
-                               "and the picture lip-syncs to it. This conditions the stream itself "
-                               "rather than asking the prompt to stop it."}),
-                "trim_seam": ("BOOLEAN", {"default": True,
-                    "tooltip": "Drop the first frame of every shot after the first: it is the "
-                               "model's own reproduction of the keyframe, so it is a duplicate."}),
                 "ref_noise_aug": ("FLOAT", {"default": 0.999, "min": 0.5, "max": 1.0, "step": 0.005,
                     "tooltip": "How CLEAN a reference is shown. 0.999 (H3's default) hands over a "
                                "noise-free image, which invites the model to REPRODUCE it -- "
@@ -6450,12 +6712,6 @@ class H3LongVideos:
                                "says approximate: try 0.95, then 0.90. One aug covers every "
                                "conditioning latent, so below 0.99 the keyframe rides as a "
                                "reference instead of an anchor."}),
-                "tiled_decode": ("BOOLEAN", {"default": True,
-                    "tooltip": "Decode in tiles. The whole-clip decode is the single largest "
-                               "allocation in a run and the usual point a big checkpoint spills."}),
-                "cleanup_between_shots": ("BOOLEAN", {"default": True,
-                    "tooltip": "Move each finished shot to system RAM and purge VRAM between "
-                               "shots, so a long chain does not accumulate on the card."}),
                 "latent_upscale": (_latent_upscale_model_list(), {"default": "off",
                     "tooltip": "Upscale each shot in LATENT space, between sampling and decode, "
                                "so the shot is SAMPLED small and only DECODED large. That is the "
@@ -6484,9 +6740,6 @@ class H3LongVideos:
                     "step": 32,
                     "tooltip": "Fit the result's short edge to this many pixels. 0 keeps the "
                                "model's own factor."}),
-                "upscale_batch": ("INT", {"default": 4, "min": 1, "max": 64,
-                    "tooltip": "Frames per chunk for the model upscale. Lower = less VRAM, "
-                               "slower."}),
                 "shot_length": (["from the beat", "fixed"], {"default": "from the beat",
                     "tooltip": "How long each shot is.\n\n"
                                "'from the beat' sizes every shot from what its own line "
@@ -6575,17 +6828,6 @@ class H3LongVideos:
                                "A `Name: ...` paragraph in the prompt itself is folded in "
                                "here automatically -- a sheet is not a beat, and spending "
                                "a shot rendering a description is the visible symptom."}),
-                "character_guard": ("BOOLEAN", {"default": True,
-                    "tooltip": "Describe only the people a beat actually involves.\n\n"
-                               "The sheet has to be in every shot for clothing to hold. "
-                               "But describing EVERYONE in every shot puts everyone in "
-                               "every shot: a beat about one person renders two, because "
-                               "the text standing beside it says the other one is there, "
-                               "and a described person is a person the model draws.\n\n"
-                               "A beat naming nobody keeps whoever the last one kept, so "
-                               "'She lies still.' does not empty the frame. Off, every "
-                               "sheet line goes into every shot. info names who each shot "
-                               "kept."}),
                 "pace": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 2.0, "step": 0.05,
                     "tooltip": "Scales how much screen time each beat is given, when "
                                "shot_length is 'from the beat'.\n\n"
@@ -6599,126 +6841,8 @@ class H3LongVideos:
                                "at one action's worth and capped by shot_seconds, and "
                                "'fixed' ignores this entirely. info reports the seconds "
                                "each staged action ends up with."}),
-                "auto_sound": ("BOOLEAN", {"default": True,
-                    "tooltip": "Give each shot the sound its own action implies.\n\n"
-                               "H3 is joint, so the same prose conditions the audio "
-                               "branch -- and a beat that says what happens has already "
-                               "said what it sounds like. Walking gets footsteps, a "
-                               "chain gets links dragging, scissors get blades through "
-                               "fabric, a lock gets a lock closing.\n\n"
-                               "Read from the BEAT only, never the scene: a chain "
-                               "standing in the scene does not rattle in a shot where "
-                               "nobody moves. Three sounds at most, so the shot gets a "
-                               "cue rather than an inventory.\n\n"
-                               "The ambient bed and the room tone FOLLOW the "
-                               "characters. Both are read from the scene, and a film "
-                               "that walks into a tiled bathroom was going on being "
-                               "told it sounds like the carpeted room it left -- the "
-                               "picture in one room and the audio in another, in the "
-                               "same conditioning. They are re-read at a move, but "
-                               "only where the new room has a sound of its own.\n\n"
-                               "NOTHING HERE CAN OPEN A SILENT SHOT. Ambience on "
-                               "every shot was tried and does not work: the bed was "
-                               "allowed to open the audio branch, and an open branch "
-                               "on a joint model fills itself. At 4-8 steps the last "
-                               "audio step clears 50%-30% of its denoising in one "
-                               "jump, and what it invents there is a voice -- so "
-                               "every wordless shot got ambience and a babbling mouth "
-                               "with it. Ambience everywhere and silence cannot both "
-                               "hold: the silence latent IS the audio, and there is "
-                               "no room in it for a room tone. Score a silent shot by "
-                               "writing the sound into that beat, or lay an ambient "
-                               "track under the finished video outside the model.\n\n"
-                               "A beat that already describes its own sound is left "
-                               "alone -- what you wrote wins. A shot given sound is also "
-                               "not silenced, since it is now asking for audio. info "
-                               "lists which shots got one."}),
-                "hold_scene_state": ("BOOLEAN", {"default": True,
-                    "tooltip": "Put a described state at the first frame instead of "
-                               "leaving it to be performed.\n\n"
-                               "'A van with its doors closed' names a state and never "
-                               "says when it is true. A video model asked for a door "
-                               "renders what a door does, so the shot opens on the doors "
-                               "open and the characters close them -- the state arrives "
-                               "as the action, because that is the most interesting "
-                               "event in the sentence.\n\n"
-                               "Doors, gates, windows, curtains, blinds, shutters, "
-                               "hatches, tailgates, lids and drawers. Two at most per "
-                               "shot.\n\n"
-                               "A beat that WORKS the thing is not held -- 'Mara opens the "
-                               "doors' is asking for exactly that motion. It is given the "
-                               "two ENDS of the change instead: shut at the first frame, "
-                               "open by the last. Some distill LoRAs render an action "
-                               "backwards, and a beat naming one state names neither end, "
-                               "so the reverse answers it just as well. Verbs that go "
-                               "either way -- pulls, draws, slides, swings -- get no "
-                               "anchor, since a wrong one asks for the reversal rather "
-                               "than allowing it.\n\n"
-                               "Once a beat has changed a state, no later shot is told "
-                               "the old one, even though the scene paragraph still says "
-                               "it. Two sentences per shot at most, the two kinds sharing "
-                               "that budget. info lists which shots got which."}),
                 # APPENDED. Saved workflows restore widgets by position.
-                "mouths_shut_when_no_line": ("BOOLEAN", {"default": True,
-                    "tooltip": "Keep mouths closed on shots where nobody speaks.\n\n"
-                               "H3 is joint: the face follows the audio branch. A shot "
-                               "with no line but a sound YOU wrote -- 'a low hum off the "
-                               "strip light' -- kept its branch open, and an open branch "
-                               "invents a voice the face lip-syncs to. Nobody is speaking "
-                               "and the mouth moves anyway.\n\n"
-                               "On, such a shot is conditioned on silence like any other "
-                               "wordless shot, and every wordless shot is also told the "
-                               "mouths are closed. Conditioning is what actually settles "
-                               "it; the sentence alone loses to a stream that has already "
-                               "decided somebody is talking.\n\n"
-                               "THE COST: that shot gives up the sound you wrote for it. "
-                               "info names those shots, so turn this off if you would "
-                               "rather keep the ambience and risk the mouth.\n\n"
-                               "EFFORT IS EXEMPT. Straining, thrashing, a body under load "
-                               "is vocal and its mouth should be open, so those shots keep "
-                               "their audio and are never told to close."}),
                 # APPENDED. Saved workflows restore widgets by position.
-                "hold_gaze": ("BOOLEAN", {"default": True,
-                    "tooltip": "Put the eyes where the beat says they are looking.\n\n"
-                               "'She is looking at the TV' says it once, and two things "
-                               "pull the other way: the model's prior is that a person in "
-                               "frame faces the camera, and a near-clean reference is "
-                               "asking for the portrait's pose -- which looks at the lens, "
-                               "because photographs of people do. The result is somebody "
-                               "posing for the camera instead of watching what you "
-                               "named.\n\n"
-                               "On, a beat naming a thing to look at gets one more "
-                               "sentence saying the eyes are on it and the head is turned "
-                               "to face it. Stated as a physical fact rather than an "
-                               "activity, and impersonally -- naming the person again is "
-                               "one more mention of a person, which has its own cost.\n\n"
-                               "Reads 'looks at', 'stares at', 'glances at', 'peers into', "
-                               "'watching', 'studies'. It says nothing about where the "
-                               "camera is, so a shot looking straight down the line of "
-                               "sight is unaffected. Looking at a PERSON is left alone: "
-                               "restating a pronoun says nothing the beat did not.\n\n"
-                               "A LINE WITH NOBODY NAMED TO LOOK AT turns the faces to "
-                               "each other. Reported: two people talking to the camera "
-                               "instead of each other. With no look staged, both faces "
-                               "fall to the same portrait prior, and a line has an "
-                               "addressee whether or not the beat wrote one. Said once, "
-                               "impersonally, only with two or more people in the shot; "
-                               "a beat that names a look is never argued with.\n\n"
-                               "IT ALSO SPEAKS FOR THE EXPRESSION, because that is the "
-                               "same pull. Reported: she smiles at the camera in a "
-                               "scene of duress. A four-shot scene of a woman "
-                               "handcuffed in a van -- pulling at the cuffs, "
-                               "struggling, going limp -- had not one word in it about "
-                               "anybody's face, and an attribute the prompt leaves out "
-                               "is not left to the model, it is left to the model's "
-                               "prior: a portrait, facing the lens, pleasantly. So a "
-                               "shot whose sheet lists BINDING hardware on somebody in "
-                               "it, or whose beat uses your own distress verbs, gets "
-                               "one sentence -- the face shows the strain of it, the "
-                               "mouth set. A collar alone does not trigger it, a shot "
-                               "staging neither gets nothing, and a beat that already "
-                               "says what the face does is never argued with. Picture "
-                               "only: it can never open the audio branch."}),
                 "ambient_audio": ("AUDIO", {"tooltip":
                     "Wire a recording to play UNDER the finished soundtrack. Empty "
                     "means no bed at all.\n\n"
@@ -6783,23 +6907,6 @@ class H3LongVideos:
                                "WHEN to speak, so a small margin can clip the last word: raise "
                                "it if it does. 0 disables it."}),
                 # APPENDED. Saved workflows restore widget values by position.
-                "beat_leads": ("BOOLEAN", {"default": True,
-                    "tooltip": "Put the BEAT in front of the character sheet.\n\n"
-                               "The sheet has to be in every shot, because clothing "
-                               "continuity is read out of it. But it is a description of a "
-                               "FACE -- 'she, 22, tall, long blonde hair, blue eyes' -- and "
-                               "it was sitting in the opening tokens of every shot, ahead of "
-                               "the action. Measured: 69% of a shot's words were in "
-                               "sentences about a face, and turning every face guard off "
-                               "only reached 63%, because the sheet is most of it.\n\n"
-                               "What leads a prompt decides its composition: anatomy in the "
-                               "opening tokens is what a distilled model settles the frame "
-                               "on, which at cfg 1 no later sentence outvotes. On, the order "
-                               "is scene, then what happens, then who it happens to. The "
-                               "words are identical and none are rewritten -- only the "
-                               "order changes.\n\n"
-                               "Off restores the old order, so the two can be compared in "
-                               "one render."}),
                 # APPENDED. Saved workflows restore widget values by position.
                 "hold_levels": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0,
                     "step": 0.05,
@@ -6838,53 +6945,9 @@ class H3LongVideos:
                                "earlier shots already baked in, and it corrects levels "
                                "only -- not softening, and nothing spatial."}),
                 # APPENDED. Saved workflows restore widget values by position.
-                "hold_camera": ("BOOLEAN", {"default": True,
-                    "tooltip": "Say the camera does not move, on every shot that does not "
-                               "ask it to.\n\n"
-                               "Reported as the camera moving on its own and breaking "
-                               "continuity, and it is the chain that makes it expensive: "
-                               "every shot opens on the PREVIOUS shot's last frame, so a "
-                               "shot that drifts away from the viewpoint it started on "
-                               "hands the drifted one forward. The next shot inherits it "
-                               "and adds its own, and by shot four the room is a room "
-                               "nobody framed.\n\n"
-                               "An attribute the text does not state is left to the "
-                               "model's prior, and for a video model that prior is "
-                               "movement: a still camera is the one thing it has no reason "
-                               "to produce unless the words ask. So one sentence asks: "
-                               "one unbroken take, from one position, angle and distance. "
-                               "It names no camera -- naming one is asking for one, and the "
-                               "lens is what the gaze guards are trying to get people to "
-                               "stop looking at -- and a take is the same fact from the "
-                               "other side, which also says no cut inside the shot.\n\n"
-                               "YOUR WORDS WIN. Any camera note in the beat or the anchor "
-                               "-- a pan, a push in, handheld, a lens, 'shot on' -- stands "
-                               "it down for that shot, and a journey between places keeps "
-                               "its moving camera, because the node has already asked for "
-                               "every step of it in frame."}),
                 # APPENDED. Saved workflows restore widget values by position.
-                "verbatim": ("BOOLEAN", {"default": False,
-                    "tooltip": "Send your text and NOTHING this node writes.\n\n"
-                               "On, a shot is your scene paragraph, your beat and the "
-                               "character sheet entries for the people it names -- and that "
-                               "is all. Every continuity clause goes: the body count, the "
-                               "mouth guard, the camera take, the two ends of a door or a "
-                               "walk, posture, gaze, bare regions, held states, sound "
-                               "direction.\n\n"
-                               "WHAT COMES BACK WITH THEM is every failure each one answers: "
-                               "duplicate characters, a face lip-syncing to invented speech, "
-                               "the camera drifting until the room is a different room, a "
-                               "door that opens and shuts itself, a walk played backwards, a "
-                               "garment that returns after it came off. Each was added for a "
-                               "reported failure, and info still lists what it would have "
-                               "said on every shot.\n\n"
-                               "The MECHANISMS stay: the keyframe chain, the reference "
-                               "claims, silence pinning, shot sizing, and the scoping that "
-                               "decides which of your own sentences a shot gets. This switch "
-                               "is about sentences the node WROTE.\n\n"
-                               "Use it to see your prompt on its own, or to prove whether a "
-                               "problem is the node's doing or the model's."}),
             },
+            "hidden": {"graph": "PROMPT"},
         }
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "INT", "INT", "INT", "FLOAT")
@@ -6897,21 +6960,18 @@ class H3LongVideos:
                    "passed through verbatim.")
 
     def run(self, model, clip, vae, audio_vae, prompt, resolution, megapixels, shot_seconds,
-            steps, cfg, sampler_name, scheduler, seed,
+            steps, sampler_name, scheduler, seed,
             first_frame=None, ref_image_1=None, ref_image_2=None, ref_image_3=None,
             ref_image_4=None, negative=None, sigmas=None,
-            shift_video=12.0, shift_audio=3.0, apply_model_sampling=True,
-            silence_nonspeech=True, trim_seam=True, ref_noise_aug=0.999,
-            tiled_decode=True, cleanup_between_shots=True, plan_only=False,
+            shift_video=12.0, shift_audio=3.0, ref_noise_aug=0.999, plan_only=False,
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
-            upscale_batch=4, shot_length="from the beat", hold_restraints=True,
+            shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
-            character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
-            mouths_shut_when_no_line=True, hold_gaze=True,
+            pace=1.0,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
-            speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
-            hold_levels=0.8, hold_camera=True, verbatim=False,
+            speech_lead_seconds=0.5, speech_tail_seconds=2.0,
+            hold_levels=0.8, graph=None,
             **_removed):
 
         self._frames = None
@@ -6919,22 +6979,20 @@ class H3LongVideos:
             model=model, clip=clip, vae=vae,
             audio_vae=audio_vae, prompt=prompt, resolution=resolution,
             megapixels=megapixels, shot_seconds=shot_seconds, steps=steps,
-            cfg=cfg, sampler_name=sampler_name, scheduler=scheduler,
+            sampler_name=sampler_name, scheduler=scheduler,
             seed=seed, first_frame=first_frame, ref_image_1=ref_image_1,
             ref_image_2=ref_image_2, ref_image_3=ref_image_3, ref_image_4=ref_image_4,
             negative=negative, sigmas=sigmas, shift_video=shift_video,
-            shift_audio=shift_audio, apply_model_sampling=apply_model_sampling, silence_nonspeech=silence_nonspeech,
-            trim_seam=trim_seam, ref_noise_aug=ref_noise_aug, tiled_decode=tiled_decode,
-            cleanup_between_shots=cleanup_between_shots, plan_only=plan_only, latent_upscale=latent_upscale,
+            shift_audio=shift_audio, ref_noise_aug=ref_noise_aug,
+            plan_only=plan_only, latent_upscale=latent_upscale,
             latent_upscale_scale=latent_upscale_scale, upscale=upscale, upscale_model=upscale_model,
-            upscale_target_short_edge=upscale_target_short_edge, upscale_batch=upscale_batch, shot_length=shot_length,
+            upscale_target_short_edge=upscale_target_short_edge, shot_length=shot_length,
             hold_restraints=hold_restraints, restart_after_removal=restart_after_removal, auto_remove=auto_remove,
-            anchor=anchor, character_memory=character_memory, character_guard=character_guard,
-            pace=pace, auto_sound=auto_sound, hold_scene_state=hold_scene_state,
-            mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
+            anchor=anchor, character_memory=character_memory,
+            pace=pace, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
-            speech_tail_seconds=speech_tail_seconds, beat_leads=beat_leads,
-            hold_levels=hold_levels, hold_camera=hold_camera, verbatim=verbatim,
+            speech_tail_seconds=speech_tail_seconds,
+            hold_levels=hold_levels, graph=graph,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             try:
@@ -6952,21 +7010,18 @@ class H3LongVideos:
         return prepared
 
     def _prepare(self, model, clip, vae, audio_vae, prompt, resolution, megapixels, shot_seconds,
-            steps, cfg, sampler_name, scheduler, seed,
+            steps, sampler_name, scheduler, seed,
             first_frame=None, ref_image_1=None, ref_image_2=None, ref_image_3=None,
             ref_image_4=None, negative=None, sigmas=None,
-            shift_video=12.0, shift_audio=3.0, apply_model_sampling=True,
-            silence_nonspeech=True, trim_seam=True, ref_noise_aug=0.999,
-            tiled_decode=True, cleanup_between_shots=True, plan_only=False,
+            shift_video=12.0, shift_audio=3.0, ref_noise_aug=0.999, plan_only=False,
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
-            upscale_batch=4, shot_length="from the beat", hold_restraints=True,
+            shot_length="from the beat", hold_restraints=True,
             restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
-            character_guard=True, pace=1.0, auto_sound=True, hold_scene_state=True,
-            mouths_shut_when_no_line=True, hold_gaze=True,
+            pace=1.0,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
-            speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
-            hold_levels=0.8, hold_camera=True, verbatim=False,
+            speech_lead_seconds=0.5, speech_tail_seconds=2.0,
+            hold_levels=0.8, graph=None,
             **_removed):
 
         notes = []
@@ -6978,26 +7033,179 @@ class H3LongVideos:
         if _bad:
             raise RuntimeError(alignment_error(_bad))
         _fixed, _fixnotes = sane_widgets(dict(
-            megapixels=megapixels, shot_seconds=shot_seconds, steps=steps, cfg=cfg,
+            megapixels=megapixels, shot_seconds=shot_seconds, steps=steps,
             shift_video=shift_video, shift_audio=shift_audio,
             ref_noise_aug=ref_noise_aug, latent_upscale_scale=latent_upscale_scale,
             upscale_target_short_edge=upscale_target_short_edge,
-            upscale_batch=upscale_batch, pace=pace,
+            pace=pace,
             ambient_level=ambient_level, foley_level=foley_level,
             speech_lead_seconds=speech_lead_seconds,
             speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels))
         megapixels, shot_seconds = _fixed["megapixels"], _fixed["shot_seconds"]
-        steps, cfg = _fixed["steps"], _fixed["cfg"]
+        steps = _fixed["steps"]
         shift_video, shift_audio = _fixed["shift_video"], _fixed["shift_audio"]
         ref_noise_aug = _fixed["ref_noise_aug"]
         latent_upscale_scale = _fixed["latent_upscale_scale"]
         upscale_target_short_edge = _fixed["upscale_target_short_edge"]
-        upscale_batch, pace = _fixed["upscale_batch"], _fixed["pace"]
+        pace = _fixed["pace"]
         ambient_level, foley_level = _fixed["ambient_level"], _fixed["foley_level"]
         speech_lead_seconds = _fixed["speech_lead_seconds"]
         speech_tail_seconds = _fixed["speech_tail_seconds"]
         hold_levels = _fixed["hold_levels"]
         notes.extend(_fixnotes)
+        # WIDGETS THAT WERE NOT CHOICES. Each of these had one right answer that the
+        # node could reach and the reader could not, so each was a question whose
+        # wrong answer only ever made the render worse.
+        #
+        # cfg: H3 is CFG-free. Every clause this file writes is phrased positively
+        #   BECAUSE of that -- at cfg 1 the negative is never evaluated and naming
+        #   what you do not want names it. Above 1 the negative starts being read,
+        #   the prompting strategy stops being the right one, and the run costs
+        #   double. There was no setting here, only a way to break it.
+        # trim_seam: the first frame of a continued shot is the model's own redraw
+        #   of the keyframe it was handed. It is a duplicate whether or not anyone
+        #   ticks a box.
+        # silence_nonspeech: already decided per shot -- it fires where there is no
+        #   quoted line. The switch only ever turned a correct decision off.
+        # cleanup_between_shots: the RAM copy costs a fraction of one shot; VRAM
+        #   ratcheting across a long chain ends the render.
+        cfg = 1.0
+        trim_seam = True
+        silence_nonspeech = True
+        cleanup_between_shots = True
+        # THE CONTINUITY GUARDS. Seven switches, each turning one clause off for the
+        # WHOLE RUN, every one of them shipped on. Each exists for a reported failure
+        # -- a face lip-syncing to a line nobody wrote, the camera drifting until the
+        # room is a different room, a door that opens and shuts itself, two people
+        # sharing one gaze, a shot whose sound came from nowhere -- and turning one off
+        # does not trade the failure for anything. It just returns it.
+        #
+        # They were A/B switches: isolate one guard, render twice, see what it did.
+        # That is a developer's tool, and it was sitting in the reader's node costing
+        # them seven decisions on every workflow.
+        #
+        # THE HONEST CAVEAT, since it was the argument for keeping them: these guards
+        # are also what pays the namings that can draw a duplicate, and they are now
+        # not switchable off. The per-shot naming budget meant to replace them does not
+        # exist -- see fit_guards, which records why it cannot. What is left is the
+        # report: info still names every over-named person and which namings came from
+        # this node, and a shot that keeps duplicating is answered by rewriting the
+        # beat, which was always the better lever.
+        character_guard = True
+        hold_gaze = True
+        hold_scene_state = True
+        mouths_shut_when_no_line = True
+        hold_camera = True
+        auto_sound = True
+        beat_leads = True
+        # verbatim sent the prompt with none of the above, to tell the node's doing
+        # from the model's. Gone at the reader's word. The diagnosis it served is the
+        # one thing here with no replacement, so it is worth saying plainly: with this
+        # switch removed, nothing renders your text without the node's sentences over
+        # it, and info's account of what each clause WOULD have said is what is left.
+        verbatim = False
+        # apply_model_sampling asked the reader whether the graph had already set the
+        # schedule. comfy's own MiniMaxH3SigmaShift stamps that into the model, so the
+        # model answers it.
+        _upstream = upstream_h3_shift(model)
+        apply_model_sampling = _upstream is None
+        if _upstream is not None:
+            notes.append(
+                f"the H3 schedule is ALREADY SET upstream (video {_upstream[0]:g}"
+                + (f"/audio {_upstream[1]:g}" if _upstream[1] else "")
+                + f"), so this node is not patching it again and its own shift_video "
+                  f"{shift_video:g} and shift_audio {shift_audio:g} are NOT what is "
+                  f"running -- the upstream node's are. Read from the stamp comfy's "
+                  f"MiniMaxH3SigmaShift leaves in transformer_options. Remove that node "
+                  f"to sample on the shifts set here")
+        # THE STEP COUNT IS THE SCHEDULE. shift_video 12 is H3's own default and it
+        # was chosen against ~20 steps; a turbo LoRA drops that to 3-8 and nobody
+        # moves the shift, so the last step is left clearing 0.63-0.86 in one jump
+        # and the anatomy under the polish never resolves.
+        _lora_steps = lora_step_targets(graph)
+        _shift_live = bool(apply_model_sampling
+                           and not (sigmas is not None and len(sigmas)))
+        if _lora_steps:
+            _targets = sorted({n for n, _ in _lora_steps})
+            if len(_targets) > 1:
+                notes.append(
+                    "two or more LoRAs in this workflow state DIFFERENT step counts ("
+                    + "; ".join(f"{n} from {nm}" for n, nm in sorted(_lora_steps))
+                    + "). A distilled LoRA collapses the denoising trajectory onto the "
+                      "step count it was trained for, so stacking two that disagree asks "
+                      "the model for both at once and it renders neither. This is the one "
+                      "thing here that is really schedules fighting; steps is currently "
+                      f"{steps}")
+            elif int(steps) != _targets[0]:
+                notes.append(
+                    f"{_lora_steps[0][1]} is built for {_targets[0]} steps and steps is "
+                    f"{steps}. Read out of the FILE NAME, which is the only place a LoRA "
+                    f"states it -- its metadata carries rank and alpha and no schedule at "
+                    f"all. Running a distilled LoRA off its own step count denoises past "
+                    f"or short of where its trajectory lands")
+        if _shift_live:
+            _jump = final_video_jump(steps, shift_video, scheduler)
+            if _jump > REFERENCE_FINAL_JUMP:
+                _new = shift_video_for_jump(steps, scheduler)
+                if _new is not None and _new < shift_video:
+                    _after = final_video_jump(steps, _new, scheduler)
+                    notes.append(
+                        f"shift_video LOWERED {shift_video:g} -> {_new:g}. At {steps} steps "
+                        f"the {shift_video:g} typed in left {_jump:.2f} of video noise for "
+                        f"the final step to clear alone, against the "
+                        f"{REFERENCE_FINAL_JUMP:.2f} this aims at; {_new:g} leaves "
+                        f"{_after:.2f}. comfy's "
+                        f"schedules end at zero, so that sigma is crossed in ONE evaluation "
+                        f"-- every step before it polishes the top of the schedule and the "
+                        f"last one has to invent the structure underneath, which is what a "
+                        f"partly rendered limb or face is. 0.40 is what H3's own default "
+                        f"shift of 12 already leaves at the ~20 steps the undistilled model "
+                        f"is sampled at, so this is the schedule H3's own default already "
+                        f"gives when it has the steps it was picked for. Wire `sigmas`, or turn "
+                        f"apply_model_sampling off, to keep shift_video exactly as typed"
+                        + (f". It does NOT reach {REFERENCE_FINAL_JUMP:.2f} here -- {_after:.2f} is "
+                           f"the best {steps} steps can do, with shift_video already at its "
+                           f"{_new:g} floor. RAISE steps: the jump falls as the schedule gets "
+                           f"more places to stand"
+                           if _after > REFERENCE_FINAL_JUMP + 1e-6 else ""))
+                    # THE RATIO IS LOAD-BEARING, and lowering shift_video alone breaks
+                    # it. ModelSamplingAV.audio_scale IS shift_video/shift_audio, and
+                    # MiniMaxH3.process_latent_in carries the audio slice multiplied by
+                    # it (model_base.py) -- the packed latent holds audio_scale * x_audio
+                    # and process_latent_out divides it back out. It is the limit of
+                    # sigma_v/sigma_a as sigma falls, which is what time_shift_sigma
+                    # converges to. So shift_audio moves with shift_video, by the same
+                    # factor, and the stream keeps riding at the scale it was riding at.
+                    # (What does NOT depend on shift_video is where the audio branch
+                    # LANDS -- last_audio_sigma inverts the video shift back out. Two
+                    # different quantities; only one of them is free.)
+                    _lo_a, _hi_a = _WIDGET_RANGE["shift_audio"][1], _WIDGET_RANGE["shift_audio"][2]
+                    _ratio = float(shift_video) / float(shift_audio or 1.0)
+                    _new_a = min(max(_new / _ratio, _lo_a), _hi_a) if _ratio else shift_audio
+                    if abs(_new_a - shift_audio) > 1e-9:
+                        _got = _new / _new_a if _new_a else _ratio
+                        notes.append(
+                            f"shift_audio follows it {shift_audio:g} -> {_new_a:g}, holding "
+                            f"video:audio at {_got:.2g}:1"
+                            + ("" if abs(_got - _ratio) < 0.05 else
+                               f" -- NOT the {_ratio:.2g}:1 you set, because shift_audio hit "
+                               f"its {_lo_a:g} floor and could not go lower")
+                            + f". That ratio is audio_scale -- the "
+                            f"factor the packed latent carries the audio stream at -- so "
+                            f"moving shift_video without it would rescale the audio against "
+                            f"a picture that did not move. It also lands the audio branch "
+                            f"softer: {last_audio_sigma(steps, shift_audio, scheduler, shift_video):.2f} "
+                            f"-> {last_audio_sigma(steps, _new_a, scheduler, _new):.2f} on the "
+                            f"final step")
+                        shift_audio = _new_a
+                    shift_video = _new
+                elif _new is not None:
+                    notes.append(
+                        f"the final step still clears {_jump:.2f} of video noise at {steps} "
+                        f"steps and shift_video {shift_video:g}, above the "
+                        f"{REFERENCE_FINAL_JUMP:.2f} it aims at, and shift_video cannot go lower "
+                        f"than {_new:g} -- it is already at the widget floor. RAISE steps: "
+                        f"the jump falls as the schedule gets more places to stand")
         _wired = [n for n, r in enumerate((ref_image_1, ref_image_2, ref_image_3,
                                            ref_image_4), 1) if r is not None]
         _missing = unwired_reference_tags(f"{prompt}\n{character_memory}", _wired)
@@ -7178,6 +7386,7 @@ class H3LongVideos:
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
         crowded = []              # (shot, clauses dropped for room)
+        pronouned = []            # (shot, [(name, namings turned into pronouns)])
         absent_hold = []          # shots where the wearer is not on screen
         exposed_by_beat = []      # (shot, garments the beat names while covered)
         named_shots = []          # shots reminded the thing is still there
@@ -8147,15 +8356,24 @@ class H3LongVideos:
                            if n not in (_described or [])
                            and re.search(r"\b" + re.escape(n) + r"\b", _kept)]
             _cast_hold = cast_hold(list(_described or []) + _also_named, body, _extras_seen)
-            shot_text = ((line + _exact).strip() if verbatim
-                         else (line + _exact + _cast_hold + _kept).strip())
+            # A REPEATED NAMING IS SPENT AS A PRONOUN. Only the clauses this node
+            # wrote, only where the pronoun resolves to one person, and only after
+            # cast_hold has counted the bodies -- the first naming survives, so the
+            # body count reads the same text it always did.
+            _who_here = [(_n, sheet_pronoun(_ln)) for _n, _ln in sheet_lines(sheet)
+                         if _n and re.search(r"\b" + re.escape(_n) + r"\b",
+                                             line + _exact + _kept)]
+            _kept, _swapped = pronoun_rewrite(_kept, _who_here, extras=_extras_seen)
+            if _swapped:
+                pronouned.append((len(plan) + 1, _swapped))
+            shot_text = (line + _exact + _cast_hold + _kept).strip()
             for _n in (_described or []):
                 _total = len(re.findall(r"\b" + re.escape(_n) + r"\b", shot_text))
                 if _total >= 3:
                     _mine = _total - len(re.findall(r"\b" + re.escape(_n) + r"\b",
                                                     f"{_scene_sent} {body} {_exact}"))
                     named_often.append((len(plan) + 1, _n, _total, _mine))
-            _sound_kept = "" if (verbatim or "sound" in _dropped) else _sound
+            _sound_kept = "" if "sound" in _dropped else _sound
             sound_words += len(_sound_kept.split())
             guard_words += (len(shot_text.split()) - len(_sound_kept.split())
                             - len(f"{_scene_sent} {body}".split()) - len(_exact.split()))
@@ -8300,7 +8518,7 @@ class H3LongVideos:
                 f"in time is a state the model can render by arriving at it, which is a "
                 f"van whose doors open so somebody can close them. A beat that works the "
                 f"thing itself is left alone, and once a beat has changed a state no "
-                f"later shot is told the old one. Off with hold_scene_state.")
+                f"later shot is told the old one.")
         if paced_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in paced_shots)} stage less than "
@@ -8380,8 +8598,7 @@ class H3LongVideos:
                 f"its composition -- anatomy in the opening tokens is what a distilled model "
                 f"settles the frame on, and at cfg 1 no later sentence outvotes it. Your "
                 f"words are identical and none are rewritten; only the order changed, which "
-                f"is the one thing about this that had never been tried. Off with beat_leads "
-                f"to compare the two in one render")
+                f"is the one thing about this that had never been tried")
         if contact_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in contact_shots)} have three or more "
@@ -8404,10 +8621,12 @@ class H3LongVideos:
                 + ". Naming a person twice in one shot is what draws a second copy of "
                   "them, and every clause that owns a fact -- a pose, a look, whose "
                   "voice it is, who is wearing what -- pays a naming to say whose fact "
-                  "it is. Worth reading when duplicates persist: the ones from this node "
-                  "go away with the guard that writes them (hold_gaze, hold_scene_state, "
-                  "auto_sound, or verbatim for all of them), and the ones from your beat "
-                  "are yours to rewrite -- a pronoun costs nothing")
+                  "it is. Worth reading when duplicates persist. The guards that write "
+                  "these are no longer switchable -- each answers a failure of its own, "
+                  "and turning one off returns that failure rather than trading it for "
+                  "anything -- so the lever is the BEAT: a pronoun costs nothing, and "
+                  "'she turns' in place of a second 'Mara turns' takes a naming off this "
+                  "shot without losing a word of what you asked for")
         if camera_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in camera_shots)} say nothing about the "
@@ -8420,7 +8639,7 @@ class H3LongVideos:
                 f"An unstated attribute is left to the model's prior, and for a video model "
                 f"that prior is movement. Your words always win: any camera note in the "
                 f"beat or the anchor stands it down there, and a journey between places "
-                f"keeps its moving camera. Off with hold_camera")
+                f"keeps its moving camera")
         if exact_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in exact_shots)} carry an exact: line. "
@@ -8516,6 +8735,20 @@ class H3LongVideos:
                 f"static wardrobe from the NEXT shot, the way a removal scrubs from its "
                 f"own. An 'add:' that merely reveals a layer already underneath is left "
                 f"alone: nothing is being put on there")
+        if pronouned:
+            notes.append(
+                "a repeated naming was spent as a PRONOUN in this node's own clauses -- "
+                + "; ".join(f"shot {n}: " + ", ".join(f"{who} x{k}" for who, k in sw)
+                            for n, sw in pronouned)
+                + ". Naming somebody three times in one shot is what draws a second "
+                  "copy of them, and a clause cannot simply be dropped to save the "
+                  "naming -- the fact it carries goes with it. So the first naming in "
+                  "the clause text stands and the repeats become 'she', 'his', 'him'. "
+                  "Your own words are never touched, and nothing is rewritten where a "
+                  "second person in the shot answers to the same pronoun, or where the "
+                  "beat stages extras: an unresolvable pronoun is the ambiguity the "
+                  "naming existed to prevent. The namings left are in your text, and a "
+                  "pronoun there costs nothing either")
         if crowded:
             notes.append(
                 "guard clauses dropped for room -- "
@@ -8542,7 +8775,7 @@ class H3LongVideos:
                   "the other branch. Only where the room actually changed and only "
                   "where the new room has a sound of its own: otherwise the film's "
                   "own bed stands, because one bed across a chain is part of what "
-                  "makes it one film. Off with auto_sound")
+                  "makes it one film")
         if travel_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in travel_shots)} move between "
@@ -8562,8 +8795,7 @@ class H3LongVideos:
                 f"picture, but the text is what the model reconciles it against, and "
                 f"text that says nothing loses to a reference that says something. "
                 f"Standing is never held -- it is the default pose, so the clause "
-                f"would cost a naming of the person and buy nothing. Off with "
-                f"hold_scene_state")
+                f"would cost a naming of the person and buy nothing")
         if unattributed:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in unattributed)} carry a line that "
@@ -8713,7 +8945,7 @@ class H3LongVideos:
                 f"is in frame with them. Reported as one character stuck gazing at the "
                 f"camera while the other does his part: the target was one string with "
                 f"no owner, said impersonally, so a look she staged went on being said "
-                f"in shots she was not in and landed on whoever was. Off with hold_gaze")
+                f"in shots she was not in and landed on whoever was")
         if dialogue_gaze_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in dialogue_gaze_shots)} carry a line "
@@ -8726,7 +8958,7 @@ class H3LongVideos:
                 f"the one thing that can be said without inventing. One impersonal "
                 f"sentence: both names in the shot are already spent, and a third "
                 f"mention is a third person. Write 'looks at' or 'turns to' in the beat "
-                f"and that is said instead. Off with hold_gaze")
+                f"and that is said instead")
         if anchored_shots:
             notes.append(
                 f"fastened limbs held in place on shot(s) {', '.join(str(n) for n in anchored_shots)}"
@@ -8891,7 +9123,7 @@ class H3LongVideos:
                 f"silent conditioning is the half that actually settles it, since a "
                 f"lips-closed line loses to a stream that has decided somebody is "
                 f"talking. Shots staging effort are left out on purpose -- straining is "
-                f"vocal and that mouth should be open. Off with mouths_shut_when_no_line")
+                f"vocal and that mouth should be open")
         if _film_mood == "grim":
             notes.append(
                 "the anchor declares the film's tone, so every shot carries \"The mood "
@@ -8941,7 +9173,7 @@ class H3LongVideos:
                 f"swapped between them. A vocal the beat does not pin on anybody "
                 f"holds nobody: closing mouths on a guess could close the mouth "
                 f"making the noise. This changes which faces move and never what the "
-                f"audio is conditioned on. Off with mouths_shut_when_no_line")
+                f"audio is conditioned on")
         if duress_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in duress_shots)} are told what the "
@@ -8992,7 +9224,7 @@ class H3LongVideos:
                 f"that genuinely go either way -- pulls, draws, slides, swings -- get no "
                 f"anchor, because a wrong one asks for the reversal instead of allowing "
                 f"it. Reversal is likeliest in shot 1, which has no previous last frame "
-                f"pinning where it starts; first_frame pins it. Off with hold_scene_state.")
+                f"pinning where it starts; first_frame pins it.")
         if inferred_sound:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in inferred_sound)} were given the "
@@ -9366,13 +9598,12 @@ class H3LongVideos:
             ref_noise_aug=ref_noise_aug, restart_after_removal=restart_after_removal, revealed_shots=revealed_shots,
             sampler_name=sampler_name, scheduler=scheduler, seed=seed,
             shift_audio=shift_audio, shift_video=shift_video,
-            sigmas=sigmas, silence_nonspeech=silence_nonspeech,
+            sigmas=sigmas, silence_nonspeech=silence_nonspeech, trim_seam=trim_seam,
             speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, cut_shots=cut_shots,
             shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
             reentry_shots=reentry_shots,
-            tiled_decode=tiled_decode, trim_seam=trim_seam,
-            upscale=upscale, upscale_batch=upscale_batch, upscale_model=upscale_model,
+            upscale=upscale, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
         )
 
@@ -9424,10 +9655,8 @@ class H3LongVideos:
         steps = prepared.steps
         stripped_shots = prepared.stripped_shots
         cut_shots = prepared.cut_shots
-        tiled_decode = prepared.tiled_decode
         trim_seam = prepared.trim_seam
         upscale = prepared.upscale
-        upscale_batch = prepared.upscale_batch
         upscale_model = prepared.upscale_model
         upscale_target_short_edge = prepared.upscale_target_short_edge
         vae = prepared.vae
@@ -9646,7 +9875,7 @@ class H3LongVideos:
             except Exception:
                 parts = None
 
-            shot_tiled = tiled_decode
+            shot_tiled = not decode_fits_untiled(vae, out)
             pre_up = None            # the SAMPLED video latent, when upscaling ran
             if latent_upscale and latent_upscale != "off" and parts and len(parts) == 2:
                 vid_up, up_note = upscale_video_latent(parts[0], latent_upscale,
@@ -9822,7 +10051,8 @@ class H3LongVideos:
         video = frames.finish()
         if upscale and upscale != "off":
             video, up_note = _upscale_frames(video, upscale, upscale_model,
-                                             upscale_target_short_edge, upscale_batch)
+                                             upscale_target_short_edge,
+                                             upscale_batch_for(video))
             if up_note:
                 notes.append(up_note)
         audio = torch.cat(aud_out, dim=-1)

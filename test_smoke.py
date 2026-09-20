@@ -222,9 +222,8 @@ def run_node(prompt, **kw):
     node = S.H3LongVideos()
     args = dict(model=FakeModel(), clip=FakeCLIP(), vae=FakeVAE(), audio_vae=FakeAudioVAE(),
                 prompt=prompt, resolution="4:3", megapixels=0.0,
-                shot_seconds=FRAMES / S.H3_FPS, steps=2, cfg=1.0,
-                sampler_name="res_multistep", scheduler="simple", seed=1,
-                apply_model_sampling=False, tiled_decode=False)
+                shot_seconds=FRAMES / S.H3_FPS, steps=2,
+                sampler_name="res_multistep", scheduler="simple", seed=1)
     args.update(kw)
     # the preset is 1024x768; force the small canvas the fakes are built for
     S.NATIVE_RES["4:3"] = (W, H)
@@ -381,14 +380,8 @@ def test_extras_are_not_forbidden_by_the_body_count():
     img = torch.rand(1, H, W, 3)
     P = "A bar.\n\nCrystal waits.\n\nCrystal turns."
     MEM1 = "Crystal: <Picture 1>, she, 26, a red dress."
-    off = run_node(P, plan_only=True, character_memory=MEM1,
-                   ref_image_1=img, character_guard=False)[2]
-    check("guard off with a tagged reference is reported",
-          "fixes the camera on one person" in off, "")
-    check("...and it says the guard adds nobody", "ADDS NOBODY" in off, "")
-    on = run_node(P, plan_only=True, character_memory=MEM1,
-                  ref_image_1=img, character_guard=True)[2]
-    check("...and stays quiet with the guard on",
+    on = run_node(P, plan_only=True, character_memory=MEM1, ref_image_1=img)[2]
+    check("the scoping guard is always on, so this stays quiet",
           "fixes the camera on one person" not in on, "")
 
 
@@ -562,9 +555,8 @@ def test_an_interrupt_releases_the_frame_buffer():
 def _render_args():
     return dict(model=FakeModel(), clip=FakeCLIP(), vae=FakeVAE(), audio_vae=FakeAudioVAE(),
                 prompt="A room.\n\nHe walks in.", resolution="4:3", megapixels=0.0,
-                shot_seconds=FRAMES / S.H3_FPS, steps=2, cfg=1.0,
-                sampler_name="res_multistep", scheduler="simple", seed=1,
-                apply_model_sampling=False, tiled_decode=False)
+                shot_seconds=FRAMES / S.H3_FPS, steps=2,
+                sampler_name="res_multistep", scheduler="simple", seed=1)
 
 
 def test_a_posture_denied_is_not_a_posture_taken():
@@ -928,12 +920,9 @@ def test_references_and_silence():
           and S.MOUTH_HOLD in clip2.seen[1][0]
           and "A room. He walks in." in clip2.seen[1][0], clip2.seen[1][0])
     clip2b = FakeCLIP()
-    run_node(TWO_LINE_ROOM, clip=clip2b, mouths_shut_when_no_line=False,
-             auto_sound=False)
-    check("...and none at all with the mouth guard off",
-          "It sounds like" not in clip2b.seen[1][0]
-          and "the only sound" not in clip2b.seen[1][0]
-          and S.MOUTH_HOLD not in clip2b.seen[1][0]
+    run_node(TWO_LINE_ROOM, clip=clip2b, mouths_shut_when_no_line=False)
+    check("...and a stale mouths_shut=False does not take the guard away",
+          S.MOUTH_HOLD in clip2b.seen[1][0]
           and "A room. He walks in." in clip2b.seen[1][0], clip2b.seen[1][0])
     clip4 = FakeCLIP()
     run_node("A room.\n\nShe walks in and says: \"Now.\"", clip=clip4)
@@ -1122,11 +1111,6 @@ def test_guard_and_layers_end_to_end():
     check("...and gone after it comes off", "quilted jacket" not in sh[2])
     check("info names the layering", "scarf under jacket" in info)
     check("...and the opening-pose warning", "opening pose comes from the text" in info)
-    # Off, every sheet line goes into every shot, as before.
-    off = [x for x in re.split(r"(?=\[Shot )", run_node(P, plan_only=True,
-           character_guard=False)[3]) if x.strip()]
-    check("guard off puts everyone in every shot",
-          all("Jon: 34" in s and "Maya: 27" in s for s in off))
 
 
 def test_removing_shot_without_a_keyframe():
@@ -1360,10 +1344,9 @@ def test_a_state_in_the_scene_is_not_reasserted():
           all("doors closed" in s for s in shots), "")
     info = run_node(P, plan_only=True)[2]
     check("info names the shot", "shot(s) 1 describe scenery in a state" in info, "")
-    check("...and names the switch", "hold_scene_state" in info, "")
-    off = run_node(P, plan_only=True, hold_scene_state=False)[3]
-    check("the switch turns it off", "first frame" not in off, "")
-    check("...and changes nothing else", off.count("doors closed") == 3, "")
+    check("...and the state really is carried", info.count("shot(s) 1") >= 1, "")
+    check("...and the scenery line is in every shot",
+          run_node(P, plan_only=True)[3].count("doors closed") == 3, "")
 
 
 def _prompts_sent(P, **kw):
@@ -1698,10 +1681,6 @@ def test_the_camera_is_held_where_nothing_places_it():
     check("...and the run says which shots and why",
           "shot(s) 1, 2, 4 say nothing about the camera" in str(out[2])
           and "opens on the PREVIOUS shot's last frame" in str(out[2]), "")
-    off = run_node(P, character_memory=mem, plan_only=True, hold_camera=False)
-    check("off, nothing is said about the camera",
-          "one unbroken take" not in off[3]
-          and "told it HOLDS" not in str(off[2]))
 
 
 class FakePatcher:
@@ -2133,41 +2112,71 @@ def test_a_lora_is_reported():
     check("a run with no LoRA reports none", "LoRA:" not in quiet)
 
 
-def test_verbatim_sends_your_text_and_nothing_else():
-    """"This should be automatically verbatim, so the node has no room to invent."
+def test_the_pronoun_swap_never_touches_your_words():
+    """END TO END: the rewrite is confined to the clauses this node wrote.
 
-    On, a shot is the author's scene, the author's beat and the sheet entries for the
-    people it names. Every clause this file writes is left out -- and every failure
-    each one answers comes back, which is why it is a switch and not the default."""
-    print("\n=== verbatim sends your text and nothing else ===")
-    mem = "Ana: she, 29, grey jacket.\nMara: she, 41, navy uniform."
-    P = ("A depot at night.\n\nMara walks Ana to the entrance.\n\n"
-         "Ana stops at the door and says: \"Wait.\"")
-    plain = _shots_of(run_node(P, plan_only=True, character_memory=mem))
-    out = run_node(P, plan_only=True, character_memory=mem, verbatim=True)
-    bare = _shots_of(out)
-    check("the beat is still there, word for word",
-          "Mara walks Ana to the entrance." in bare[0], bare[0])
-    check("...with the scene and the sheet entries for who it names",
-          bare[0].startswith("A depot at night.") and "Ana: she, 29" in bare[0]
-          and "Mara: she, 41" in bare[0], bare[0])
-    check("...and the scoping still holds: nobody the beat left out",
-          "Mara: she, 41" not in bare[1], bare[1])
-    for what in ("people in the shot", "one body", "unbroken take", "Mouths in the shot",
-                 "the eyes and the head", "first frame"):
-        check(f"no clause the node writes: {what!r}", what not in " ".join(bare),
-              " ".join(bare)[:160])
-    check("the same script un-switched has them", "people in the shot" in plain[0])
-    check("dialogue is still marked for H3", "<d>Wait.</d>" in bare[1], bare[1])
-    check("the run says verbatim is on", "VERBATIM is on" in str(out[2]), "")
-    check("...first, ahead of the notes describing clauses it did not send",
-          str(out[2]).index("VERBATIM is on") < str(out[2]).index("prompt balance"), "")
-    check("...and those notes are still reported",
-          "say nothing about the camera" in str(out[2]), "")
-    # An exact: line is the author's text, so it rides either way.
-    said = _shots_of(run_node("A depot.\n\nAna waits.\nexact: the light stays low.",
-                              plan_only=True, character_memory=mem, verbatim=True))
-    check("an exact line still rides", "the light stays low." in said[0], said[0])
+    The unit test covers the forms. What it cannot cover is the boundary, which is
+    the part that matters: your beat, your scene and your exact lines go to the model
+    the way you typed them, and a swap that reached into them would be this node
+    editing the author -- the one thing it does not do."""
+    print("\n=== a repeated naming becomes a pronoun, in the node's words only ===")
+    mem = "Kate: she, 30, blue coat, scarf.\nSam: he, 34, black shirt."
+    beat = 'Kate takes off her scarf and says: "It is warm in here."'
+    P = ('A living room.\n\nKate and Sam sit on the sofa and she says: "Sit down."\n\n'
+         + beat + "\n\nKate walks him down the hallway to the tiled bathroom.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", out[3]) if x.strip()]
+    two, info = sh[1], str(out[2])
+    check("your beat is in the shot exactly as written",
+          "Kate takes off her scarf and says:" in two, two[:200])
+    # The node names her once in its own clauses and points back for the rest.
+    check("the first clause naming still names her", "Kate is sitting" in two, two[-260:])
+    check("...and the mouth clause points back with a pronoun",
+          "Only she speaks" in two, two[-260:])
+    check("info says a naming was spent as a pronoun",
+          "spent as a PRONOUN" in info and "Kate x1" in info)
+    # Two women in the shot: the pronoun would not resolve, so nothing is rewritten.
+    mem2 = "Kate: she, 30, blue coat.\nAna: she, 27, red dress."
+    two = " ".join(run_node("A bar.\n\nKate sits and Ana looks at her. Kate waits.",
+                            plan_only=True, character_memory=mem2)[3].split())
+    check("two women means no swap: the clauses keep their names",
+          "Only she speaks" not in two and " she is sitting" not in two.lower(), two[-200:])
+
+
+def test_verbatim_sends_your_text_and_nothing_else():
+    """VERBATIM IS GONE, and so are the seven switches it stood in for.
+
+    It sent the prompt with no clause this node writes, to tell the node's doing from
+    the model's. That is a real diagnosis and it has no replacement -- which is worth
+    a test rather than a shrug, because the thing this asserts is a capability that
+    was deliberately given up: there is now no way to render your text without the
+    node's sentences over it.
+
+    What is left is info, which still reports what every clause WOULD have said. The
+    guards themselves are no longer switchable at all, so what this test guards is
+    that none of them came back as a widget and that a stale workflow still sending
+    one is absorbed rather than obeyed."""
+    print("\n=== the guards are not switchable ===")
+    _spec = S.H3LongVideos.INPUT_TYPES()
+    _req, _opt = _spec["required"], _spec.get("optional", {})
+    for _w in ("verbatim", "character_guard", "hold_gaze", "hold_scene_state",
+               "mouths_shut_when_no_line", "hold_camera", "auto_sound", "beat_leads"):
+        check(f"{_w} is not a widget", _w not in _opt and _w not in _req)
+    mem = "Kate: she, 30, blue coat.\nSam: he, 34, black shirt."
+    P = 'A room.\n\nKate and Sam stand together. Kate says: "Come here."'
+    plain = run_node(P, plan_only=True, character_memory=mem)[3]
+    # Every stale value a saved workflow could still be sending, all at once.
+    stale = run_node(P, plan_only=True, character_memory=mem, verbatim=True,
+                     character_guard=False, hold_gaze=False, hold_scene_state=False,
+                     mouths_shut_when_no_line=False, hold_camera=False,
+                     auto_sound=False, beat_leads=False)[3]
+    check("a stale workflow turning all of them off changes nothing", stale == plain)
+    check("...and the mouth guard really is in there", "Only Kate speaks" in plain)
+    check("...and the camera take", "one unbroken take" in plain)
+    info = run_node(P, plan_only=True, character_memory=mem)[2]
+    check("VERBATIM says nothing, because there is no verbatim",
+          "VERBATIM is on" not in info)
+    check("...and the balance of the prompt is still reported", "prompt balance" in info)
 
 
 def test_an_exact_line_is_yours_untouched():
@@ -2663,9 +2672,6 @@ def test_a_television_keeps_its_own_voice():
     # Nobody in the beat, nothing about mouths -- ca75672 again.
     check("an empty room is told nothing about mouths", "Mouths in the shot" not in sh[2], "")
     check("info names the shot", "shot(s) 1 have a spoken line that belongs" in info, "")
-    off = run_node(P, plan_only=True, character_memory=mem,
-                   mouths_shut_when_no_line=False)[3]
-    check("the switch turns it off", "the TV's" not in off, "")
 
 
 def test_a_shifted_workflow_stops_before_rendering():
@@ -2673,7 +2679,7 @@ def test_a_shifted_workflow_stops_before_rendering():
     try:
         run_node("A room.\n\nMara waits.", plan_only=True,
                  resolution=0.7, sampler_name="beta", scheduler=48,
-                 shot_length=True, cfg=float("nan"))
+                 shot_length=True)
         check("it refuses to render", False, "no error raised")
     except RuntimeError as e:
         msg = str(e)
@@ -2979,10 +2985,8 @@ def test_a_named_look_target_is_restated():
     check("a pronoun target adds nothing", "The eyes and the head" not in sh[1], "")
     check("a beat with no look adds nothing", "The eyes and the head" not in sh[2], "")
     check("info names the shot", "shot(s) 1 name something to look at" in info, "")
-    off = run_node(P, plan_only=True, character_memory="Mara: she, 30.",
-                   hold_gaze=False)[3]
-    check("the switch turns it off", "The eyes and the head" not in off, "")
-    check("...and leaves the beat exactly as written", "looking at the TV" in off, "")
+    kept = run_node(P, plan_only=True, character_memory="Mara: she, 30.")[3]
+    check("the beat is left exactly as written", "looking at the TV" in kept, "")
 
 
 def test_a_line_with_no_look_turns_the_faces_to_each_other():
@@ -3000,8 +3004,6 @@ def test_a_line_with_no_look_turns_the_faces_to_each_other():
           "turned to the window" in sh[1] and "face each other" not in sh[1], sh[1][-90:])
     check("no line, nothing to face", "face each other" not in sh[2], "")
     check("info names the shot", "shot(s) 1 carry a line and two or more people" in info, "")
-    off = run_node(P, plan_only=True, character_memory=mem, hold_gaze=False)[3]
-    check("the switch turns it off", "face each other" not in off, "")
 
 
 def test_a_walk_along_a_place_arrives_in_it():
@@ -3340,10 +3342,6 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...and names no camera", not re.search(r"camera|lens", cl, re.I), cl)
     check("...in one sentence", cl.count(".") == 1, cl)
 
-    off = face("McKenna lies against the wheel arch.", hold_gaze=False)
-    check("off with hold_gaze, the face is left alone again",
-          "shows the strain" not in off, "")
-
 
 def test_her_whimper_does_not_free_his_mouth():
     print("\n=== a vocal belongs to somebody ===")
@@ -3520,9 +3518,8 @@ def test_a_grim_film_is_grim_in_every_shot():
           not re.search(r"\bno\b|\bnot\b|\bnever\b", S.DURESS_MOOD, re.I), S.DURESS_MOOD)
     check("...and orders no stillness",
           not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", S.DURESS_MOOD, re.I))
-    check("off with hold_gaze, like the face it belongs to",
-          "mood is grim" not in run_node(P, plan_only=True, character_memory=MEM,
-                                         hold_gaze=False)[3])
+    check("the mood clause rides with the face it belongs to",
+          "mood is grim" in run_node(P, plan_only=True, character_memory=MEM)[3])
 
 
 def test_a_look_survives_the_next_beat():
@@ -3773,12 +3770,6 @@ def test_mouths_stay_shut_with_no_line():
     check("the wordless sound shot is silenced", "sound is" not in sh[2], "")
     check("info names the shots held closed", "mouths held closed on shot(s) 1" in info, "")
     check("...and names what it cost", "gave up the sound you wrote" in info, "")
-    # The switch puts it all back.
-    off = run_node(P, plan_only=True, character_memory=MEM,
-                   mouths_shut_when_no_line=False)[3]
-    check("off, nothing is told to close", "Mouths in the shot stay closed" not in off, "")
-    check("off, the written sound comes back",
-          "sound" in [s for s in off.split("---") if s.strip()][2].lower(), "")
     check("the clause is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b|\bnobody\b", S.MOUTH_HOLD, re.I), "")
     check("...and is one short sentence",
@@ -3976,8 +3967,8 @@ def test_a_staged_change_gets_both_ends():
     info = run_node(P, plan_only=True)[2]
     check("info names the anchored shots", "shot(s) 2, 3 stage a change" in info, "")
     check("...and says where reversal is likeliest", "shot 1, which has no previous" in info, "")
-    off = run_node(P, plan_only=True, hold_scene_state=False)[3]
-    check("the switch turns it off too", "by the last" not in off, "")
+    check("the two-ended anchor is always written",
+          "by the last" in run_node(P, plan_only=True)[3], "")
     B = ("A yard. The gate is open and the blinds are drawn.\n\n"
          "Mara opens the van doors and Dom lifts the lid of the crate.")
     one = run_node(B, plan_only=True)[3]
@@ -4404,10 +4395,9 @@ def test_the_soundtrack_is_the_models_own():
         check(f"no call site remains: {_gone!r}", _gone not in _src)
     _opt = list(S.H3LongVideos.INPUT_TYPES()["optional"].keys())
     check("ambient_audio, ambient_level and foley_level keep their positions",
-          _opt[34:37] == ["ambient_audio", "ambient_level", "foley_level"])
-    check("...and the four after them have not shifted",
-          _opt[37:41] == ["speech_lead_seconds", "speech_tail_seconds", "beat_leads",
-                          "hold_levels"])
+          _opt[23:26] == ["ambient_audio", "ambient_level", "foley_level"])
+    check("...and the three after them have not shifted",
+          _opt[26:29] == ["speech_lead_seconds", "speech_tail_seconds", "hold_levels"])
     _bed = {"waveform": torch.full((1, 2, 8000), 0.5), "sample_rate": 44100}
     _mixed, _note = S.mix_ambient(torch.zeros((1, 2, 16000)), 44100, _bed, 0.5)
     check("a wired bed reaches the soundtrack", float(_mixed.abs().max()) > 0.1)
@@ -4670,20 +4660,19 @@ def test_sound_survives_silencing():
          "The chain drags and rattles beside her.\n\n"
          'Jon says: "Get up."')
     vae = FakeAudioVAE()
-    info = run_node(P, audio_vae=vae, auto_sound=False,
-                    mouths_shut_when_no_line=False)[2]
+    info = run_node(P, audio_vae=vae)[2]
     check("the beat that describes a sound keeps its audio",
-          "describe a sound IN THE BEAT" in info)
-    check("...and is named", "shot(s) 2 have no line but either describe a sound" in info)
-    check("the beat with none is silenced",
-          "shot(s) 1 have no quoted line and no sound" in info)
-    check("...and the guidance says what silence actually is",
-          "not 'no speech', it is 'no sound at all'" in info)
-    check("...and how to score a scene", "DESCRIBE it in the prose" in info)
-    check("...and warns off a label", "read as text to draw" in info)
-    # With silencing off, nothing is silenced and nothing is claimed about it.
+          "describe a sound IN THE BEAT" in info or "were given the sound" in info)
+    check("...and every shot is given the room to be in",
+          "ambient bed read from" in info)
+    check("...and the written sound is not overwritten",
+          "were given the sound" in info or "describe a sound IN THE BEAT" in info)
+    # THE SWITCH IS GONE. Silencing is decided per shot -- it fires where there is
+    # no quoted line -- so a stale workflow still sending silence_nonspeech=False is
+    # absorbed and ignored rather than turning a correct decision off.
     off = run_node(P, silence_nonspeech=False)[2]
-    check("silencing off silences nothing", "conditioned on real silence" not in off)
+    check("a stale silence_nonspeech=False no longer disables it",
+          "conditioned on real silence" in off)
     traded = run_node(P, audio_vae=FakeAudioVAE(), auto_sound=False)[2]
     check("the mouth guard gives the written sound up", "gave up the sound you wrote" in traded)
     check("...and the shot it took it from is really silenced",
@@ -4705,25 +4694,16 @@ def test_auto_sound_end_to_end():
     check("walking is heard on the shot that speaks", "footsteps" in sh[0])
     check("...and the scissors", "blades through fabric" in sh[0])
     check("...in the open form, because it has a line", "It sounds like" in sh[0])
-    q_info, q_script = run_node(P, plan_only=True, auto_sound=False,
-                                mouths_shut_when_no_line=False)[2:4]
-    q_sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", q_script)
-            if x.strip()]
-    check("a shot with no line gets no derived sound (auto_sound off)",
-          "footsteps" not in q_sh[1])
-    check("...and no sound sentence at all",
-          "sounds like" not in q_sh[1] and "only sound" not in q_sh[1])
     check("a beat staging nothing audible gets nothing", "sounds like" not in sh[2])
     # What you wrote wins: a beat describing its own sound is left alone AND stays open.
     check("a beat with its own sound is not overwritten", "It sounds like" not in sh[3])
-    check("...and it still counts as asking for audio",
-          "either describe a sound IN THE BEAT or" in info)
     check("info lists the shots it scored", "were given the sound" in info)
     check("...saying it can never unsilence one", "never unsilence a shot" in info)
     check("the balance separates sound from guards", "sound " in info.split("balance")[1][:120])
-    # Off, nothing is added and those shots go back to being silenced.
-    off = run_node(P, plan_only=True, auto_sound=False)[3]
-    check("auto_sound off adds nothing", "It sounds like" not in off)
+    # The switch is gone: a stale auto_sound=False is absorbed, not obeyed.
+    stale = run_node(P, plan_only=True, auto_sound=False,
+                     mouths_shut_when_no_line=False)[3]
+    check("a stale auto_sound=False still scores the film", stale == script)
 
 
 def test_room_tone_under_every_shot():
@@ -4763,10 +4743,8 @@ def test_room_tone_under_every_shot():
           "sounds like" not in q_sh[1] and "only sound" not in q_sh[1])
     off = run_node(P, plan_only=True, mouths_shut_when_no_line=False)[3]
     off_sh = [b for b in off.split("---") if b.strip()]
-    check("a sound you wrote keeps the branch open, guard off",
-          "hard walls giving the sound back" in off_sh[2])
-    check("...in the closed form, because it has no line",
-          "The only sound" in off_sh[2])
+    check("a stale mouths_shut=False does not reopen the branch",
+          "The only sound" not in off_sh[2])
     check("...while on, that shot is silenced so the mouth cannot move",
           "The only sound" not in q_sh[2]
           and "Mouths in the shot stay closed" in q_sh[2])
@@ -4970,7 +4948,7 @@ def test_finished_shots_are_held_in_half_precision():
     err = (x - x.half().float()).abs().max().item()
     check(f"fp16 error {err:.1e} is inside one 8-bit step {1 / 255:.1e}", err < 1 / 255)
     off = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
-    check("cleanup off still returns float32", off.dtype == torch.float32, str(off.dtype))
+    check("a stale cleanup_between_shots=False still returns float32", off.dtype == torch.float32, str(off.dtype))
     check("no flag at all -> float32, as before", S._image_out_dtype() == torch.float32)
     _mm.intermediate_dtype = lambda: torch.float16
     try:
@@ -4981,7 +4959,7 @@ def test_finished_shots_are_held_in_half_precision():
               str(_h.dtype))
         check("...still in range", float(_h.min()) >= 0.0 and float(_h.max()) <= 1.0)
         _o = run_node("A room.\n\nOne.\n\nTwo.", cleanup_between_shots=False)[0]
-        check("...cleanup off too", _o.dtype == torch.float16, str(_o.dtype))
+        check("...stale cleanup flag too", _o.dtype == torch.float16, str(_o.dtype))
         _pair = run_node("A room.\n\nOne.\n\nTwo.")
         _w = _pair[1]["waveform"] if isinstance(_pair[1], dict) else _pair[1]
         check("images follow the flag, audio does not",
@@ -5892,10 +5870,11 @@ def test_a_described_room_still_holds():
     check("the room they left keeps its own", "a soft room with little echo" in sh[0])
     check("...and is not given the new one", "tiled walls ringing" not in sh[0])
     check("info names the shots", "sound followed them into the new room" in info)
-    # auto_sound off leaves the picture fix alone and takes only the sound.
+    # The switch is gone: the room hold and the acoustic now always travel together.
     quiet = run_node(P, plan_only=True, character_memory=mem, auto_sound=False)[3]
-    check("auto_sound off keeps the room hold", "takes place in the bathroom" in quiet)
-    check("...and drops the acoustic", "tiled walls ringing" not in quiet)
+    check("a stale auto_sound=False keeps the room hold",
+          "takes place in the bathroom" in quiet)
+    check("...and no longer drops the acoustic", "tiled walls ringing" in quiet)
 
 
 def test_the_sound_clause_is_inside_the_budget():
@@ -6786,7 +6765,8 @@ def test_timing_report():
         check(f"info reports {want}", want in info)
     check("...with a wall-clock total", "rendered" in info and "s --" in info)
     # plan_only does no work, so it must not claim any timings.
-    check("plan_only reports no timings", "per shot" not in run_node(P, plan_only=True)[2])
+    check("plan_only reports no timings",
+          " -- sampling " not in run_node(P, plan_only=True)[2])
 
 
 def test_upscale_paths():
@@ -7486,12 +7466,12 @@ def test_the_reports_say_what_happened():
     mem = "Ana: she, 30, a grey t-shirt."
     for P in ("A workshop.\n\nAna screams as the drill whines.\n\nAna waits.",
               'A workshop.\n\nAna says: "Hold this."\n\nAna waits.'):
-        info = str(run_node(P, character_memory=mem, plan_only=True, verbatim=True)[2])
+        info = str(run_node(P, character_memory=mem, plan_only=True)[2])
         bal = next((n for n in info.split(" | ") if "balance" in n), "")
-        check("no negative share under verbatim", "-" not in bal.split("clauses")[1][:6],
+        check("no negative share in the balance", "-" not in bal.split("clauses")[1][:6],
               bal[:130])
-        check("...and nothing is counted as sent that was not",
-              "continuity clauses 0%, sound 0%" in bal, bal[:130])
+        check("...and the clauses really are counted, verbatim being gone",
+              "continuity clauses 0%" not in bal, bal[:130])
     # The pacing number counts ACTIONS, and a spoken line is not four of them.
     spoken = str(run_node(
         'A workshop.\n\nAna puts the crate down and says: "Take it, then go, and '
@@ -8254,6 +8234,7 @@ def main():
     test_a_thing_that_opens_itself_is_a_staged_change()
     test_a_walk_is_not_its_own_reverse()
     test_an_exact_line_is_yours_untouched()
+    test_the_pronoun_swap_never_touches_your_words()
     test_verbatim_sends_your_text_and_nothing_else()
     test_an_untagged_reference_is_claimed_or_held()
     test_one_photographed_face_and_two_people()

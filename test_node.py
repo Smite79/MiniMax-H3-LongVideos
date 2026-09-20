@@ -763,6 +763,299 @@ def test_the_babble_advice_points_the_right_way():
     check("an impossible target is harmless", S.shift_audio_for(8, 1.0) == 0.0)
 
 
+def test_the_last_video_step_is_where_structure_resolves():
+    """The video branch's final jump, which nothing was reading.
+
+    comfy's schedules end at zero, so whatever sigma stands before that zero is
+    cleared in ONE evaluation. shift_video 12 -- H3's own default -- leaves 0.39
+    there at the ~20 steps the undistilled model is sampled at, and that is fine.
+    At the 8 this node defaults to it leaves 0.63; at the 3-4 a turbo LoRA wants,
+    0.86 and 0.80. Seven steps nibbling the top of the schedule and one step to
+    invent the anatomy underneath is what a hand that stops halfway is.
+
+    The suite already covered the AUDIO branch's last step in full and had nothing
+    at all on the video one, which is the branch you can see."""
+    for _n, _v, _want in ((20, 12.0, 12.0 / 31.0), (8, 12.0, 12.0 / 19.0),
+                          (4, 12.0, 0.80), (3, 12.0, 12.0 / 14.0),
+                          (8, 5.0, 5.0 / 12.0), (8, 1.0, 0.125)):
+        check(f"{_n} steps at shift_video {_v:g} -> {_want:.3f}",
+              abs(S.final_video_jump(_n, _v) - _want) < 1e-9)
+    # Both directions, and both are the ones the instinct gets backwards.
+    check("fewer steps leaves more for the last one",
+          S.final_video_jump(4, 12.0) > S.final_video_jump(8, 12.0)
+          > S.final_video_jump(20, 12.0))
+    check("...and so does a bigger video shift",
+          S.final_video_jump(8, 12.0) > S.final_video_jump(8, 5.0))
+    # The node's own defaults are the case that matters, so state it outright.
+    check("the shipped default leaves more than it should",
+          S.final_video_jump(8, 12.0) > S.REFERENCE_FINAL_JUMP)
+    check("...and H3's default at H3's step count does not",
+          S.final_video_jump(20, 12.0) <= S.REFERENCE_FINAL_JUMP)
+    check("a bad step count is harmless", S.final_video_jump("x", 12.0) == 0.0)
+    check("a bad shift is harmless", S.final_video_jump(8, None) == 0.0)
+
+
+def test_the_shift_correction_lowers_it():
+    """FEWER STEPS NEED A SMALLER shift_video, and the instinct runs the other way:
+    a short schedule feels like it needs more shift to hold its structure. Following
+    that is exactly what turns 4 steps into a 0.80 final jump.
+
+    Same inversion shift_audio_for() runs on the audio branch, so the same test
+    shape: it must never RAISE the jump, it must fall as steps fall, and it must
+    stay inside the widget so the number reported is one that can be typed in."""
+    for _n in (2, 3, 4, 6, 8, 12, 16, 20):
+        _v = S.shift_video_for_jump(_n)
+        check(f"{_n} steps: correction is settable", 1.0 <= _v <= 20.0)
+        # It SOLVES for the target rather than clamping to what is typed in, so at
+        # 20 steps -- where shift 12 already lands under it -- it comes back slightly
+        # above 12. _prepare only ever applies a correction that LOWERS the shift;
+        # the check that it does is test_widget_values_are_usable's job, not this
+        # function's. Here: wherever there is something to fix, fix it downward.
+        if S.final_video_jump(_n, 12.0) > S.REFERENCE_FINAL_JUMP:
+            check(f"{_n} steps: correction lowers the last step",
+                  S.final_video_jump(_n, _v) < S.final_video_jump(_n, 12.0)
+                  and _v < 12.0)
+    # It lands ON the target wherever the widget range allows it.
+    for _n in (3, 4, 8, 20):
+        check(f"{_n} steps lands on the target",
+              abs(S.final_video_jump(_n, S.shift_video_for_jump(_n))
+                  - S.REFERENCE_FINAL_JUMP) < 1e-2)
+    check("the correction falls as steps fall",
+          S.shift_video_for_jump(3) < S.shift_video_for_jump(4)
+          < S.shift_video_for_jump(8) < S.shift_video_for_jump(20))
+    # 20 steps is where H3's own default already sits, so it must barely move.
+    check("H3's step count barely moves off H3's default",
+          abs(S.shift_video_for_jump(20) - 12.0) < 1.0)
+    check("...and 8 steps asks for much less", S.shift_video_for_jump(8) < 6.0)
+    # Where the floor binds it says so by returning the floor, not a fiction.
+    # ROUNDED THE WRONG WAY. The jump rises with shift, so rounding the solved
+    # 4.6666 up to 4.67 puts it back OVER the 0.40 it was solved for -- by 0.0002,
+    # which was enough to make _prepare print "does NOT reach 0.40, shift_video is
+    # already at its floor" about a shift of 4.67 with the floor at 1.0.
+    for _n in (3, 4, 5, 6, 8, 10, 12, 16, 20):
+        check(f"{_n} steps: the correction never overshoots its own target",
+              S.final_video_jump(_n, S.shift_video_for_jump(_n))
+              <= S.REFERENCE_FINAL_JUMP + 1e-9)
+    check("clamped at the widget floor", S.shift_video_for_jump(2) == 1.0)
+    check("one step has nothing to aim at", S.shift_video_for_jump(1) is None)
+    check("a bad step count is harmless", S.shift_video_for_jump(None) is None)
+    check("an impossible target is harmless", S.shift_video_for_jump(8, "simple", 1.0) is None)
+
+
+def test_a_lora_states_its_step_count_in_its_name():
+    """The file name is the ONLY place a distilled LoRA says what it was built for.
+
+    Its safetensors metadata carries rank, alpha, baked_scale and conversion notes
+    and no sigma, no shift and no step count -- and comfy keeps only that metadata
+    dict, dropping the path, so the name survives nowhere but the workflow graph.
+
+    THE TRAP IS step600. Two of the shipped H3 LoRAs carry a training checkpoint in
+    the name, and reading it as a sampling target would advise 600 steps off a LoRA
+    that wants 4. Digits BEFORE the word, never after."""
+    def _g(*names):
+        return {str(i): {"class_type": "LoraLoader", "inputs": {"lora_name": n}}
+                for i, n in enumerate(names)}
+
+    check("a 4step LoRA is read as 4",
+          S.lora_step_targets(_g("minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_fro_v4.safetensors"))
+          == [(4, "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_fro_v4.safetensors")])
+    for _n, _want in (("minimax_h3_fl2v_turbo_8step_v1.0_comfyui_resized.safetensors", 8),
+                      ("minimax_h3_taomate_fl2va_3step_ema_comfyui.safetensors", 3),
+                      ("some_lora_6-step.safetensors", 6),
+                      ("some_lora_12_step.safetensors", 12)):
+        check(f"{_n} -> {_want}", S.lora_step_targets(_g(_n))[0][0] == _want)
+    # The checkpoint trap, in both files that carry it.
+    for _n in ("minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro.safetensors",
+               "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors"):
+        check(f"a training checkpoint is NOT a step target: {_n[-24:]}",
+              S.lora_step_targets(_g(_n)) == [])
+    # LoRAs that simply do not say.
+    for _n in ("Astro nsfw.safetensors", "LTX2.3_DMD_hybrid_v2.safetensors",
+               "ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+               "minimax_h3_fl2v_turbo_silver_dareties_comfy_full_v1.safetensors"):
+        check(f"no claim, no reading: {_n[:28]}", S.lora_step_targets(_g(_n)) == [])
+    # Two distill LoRAs that disagree is the one thing really worth calling a fight.
+    _two = S.lora_step_targets(_g("a_4step.safetensors", "b_8step.safetensors"))
+    check("two disagreeing LoRAs are both reported", sorted(_two) == [
+        (4, "a_4step.safetensors"), (8, "b_8step.safetensors")])
+    # The same LoRA on model and CLIP is one LoRA.
+    check("the same file twice is one entry",
+          len(S.lora_step_targets(_g("a_4step.safetensors", "a_4step.safetensors"))) == 1)
+    # Stacker nodes number their slots; those are lora_name inputs too.
+    check("a stacker's numbered slots are read",
+          len(S.lora_step_targets({"1": {"class_type": "LoraStacker", "inputs": {
+              "lora_name_1": "a_4step.safetensors",
+              "lora_name_2": "b_8step.safetensors"}}})) == 2)
+    # This runs off a hidden input that is absent on older frontends.
+    for _bad in (None, {}, "nope", {"1": {"inputs": None}}, {"1": {}}, {"1": None}):
+        check(f"a graph of {_bad!r} is harmless", S.lora_step_targets(_bad) == [])
+
+
+def test_the_graph_says_whether_the_schedule_is_already_set():
+    """apply_model_sampling asked the reader a question about their own graph.
+
+    "Turn off only if you patch it upstream yourself" -- and a wrong answer either
+    patches the schedule twice or leaves it unset. comfy's MiniMaxH3SigmaShift
+    stamps what it applied into transformer_options, so the model carries the answer.
+
+    THE MODEL_SAMPLING OBJECT IS NOT THE TEST. An H3 checkpoint loads with the right
+    FLOW_AV 12/3 schedule already on it, so "is a shift set" is true before anybody
+    has touched anything -- reading that instead would stand the node's own patch
+    down on every clean run. Only the stamp separates a patch from a default."""
+    class Stamped:
+        model_options = {"transformer_options": {
+            "minimax_h3_sigma_shift_video": 8.0, "minimax_h3_sigma_shift_audio": 2.0}}
+    class VideoOnly:
+        model_options = {"transformer_options": {"minimax_h3_sigma_shift_video": 6.0}}
+    class Clean:
+        model_options = {"transformer_options": {}}
+    class Defaulted:          # a loaded H3 model: schedule set, nobody patched it
+        model_options = {"transformer_options": {}}
+        model_sampling = "ModelSamplingAV(shift=12, audio_shift=3)"
+    class Bare:
+        pass
+    check("an upstream patch is seen, with its numbers",
+          S.upstream_h3_shift(Stamped()) == (8.0, 2.0))
+    check("...and a video-only stamp reads 0 for the audio",
+          S.upstream_h3_shift(VideoOnly()) == (6.0, 0.0))
+    check("an untouched graph is not a patch", S.upstream_h3_shift(Clean()) is None)
+    check("a model that merely HAS a schedule is not a patch",
+          S.upstream_h3_shift(Defaulted()) is None)
+    for _bad in (Bare(), None, "model", 7):
+        check(f"{type(_bad).__name__} is harmless", S.upstream_h3_shift(_bad) is None)
+    class Junk:
+        model_options = {"transformer_options": {"minimax_h3_sigma_shift_video": "eight"}}
+    check("an unreadable stamp is not a patch", S.upstream_h3_shift(Junk()) is None)
+
+
+def test_the_card_decides_tiling_and_chunk_size():
+    """Two widgets asked the reader to guess what the card had free.
+
+    tiled_decode shipped on and stayed on, which pays tile seams on every render
+    including the ones with room to spare; upscale_batch said "Lower = less VRAM,
+    slower" and left the arithmetic to the reader. ComfyUI sizes every VAE with
+    memory_used_decode and this file has been handing that number to free_memory
+    before every decode for as long as it has been right.
+
+    BOTH FAIL TOWARD WHAT SHIPPED. The failure modes are not symmetric: tiling
+    something that would have fit costs seams on one clip, and not tiling something
+    that will not fit ends the render. So every unknown -- a VAE that cannot
+    estimate itself, a missing device, a raised probe -- takes the old behaviour."""
+    _rt = S._runtime_module
+    _real_free = getattr(_rt.mm, "get_free_memory", None)
+    _real_dev = getattr(_rt.mm, "get_torch_device", None)
+
+    class VAE:
+        vae_dtype = torch.float16
+        def __init__(self, cost): self.cost = cost
+        def memory_used_decode(self, shape, dtype): return self.cost
+    class VAEBlind:
+        vae_dtype = torch.float16
+        def memory_used_decode(self, shape, dtype): raise RuntimeError("no estimate")
+    lat = {"samples": torch.zeros((1, 4, 2, 8, 8))}
+    try:
+        _rt.mm.get_torch_device = lambda: "cpu"
+        _rt.mm.get_free_memory = lambda d=None: 8e9          # 8 GB free
+        check("a decode that fits runs whole",
+              S.decode_fits_untiled(VAE(1e6), lat) is True)
+        check("a decode that does not fit is tiled",
+              S.decode_fits_untiled(VAE(9e9), lat) is False)
+        # 7e9 is UNDER the 8e9 free. It still tiles, and only DECODE_HEADROOM's 1.25
+        # over ComfyUI's own estimate -- the working allocations around the decode --
+        # makes that the right answer. Raw, it would run whole and spill.
+        check("a decode that fits only without headroom is still tiled",
+              7e9 < 8e9 and S.decode_fits_untiled(VAE(7e9), lat) is False)
+        check("...and one that fits WITH headroom runs whole",
+              S.decode_fits_untiled(VAE(8e9 / _rt.DECODE_HEADROOM * 0.9), lat) is True)
+        check("a VAE that cannot estimate itself is tiled",
+              S.decode_fits_untiled(VAEBlind(), lat) is False)
+        check("a bare latent works too, not only a dict",
+              S.decode_fits_untiled(VAE(1e6), torch.zeros((1, 4, 2, 8, 8))) is True)
+        # Chunk size falls as the frame grows, which is the whole of what it does.
+        _small = S.upscale_batch_for(torch.zeros((300, 480, 640, 3)))
+        _big = S.upscale_batch_for(torch.zeros((300, 1080, 1920, 3)))
+        check(f"a small frame takes a bigger chunk ({_small} vs {_big})", _small > _big)
+        check("...and both are settable", 1 <= _big and _small <= 64)
+        # Never more chunks than there are frames to put in them.
+        check("a short clip never asks for more than it has",
+              S.upscale_batch_for(torch.zeros((3, 64, 64, 3))) <= 3)
+        _rt.mm.get_free_memory = lambda d=None: 1e5          # nothing free
+        check("a full card still asks for one frame, not zero",
+              S.upscale_batch_for(torch.zeros((300, 1080, 1920, 3))) == 1)
+        check("...and tiles the decode", S.decode_fits_untiled(VAE(1e6), lat) is False)
+        def _boom(*a, **k): raise RuntimeError("no device")
+        _rt.mm.get_free_memory = _boom
+        check("an unprobeable card tiles", S.decode_fits_untiled(VAE(1e6), lat) is False)
+        check("...and takes the widget's old default", S.upscale_batch_for(
+            torch.zeros((300, 480, 640, 3))) == 4)
+    finally:
+        if _real_free is not None: _rt.mm.get_free_memory = _real_free
+        if _real_dev is not None: _rt.mm.get_torch_device = _real_dev
+    check("garbage frames take the default", S.upscale_batch_for(None) == 4)
+    check("garbage everything tiles", S.decode_fits_untiled(None, None) is False)
+
+
+def test_a_repeated_naming_is_spent_as_a_pronoun():
+    """The node taking its own advice.
+
+    Naming somebody three times in one shot draws a second copy of them, and every
+    clause that owns a fact pays a naming to say whose it is. Dropping the clause does
+    not work -- fit_guards records why -- so the naming is spent differently: the
+    first one in the node's own clause text stands, the repeats become pronouns, and
+    the fact stays where it was.
+
+    Measured on guard-heavy shots, this takes 44 namings to 41 and empties the
+    five-naming bucket. Modest, and it is the whole of what is safely available: the
+    rest of the namings are in the author's words, which are never touched."""
+    SHE, HE = [("Mara", "she")], [("Dan", "he")]
+    TWO_SHE = [("Mara", "she"), ("Kate", "she")]
+    MIX = [("Mara", "she"), ("Dan", "he")]
+
+    def out(text, who, **kw):
+        return S.pronoun_rewrite(text, who, **kw)[0]
+
+    check("the first naming stands and the second goes",
+          out(" Mara is lying down. Mara is still lying down.", SHE)
+          == " Mara is lying down. She is still lying down.")
+    check("...and a sentence-opening pronoun takes the capital",
+          "She is still" in out(" Mara is lying down. Mara is still lying down.", SHE))
+    check("a possessive before a noun becomes the determiner",
+          out(" Only Mara speaks. Mara's mouth is shut.", SHE)
+          == " Only Mara speaks. Her mouth is shut.")
+    check("...and his, for a he",
+          out(" Dan stands. Dan's coat is open.", HE)
+          == " Dan stands. His coat is open.")
+    check("a name after a preposition takes the object form",
+          out(" Dan stands. Mara turns to Dan.", HE)
+          == " Dan stands. Mara turns to him.")
+    # THE ATTRIBUTION ITSELF IS LEFT ALONE. "the sobbing is her" is not English, and
+    # the clause exists to say whose vocal it is so nobody else's mouth is opened.
+    check("a predicate possessive keeps its name",
+          out(" Only Mara sobs. The sobbing is Mara's.", SHE)
+          == " Only Mara sobs. The sobbing is Mara's.")
+    # The restraint that makes the whole thing safe.
+    check("two people answering to 'she' means nothing is rewritten",
+          out(" Mara is lying down. Kate looks at Mara.", TWO_SHE)
+          == " Mara is lying down. Kate looks at Mara.")
+    check("...while one of each is fine",
+          out(" Mara is lying down. Dan looks at Mara. Mara waits.", MIX)
+          == " Mara is lying down. Dan looks at her. She waits.")
+    check("extras staged means nothing is rewritten",
+          out(" Mara is lying down. Mara waits.", SHE, extras=True)
+          == " Mara is lying down. Mara waits.")
+    check("a single naming is left alone",
+          out(" Mara is lying down.", SHE) == " Mara is lying down.")
+    # It reports what it did, per person, so info can say so.
+    check("the swaps are counted and named",
+          S.pronoun_rewrite(" Mara waits. Mara sits. Mara stands.", SHE)[1]
+          == [("Mara", 2)])
+    for _bad in (None, "", " text with nobody in it"):
+        check(f"{_bad!r} is harmless", S.pronoun_rewrite(_bad, SHE)[1] == [])
+    for _who in (None, [], [("", "she")], [("Mara", None)], [("Mara", "it")]):
+        check(f"cast {_who!r} is harmless",
+              S.pronoun_rewrite(" Mara waits. Mara sits.", _who)[1] == [])
+
+
 def test_silence_reports_what_happened():
     """The silence note reported the FLAG, not the result.
 
@@ -3692,11 +3985,9 @@ def test_schema():
     for name in ("model", "clip", "vae", "audio_vae", "prompt"):
         check(f"{name} is required", name in req)
     check("the prompt is a socket, not a box", req["prompt"][1].get("forceInput") is True)
-    check("cfg defaults to 1.0 -- H3 is CFG-free", req["cfg"][1]["default"] == 1.0)
     check("shot_seconds defaults to 10", req["shot_seconds"][1]["default"] == 10.0)
     check("the shifts default to 12/3",
           opt["shift_video"][1]["default"] == 12.0 and opt["shift_audio"][1]["default"] == 3.0)
-    check("silence on non-speech shots is on", opt["silence_nonspeech"][1]["default"] is True)
     check("restraints are held by default", opt["hold_restraints"][1]["default"] is True)
     check("removals are read from the beat by default",
           opt["auto_remove"][1]["default"] is True)
@@ -3706,26 +3997,41 @@ def test_schema():
     n_widgets = sum(1 for d in (req, opt) for k, v in d.items()
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 43)
-    for _w in ("anchor", "character_memory", "character_guard"):
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 28)
+    for _w in ("anchor", "character_memory"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-17:] == ["anchor", "character_memory", "character_guard",
-                              "pace", "auto_sound", "hold_scene_state",
-                              "mouths_shut_when_no_line", "hold_gaze",
-                              "ambient_audio", "ambient_level", "foley_level",
-                              "speech_lead_seconds", "speech_tail_seconds",
-                              "beat_leads", "hold_levels", "hold_camera", "verbatim"])
-    check("hold_gaze is offered, and on",
-          "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
-    check("mouths_shut_when_no_line is offered, and on",
-          "mouths_shut_when_no_line" in opt
-          and opt["mouths_shut_when_no_line"][1]["default"] is True)
-    check("hold_scene_state is offered, and on",
-          "hold_scene_state" in opt and opt["hold_scene_state"][1]["default"] is True)
+          list(opt)[-9:] == ["anchor", "character_memory", "pace",
+                             "ambient_audio", "ambient_level", "foley_level",
+                             "speech_lead_seconds", "speech_tail_seconds",
+                             "hold_levels"])
+    # SEVEN WIDGETS THAT WERE NOT CHOICES. Each had one right answer the node
+    # could reach and the reader could not; each is now measured or pinned. They are
+    # asserted GONE, the way reference_mode and save_defaults are, because a widget
+    # that comes back is a question being asked again.
+    for _gone, _why in (("cfg", "H3 is CFG-free; pinned to 1.0"),
+                        ("apply_model_sampling", "read from the model's own stamp"),
+                        ("silence_nonspeech", "already decided per shot"),
+                        ("trim_seam", "the seam frame is a duplicate either way"),
+                        ("tiled_decode", "measured against free VRAM"),
+                        ("cleanup_between_shots", "pinned on"),
+                        ("upscale_batch", "measured against free VRAM"),
+                        # The continuity guards. Each answered a reported failure and
+                        # turning one off returned it rather than trading it; verbatim
+                        # turned off all seven at once, to tell the node's doing from
+                        # the model's, and went at the reader's word.
+                        ("character_guard", "the cast scoping always runs"),
+                        ("hold_gaze", "pinned on"),
+                        ("hold_scene_state", "pinned on"),
+                        ("mouths_shut_when_no_line", "pinned on"),
+                        ("hold_camera", "pinned on"),
+                        ("auto_sound", "pinned on"),
+                        ("beat_leads", "pinned on: the beat leads, measured better"),
+                        ("verbatim", "removed; info still reports what each clause says")):
+        check(f"{_gone} is gone -- {_why}", _gone not in opt and _gone not in req)
     check("reference_mode is gone", "reference_mode" not in opt)
     check("save_defaults is gone", "save_defaults" not in opt and "save_defaults" not in req)
-    for _u in ("upscale", "upscale_model", "upscale_target_short_edge", "upscale_batch",
+    for _u in ("upscale", "upscale_model", "upscale_target_short_edge",
                "latent_upscale", "latent_upscale_scale"):
         check(f"{_u} is on the node", _u in opt)
     check("both upscalers default to off",
@@ -3893,6 +4199,12 @@ def main():
     test_behind_the_back_is_read_however_it_is_written()
     test_a_bound_body_lying_down_has_something_under_it()
     test_a_body_under_effort_has_a_voice()
+    test_the_last_video_step_is_where_structure_resolves()
+    test_the_shift_correction_lowers_it()
+    test_a_lora_states_its_step_count_in_its_name()
+    test_the_graph_says_whether_the_schedule_is_already_set()
+    test_the_card_decides_tiling_and_chunk_size()
+    test_a_repeated_naming_is_spent_as_a_pronoun()
     test_widget_values_are_usable()
     test_the_allocator_that_aborts_is_refused_before_sampling()
     test_schema()

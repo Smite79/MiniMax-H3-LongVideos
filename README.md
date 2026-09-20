@@ -90,13 +90,6 @@ Nothing reads it either, on purpose: a name in it puts nobody in the shot, a gar
 it removes nothing, and a door in it stages no change. Write what must be **said**, and
 let the beat stage what happens. `exactly:` and `verbatim:` do the same thing.
 
-To see your prompt entirely on its own, switch on the `verbatim` widget: a shot is then
-your scene, your beat and the sheet entries for the people it names, and nothing this
-node writes. Every failure the continuity clauses answer comes back with them —
-duplicate characters, invented speech, a drifting camera, a door that shuts itself, a
-walk played backwards — so it is most useful for proving whether a fault is the node's
-doing or the model's. `info` still lists what each clause would have said.
-
 ### The character sheet
 
 A paragraph of `Name: attributes` lines, or the `character_memory` widget. Each shot is
@@ -128,14 +121,56 @@ at what strength, whether the **text encoder** carries them too, and the last on
 name if its metadata has one. Two runs whose prompts are identical can render
 differently, and nothing else in the run says why.
 
+It also reads the **step count out of the LoRA's file name** — `4step`, `8step`,
+`3step` — because that is the only place a distilled LoRA states one. Its safetensors
+metadata carries rank, alpha and conversion provenance and no schedule at all, and
+ComfyUI keeps only that metadata, dropping the path, so the name survives nowhere but
+the workflow graph. `info` says when your `steps` disagrees with it, and when two
+stacked LoRAs disagree with each other. A training checkpoint in a name — `step600` —
+is not a step target and is not read as one.
+
+### The step count is the schedule
+
+`shift_video` 12 is H3's own default and it was chosen against the ~20 steps the
+undistilled model is sampled at, where it leaves **0.39** of video noise for the last
+step. ComfyUI's schedules end at zero, so that sigma is crossed in one evaluation.
+
+Put a turbo LoRA in front of it and nothing moves the shift:
+
+| steps | schedule at `shift_video` 12 | last step clears |
+|---|---|---|
+| 20 | `… 0.571, 0.387, 0.0` | 0.39 |
+| 8 | `1.0, 0.988, 0.973, 0.952, 0.923, 0.878, 0.8, 0.632, 0.0` | **0.63** |
+| 4 | `1.0, 0.973, 0.923, 0.8, 0.0` | **0.80** |
+| 3 | `1.0, 0.96, 0.858, 0.0` | **0.86** |
+
+Every step but the last polishes the top of the schedule; the last one has to invent
+the structure underneath. That is what a partly rendered limb or face is. So the node
+solves for the `shift_video` that puts the final step back at 0.39 — 4.67 at 8 steps,
+2.0 at 4 — and reports the change in `info`. There is no widget for it: the target is
+the one H3's own default already produces at the step count it was chosen for, and a
+dial for it would be a dial for a number that is not yours to pick. Fewer steps need a
+**smaller** shift, not a larger one; the instinct runs the other way.
+
+Wiring `sigmas`, or turning `apply_model_sampling` off, leaves `shift_video` exactly as
+typed — both already bypass the schedule the node builds.
+
+**`shift_audio` moves with it**, by the same factor, so video:audio keeps the ratio you
+set. That ratio is not decoration: `ModelSamplingAV.audio_scale` **is**
+`shift_video / shift_audio`, and the packed latent carries the audio stream multiplied
+by it — lowering one without the other rescales the audio against a picture that did not
+move. Where the audio branch *lands* is a different quantity and genuinely does not
+depend on `shift_video` (the branch inverts the video shift back out), which is why
+holding the ratio costs nothing and in fact lands the audio softer: 0.30 → 0.14 at 8
+steps. Where `shift_audio` hits its floor and the ratio cannot be held, `info` says so.
+
 ## Settings
 
 | setting | value |
 |---|---|
-| `cfg` | **1.0** — H3 is CFG-free; the negative prompt is never evaluated |
 | `sampler_name` | `res_multistep`, or `euler` with PDD Acc |
 | `scheduler` | `simple` |
-| `shift_video` / `shift_audio` | **12 / 3** — keep them near 4:1 or the audio breaks |
+| `shift_video` / `shift_audio` | **12 / 3**. `shift_video` is lowered automatically when `steps` is too low for it — see below |
 | `steps` | 6–8 with a turbo/distill LoRA, 20+ without |
 | `megapixels` | 1.0 is H3's native budget; lower is faster and leaner |
 | `shot_seconds` | the cap on each shot |
@@ -149,8 +184,72 @@ lip-sync to. The bed is built from the room your scene names, so it needs no fil
 and shaped noise cannot speak. It makes tone — air, rumble, hum, water, a clock — so
 a scene whose ambience is birdsong gets the room, not the birds; `info` says when.
 
-Everything else is a switch, on by default, and each has a tooltip explaining what it
-does and what it costs. Hover before you change one.
+Everything else has a tooltip explaining what it does and what it costs. Hover before
+you change one.
+
+## What the node decides for you
+
+Seven settings used to be widgets. Each had one right answer the node could reach and
+you could not, so each was a question whose wrong answer only made the render worse.
+They are gone, and `info` says what was chosen whenever it matters.
+
+| was a widget | now |
+|---|---|
+| `cfg` | pinned to **1.0**. H3 is CFG-free, and every clause this node writes is phrased positively *because* of that — above 1.0 the negative starts being read, the prompting strategy stops being the right one, and the run costs double |
+| `apply_model_sampling` | read from the model. ComfyUI's `MiniMaxH3SigmaShift` stamps the shifts it applied into `transformer_options`, so a deliberate upstream patch announces itself — and the node stands down and says so, instead of patching twice |
+| `tiled_decode` | measured. The VAE's own `memory_used_decode` against free VRAM, with 25% over it for working allocations. You get a whole-clip decode — and no tile seams — whenever the card has room |
+| `upscale_batch` | measured, from free VRAM and the frame size |
+| `trim_seam` | pinned on. The first frame of a continued shot is the model's redraw of the keyframe it was handed: a duplicate either way |
+| `silence_nonspeech` | pinned on. It was already decided per shot — it fires where there is no quoted line — and the switch only ever turned a correct decision off |
+| `cleanup_between_shots` | pinned on. The RAM copy costs a fraction of one shot; VRAM ratcheting across a long chain ends the render |
+| `character_guard`, `hold_gaze`, `hold_scene_state`, `mouths_shut_when_no_line`, `hold_camera`, `auto_sound`, `beat_leads` | pinned on. Seven switches, each turning one continuity clause off for the whole run, all seven shipped on. Each answers a reported failure — a face lip-syncing to a line nobody wrote, a drifting camera, a door that shuts itself — and turning one off returns that failure rather than trading it for anything |
+| `verbatim` | removed. It sent your text with none of those clauses, to tell the node's doing from the model's |
+
+### What you give up
+
+`verbatim` was the only way to render your text without this node's sentences over it,
+and nothing replaces it. `info` still reports what every clause *would* have said, which
+is most of what it was read for, but the A/B render is gone.
+
+The guards are also what pays the namings that can draw a duplicate character, and they
+are no longer switchable off. A per-shot naming *budget* was tried first — shed the
+lowest-ranked clauses on a crowded shot — and it does not work. Nearly every clause here
+names its *subject*: "McKenna is lying down", "Only Kate speaks". The ones that mention
+somebody only in passing are about the room, the take and the framing, and measured on
+real shots those name nobody at all. So a pass restricted to them changes nothing, and a
+pass allowed past them costs a fact every time it fires. There is no clause that both
+names a person and is safe to drop. `fit_guards` records this.
+
+### A repeated naming is spent as a pronoun
+
+What works instead is the advice this node has always printed: *a pronoun costs nothing.*
+The **first** naming in the node's own clause text stands; the repeats become "she",
+"his", "him". The fact stays exactly where it was and the naming is not spent twice:
+
+> Kate takes off her scarf and says: "It is warm in here." … **Kate is sitting.** Only
+> **she** speaks; every other mouth in the shot stays closed.
+
+Three restrictions, and they are what make it safe:
+
+- **Your words are never touched.** Only clauses this node wrote are rewritten. Your
+  scene, your beat and your `exactly:` lines reach the model as you typed them.
+- **Nothing is rewritten where the pronoun would not resolve** — two people in the shot
+  answering to "she", or a beat staging extras who are not on the sheet to be counted.
+  An unresolvable pronoun is the ambiguity the naming existed to prevent.
+- **The attribution keeps its name.** "The sobbing is Mara's" stays, because that clause
+  exists to say whose vocal it is so nobody else's mouth is opened for it.
+
+Measured on guard-heavy shots this takes 44 namings to 41 and empties the five-naming
+bucket. Modest, and it is the whole of what is safely available — the rest of the
+namings are in your own text. `info` reports each swap, per shot and per person.
+
+The lever that remains is your beat: "she turns" for a second "Mara turns" takes a
+naming off the shot without losing a word of what you asked for.
+
+Every measurement **fails toward what shipped**. A VAE that cannot estimate itself, a
+card that will not report free memory, a probe that raises — all of them tile the
+decode and take the old chunk size, because tiling something that would have fit costs
+seams on one clip and not tiling something that will not fit ends the render.
 
 ## Outputs
 

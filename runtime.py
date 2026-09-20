@@ -294,6 +294,64 @@ def _decode_headroom(vae, latent):
     return 1e30
 
 
+def decode_fits_untiled(vae, out_latent):
+    """True when the whole-clip decode fits in what the card has free right now.
+
+    REPLACES A WIDGET THAT ASKED THE READER TO GUESS THIS. The whole-clip decode is
+    the single largest allocation in a run, so tiled_decode shipped on and stayed on
+    -- which pays tile seams on every render, including the ones with room to spare.
+
+    Nothing about that needed asking. ComfyUI sizes every VAE with memory_used_decode
+    and _decode_headroom already asks for exactly that number, with DECODE_HEADROOM
+    over it for working allocations; free_memory has been handed it before every
+    decode in this file for as long as it has been right. Comparing it against
+    get_free_memory is the same arithmetic ComfyUI runs internally to decide what to
+    evict.
+
+    FALSE ON EVERY UNCERTAINTY. A VAE that cannot estimate itself returns 1e30 from
+    _decode_headroom and lands here as "tile"; so does a missing device, a raised
+    probe, or a nested latent that will not unbind. The failure modes are not
+    symmetric -- tiling something that would have fit costs seams on one clip, and
+    not tiling something that will not fit ends the render -- so every unknown takes
+    the behaviour that was shipped."""
+    try:
+        latent = out_latent["samples"] if isinstance(out_latent, dict) else out_latent
+        if getattr(latent, "is_nested", False):
+            latent = latent.unbind()[0]
+        need = _decode_headroom(vae, latent)
+        if not (0.0 < need < 1e29):
+            return False
+        free = float(mm.get_free_memory(mm.get_torch_device()))
+    except Exception:
+        return False
+    return free > need
+
+
+def upscale_batch_for(frames, scale=4):
+    """Frames per chunk for the model upscale, from what the card has free.
+
+    The widget this replaces said "Lower = less VRAM, slower", which is the whole of
+    what it did: a number with a right answer the reader had no way to compute and
+    the node had every way to. A chunk costs its own frames plus the enlarged output,
+    and `scale` is taken at the worst case a shipped model does (x4) rather than the
+    one configured, because guessing low here is what OOMs.
+
+    Budgeted at a THIRD of free VRAM. The upscale runs after the chain is finished,
+    so the DiT and both VAEs may still be resident and the frames themselves are in
+    system RAM; a third leaves room for all of it. Clamped to the range the widget
+    offered, and 4 -- its default -- on any uncertainty."""
+    try:
+        n, h, w = int(frames.shape[0]), int(frames.shape[1]), int(frames.shape[2])
+        c = int(frames.shape[3]) if len(frames.shape) > 3 else 3
+        per = h * w * c * 4.0 * (1.0 + float(scale) ** 2)      # in + enlarged out
+        free = float(mm.get_free_memory(mm.get_torch_device()))
+    except Exception:
+        return 4
+    if per <= 0 or free <= 0:
+        return 4
+    return max(1, min(64, min(n or 1, int(free / 3.0 / per))))
+
+
 def _resident(models):
     """The LoadedModel entries ComfyUI currently holds for `models`.
 
