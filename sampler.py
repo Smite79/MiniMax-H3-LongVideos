@@ -3446,7 +3446,22 @@ OTHERS_UNCHANGED = " Everyone else in the shot has on exactly what their own ent
 
 RESTRAINT_GOING_ON = (" The hardware goes on during this shot: it is open and off the "
                       "body at the first frame, and closed on it by the last.")
-RESTRAINT_ENDS_AT = " By the last frame the {part} are {where}, and stay there."
+# WHERE THE HARDWARE CLOSES, not only where the limbs end up. RESTRAINT_GOING_ON
+# gives the hardware both of its ends -- open and off at the first frame, closed by
+# the last -- and this used to give the limbs only their last one. Between those two
+# facts nothing said where the closing HAPPENS, and a video model asked to go from no
+# cuffs to cuffs does the likeliest thing in front of the body and leaves them there.
+# Reported as wrists cuffed in front on the shot that applies them, while every shot
+# after it holds them correctly behind: the later shots read the standing pose, and
+# the applying shot was the one with a gap in it.
+#
+# The second sentence is the original and is left word for word, because the shot
+# after this one inherits the last frame and that is the sentence that pins it.
+# Positively phrased, like everything else here -- at cfg 1 naming where they are NOT
+# is naming it.
+RESTRAINT_ENDS_AT = (" The {part} are already {where} when the hardware closes, and it "
+                     "closes on them there. By the last frame the {part} are {where}, "
+                     "and stay there.")
 CHAIN_RIGID_TAIL = " Its links keep their size and the run between them stays taut."
 _APPLY_NOW = re.compile(
     _A_DETERMINER +
