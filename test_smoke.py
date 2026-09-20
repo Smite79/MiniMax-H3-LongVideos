@@ -2112,6 +2112,48 @@ def test_a_lora_is_reported():
     check("a run with no LoRA reports none", "LoRA:" not in quiet)
 
 
+def test_the_limb_position_leads_the_shot():
+    """Reported, and not fixed by saying it more: wrists cuffed in FRONT of the body
+    on every shot using handcuffs, while the text said behind the back five times.
+
+    This file already measured the rule and built beat_leads on it -- what LEADS a
+    prompt decides its composition, anatomy in the opening tokens is what a distilled
+    model settles the frame on, and at cfg 1 no later sentence outvotes it. The limb
+    position was then left sitting after the sheet, the body count, the hardware
+    clause and the chain clause: a later sentence, by this file's own finding. Five
+    late sentences lose to the opening tokens.
+
+    So it is MOVED, not repeated. The words are the same words; only their position
+    changed, which is the one lever here that has ever moved composition."""
+    print("\n=== where the limbs are leads the shot ===")
+    MEM = "Mara: she, 26, dark hair, a grey t-shirt.\nDan: he, 40, a work coat."
+    P = ("A cell.\n\nDan cuffs Mara's wrists behind her back.\n\n"
+         "Mara stands against the wall.\n\nMara turns to face the door.")
+    sh = [" ".join(b.split("]", 1)[1].split()) for b in
+          run_node(P, plan_only=True, character_memory=MEM)[3].split("[Shot ")[1:]]
+    POSE = "Both arms are behind the body, wrists together at the small of the back"
+    for i, s in enumerate(sh, 1):
+        check(f"shot {i} carries the position", POSE in s, s[:160])
+        check(f"...and says it ONCE, not twice", s.count(POSE) == 1)
+        # It must sit ahead of the sheet, which is what it used to sit behind.
+        check(f"...ahead of the character sheet",
+              s.index(POSE) < s.index("Mara: she, 26"), s[:200])
+    # The beat is still first: your words lead, the position follows them.
+    check("the beat still leads", sh[0].index("Dan cuffs") < sh[0].index(POSE), sh[0][:150])
+    # And on the applying shot it precedes the hardware clause it used to trail.
+    check("the position precedes the hardware clause",
+          sh[0].index(POSE) < sh[0].index("The hardware goes on"), sh[0][:200])
+    # A shot with no limb position must be untouched.
+    plain = [" ".join(b.split("]", 1)[1].split()) for b in
+             run_node("A kitchen.\n\nMara pours a glass of water.\n\nMara drinks it.",
+                      plan_only=True, character_memory="Mara: she, 26, dark hair."
+                      )[3].split("[Shot ")[1:]]
+    check("a shot with no restraint gets no hoisted pose",
+          all("Both arms are" not in s for s in plain), plain[0][:160])
+    check("...and its sheet still follows its beat",
+          plain[0].index("Mara pours") < plain[0].index("Mara: she, 26"), plain[0][:150])
+
+
 def test_the_pronoun_swap_never_touches_your_words():
     """END TO END: the rewrite is confined to the clauses this node wrote.
 
@@ -8234,6 +8276,7 @@ def main():
     test_a_thing_that_opens_itself_is_a_staged_change()
     test_a_walk_is_not_its_own_reverse()
     test_an_exact_line_is_yours_untouched()
+    test_the_limb_position_leads_the_shot()
     test_the_pronoun_swap_never_touches_your_words()
     test_verbatim_sends_your_text_and_nothing_else()
     test_an_untagged_reference_is_claimed_or_held()

@@ -8125,6 +8125,30 @@ class H3LongVideos:
             if not _arms_pos and _legs_pos == "ankles to the wrists":
                 _arms_pos = "behind the back"
             _pose = pose_clause(_arms_pos, lying=_lying_now, legs=_legs_pos)
+            # WHERE THE LIMBS ARE GOES IN THE OPENING TOKENS, beside the beat, not
+            # eight sentences down with the other continuity clauses.
+            #
+            # This file already measured the rule and built beat_leads on it: what
+            # LEADS a prompt decides its composition, anatomy in the opening tokens is
+            # what a distilled model settles the frame on, and at cfg 1 no later
+            # sentence outvotes it. The limb position was then left sitting after the
+            # sheet, the body count, the hardware clause and the chain clause -- a
+            # later sentence, by the file's own finding.
+            #
+            # Reported, and not fixed by any amount of saying it: wrists cuffed in
+            # FRONT of the body on every shot that uses handcuffs, while the text said
+            # behind the back five times over. Five late sentences lose to the opening
+            # tokens; one early sentence is the thing the rule says wins. It is moved,
+            # not duplicated -- the guard list drops its copy, so the words are the
+            # same words and only their position changed, which is the one lever here
+            # that has ever moved composition.
+            _pose_led = ""
+            if _pose and _arms_pos and body:
+                _at = line.find(body)
+                if _at >= 0:
+                    _cut = _at + len(body)
+                    line = (line[:_cut] + _pose + line[_cut:]).strip()
+                    _pose_led = _pose
             hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
@@ -8380,7 +8404,7 @@ class H3LongVideos:
                 (7, "anchors", anchors),     # hardware with nowhere to sit
                 (10, "state", _state_clause),
                 (9, "posture", _posture),   # where the last beat left the body
-                (3, "pose", _pose),
+                (3, "pose", "" if _pose_led else _pose),   # hoisted ahead of the sheet
                 (11, "gaze", _gaze),
                 (12, "duress", _duress),
                 (12, "mouth", _mouth),
