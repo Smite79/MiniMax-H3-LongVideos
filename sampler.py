@@ -4251,6 +4251,77 @@ SEALED_HOLD = (" The {item} runs around the waist and passes between the legs, "
                "and it stays exactly so for the whole shot.")
 
 
+# What the hardware is MADE OF, when the author has not said.
+#
+# FORM_HOLD has always ended ", the same object in the same material" -- which holds
+# the material steady across shots without ever saying what it is. An unspecified
+# attribute is filled from the prior, the lesson this file already recorded for a
+# bare region and for anatomy at the hip, and the prior for restraint hardware is
+# black: black-finished cuffs, black chain. Reported as handcuffs that render black
+# instead of steel.
+#
+# Metal only. Rope, tape and leather come back the way they are written, and a
+# default on those would be the node inventing a colour the author did not ask for.
+_HARDWARE_MATERIAL = (
+    (r"\b(?:handcuffs?|manacles?|leg\s+irons?|irons?)\b",
+     "bright bare steel, the metal polished and catching the light"),
+    (r"\b(?:shackles?|cuffs?)\b",
+     "bright bare steel, the metal polished and catching the light"),
+    (r"\b(?:chains?)\b", "bright bare steel, the links unpainted metal"),
+)
+# The author having already said. _HARDWARE_NOUN carries an adjective group, so a
+# beat writing "black steel cuffs" or "leather cuffs" keeps its own word and this
+# stands down -- it only fills a gap, it never argues with the text.
+_MATERIAL_SAID = re.compile(
+    r"\b(?:steel|stainless|chrome|chromed|nickel|nickelled|silver|iron|brass|"
+    r"copper|alloy|metal|metallic|leather|nylon|plastic|rubber|canvas|webbing|"
+    r"rope|hemp|cotton|black|blackened|blued|dark|matte|matt|gunmetal|bronze|"
+    r"gold|golden|painted|coated|anodi[sz]ed|powder-?coated|white|red|blue|green|"
+    r"pink|purple|grey|gray|brown)\b", re.I)
+
+# "The handcuffs is" -- a pair of cuffs, a set of irons and a chain do not agree,
+# and the hardware names in these beats are plural as often as not.
+_PLURAL_HARDWARE = re.compile(r"\b(?:cuffs?|handcuffs|manacles|shackles|irons|"
+                              r"chains|ropes|cords|straps)\b$", re.I)
+HARDWARE_MATERIAL_CLAUSE = " The {item} {verb} {material}."
+
+
+def hardware_material_clause(item, material):
+    """The material sentence, agreeing with a plural piece of hardware."""
+    if not item or not material:
+        return ""
+    plural = bool(re.search(r"(?:cuffs|handcuffs|manacles|shackles|irons|chains|"
+                            r"ropes|cords|straps)\s*$", str(item), re.I))
+    return HARDWARE_MATERIAL_CLAUSE.format(
+        item=str(item).strip(), verb="are" if plural else "is", material=material)
+
+
+def hardware_material(items, said=""):
+    """(item, material) to state, or ("", "") when the author already said or it is
+    not metal.
+
+    `said` is every word the shot carries about this hardware -- the beat and the
+    sheet entry -- because the author can name the material in either. One material
+    sentence per shot, for the first piece of metal that needs one: a run naming
+    cuffs and a chain gets the cuffs, and the chain's own clause already says its
+    links are bare metal."""
+    for item in items or ():
+        text = str(item or "")
+        if not text.strip():
+            continue
+        for pat, material in _HARDWARE_MATERIAL:
+            if not re.search(pat, text, re.I):
+                continue
+            if _MATERIAL_SAID.search(text):
+                return ("", "")           # written into the item's own name
+            near = " ".join(s for s in re.split(r"(?<=[.!?])\s+", str(said or ""))
+                            if re.search(pat, s, re.I))
+            if near and _MATERIAL_SAID.search(near):
+                return ("", "")           # written into the sentence that names it
+            return (text.strip(), material)
+    return ("", "")
+
+
 def held_part(items):
     """The body part an anchored restraint holds, read from the hardware itself."""
     text = " ".join(items or [])
@@ -8272,6 +8343,9 @@ class H3LongVideos:
             # not duplicated -- the guard list drops its copy, so the words are the
             # same words and only their position changed, which is the one lever here
             # that has ever moved composition.
+            _mat_item, _mat = (hardware_material(worn_items, f"{body} {shot_sheet}")
+                               if restrained else ("", ""))
+            _material = hardware_material_clause(_mat_item, _mat)
             _seal = SEALED_HOLD.format(item=sealed) if sealed else ""
             _seal_led = False
             _pose_led = ""
@@ -8539,6 +8613,7 @@ class H3LongVideos:
                 (10, "state", _state_clause),
                 (9, "posture", _posture),   # where the last beat left the body
                 (3, "pose", "" if _pose_led else _pose),   # hoisted ahead of the sheet
+                (3, "material", _material),  # what the metal IS, when nobody said
                 (11, "gaze", _gaze),
                 (12, "duress", _duress),
                 (12, "mouth", _mouth),

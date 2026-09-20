@@ -2112,6 +2112,59 @@ def test_a_lora_is_reported():
     check("a run with no LoRA reports none", "LoRA:" not in quiet)
 
 
+def test_metal_hardware_is_told_what_it_is_made_of():
+    """Reported: handcuffs render BLACK instead of steel.
+
+    FORM_HOLD has always ended ", the same object in the same material" -- which
+    holds the material steady from shot to shot without ever saying what it is. An
+    unspecified attribute is filled from the prior, which is this file's own lesson
+    for a bare region and for the anatomy at the hip, and the prior for restraint
+    hardware is black: black-finished cuffs, black chain.
+
+    Metal only. Rope, tape and leather come back the way they are written, and a
+    default on those would be the node inventing a colour nobody asked for. And it
+    only ever fills a GAP: an author who writes steel, or black leather, keeps their
+    own word and this says nothing."""
+    print("\n=== the metal is told what it is ===")
+    STEEL = "bright bare steel"
+    MEM = "Mara: she, 26, dark hair."
+    sh = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A cell.\n\nDan cuffs Mara's wrists behind her back.\n\n"
+        "Mara stands still.\n\nMara waits.", plan_only=True,
+        character_memory=MEM)[3].split("[Shot ")[1:]]
+    check("the applying shot says what the metal is", STEEL in sh[0], sh[0][:200])
+    check("...and every shot holding them does too", all(STEEL in s for s in sh))
+    check("...agreeing with a plural pair", "The cuffs are bright bare steel" in sh[0],
+          sh[0][:200])
+    # The author's own word always wins -- this fills a gap, it does not argue.
+    leather = " ".join(run_node(
+        "A cell.\n\nDan puts black leather cuffs on Mara's wrists.\n\nMara stands still.",
+        plan_only=True, character_memory=MEM)[3].split())
+    check("black leather is left alone", STEEL not in leather, leather[:200])
+    steel_sheet = " ".join(run_node(
+        "A cell.\n\nMara stands still.\n\nMara waits.", plan_only=True,
+        character_memory="Mara: she, 26, dark hair, steel handcuffs.")[3].split())
+    check("a sheet that already says steel is not told again",
+          "are bright bare steel" not in steel_sheet, steel_sheet[:200])
+    # Not metal, not this clause's business.
+    rope = " ".join(run_node(
+        "A cell.\n\nDan ties Mara's wrists with rope.\n\nMara stands still.",
+        plan_only=True, character_memory=MEM)[3].split())
+    check("rope gets no metal sentence", STEEL not in rope, rope[:180])
+    # The unit, straight.
+    check("bare cuffs get a material", S.hardware_material(["handcuffs"])[1].startswith(STEEL))
+    check("...and a chain names its links",
+          "links" in S.hardware_material(["chain"])[1])
+    for said in ("steel handcuffs", "chrome cuffs", "blackened shackles"):
+        check(f"{said!r} says it already", S.hardware_material([said]) == ("", ""))
+    for quiet in ("rope", "duct tape", "leather straps", "zip ties"):
+        check(f"{quiet!r} is not metal here", S.hardware_material([quiet]) == ("", ""))
+    check("a beat naming the material counts too",
+          S.hardware_material(["cuffs"], "Dan locks the chrome cuffs on her") == ("", ""))
+    for bad in (None, [], [""], [None]):
+        check(f"{bad!r} is harmless", S.hardware_material(bad) == ("", ""))
+
+
 def test_hardware_closed_over_the_groin_stays_closed():
     """Reported: duct tape wound round the waist and between the legs is there in one
     beat and gone in the next, the genitals bare again.
@@ -8330,6 +8383,7 @@ def main():
     test_a_thing_that_opens_itself_is_a_staged_change()
     test_a_walk_is_not_its_own_reverse()
     test_an_exact_line_is_yours_untouched()
+    test_metal_hardware_is_told_what_it_is_made_of()
     test_hardware_closed_over_the_groin_stays_closed()
     test_the_limb_position_leads_the_shot()
     test_the_pronoun_swap_never_touches_your_words()
