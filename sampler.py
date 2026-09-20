@@ -76,8 +76,6 @@ RESIZE_CHUNK = _runtime_module.RESIZE_CHUNK
 _stream_chunks = _runtime_module._stream_chunks
 _resize_short_edge = _runtime_module._resize_short_edge
 _upscale_frames = _runtime_module._upscale_frames
-decode_fits_untiled = _runtime_module.decode_fits_untiled
-upscale_batch_for = _runtime_module.upscale_batch_for
 _find_node = _runtime_module._find_node
 _invoke_node = _runtime_module._invoke_node
 build_conditioning = _cond_module.build_conditioning
@@ -7160,6 +7158,16 @@ class H3LongVideos:
         trim_seam = True
         silence_nonspeech = True
         cleanup_between_shots = True
+        # AS SHIPPED. Both of these were widgets defaulting to True and 4, and
+        # both were briefly replaced by a measurement of free VRAM. Tiling is not a
+        # memory question this node gets to re-answer: the whole-clip decode is the
+        # largest allocation in a run, the project defaulted to tiled for that
+        # reason, and the decoded frames are what the NEXT shot's keyframe is taken
+        # from -- so changing how the decode runs changes the chain that carries a
+        # room from one beat to the next. Reported as scenery rearranging between
+        # beats: a TV gone, a door arrived.
+        tiled_decode = True
+        upscale_batch = 4
         # THE CONTINUITY GUARDS. Seven switches, each turning one clause off for the
         # WHOLE RUN, every one of them shipped on. Each exists for a reported failure
         # -- a face lip-syncing to a line nobody wrote, the camera drifting until the
@@ -7194,17 +7202,24 @@ class H3LongVideos:
         # apply_model_sampling asked the reader whether the graph had already set the
         # schedule. comfy's own MiniMaxH3SigmaShift stamps that into the model, so the
         # model answers it.
+        # REPORTED, NOT ACTED ON. This briefly decided apply_model_sampling: an
+        # upstream stamp meant the node stood down and let the other node's shifts run
+        # instead of its own. That is the node changing the SCHEDULE on its own
+        # initiative, which is the same class of mistake as the shift correction that
+        # sat below this and broke every distilled LoRA. So it patches unconditionally,
+        # the way it shipped, and the detection only says what it found.
+        apply_model_sampling = True
         _upstream = upstream_h3_shift(model)
-        apply_model_sampling = _upstream is None
         if _upstream is not None:
             notes.append(
-                f"the H3 schedule is ALREADY SET upstream (video {_upstream[0]:g}"
+                f"the H3 schedule is ALSO SET UPSTREAM (video {_upstream[0]:g}"
                 + (f"/audio {_upstream[1]:g}" if _upstream[1] else "")
-                + f"), so this node is not patching it again and its own shift_video "
-                  f"{shift_video:g} and shift_audio {shift_audio:g} are NOT what is "
-                  f"running -- the upstream node's are. Read from the stamp comfy's "
-                  f"MiniMaxH3SigmaShift leaves in transformer_options. Remove that node "
-                  f"to sample on the shifts set here")
+                + f"), and this node applies its own {shift_video:g}/{shift_audio:g} as "
+                  f"well. Whichever patch lands last is the schedule that samples, which "
+                  f"is how it has always been -- this note is new, the behaviour is not. "
+                  f"Read from the stamp comfy's MiniMaxH3SigmaShift leaves in "
+                  f"transformer_options. Remove that node, or set it to the same numbers, "
+                  f"to leave no doubt about which schedule ran")
         # SHIFT IS NOT THIS NODE'S TO CORRECT. What stood here solved shift_video
         # down from H3's 12 so the final step cleared less noise -- 4.66 at 8 steps,
         # 2.0 at 4 -- on the reasoning that a schedule leaving 0.63 for one evaluation
@@ -9687,6 +9702,7 @@ class H3LongVideos:
             sampler_name=sampler_name, scheduler=scheduler, seed=seed,
             shift_audio=shift_audio, shift_video=shift_video,
             sigmas=sigmas, silence_nonspeech=silence_nonspeech, trim_seam=trim_seam,
+            tiled_decode=tiled_decode, upscale_batch=upscale_batch,
             speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, cut_shots=cut_shots,
             shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
@@ -9743,8 +9759,10 @@ class H3LongVideos:
         steps = prepared.steps
         stripped_shots = prepared.stripped_shots
         cut_shots = prepared.cut_shots
+        tiled_decode = prepared.tiled_decode
         trim_seam = prepared.trim_seam
         upscale = prepared.upscale
+        upscale_batch = prepared.upscale_batch
         upscale_model = prepared.upscale_model
         upscale_target_short_edge = prepared.upscale_target_short_edge
         vae = prepared.vae
@@ -9963,7 +9981,7 @@ class H3LongVideos:
             except Exception:
                 parts = None
 
-            shot_tiled = not decode_fits_untiled(vae, out)
+            shot_tiled = tiled_decode
             pre_up = None            # the SAMPLED video latent, when upscaling ran
             if latent_upscale and latent_upscale != "off" and parts and len(parts) == 2:
                 vid_up, up_note = upscale_video_latent(parts[0], latent_upscale,
@@ -10139,8 +10157,7 @@ class H3LongVideos:
         video = frames.finish()
         if upscale and upscale != "off":
             video, up_note = _upscale_frames(video, upscale, upscale_model,
-                                             upscale_target_short_edge,
-                                             upscale_batch_for(video))
+                                             upscale_target_short_edge, upscale_batch)
             if up_note:
                 notes.append(up_note)
         audio = torch.cat(aud_out, dim=-1)

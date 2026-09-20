@@ -849,73 +849,6 @@ def test_the_graph_says_whether_the_schedule_is_already_set():
     check("an unreadable stamp is not a patch", S.upstream_h3_shift(Junk()) is None)
 
 
-def test_the_card_decides_tiling_and_chunk_size():
-    """Two widgets asked the reader to guess what the card had free.
-
-    tiled_decode shipped on and stayed on, which pays tile seams on every render
-    including the ones with room to spare; upscale_batch said "Lower = less VRAM,
-    slower" and left the arithmetic to the reader. ComfyUI sizes every VAE with
-    memory_used_decode and this file has been handing that number to free_memory
-    before every decode for as long as it has been right.
-
-    BOTH FAIL TOWARD WHAT SHIPPED. The failure modes are not symmetric: tiling
-    something that would have fit costs seams on one clip, and not tiling something
-    that will not fit ends the render. So every unknown -- a VAE that cannot
-    estimate itself, a missing device, a raised probe -- takes the old behaviour."""
-    _rt = S._runtime_module
-    _real_free = getattr(_rt.mm, "get_free_memory", None)
-    _real_dev = getattr(_rt.mm, "get_torch_device", None)
-
-    class VAE:
-        vae_dtype = torch.float16
-        def __init__(self, cost): self.cost = cost
-        def memory_used_decode(self, shape, dtype): return self.cost
-    class VAEBlind:
-        vae_dtype = torch.float16
-        def memory_used_decode(self, shape, dtype): raise RuntimeError("no estimate")
-    lat = {"samples": torch.zeros((1, 4, 2, 8, 8))}
-    try:
-        _rt.mm.get_torch_device = lambda: "cpu"
-        _rt.mm.get_free_memory = lambda d=None: 8e9          # 8 GB free
-        check("a decode that fits runs whole",
-              S.decode_fits_untiled(VAE(1e6), lat) is True)
-        check("a decode that does not fit is tiled",
-              S.decode_fits_untiled(VAE(9e9), lat) is False)
-        # 7e9 is UNDER the 8e9 free. It still tiles, and only DECODE_HEADROOM's 1.25
-        # over ComfyUI's own estimate -- the working allocations around the decode --
-        # makes that the right answer. Raw, it would run whole and spill.
-        check("a decode that fits only without headroom is still tiled",
-              7e9 < 8e9 and S.decode_fits_untiled(VAE(7e9), lat) is False)
-        check("...and one that fits WITH headroom runs whole",
-              S.decode_fits_untiled(VAE(8e9 / _rt.DECODE_HEADROOM * 0.9), lat) is True)
-        check("a VAE that cannot estimate itself is tiled",
-              S.decode_fits_untiled(VAEBlind(), lat) is False)
-        check("a bare latent works too, not only a dict",
-              S.decode_fits_untiled(VAE(1e6), torch.zeros((1, 4, 2, 8, 8))) is True)
-        # Chunk size falls as the frame grows, which is the whole of what it does.
-        _small = S.upscale_batch_for(torch.zeros((300, 480, 640, 3)))
-        _big = S.upscale_batch_for(torch.zeros((300, 1080, 1920, 3)))
-        check(f"a small frame takes a bigger chunk ({_small} vs {_big})", _small > _big)
-        check("...and both are settable", 1 <= _big and _small <= 64)
-        # Never more chunks than there are frames to put in them.
-        check("a short clip never asks for more than it has",
-              S.upscale_batch_for(torch.zeros((3, 64, 64, 3))) <= 3)
-        _rt.mm.get_free_memory = lambda d=None: 1e5          # nothing free
-        check("a full card still asks for one frame, not zero",
-              S.upscale_batch_for(torch.zeros((300, 1080, 1920, 3))) == 1)
-        check("...and tiles the decode", S.decode_fits_untiled(VAE(1e6), lat) is False)
-        def _boom(*a, **k): raise RuntimeError("no device")
-        _rt.mm.get_free_memory = _boom
-        check("an unprobeable card tiles", S.decode_fits_untiled(VAE(1e6), lat) is False)
-        check("...and takes the widget's old default", S.upscale_batch_for(
-            torch.zeros((300, 480, 640, 3))) == 4)
-    finally:
-        if _real_free is not None: _rt.mm.get_free_memory = _real_free
-        if _real_dev is not None: _rt.mm.get_torch_device = _real_dev
-    check("garbage frames take the default", S.upscale_batch_for(None) == 4)
-    check("garbage everything tiles", S.decode_fits_untiled(None, None) is False)
-
-
 def test_a_repeated_naming_is_spent_as_a_pronoun():
     """The node taking its own advice.
 
@@ -4285,7 +4218,6 @@ def main():
     test_a_body_under_effort_has_a_voice()
     test_a_lora_states_its_step_count_in_its_name()
     test_the_graph_says_whether_the_schedule_is_already_set()
-    test_the_card_decides_tiling_and_chunk_size()
     test_a_repeated_naming_is_spent_as_a_pronoun()
     test_a_lora_that_does_not_fit_is_reported_not_silent()
     test_a_lora_on_a_quantized_checkpoint_is_reported()

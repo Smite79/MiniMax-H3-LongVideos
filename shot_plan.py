@@ -94,8 +94,10 @@ class PreparedVideo:
     steps: int
     stripped_shots: object
     cut_shots: object
+    tiled_decode: bool
     trim_seam: bool
     upscale: str
+    upscale_batch: int
     upscale_model: str
     upscale_target_short_edge: int
     vae: object
