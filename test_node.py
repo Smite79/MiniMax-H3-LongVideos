@@ -763,85 +763,6 @@ def test_the_babble_advice_points_the_right_way():
     check("an impossible target is harmless", S.shift_audio_for(8, 1.0) == 0.0)
 
 
-def test_the_last_video_step_is_where_structure_resolves():
-    """The video branch's final jump, which nothing was reading.
-
-    comfy's schedules end at zero, so whatever sigma stands before that zero is
-    cleared in ONE evaluation. shift_video 12 -- H3's own default -- leaves 0.39
-    there at the ~20 steps the undistilled model is sampled at, and that is fine.
-    At the 8 this node defaults to it leaves 0.63; at the 3-4 a turbo LoRA wants,
-    0.86 and 0.80. Seven steps nibbling the top of the schedule and one step to
-    invent the anatomy underneath is what a hand that stops halfway is.
-
-    The suite already covered the AUDIO branch's last step in full and had nothing
-    at all on the video one, which is the branch you can see."""
-    for _n, _v, _want in ((20, 12.0, 12.0 / 31.0), (8, 12.0, 12.0 / 19.0),
-                          (4, 12.0, 0.80), (3, 12.0, 12.0 / 14.0),
-                          (8, 5.0, 5.0 / 12.0), (8, 1.0, 0.125)):
-        check(f"{_n} steps at shift_video {_v:g} -> {_want:.3f}",
-              abs(S.final_video_jump(_n, _v) - _want) < 1e-9)
-    # Both directions, and both are the ones the instinct gets backwards.
-    check("fewer steps leaves more for the last one",
-          S.final_video_jump(4, 12.0) > S.final_video_jump(8, 12.0)
-          > S.final_video_jump(20, 12.0))
-    check("...and so does a bigger video shift",
-          S.final_video_jump(8, 12.0) > S.final_video_jump(8, 5.0))
-    # The node's own defaults are the case that matters, so state it outright.
-    check("the shipped default leaves more than it should",
-          S.final_video_jump(8, 12.0) > S.REFERENCE_FINAL_JUMP)
-    check("...and H3's default at H3's step count does not",
-          S.final_video_jump(20, 12.0) <= S.REFERENCE_FINAL_JUMP)
-    check("a bad step count is harmless", S.final_video_jump("x", 12.0) == 0.0)
-    check("a bad shift is harmless", S.final_video_jump(8, None) == 0.0)
-
-
-def test_the_shift_correction_lowers_it():
-    """FEWER STEPS NEED A SMALLER shift_video, and the instinct runs the other way:
-    a short schedule feels like it needs more shift to hold its structure. Following
-    that is exactly what turns 4 steps into a 0.80 final jump.
-
-    Same inversion shift_audio_for() runs on the audio branch, so the same test
-    shape: it must never RAISE the jump, it must fall as steps fall, and it must
-    stay inside the widget so the number reported is one that can be typed in."""
-    for _n in (2, 3, 4, 6, 8, 12, 16, 20):
-        _v = S.shift_video_for_jump(_n)
-        check(f"{_n} steps: correction is settable", 1.0 <= _v <= 20.0)
-        # It SOLVES for the target rather than clamping to what is typed in, so at
-        # 20 steps -- where shift 12 already lands under it -- it comes back slightly
-        # above 12. _prepare only ever applies a correction that LOWERS the shift;
-        # the check that it does is test_widget_values_are_usable's job, not this
-        # function's. Here: wherever there is something to fix, fix it downward.
-        if S.final_video_jump(_n, 12.0) > S.REFERENCE_FINAL_JUMP:
-            check(f"{_n} steps: correction lowers the last step",
-                  S.final_video_jump(_n, _v) < S.final_video_jump(_n, 12.0)
-                  and _v < 12.0)
-    # It lands ON the target wherever the widget range allows it.
-    for _n in (3, 4, 8, 20):
-        check(f"{_n} steps lands on the target",
-              abs(S.final_video_jump(_n, S.shift_video_for_jump(_n))
-                  - S.REFERENCE_FINAL_JUMP) < 1e-2)
-    check("the correction falls as steps fall",
-          S.shift_video_for_jump(3) < S.shift_video_for_jump(4)
-          < S.shift_video_for_jump(8) < S.shift_video_for_jump(20))
-    # 20 steps is where H3's own default already sits, so it must barely move.
-    check("H3's step count barely moves off H3's default",
-          abs(S.shift_video_for_jump(20) - 12.0) < 1.0)
-    check("...and 8 steps asks for much less", S.shift_video_for_jump(8) < 6.0)
-    # Where the floor binds it says so by returning the floor, not a fiction.
-    # ROUNDED THE WRONG WAY. The jump rises with shift, so rounding the solved
-    # 4.6666 up to 4.67 puts it back OVER the 0.40 it was solved for -- by 0.0002,
-    # which was enough to make _prepare print "does NOT reach 0.40, shift_video is
-    # already at its floor" about a shift of 4.67 with the floor at 1.0.
-    for _n in (3, 4, 5, 6, 8, 10, 12, 16, 20):
-        check(f"{_n} steps: the correction never overshoots its own target",
-              S.final_video_jump(_n, S.shift_video_for_jump(_n))
-              <= S.REFERENCE_FINAL_JUMP + 1e-9)
-    check("clamped at the widget floor", S.shift_video_for_jump(2) == 1.0)
-    check("one step has nothing to aim at", S.shift_video_for_jump(1) is None)
-    check("a bad step count is harmless", S.shift_video_for_jump(None) is None)
-    check("an impossible target is harmless", S.shift_video_for_jump(8, "simple", 1.0) is None)
-
-
 def test_a_lora_states_its_step_count_in_its_name():
     """The file name is the ONLY place a distilled LoRA says what it was built for.
 
@@ -1054,6 +975,169 @@ def test_a_repeated_naming_is_spent_as_a_pronoun():
     for _who in (None, [], [("", "she")], [("Mara", None)], [("Mara", "it")]):
         check(f"cast {_who!r} is harmless",
               S.pronoun_rewrite(" Mara waits. Mara sits.", _who)[1] == [])
+
+
+def test_a_lora_that_does_not_fit_is_reported_not_silent():
+    """A LoRA built for the wrong variant of H3 half-loads, and nothing said so.
+
+    comfy applies each pair as (B @ A).reshape(weight.shape) inside a bare try/except:
+    a pair that will not reshape logs one ERROR line and the weight is handed back
+    untouched, while every pair that DOES fit is applied. The LoRA is then half on.
+
+    WHAT DOES NOT FIT IS THE PART THAT HOLDS STRUCTURE. H3's variants differ in the
+    AdaLN input -- 2688 on the full fl2va, 8 on the pruned and on the hybrid this node
+    recommends -- and are identical in attention and MLP. Measured on the shipped
+    LoRAs: two of six drop exactly their 51 AdaLN pairs onto a hybrid and keep all 208
+    of the rest. A distilled few-step trajectory on the attention stack with its
+    timestep modulation missing is anatomy that does not resolve, on some LoRAs and
+    not others, which is why it never pointed at the LoRA."""
+    class Ad:                       # comfy's LoRAAdapter: weights[0] @ weights[1]
+        def __init__(self, out, r, inn):
+            self.weights = [torch.zeros(out, r), torch.zeros(r, inn), None, None, None, None]
+    class Patcher:
+        def __init__(self, patches, sd):
+            self.patches, self._sd = patches, sd
+        def model_state_dict(self):
+            return self._sd
+
+    HYBRID = {f"diffusion_model.blocks.{i}.adaln_proj.linear.weight": torch.zeros(96768, 8)
+              for i in range(50)}
+    HYBRID.update({f"diffusion_model.blocks.{i}.attn.out_proj.weight": torch.zeros(5376, 7168)
+                   for i in range(50)})
+    # A LoRA trained on the FULL model: AdaLN wants 2688 in, attention fits either way.
+    full = {f"diffusion_model.blocks.{i}.adaln_proj.linear.weight": [(1.0, Ad(96768, 13, 2688))]
+            for i in range(50)}
+    full.update({f"diffusion_model.blocks.{i}.attn.out_proj.weight": [(1.0, Ad(5376, 16, 7168))]
+                 for i in range(50)})
+    got = S.lora_patch_mismatches(Patcher(full, HYBRID))
+    check("the mismatch is caught", len(got) == 1)
+    fam, n, produced, target = got[0]
+    check("...reported per family, not once per block",
+          n == 50 and fam.endswith("adaln_proj.linear") and ".N." in fam)
+    check("...with both shapes, so it is diagnosable",
+          produced == (96768, 2688) and target == (96768, 8))
+    check("...and the layers that DO fit are not reported", "attn" not in fam)
+    # The same LoRA converted for this variant says nothing.
+    fitted = {f"diffusion_model.blocks.{i}.adaln_proj.linear.weight": [(1.0, Ad(96768, 13, 8))]
+              for i in range(50)}
+    check("a LoRA that fits is silent", S.lora_patch_mismatches(Patcher(fitted, HYBRID)) == [])
+    # It runs on every render, so nothing here may raise.
+    for _bad in (None, "model", 7, Patcher({}, HYBRID), Patcher({"k": [(1.0, None)]}, HYBRID),
+                 Patcher({"k": [(1.0, Ad(1, 1, 1))]}, {}), Patcher({"k": []}, HYBRID)):
+        check(f"{type(_bad).__name__} is harmless", S.lora_patch_mismatches(_bad) == [])
+    class Dead:
+        patches = {"k": [(1.0, Ad(1, 1, 1))]}
+        def model_state_dict(self): raise RuntimeError("no state dict")
+    check("a patcher that will not hand over a state dict is harmless",
+          S.lora_patch_mismatches(Dead()) == [])
+
+
+def test_a_lora_on_a_quantized_checkpoint_is_reported():
+    """Merging a LoRA into a quantized weight costs more than the LoRA is worth.
+
+    comfy dequantizes, adds the delta, and writes back through set_weight, which
+    re-quantizes with the scale recalculated and STOCHASTIC rounding. Unbiased, so the
+    LoRA survives in expectation -- and the rounding noise it brings is set by the
+    quantisation step, not by how small the delta was.
+
+    Measured, int8 H3 and the shipped distill LoRAs: deltas of 0.0002-0.004 of the
+    weight norm land with weight noise 9-15x the delta. The one LoRA with a delta
+    twenty times larger came out best at 2.3x -- the same finding from the other end.
+
+    Detected through comfy's own get_key_weight: a set_func exists for exactly the
+    layers that requantize on write. Guessing from checkpoint filenames would miss a
+    quantized model that is not named like one, and accuse one that is."""
+    class Quant:
+        def set_weight(self, *a, **k): pass
+        def convert_weight(self, w, **k): return w
+        weight = None
+    class Plain:
+        weight = None
+    class Model:
+        def __init__(self, quant_keys, plain_keys):
+            for k in quant_keys: setattr(self, k, Quant())
+            for k in plain_keys: setattr(self, k, Plain())
+    class Patcher:
+        def __init__(self, patches, model): self.patches, self.model = patches, model
+
+    # comfy is stubbed in this harness, so stand in for the one call the function
+    # makes. The real get_key_weight resolves the op and looks for set_<attr>, which
+    # is exactly what this does -- the point is that the detection asks comfy rather
+    # than reading checkpoint names.
+    _mp = types.ModuleType("comfy.model_patcher")
+    def _gkw(model, key):
+        op_name, attr = key.rsplit(".", 1)
+        op = getattr(model, op_name)
+        return (None, getattr(op, "set_" + attr, None), getattr(op, "convert_" + attr, None))
+    _mp.get_key_weight = _gkw
+    sys.modules["comfy.model_patcher"] = _mp
+    sys.modules["comfy"].model_patcher = _mp
+
+    m = Model(["q0", "q1", "q2"], ["p0"])
+    keys = {"q0.weight": [], "q1.weight": [], "q2.weight": [], "p0.weight": []}
+    check("the quantized weights are counted, the plain one is not",
+          S.lora_on_quantized(Patcher(keys, m)) == (3, 4))
+    check("an unquantized checkpoint reports none",
+          S.lora_on_quantized(Patcher({"p0.weight": []}, Model([], ["p0"]))) == (0, 1))
+    check("no LoRA, nothing to say",
+          S.lora_on_quantized(Patcher({}, m)) == (0, 0))
+    # It runs on every render behind a LoRA, so nothing here may raise.
+    for _bad in (None, "model", 7, Patcher({"k.weight": []}, None),
+                 Patcher({"missing.weight": []}, m)):
+        got = S.lora_on_quantized(_bad)
+        check(f"{type(_bad).__name__} is harmless", isinstance(got, tuple) and got[0] == 0)
+
+
+def test_a_lora_too_small_for_the_dtype_is_measured():
+    """A LoRA that rounds off the weight it is added to, and nothing said so.
+
+    The delta is added to a weight already rounded to the compute dtype and the sum is
+    rounded again. Where the delta is below one step of that dtype at that value it
+    rounds back off and the LoRA does not happen -- partly, unevenly, per element.
+
+    H3 declares bfloat16 and float32 only, so it runs bf16: 8 mantissa bits, ~4e-3 of
+    relative resolution. The shipped distill LoRAs carry deltas near 1e-4 of the weight
+    norm, having been rank-resized hard. Measured on them: 31%-55% lands at bf16,
+    78%-98% at fp16 (which H3 cannot use), 100% at fp32. The one LoRA with a delta
+    twenty times larger lands whole at any width.
+
+    NOT THE QUANTIZED CHECKPOINT. The rounding is in the compute dtype, so a bf16 file
+    on disk rounds exactly the same way -- which is why this is measured rather than
+    inferred from the checkpoint's name or format."""
+    class Ad:
+        def __init__(self, B, A): self.weights = [B, A, None, None, None, None]
+    class Patcher:
+        def __init__(self, patches, sd): self.patches, self._sd = patches, sd
+        def model_state_dict(self): return self._sd
+
+    torch.manual_seed(0)
+    W = torch.randn(256, 256).bfloat16()
+    def lands(scale, dtype=torch.bfloat16):
+        A = torch.randn(8, 256) * scale
+        B = torch.randn(256, 8) * scale
+        sd = {f"blocks.{i}.attn.out_proj.weight": W.to(dtype) for i in range(8)}
+        pt = {f"blocks.{i}.attn.out_proj.weight": [(1.0, Ad(B, A))] for i in range(8)}
+        return S.lora_delta_survival(Patcher(pt, sd))
+
+    small, n = lands(3e-3)
+    check(f"a small delta mostly rounds off at bf16 ({small:.0%})", small < 0.5)
+    check("...over the sampled layers", n == S.LORA_SURVIVAL_SAMPLE)
+    big, _ = lands(3e-2)
+    check(f"a delta twenty times larger lands whole ({big:.0%})", big > 0.9)
+    check("...and the floor sits between them", small < S.LORA_LANDS_FLOOR < big)
+    # The same delta in a wider dtype is the control: the LoRA did not change, the
+    # width did, which is what makes this a dtype finding and not a LoRA one.
+    wide, _ = lands(3e-3, torch.float32)
+    check(f"the same small delta lands whole at fp32 ({wide:.0%})", wide > 0.99)
+    # Never raises: it runs on every render that has a LoRA on it.
+    for _bad in (None, "model", 7, Patcher({}, {}), Patcher({"k": [(1.0, None)]}, {}),
+                 Patcher({"k": [(1.0, Ad(torch.zeros(2, 2), torch.zeros(2, 2)))]}, {})):
+        check(f"{type(_bad).__name__} is harmless", S.lora_delta_survival(_bad) == (None, 0))
+    # An integer weight has no rounding question to ask and must not be measured.
+    ints = {"blocks.0.attn.out_proj.weight": torch.zeros(8, 8, dtype=torch.int8)}
+    check("an int weight is skipped", S.lora_delta_survival(
+        Patcher({"blocks.0.attn.out_proj.weight": [(1.0, Ad(torch.zeros(8, 2), torch.zeros(2, 8)))]},
+                ints)) == (None, 0))
 
 
 def test_silence_reports_what_happened():
@@ -4199,12 +4283,13 @@ def main():
     test_behind_the_back_is_read_however_it_is_written()
     test_a_bound_body_lying_down_has_something_under_it()
     test_a_body_under_effort_has_a_voice()
-    test_the_last_video_step_is_where_structure_resolves()
-    test_the_shift_correction_lowers_it()
     test_a_lora_states_its_step_count_in_its_name()
     test_the_graph_says_whether_the_schedule_is_already_set()
     test_the_card_decides_tiling_and_chunk_size()
     test_a_repeated_naming_is_spent_as_a_pronoun()
+    test_a_lora_that_does_not_fit_is_reported_not_silent()
+    test_a_lora_on_a_quantized_checkpoint_is_reported()
+    test_a_lora_too_small_for_the_dtype_is_measured()
     test_widget_values_are_usable()
     test_the_allocator_that_aborts_is_refused_before_sampling()
     test_schema()

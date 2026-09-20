@@ -121,6 +121,65 @@ at what strength, whether the **text encoder** carries them too, and the last on
 name if its metadata has one. Two runs whose prompts are identical can render
 differently, and nothing else in the run says why.
 
+### Baking a LoRA in, instead of applying it every render
+
+`merge_lora.py` writes a checkpoint with the LoRAs already in the weights:
+
+```
+python merge_lora.py BASE.safetensors OUT.safetensors LORA[:strength] [LORA...]
+    --dtype bf16|fp16|fp32     what to write (default bf16)
+    --plan                     report what would happen and write nothing
+```
+
+It takes any number of LoRAs with per-LoRA strengths, reads both key spellings
+(`lora_A`/`lora_B` and kohya's `lora_down`/`lora_up`, with or without the
+`diffusion_model.` prefix, `alpha` honoured where present), does the arithmetic in
+fp32, and **streams** — one tensor in memory at a time, so a 34 GB base does not need
+34 GB of RAM.
+
+A quantized base comes out **dequantized**: int8 data and its `weight_scale` become
+plain weights, and the `comfy_quant` markers are dropped, because leaving them would
+have ComfyUI read bf16 as int8. The output is therefore much larger than the input —
+the int8 H3 is 34 GB in and about 62 GB out at bf16. NVFP4 is refused by name rather
+than guessed at.
+
+It **measures what it achieved** and says so:
+
+> LoRA fidelity: stored change differs from the intended delta by 0.14x the delta, as bf16
+
+Under 0.1 the LoRA is in the file. At 1.0 or over it is not — the delta was below what
+that dtype can resolve, and the merge moved the weights without carrying the LoRA. That
+number is the point of running the tool, because a small LoRA cannot always be baked in
+at all: measured on the shipped H3 distill LoRAs, deltas run 1e-4 of the weight norm and
+some of them need fp32 to survive being merged.
+
+Shape-mismatched layers are skipped and counted, which is the case below.
+
+### A LoRA built for the wrong variant half-loads
+
+H3 ships in variants whose **AdaLN input differs** — 2688 on the full `fl2va`, **8** on
+the pruned build and on the hybrid this node recommends — while attention and MLP are
+identical between them. A LoRA trained on one and used on the other therefore looks
+like it loads.
+
+It does not. ComfyUI applies each LoRA pair as `(B @ A).reshape(weight.shape)` inside a
+bare `try/except`: a pair that will not reshape logs one `ERROR` line and the weight is
+returned untouched, while every pair that *does* fit is applied. The LoRA ends up **half
+on** — and the half that goes missing is `adaln_proj`, the per-block timestep modulation.
+
+A distilled few-step trajectory applied to the attention stack with its modulation
+missing is anatomy that does not resolve: a third leg, a limb that starts and stops. It
+happens on some LoRAs and not others, which is exactly what makes it hard to attribute.
+
+`info` now reports it — the layer family, how many blocks, and both shapes. If you see
+
+> LoRA PARTLY APPLIED -- 51 x diffusion_model.blocks.N.adaln_proj.linear wanted
+> (96768, 2688) for a (96768, 8) weight
+
+then that LoRA is for the full `fl2va` checkpoint, not this one. Use it on the model it
+was built for, or on a build of it converted for this one. Nothing about the prompt,
+the step count or the schedule will fix it.
+
 It also reads the **step count out of the LoRA's file name** — `4step`, `8step`,
 `3step` — because that is the only place a distilled LoRA states one. Its safetensors
 metadata carries rank, alpha and conversion provenance and no schedule at all, and
@@ -129,40 +188,28 @@ the workflow graph. `info` says when your `steps` disagrees with it, and when tw
 stacked LoRAs disagree with each other. A training checkpoint in a name — `step600` —
 is not a step target and is not read as one.
 
-### The step count is the schedule
+### The step count is the schedule, and the LoRA owns it
 
-`shift_video` 12 is H3's own default and it was chosen against the ~20 steps the
-undistilled model is sampled at, where it leaves **0.39** of video noise for the last
-step. ComfyUI's schedules end at zero, so that sigma is crossed in one evaluation.
+`shift_video` 12 / `shift_audio` 3 are H3's own defaults and they are what gets used.
+The node does **not** adjust them for your step count.
 
-Put a turbo LoRA in front of it and nothing moves the shift:
+It briefly did, and that was a mistake worth recording. The reasoning was that at 8
+steps shift 12 leaves 0.63 of video noise for the final step to clear in one
+evaluation, and that structure cannot resolve inside a jump that big. That is true of
+an undistilled model and exactly wrong in front of a turbo LoRA: **a LoRA distilled at
+8 steps is trained to cross that jump in one evaluation** — the big final step is not
+a defect in the schedule, it is what distillation buys. Solving `shift_video` down to
+4.66 took the schedule away from the one the LoRA learned and left it running a
+trajectory it had never seen. Reported as third legs and half-rendered body parts, on
+some LoRAs and not others, because how far each one sits from its trained schedule
+differs.
 
-| steps | schedule at `shift_video` 12 | last step clears |
-|---|---|---|
-| 20 | `… 0.571, 0.387, 0.0` | 0.39 |
-| 8 | `1.0, 0.988, 0.973, 0.952, 0.923, 0.878, 0.8, 0.632, 0.0` | **0.63** |
-| 4 | `1.0, 0.973, 0.923, 0.8, 0.0` | **0.80** |
-| 3 | `1.0, 0.96, 0.858, 0.0` | **0.86** |
+If a LoRA wants a different shift, set it. The LoRA knows what schedule it was trained
+on better than an analysis of the sigma curve does.
 
-Every step but the last polishes the top of the schedule; the last one has to invent
-the structure underneath. That is what a partly rendered limb or face is. So the node
-solves for the `shift_video` that puts the final step back at 0.39 — 4.67 at 8 steps,
-2.0 at 4 — and reports the change in `info`. There is no widget for it: the target is
-the one H3's own default already produces at the step count it was chosen for, and a
-dial for it would be a dial for a number that is not yours to pick. Fewer steps need a
-**smaller** shift, not a larger one; the instinct runs the other way.
-
-Wiring `sigmas`, or turning `apply_model_sampling` off, leaves `shift_video` exactly as
-typed — both already bypass the schedule the node builds.
-
-**`shift_audio` moves with it**, by the same factor, so video:audio keeps the ratio you
-set. That ratio is not decoration: `ModelSamplingAV.audio_scale` **is**
-`shift_video / shift_audio`, and the packed latent carries the audio stream multiplied
-by it — lowering one without the other rescales the audio against a picture that did not
-move. Where the audio branch *lands* is a different quantity and genuinely does not
-depend on `shift_video` (the branch inverts the video shift back out), which is why
-holding the ratio costs nothing and in fact lands the audio softer: 0.30 → 0.14 at 8
-steps. Where `shift_audio` hits its floor and the ratio cannot be held, `info` says so.
+`info` still reports when your `steps` disagrees with the step count in a LoRA's file
+name, and when two stacked LoRAs disagree with each other — both read, neither acted
+on.
 
 ## Settings
 

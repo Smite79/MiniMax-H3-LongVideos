@@ -2606,14 +2606,6 @@ def shift_audio_for(steps, target=None):
     return min(max(s * (n - 1) / (1.0 - s), lo), hi)
 
 
-# What shift_video 12 -- ComfyUI's own H3 default, nodes_minimax_h3.py -- leaves on
-# the final step at the ~20 steps the UNDISTILLED model is sampled at. 12 is not a
-# wrong number; it is a number that was chosen against a step count, and it stops
-# being right the moment a turbo LoRA drops that count. This is the target every
-# correction below aims at, so "corrected" means "the schedule H3's own default
-# already produces when it has the steps it was picked for".
-REFERENCE_FINAL_JUMP = 0.40
-
 # A distilled step target lives in the FILENAME and nowhere else. Digits BEFORE the
 # word, so `4step`, `8step` and `3step` match and `step600` does NOT: that is a
 # training checkpoint -- minimax_h3_turbo_v4_step600 and the lightx2v dareties build
@@ -2662,90 +2654,6 @@ def lora_step_targets(graph):
             if 1 <= n <= _WIDGET_RANGE["steps"][2] and (n, value) not in out:
                 out.append((n, value))
     return out
-
-
-def final_video_jump(steps, shift_video, scheduler="simple"):
-    """How much VIDEO noise the last sampling step has to clear on its own.
-
-    comfy's schedules end at zero, so whatever sigma stands before that zero is
-    removed in ONE evaluation. That number, not the step count, is what decides
-    whether structure resolves: at shift 12 the video branch spends every step but
-    the last nibbling the top of the schedule --
-
-        steps=8   1.0  0.988  0.973  0.952  0.923  0.878  0.8  0.632  0.0
-
-    -- and then crosses 0.632 in a single jump. Seven steps of polish on top of noise,
-    one step to invent the anatomy underneath. Reported as limbs and faces that render
-    partially: half an arm, a hand that stops. At the 3-4 steps a distilled LoRA wants
-    the same shift leaves 0.86 and 0.80, which is nearly the whole denoise in one move.
-
-    For `simple` this is exactly shift / (steps + shift - 1) -- the same inversion
-    last_audio_sigma() runs on the audio branch -- but the real schedule is asked for
-    when comfy is importable so any scheduler answers honestly.
-    """
-    try:
-        n = max(1, int(steps))
-        v = float(shift_video)
-    except (TypeError, ValueError):
-        return 0.0
-    if v <= 0.0:
-        return 0.0
-    try:
-        import comfy.samplers as _cs
-        import comfy.model_sampling as _cms
-        _ms = _cms.ModelSamplingDiscreteFlow()
-        _ms.set_parameters(shift=v)
-        sig = [float(x) for x in _cs.calculate_sigmas(_ms, str(scheduler), n)]
-        last = next((x for x in reversed(sig) if x > 0.0), 0.0)
-        if last > 0.0:
-            return last
-    except Exception:
-        pass
-    return v / (n + v - 1.0) if (n + v - 1.0) > 0 else 0.0
-
-
-def shift_video_for_jump(steps, scheduler="simple", target=None):
-    """The shift_video that leaves `target` on the final step at THIS step count.
-
-    Inverting sigma = v / (steps + v - 1), the same shape shift_audio_for() inverts:
-
-        v = sigma * (steps - 1) / (1 - sigma)
-
-    and the DIRECTION is the half worth stating: sigma rises with shift, so FEWER
-    steps need a SMALLER shift_video, not a larger one. The instinct runs the other
-    way -- a short schedule feels like it needs more shift to hold structure -- and
-    following it is what turns 4 steps into a 0.8 final jump.
-
-    Bisected against the real schedule where comfy is importable, because only the
-    shift-honouring schedulers (use_ms True, the ones scheduler_that_finishes_audio
-    already restricts itself to) have a closed form at all; the analytic inverse is
-    the fallback. Clamped to the widget's own range so the number reported is one
-    that can be typed in.
-    """
-    lo, hi = _WIDGET_RANGE["shift_video"][1], _WIDGET_RANGE["shift_video"][2]
-    s = REFERENCE_FINAL_JUMP if target is None else float(target)
-    try:
-        n = max(1, int(steps))
-    except (TypeError, ValueError):
-        return None
-    if not 0.0 < s < 1.0 or n < 2:
-        return None                       # one step clears everything; nothing to aim at
-    if final_video_jump(n, lo, scheduler) > s:
-        return lo                         # even the floor overshoots: take the floor
-    if final_video_jump(n, hi, scheduler) <= s:
-        return hi
-    a, b = lo, hi
-    for _ in range(40):
-        mid = (a + b) / 2.0
-        if final_video_jump(n, mid, scheduler) <= s:
-            a = mid
-        else:
-            b = mid
-    # FLOORED, not rounded. The jump rises with shift, so rounding 4.6666 up to 4.67
-    # puts the result back OVER the target it was just solved for -- by 0.0002, which
-    # is nothing to look at and enough to make the caller report a shortfall that is
-    # not there. Two decimals because that is what the widget steps in.
-    return min(max(math.floor(a * 100.0) / 100.0, lo), hi)
 
 
 def upstream_h3_shift(model):
@@ -3891,6 +3799,185 @@ def lora_facts(patcher):
             if value not in strengths:
                 strengths.append(value)
     return (stacked, len(patches), sorted(strengths, reverse=True))
+
+
+def lora_patch_mismatches(patcher):
+    """[(family, count, produced, target)] for LoRA patches this model cannot take.
+
+    A LORA THAT DOES NOT FIT IS NOT REFUSED. comfy applies each pair as
+    (B @ A).reshape(weight.shape) inside a bare try/except that logs one ERROR line
+    and hands the weight back untouched (comfy/weight_adapter/lora.py). The keys that
+    DO fit are applied anyway, so a LoRA built for a different variant of the same
+    model half-loads: attention and MLP adapted, and whatever did not fit missing.
+
+    WHICH IS THE WORST SHAPE THIS FAILURE COULD TAKE, because what does not fit is
+    usually adaln_proj -- the per-block timestep modulation. H3 ships in variants
+    whose AdaLN input differs (2688 on the full fl2va, 8 on the pruned and on the
+    hybrid this node recommends), while attention and MLP are identical between them.
+    So a LoRA trained on the full model drops exactly its 51 AdaLN pairs onto a hybrid
+    and keeps all 208 of the rest: a distilled few-step trajectory applied to the
+    attention stack with the modulation that was meant to go with it missing. The
+    picture still renders. What it renders is anatomy that does not resolve -- a third
+    leg, a limb that starts and stops -- on some LoRAs and not others, which is what
+    makes it so hard to attribute.
+
+    Reported per FAMILY rather than per key: 51 lines saying the same thing about 51
+    blocks is not a report anybody reads."""
+    patches = getattr(patcher, "patches", None)
+    if not isinstance(patches, dict) or not patches:
+        return []
+    try:
+        sd = patcher.model_state_dict()
+    except Exception:
+        return []
+    seen = {}
+    for key, entries in patches.items():
+        target = getattr(sd.get(key), "shape", None)
+        if target is None:
+            continue
+        want = 1
+        for d in target:
+            want *= int(d)
+        for entry in entries if isinstance(entries, (list, tuple)) else ():
+            weights = getattr(entry[1] if len(entry) > 1 else None, "weights", None)
+            if not weights or len(weights) < 2:
+                continue
+            up, down = getattr(weights[0], "shape", None), getattr(weights[1], "shape", None)
+            if not up or not down or len(up) < 1 or len(down) < 2:
+                continue
+            got = int(up[0]) * int(down[1])
+            if got == want:
+                continue
+            fam = re.sub(r"\.\d+\.", ".N.", str(key)).rsplit(".weight", 1)[0]
+            row = seen.setdefault(fam, [0, (int(up[0]), int(down[1])), tuple(int(d) for d in target)])
+            row[0] += 1
+    return [(fam, n, produced, target) for fam, (n, produced, target) in seen.items()]
+
+
+def lora_on_quantized(patcher):
+    """(patched weights that requantize, total patched) for a QUANTIZED checkpoint.
+
+    A LORA IS MERGED INTO THE WEIGHT, AND ON A QUANTIZED CHECKPOINT THAT COSTS MORE
+    THAN THE LORA IS WORTH. comfy patches a quantized layer by dequantizing it, adding
+    the delta and writing it back through set_weight, which re-quantizes with the scale
+    RECALCULATED and stochastic rounding (comfy/ops.py). Unbiased, so the LoRA survives
+    in expectation -- and the rounding noise that comes with it does not care how small
+    the delta was.
+
+    Measured on this machine, int8 H3 and the shipped distill LoRAs: a delta of 0.0002
+    to 0.004 of the weight norm, applied through that round trip, lands with random
+    weight noise 9x to 15x the size of the delta itself. The LoRA is the quiet part.
+    Five of six LoRAs sat in that range; the one with a delta twenty times larger came
+    out best, at 2.3x, which is the same finding from the other end -- the smaller the
+    LoRA, the worse it does, because the noise is set by the quantization step and not
+    by the LoRA.
+
+    Weight noise across every block's attention is structure that does not resolve. It
+    is the same failure whatever the prompt says, it varies by LoRA, and nothing in
+    this node can correct it: by the time a MODEL arrives here the rounding has already
+    happened. What can be done is to say so, because a render that is quietly carrying
+    a random perturbation of its own weights looks like a model problem.
+
+    Detected through comfy's own API rather than by guessing at checkpoint names:
+    get_key_weight returns a set_func for exactly the layers that requantize on write,
+    and None for the ones that take a delta as it is."""
+    patches = getattr(patcher, "patches", None)
+    if not isinstance(patches, dict) or not patches:
+        return (0, 0)
+    try:
+        from comfy.model_patcher import get_key_weight
+    except Exception:
+        return (0, 0)
+    model = getattr(patcher, "model", None)
+    if model is None:
+        return (0, 0)
+    requant = 0
+    for key in patches:
+        try:
+            _w, set_func, _c = get_key_weight(model, key)
+        except Exception:
+            continue
+        if set_func is not None:
+            requant += 1
+    return (requant, len(patches))
+
+
+# How much of a LoRA has to land before the LoRA is doing what it was trained to do.
+# Below this the distilled trajectory is only partly present, which is a model asked to
+# denoise in four steps with some of the adaptation that makes four steps work missing.
+LORA_LANDS_FLOOR = 0.60
+# Layers sampled to measure it. The answer is a property of the dtype and the delta's
+# size, not of which block it is, so a handful agree with all 208 and cost a fraction.
+LORA_SURVIVAL_SAMPLE = 6
+
+
+def lora_delta_survival(patcher, sample=LORA_SURVIVAL_SAMPLE):
+    """(fraction of the LoRA delta that survives the weight's dtype, layers measured).
+
+    A LORA IS ADDED TO A WEIGHT THAT IS ALREADY ROUNDED, and the sum is rounded again.
+    Where the delta is smaller than one step of the weight's dtype at that value, it
+    rounds straight back off and the LoRA never happens. Nothing warns: the render
+    proceeds with a LoRA that is partly, unevenly, applied.
+
+    H3 declares supported_inference_dtypes = [bfloat16, float32], so it runs bf16 --
+    8 mantissa bits, about 4e-3 of relative resolution. Measured against that on the
+    shipped distill LoRAs, whose deltas run around 1e-4 of the weight norm because they
+    were rank-resized hard (sv_fro 0.95, some projections down to rank 2):
+
+        bf16   31% - 55% of the delta lands
+        fp16   78% - 98%          (H3 cannot run fp16)
+        fp32  100%                (4x the memory of bf16, streaming already)
+
+    The one LoRA here with a delta twenty times larger lands at 100% in every dtype,
+    which is the same finding from the other end and the reason this shows up on some
+    LoRAs and not others.
+
+    NOT AN INT8 PROBLEM, and worth being clear about because the obvious move is to
+    drop the quantized checkpoint. The rounding is in the COMPUTE dtype, which is bf16
+    whether the file on disk is int8 or bf16. A bf16 checkpoint rounds identically.
+
+    Sampled and measured rather than inferred from the file, because the answer depends
+    on the weight's own magnitudes and there is no way to read it off the metadata."""
+    patches = getattr(patcher, "patches", None)
+    if not isinstance(patches, dict) or not patches:
+        return (None, 0)
+    try:
+        import torch as _t
+        sd = patcher.model_state_dict()
+    except Exception:
+        return (None, 0)
+    kept = total = 0.0
+    seen = 0
+    for key in sorted(patches):
+        if seen >= sample:
+            break
+        w = sd.get(key)
+        if w is None or not getattr(w, "is_floating_point", lambda: False)():
+            continue
+        for entry in patches[key] if isinstance(patches[key], (list, tuple)) else ():
+            weights = getattr(entry[1] if len(entry) > 1 else None, "weights", None)
+            if not weights or len(weights) < 2:
+                continue
+            try:
+                strength = float(entry[0])
+                up = weights[0].to(_t.float32)
+                down = weights[1].to(_t.float32)
+                if up.ndim > 2 or down.ndim > 2:
+                    up, down = up.flatten(1), down.flatten(1)
+                delta = (up @ down) * strength
+                if delta.numel() != w.numel():
+                    continue
+                base = w.detach().to(_t.float32).reshape(delta.shape)
+                landed = ((base + delta).to(w.dtype).to(_t.float32) - base)
+                kept += float(landed.norm())
+                total += float(delta.norm())
+                seen += 1
+            except Exception:
+                continue
+            break
+    if not seen or total <= 0.0:
+        return (None, 0)
+    return (kept / total, seen)
 
 
 def lora_name_of(patcher):
@@ -7118,13 +7205,23 @@ class H3LongVideos:
                   f"running -- the upstream node's are. Read from the stamp comfy's "
                   f"MiniMaxH3SigmaShift leaves in transformer_options. Remove that node "
                   f"to sample on the shifts set here")
-        # THE STEP COUNT IS THE SCHEDULE. shift_video 12 is H3's own default and it
-        # was chosen against ~20 steps; a turbo LoRA drops that to 3-8 and nobody
-        # moves the shift, so the last step is left clearing 0.63-0.86 in one jump
-        # and the anatomy under the polish never resolves.
+        # SHIFT IS NOT THIS NODE'S TO CORRECT. What stood here solved shift_video
+        # down from H3's 12 so the final step cleared less noise -- 4.66 at 8 steps,
+        # 2.0 at 4 -- on the reasoning that a schedule leaving 0.63 for one evaluation
+        # cannot resolve structure in it.
+        #
+        # THAT REASONING IS WRONG IN FRONT OF A DISTILLED LORA, which is the only place
+        # the correction ever fired. A turbo LoRA distilled at 8 steps is TRAINED to
+        # cross that 0.63 in one evaluation; the big final jump is not a defect in the
+        # schedule, it is the thing distillation buys. Moving shift_video to 4.66 took
+        # the schedule away from the one the LoRA learned and left the LoRA solving a
+        # trajectory it was never trained on. Reported as third legs and body parts
+        # that render half -- on some LoRAs and not others, because how far a given
+        # LoRA is from the schedule it was trained on differs.
+        #
+        # shift_video and shift_audio are what you typed. The LoRA knows what schedule
+        # it wants better than an analysis of the sigma curve does.
         _lora_steps = lora_step_targets(graph)
-        _shift_live = bool(apply_model_sampling
-                           and not (sigmas is not None and len(sigmas)))
         if _lora_steps:
             _targets = sorted({n for n, _ in _lora_steps})
             if len(_targets) > 1:
@@ -7133,79 +7230,14 @@ class H3LongVideos:
                     + "; ".join(f"{n} from {nm}" for n, nm in sorted(_lora_steps))
                     + "). A distilled LoRA collapses the denoising trajectory onto the "
                       "step count it was trained for, so stacking two that disagree asks "
-                      "the model for both at once and it renders neither. This is the one "
-                      "thing here that is really schedules fighting; steps is currently "
-                      f"{steps}")
+                      "the model for both at once and it renders neither. steps is "
+                      f"currently {steps}")
             elif int(steps) != _targets[0]:
                 notes.append(
                     f"{_lora_steps[0][1]} is built for {_targets[0]} steps and steps is "
                     f"{steps}. Read out of the FILE NAME, which is the only place a LoRA "
-                    f"states it -- its metadata carries rank and alpha and no schedule at "
-                    f"all. Running a distilled LoRA off its own step count denoises past "
-                    f"or short of where its trajectory lands")
-        if _shift_live:
-            _jump = final_video_jump(steps, shift_video, scheduler)
-            if _jump > REFERENCE_FINAL_JUMP:
-                _new = shift_video_for_jump(steps, scheduler)
-                if _new is not None and _new < shift_video:
-                    _after = final_video_jump(steps, _new, scheduler)
-                    notes.append(
-                        f"shift_video LOWERED {shift_video:g} -> {_new:g}. At {steps} steps "
-                        f"the {shift_video:g} typed in left {_jump:.2f} of video noise for "
-                        f"the final step to clear alone, against the "
-                        f"{REFERENCE_FINAL_JUMP:.2f} this aims at; {_new:g} leaves "
-                        f"{_after:.2f}. comfy's "
-                        f"schedules end at zero, so that sigma is crossed in ONE evaluation "
-                        f"-- every step before it polishes the top of the schedule and the "
-                        f"last one has to invent the structure underneath, which is what a "
-                        f"partly rendered limb or face is. 0.40 is what H3's own default "
-                        f"shift of 12 already leaves at the ~20 steps the undistilled model "
-                        f"is sampled at, so this is the schedule H3's own default already "
-                        f"gives when it has the steps it was picked for. Wire `sigmas`, or turn "
-                        f"apply_model_sampling off, to keep shift_video exactly as typed"
-                        + (f". It does NOT reach {REFERENCE_FINAL_JUMP:.2f} here -- {_after:.2f} is "
-                           f"the best {steps} steps can do, with shift_video already at its "
-                           f"{_new:g} floor. RAISE steps: the jump falls as the schedule gets "
-                           f"more places to stand"
-                           if _after > REFERENCE_FINAL_JUMP + 1e-6 else ""))
-                    # THE RATIO IS LOAD-BEARING, and lowering shift_video alone breaks
-                    # it. ModelSamplingAV.audio_scale IS shift_video/shift_audio, and
-                    # MiniMaxH3.process_latent_in carries the audio slice multiplied by
-                    # it (model_base.py) -- the packed latent holds audio_scale * x_audio
-                    # and process_latent_out divides it back out. It is the limit of
-                    # sigma_v/sigma_a as sigma falls, which is what time_shift_sigma
-                    # converges to. So shift_audio moves with shift_video, by the same
-                    # factor, and the stream keeps riding at the scale it was riding at.
-                    # (What does NOT depend on shift_video is where the audio branch
-                    # LANDS -- last_audio_sigma inverts the video shift back out. Two
-                    # different quantities; only one of them is free.)
-                    _lo_a, _hi_a = _WIDGET_RANGE["shift_audio"][1], _WIDGET_RANGE["shift_audio"][2]
-                    _ratio = float(shift_video) / float(shift_audio or 1.0)
-                    _new_a = min(max(_new / _ratio, _lo_a), _hi_a) if _ratio else shift_audio
-                    if abs(_new_a - shift_audio) > 1e-9:
-                        _got = _new / _new_a if _new_a else _ratio
-                        notes.append(
-                            f"shift_audio follows it {shift_audio:g} -> {_new_a:g}, holding "
-                            f"video:audio at {_got:.2g}:1"
-                            + ("" if abs(_got - _ratio) < 0.05 else
-                               f" -- NOT the {_ratio:.2g}:1 you set, because shift_audio hit "
-                               f"its {_lo_a:g} floor and could not go lower")
-                            + f". That ratio is audio_scale -- the "
-                            f"factor the packed latent carries the audio stream at -- so "
-                            f"moving shift_video without it would rescale the audio against "
-                            f"a picture that did not move. It also lands the audio branch "
-                            f"softer: {last_audio_sigma(steps, shift_audio, scheduler, shift_video):.2f} "
-                            f"-> {last_audio_sigma(steps, _new_a, scheduler, _new):.2f} on the "
-                            f"final step")
-                        shift_audio = _new_a
-                    shift_video = _new
-                elif _new is not None:
-                    notes.append(
-                        f"the final step still clears {_jump:.2f} of video noise at {steps} "
-                        f"steps and shift_video {shift_video:g}, above the "
-                        f"{REFERENCE_FINAL_JUMP:.2f} it aims at, and shift_video cannot go lower "
-                        f"than {_new:g} -- it is already at the widget floor. RAISE steps: "
-                        f"the jump falls as the schedule gets more places to stand")
+                    f"states it. Running a distilled LoRA off its own step count "
+                    f"denoises past or short of where its trajectory lands")
         _wired = [n for n, r in enumerate((ref_image_1, ref_image_2, ref_image_3,
                                            ref_image_4), 1) if r is not None]
         _missing = unwired_reference_tags(f"{prompt}\n{character_memory}", _wired)
@@ -8416,6 +8448,62 @@ class H3LongVideos:
             if _lora_clip[0]:
                 _said.append(f"{_lora_clip[0]} on the TEXT ENCODER over {_lora_clip[1]} weights at "
                              f"strength {', '.join(f'{v:g}' for v in _lora_clip[2][:4])}")
+            _lands, _n = lora_delta_survival(model)
+            if _lands is not None and _lands < LORA_LANDS_FLOOR:
+                notes.append(
+                    f"ONLY {_lands:.0%} OF THIS LORA IS LANDING (measured on {_n} "
+                    f"layers). A LoRA is added to a weight that is already rounded and "
+                    f"the sum is rounded again; where the delta is smaller than one "
+                    f"step of the weight's dtype it rounds straight back off. H3 "
+                    f"declares bfloat16 and float32 only, so it runs bf16 -- 8 mantissa "
+                    f"bits -- and these distill LoRAs carry deltas around 1e-4 of the "
+                    f"weight norm because they were rank-resized hard. What reaches the "
+                    f"model is a fraction of the adaptation, spread unevenly across the "
+                    f"weights, which is a model asked to denoise in a few steps with "
+                    f"some of what makes few steps work missing. THIS IS NOT THE INT8 "
+                    f"CHECKPOINT: the rounding is in the compute dtype, and a bf16 file "
+                    f"rounds identically, so swapping checkpoints does not address it. "
+                    f"A LoRA with a bigger delta lands whole -- prefer a build that was "
+                    f"not Frobenius-truncated, or one merged into the weights offline "
+                    f"at full precision (merge_lora.py) where the arithmetic happens "
+                    f"once, before anything is rounded")
+            _rq, _all = lora_on_quantized(model)
+            if _rq:
+                notes.append(
+                    f"LoRA ON A QUANTIZED CHECKPOINT: {_rq} of {_all} patched weights "
+                    f"re-quantize when the LoRA is merged into them. comfy dequantizes "
+                    f"the weight, adds the delta and writes it back with the scale "
+                    f"recalculated and stochastic rounding, which keeps the LoRA in "
+                    f"expectation and adds rounding noise set by the QUANTISATION STEP "
+                    f"rather than by the delta. Measured on int8 H3 with the distill "
+                    f"LoRAs: deltas of 0.0002-0.004 of the weight norm land with weight "
+                    f"noise 9-15x the delta, and the SMALLER the LoRA the worse the "
+                    f"ratio. Random weight noise across every block's attention is "
+                    f"structure that does not resolve -- limbs that do not close, a "
+                    f"part rendered twice -- the same way on every prompt, and it "
+                    f"varies by LoRA, which is what makes it read as the model's fault. "
+                    f"Nothing here can undo it: the rounding happened before this node "
+                    f"was called. Merge the LoRA at full precision and quantise the "
+                    f"result, or run the LoRA on an unquantised checkpoint. Without a "
+                    f"LoRA this checkpoint has no such round trip and is unaffected")
+            _mm = lora_patch_mismatches(model) + lora_patch_mismatches(getattr(clip, "patcher", None))
+            if _mm:
+                notes.append(
+                    "LoRA PARTLY APPLIED -- "
+                    + "; ".join(f"{n} x {fam} wanted {produced} for a {target} weight"
+                               for fam, n, produced, target in _mm)
+                    + ". comfy drops a pair it cannot reshape and keeps every pair it "
+                      "can, logging one line and continuing, so this LoRA is HALF ON: "
+                      "the layers that fit are adapted and these are not. It is built "
+                      "for a different variant of this model. H3's variants differ in "
+                      "the AdaLN input (2688 on the full fl2va, 8 on the pruned and on "
+                      "the hybrid) while attention and MLP are identical, so a LoRA "
+                      "crosses over looking like it loaded. A distilled trajectory on "
+                      "the attention stack with its timestep modulation missing is "
+                      "anatomy that does not resolve -- a third leg, a limb that stops "
+                      "-- and it happens on some LoRAs and not others. Use this LoRA on "
+                      "the checkpoint it was built for, or a build of it converted for "
+                      "this one")
             notes.append(
                 f"LoRA: {'; '.join(_said)}"
                 + (f" -- last one applied: {_name}" if _name else "")
