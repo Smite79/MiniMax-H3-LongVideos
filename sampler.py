@@ -4158,6 +4158,99 @@ _HELD_PART = (
 )
 
 
+# Hardware that passes BETWEEN THE LEGS, which is a place on the body the rest of
+# this file has no name for. held_part() reads the hardware's noun and answers with a
+# limb -- neck, ankles, waist, body, and wrists for everything it does not recognise --
+# so duct tape wound round the waist and through the crotch came back "wrists", the
+# same as a pair of handcuffs, and the hold clause it produced said the tape stayed
+# "tied and holding as it was put on" without ever saying WHERE.
+#
+# Meanwhile the bare clause went on naming the groin uncovered, because it suppresses
+# only for a GARMENT the sheet lists and tape is hardware. So the shot said: tape
+# exists somewhere, and the genitals are bare and in plain view. Both sentences were
+# true to the node and only one of them could be drawn.
+# Names the region outright, so it needs no second half: a chastity belt and a crotch
+# strap are not ambiguous about where they sit.
+_CROTCH_NAMED = re.compile(
+    r"\bchastity\s+(?:belt|device)s?\b"
+    r"|\b(?:crotch|groin)\s*(?:strap|rope|chain|cord|band|piece|panel)s?\b"
+    r"|\bthrough\s+(?:the\s+)?(?:crotch|groin)\b", re.I)
+# "between the legs" is a position for a hand, a knee, a bag or a camera far more
+# often than it is hardware, so on its own it fires nothing -- the waist half has to
+# be there too. A possessive NAME counts: "around Mara's waist" is the common wording.
+_BETWEEN_LEGS = re.compile(
+    r"\bbetween\s+(?:her|his|their|the|\w+'s)\s+legs\b", re.I)
+_ROUND_WAIST = re.compile(
+    r"\b(?:round|around|about)\s+(?:her|his|their|the|\w+'s)\s+"
+    r"(?:waist|hips|middle|belly)\b"
+    r"|\bwaist\s*(?:band|belt|chain|strap|rope)s?\b", re.I)
+
+
+def crotch_seal(text, items=()):
+    """The hardware this text closes over the groin, as written. "" when none.
+
+    TWO HALVES REQUIRED, except for a chastity belt, which is one word for both. A
+    beat has to put the thing AROUND the waist and BETWEEN the legs before this
+    fires, because "between her legs" on its own is a position for a hand, a knee or
+    a camera far more often than it is a strap, and a false positive here seals a
+    region the author left open.
+
+    Returns the hardware's own name where the beat gives one, so the clause built
+    from it says the author's word -- duct tape stays duct tape -- and falls back to
+    the generic where the naming is elsewhere in the sentence."""
+    t = str(text or "")
+    if not (_CROTCH_NAMED.search(t)
+            or (_BETWEEN_LEGS.search(t) and _ROUND_WAIST.search(t))):
+        return ""
+    named = hardware_named(t) or ""
+    if not named:
+        for item in items or ():
+            if hardware_named(str(item)):
+                named = str(item).strip()
+                break
+    if not named:
+        m = _CROTCH_NAMED.search(t)
+        if m:
+            named = m.group(0).strip()
+    return named or "the hardware"
+
+
+# WHAT COUNTS AS ASKING FOR IT OFF. restraint_coming_off() reads "unlocks" and little
+# else -- it was written for a lock, and duct tape is cut, peeled or unwrapped. A seal
+# that outlives the beat removing it is the same bug as one that vanishes early, from
+# the other side, so the wording this accepts is deliberately wide: any of these verbs
+# in the same sentence as the thing itself.
+_SEAL_COMES_OFF = re.compile(
+    r"\b(?:unlocks?|unlocking|unlocked|removes?|removing|removed|unfastens?|"
+    r"unbuckles?|unclips?|unwraps?|unwrapping|unwrapped|frees?|freeing|freed|"
+    r"releases?|releasing|released|undoes|undoing|undone|unties?|untying|untied)\b"
+    r"|\b(?:cuts?|cutting|peels?|peeling|peeled|takes?|taking|took|pulls?|pulling|"
+    r"pulled|strips?|stripping|stripped|rips?|ripping|ripped|tears?|tearing|tore|"
+    r"slices?|slicing|sliced|snips?|snipping|snipped)\b[^.]{0,48}?"
+    r"\b(?:off|away|free|loose|open)\b", re.I)
+
+
+def seal_comes_off(beat, item):
+    """Does this beat take that sealed hardware off? Both halves, in one sentence."""
+    b, it = str(beat or ""), str(item or "").strip()
+    if not b or not it:
+        return False
+    head = it.split()[-1]          # "duct tape" is cut as "the tape" as often as not
+    for sentence in re.split(r"(?<=[.!?])\s+", b):
+        if not _SEAL_COMES_OFF.search(sentence):
+            continue
+        if (re.search(r"\b" + re.escape(it) + r"\b", sentence, re.I)
+                or re.search(r"\b" + re.escape(head) + r"\b", sentence, re.I)
+                or re.search(r"\b(?:it|them)\b", sentence, re.I)):
+            return True
+    return False
+
+
+SEALED_HOLD = (" The {item} runs around the waist and passes between the legs, "
+               "covering the groin completely and lying flat against the skin there, "
+               "and it stays exactly so for the whole shot.")
+
+
 def held_part(items):
     """The body part an anchored restraint holds, read from the hardware itself."""
     text = " ".join(items or [])
@@ -7415,6 +7508,7 @@ class H3LongVideos:
         beat_said_posture = False
         restrained_who = set()    # who is actually in the hardware
         anchored = ""             # where fastened limbs are held
+        sealed = ""               # hardware closed over the groin, until it comes off
         worn_item = ""            # the hardware, in the author's words
         worn_items = []           # ...each piece of it, in order
         displaced = {}            # garment -> how it was moved
@@ -7811,7 +7905,31 @@ class H3LongVideos:
             _one_age = age_in(_one_line)
             _one_body = (body_of(_one_pron, _one_age) if len(active or []) == 1 else "")
             _one_fig = (figure_of(_one_pron, _one_age) if len(active or []) == 1 else "")
-            _one_groin = (groin_of(_one_pron, _one_age) if len(active or []) == 1 else "")
+            # Cleared here too: the latch below never runs on a beat that takes it
+            # off, so without this the seal outlives the removal that asked for it.
+            # A REMOVAL BEAT NAMES THE THING IT REMOVES, so crotch_seal() fires on
+            # "Dan unlocks the chastity belt" exactly as it does on the beat that put
+            # it on. Read the removal FIRST and off the beat's own naming, not off
+            # whatever happens to be latched -- checking `sealed` first meant a belt
+            # the SHEET declared (never latched, because no beat applied it) got
+            # latched by the beat taking it off, and then held for the rest of the run.
+            _seal_named = crotch_seal(body)
+            _seal_off = (seal_comes_off(body, _seal_named or sealed)
+                         or (bool(sealed) and names_any(sealed, toks)))
+            if _seal_off:
+                sealed = ""
+            elif _seal_named:
+                sealed = _seal_named
+            # DELIBERATELY NOT READ FROM THE SHEET. A sheet-declared belt can be
+            # UNDER something -- defer_tag_for and hidden_layers exist for exactly
+            # that, and hold the belt's words back on every shot where a garment
+            # covers it, because a reference is an instruction to draw the thing.
+            # Seeding the seal from the sheet named the belt in those shots and
+            # undid it. What this clause is for is hardware a BEAT puts on, which is
+            # the case that was losing it between shots; a covered belt already has
+            # an owner and it is not this.
+            _one_groin = ("" if sealed else
+                          (groin_of(_one_pron, _one_age) if len(active or []) == 1 else ""))
             _bare_sheet = "\n".join(ln for n, ln in sheet_lines(shot_sheet)
                                     if n and names_any(ln, toks)) or shot_sheet
             _bare = ("" if (_revealed or bare)
@@ -7836,7 +7954,7 @@ class H3LongVideos:
                               whose=(_n if _name_it else ""),
                               body=body_of(*_pron_age(shot_sheet, _n)),
                               figure=figure_of(*_pron_age(shot_sheet, _n)),
-                              groin=groin_of(*_pron_age(shot_sheet, _n)))
+                              groin=("" if sealed else groin_of(*_pron_age(shot_sheet, _n))))
                     for _n, _rg, _on in _rows)
             if _bare:
                 bared_shots.append(len(plan) + 1)
@@ -7947,6 +8065,7 @@ class H3LongVideos:
                             and any(_RESTRAINT_WORD.match(str(t)) for t in toks))):
                     restrained = posed = rigid_latched = False
                     anchored = ""
+                    sealed = ""
                     worn_item = ""
                     worn_items = []
                     restrained_who = set()
@@ -8037,6 +8156,17 @@ class H3LongVideos:
             _legs_now = legs_anchor(body) if restrained else ""
             if _legs_now:
                 legs_held = _legs_now
+            # ANYTHING CLOSED OVER THE GROIN STAYS UNTIL A REMOVAL NAMES IT. Latched
+            # like anchored above and cleared in the same place, so it outlives the
+            # beat that applied it -- the reported failure was the tape being there
+            # in one shot and the genitals bare in the next.
+            # NOT ON THE BEAT THAT TAKES IT OFF. "Dan unlocks the chastity belt"
+            # names the belt, so the detector fires on the removal too and would
+            # re-latch the thing that was just removed, one line after the clear
+            # above wiped it. The removal wins: it is the author asking.
+            _sealed_now = "" if _seal_off else crotch_seal(body, worn_items)
+            if _sealed_now:
+                sealed = _sealed_now
             _holding = bool(restrained and anchored and not _anchor_now)
             if _holding:
                 anchored_shots.append(len(plan) + 1)
@@ -8142,13 +8272,17 @@ class H3LongVideos:
             # not duplicated -- the guard list drops its copy, so the words are the
             # same words and only their position changed, which is the one lever here
             # that has ever moved composition.
+            _seal = SEALED_HOLD.format(item=sealed) if sealed else ""
+            _seal_led = False
             _pose_led = ""
-            if _pose and _arms_pos and body:
+            if (_pose or _seal) and body:
                 _at = line.find(body)
                 if _at >= 0:
                     _cut = _at + len(body)
-                    line = (line[:_cut] + _pose + line[_cut:]).strip()
-                    _pose_led = _pose
+                    _lead = (_pose if _arms_pos else "") + _seal
+                    line = (line[:_cut] + _lead + line[_cut:]).strip()
+                    _pose_led = _pose if _arms_pos else ""
+                    _seal_led = bool(_seal)
             hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))

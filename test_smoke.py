@@ -2112,6 +2112,60 @@ def test_a_lora_is_reported():
     check("a run with no LoRA reports none", "LoRA:" not in quiet)
 
 
+def test_hardware_closed_over_the_groin_stays_closed():
+    """Reported: duct tape wound round the waist and between the legs is there in one
+    beat and gone in the next, the genitals bare again.
+
+    TWO SENTENCES, BOTH TRUE TO THE NODE, AND ONLY ONE DRAWABLE. held_part() reads a
+    hardware noun and answers with a limb -- neck, ankles, waist, body, wrists for
+    anything it does not know -- so tape through the crotch came back "wrists", the
+    same as handcuffs, and the hold clause said it stayed "tied and holding as it was
+    put on" without ever saying WHERE. Meanwhile the bare clause went on calling the
+    groin uncovered, because it suppresses for a GARMENT on the sheet and tape is
+    hardware. The shot said tape exists somewhere and the genitals are in plain view.
+
+    Sealed until a removal asks, per the author: what is on the genitals stays on."""
+    print("\n=== what is closed over the groin stays closed ===")
+    MEM = "Mara: she, 26, dark hair, a cotton dress, underwear."
+    P = ("A bare room.\n\nMara takes off her dress and underwear.\n\n"
+         "Dan wraps duct tape around Mara's waist and between her legs.\n\n"
+         "Mara stands still.\n\nMara pulls at the tape.\n\n"
+         "Dan cuts the duct tape off.\n\nMara sits down.")
+    sh = [" ".join(b.split("]", 1)[1].split()) for b in
+          run_node(P, plan_only=True, character_memory=MEM)[3].split("[Shot ")[1:]]
+    SEAL, BARE = "covering the groin completely", "genitals uncovered"
+    check("before it goes on, the groin is bare as written", BARE in sh[0], sh[0][:150])
+    for i in (1, 2, 3):
+        check(f"shot {i + 1} says where the tape sits", SEAL in sh[i], sh[i][:170])
+        check(f"...and stops calling the groin bare", BARE not in sh[i])
+        check(f"...and says it in the opening tokens", sh[i].index(SEAL) < 230, sh[i][:230])
+    # Struggling with it is not taking it off.
+    check("pulling at it does not take it off", SEAL in sh[3], sh[3][:150])
+    # The removal is the author asking, and it is obeyed.
+    check("the beat that cuts it off ends the seal", SEAL not in sh[4], sh[4][:150])
+    check("...and the groin is bare again", BARE in sh[4])
+    check("...and it does not come back", SEAL not in sh[5] and BARE in sh[5])
+    # A belt and a chain go the same way, and each is named in the author's own word.
+    belt = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A bare room.\n\nDan locks a chastity belt on Mara.\n\nMara stands still.\n\n"
+        "Mara walks out to the hallway.", plan_only=True,
+        character_memory="Mara: she, 26, dark hair.")[3].split("[Shot ")[1:]]
+    check("a chastity belt seals too", all(SEAL in s for s in belt), belt[-1][:150])
+    check("...under the author's own word for it",
+          all("chastity belt runs around the waist" in s for s in belt), belt[0][:170])
+    chain = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A cell.\n\nDan runs a chain around Mara's waist and between her legs.\n\n"
+        "Mara stands still.\n\nDan unlocks the chain.\n\nMara stretches.",
+        plan_only=True, character_memory="Mara: she, 26, dark hair.")[3].split("[Shot ")[1:]]
+    check("a waist-and-crotch chain seals", SEAL in chain[0] and SEAL in chain[1])
+    check("...and unlocking it ends it", SEAL not in chain[2] and SEAL not in chain[3])
+    # A hand, a knee or a bag between the legs is not hardware.
+    for _not in ("Dan puts his hand between her legs", "Mara sits with her bag between her legs",
+                 "Dan kneels between her legs"):
+        check(f"not hardware: {_not[:34]!r}", S.crotch_seal(_not) == "")
+    check("...and cuffs are not either", S.crotch_seal("Dan cuffs her wrists behind her back") == "")
+
+
 def test_the_limb_position_leads_the_shot():
     """Reported, and not fixed by saying it more: wrists cuffed in FRONT of the body
     on every shot using handcuffs, while the text said behind the back five times.
@@ -8276,6 +8330,7 @@ def main():
     test_a_thing_that_opens_itself_is_a_staged_change()
     test_a_walk_is_not_its_own_reverse()
     test_an_exact_line_is_yours_untouched()
+    test_hardware_closed_over_the_groin_stays_closed()
     test_the_limb_position_leads_the_shot()
     test_the_pronoun_swap_never_touches_your_words()
     test_verbatim_sends_your_text_and_nothing_else()
