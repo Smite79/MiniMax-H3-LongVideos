@@ -910,6 +910,58 @@ def test_a_repeated_naming_is_spent_as_a_pronoun():
               S.pronoun_rewrite(" Mara waits. Mara sits.", _who)[1] == [])
 
 
+def test_no_report_touches_weight_data():
+    """Reported: renders went several times slower.
+
+    The render path was byte-identical, so nothing per-step had changed. What had
+    changed was what ran just BEFORE it. A report measuring how much of a LoRA
+    survived the compute dtype pulled six real weights up to float32, did the B@A
+    matmul, added, cast back and subtracted -- about 800 MiB of transient float32 per
+    sampled layer at H3's [5376, 7168], and half a second of it, immediately before
+    sampling started. On a card already streaming a model that does not fit, that is
+    resident weights evicted, and every step after it streams more.
+
+    It is gone. So is the quantized-checkpoint note beside it, which described the
+    merge path a streaming model never takes.
+
+    WHAT IS LEFT MAY READ SHAPES AND NOTHING ELSE. A weight here raises the moment
+    anything asks for its data, so a report that starts materialising one fails this
+    rather than quietly costing a render."""
+    class Landmine:
+        """A weight that will say its shape and nothing else.
+
+        Not a torch.Tensor on purpose: anything reaching for .to(), .detach(), a
+        dtype or arithmetic gets an AttributeError, which is the failure this test
+        is for. Reading .shape is all a report is allowed to do."""
+        def __init__(self, *shape):
+            self.shape = tuple(shape)
+
+    class Ad:
+        def __init__(self, out, r, inn):
+            self.weights = [torch.zeros(out, r), torch.zeros(r, inn),
+                            None, None, None, None]
+    class Patcher:
+        def __init__(self, ok=True):
+            self.patches = {f"diffusion_model.blocks.{i}.attn.out_proj.weight":
+                            [(1.0, Ad(5376, 21, 7168 if ok else 999))] for i in range(8)}
+            self._sd = {k: Landmine(5376, 7168) for k in self.patches}
+        def model_state_dict(self): return self._sd
+
+    check("a fitting LoRA reports nothing, without reading a weight",
+          S.lora_patch_mismatches(Patcher(True)) == [])
+    bad = S.lora_patch_mismatches(Patcher(False))
+    check("a mismatched one is still caught, from shapes alone", len(bad) == 1)
+    check("...with the count and both shapes",
+          bad[0][1] == 8 and bad[0][2] == (5376, 999) and bad[0][3] == (5376, 7168))
+    # The two that DID touch weight data are gone, not merely unused.
+    for _gone in ("lora_delta_survival", "lora_on_quantized",
+                  "LORA_LANDS_FLOOR", "LORA_SURVIVAL_SAMPLE"):
+        check(f"{_gone} is gone", not hasattr(S, _gone))
+    _src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
+    for _gone in ("lora_delta_survival(", "lora_on_quantized("):
+        check(f"no call site remains: {_gone!r}", _gone not in _src)
+
+
 def test_a_lora_that_does_not_fit_is_reported_not_silent():
     """A LoRA built for the wrong variant of H3 half-loads, and nothing said so.
 
@@ -963,114 +1015,6 @@ def test_a_lora_that_does_not_fit_is_reported_not_silent():
         def model_state_dict(self): raise RuntimeError("no state dict")
     check("a patcher that will not hand over a state dict is harmless",
           S.lora_patch_mismatches(Dead()) == [])
-
-
-def test_a_lora_on_a_quantized_checkpoint_is_reported():
-    """Merging a LoRA into a quantized weight costs more than the LoRA is worth.
-
-    comfy dequantizes, adds the delta, and writes back through set_weight, which
-    re-quantizes with the scale recalculated and STOCHASTIC rounding. Unbiased, so the
-    LoRA survives in expectation -- and the rounding noise it brings is set by the
-    quantisation step, not by how small the delta was.
-
-    Measured, int8 H3 and the shipped distill LoRAs: deltas of 0.0002-0.004 of the
-    weight norm land with weight noise 9-15x the delta. The one LoRA with a delta
-    twenty times larger came out best at 2.3x -- the same finding from the other end.
-
-    Detected through comfy's own get_key_weight: a set_func exists for exactly the
-    layers that requantize on write. Guessing from checkpoint filenames would miss a
-    quantized model that is not named like one, and accuse one that is."""
-    class Quant:
-        def set_weight(self, *a, **k): pass
-        def convert_weight(self, w, **k): return w
-        weight = None
-    class Plain:
-        weight = None
-    class Model:
-        def __init__(self, quant_keys, plain_keys):
-            for k in quant_keys: setattr(self, k, Quant())
-            for k in plain_keys: setattr(self, k, Plain())
-    class Patcher:
-        def __init__(self, patches, model): self.patches, self.model = patches, model
-
-    # comfy is stubbed in this harness, so stand in for the one call the function
-    # makes. The real get_key_weight resolves the op and looks for set_<attr>, which
-    # is exactly what this does -- the point is that the detection asks comfy rather
-    # than reading checkpoint names.
-    _mp = types.ModuleType("comfy.model_patcher")
-    def _gkw(model, key):
-        op_name, attr = key.rsplit(".", 1)
-        op = getattr(model, op_name)
-        return (None, getattr(op, "set_" + attr, None), getattr(op, "convert_" + attr, None))
-    _mp.get_key_weight = _gkw
-    sys.modules["comfy.model_patcher"] = _mp
-    sys.modules["comfy"].model_patcher = _mp
-
-    m = Model(["q0", "q1", "q2"], ["p0"])
-    keys = {"q0.weight": [], "q1.weight": [], "q2.weight": [], "p0.weight": []}
-    check("the quantized weights are counted, the plain one is not",
-          S.lora_on_quantized(Patcher(keys, m)) == (3, 4))
-    check("an unquantized checkpoint reports none",
-          S.lora_on_quantized(Patcher({"p0.weight": []}, Model([], ["p0"]))) == (0, 1))
-    check("no LoRA, nothing to say",
-          S.lora_on_quantized(Patcher({}, m)) == (0, 0))
-    # It runs on every render behind a LoRA, so nothing here may raise.
-    for _bad in (None, "model", 7, Patcher({"k.weight": []}, None),
-                 Patcher({"missing.weight": []}, m)):
-        got = S.lora_on_quantized(_bad)
-        check(f"{type(_bad).__name__} is harmless", isinstance(got, tuple) and got[0] == 0)
-
-
-def test_a_lora_too_small_for_the_dtype_is_measured():
-    """A LoRA that rounds off the weight it is added to, and nothing said so.
-
-    The delta is added to a weight already rounded to the compute dtype and the sum is
-    rounded again. Where the delta is below one step of that dtype at that value it
-    rounds back off and the LoRA does not happen -- partly, unevenly, per element.
-
-    H3 declares bfloat16 and float32 only, so it runs bf16: 8 mantissa bits, ~4e-3 of
-    relative resolution. The shipped distill LoRAs carry deltas near 1e-4 of the weight
-    norm, having been rank-resized hard. Measured on them: 31%-55% lands at bf16,
-    78%-98% at fp16 (which H3 cannot use), 100% at fp32. The one LoRA with a delta
-    twenty times larger lands whole at any width.
-
-    NOT THE QUANTIZED CHECKPOINT. The rounding is in the compute dtype, so a bf16 file
-    on disk rounds exactly the same way -- which is why this is measured rather than
-    inferred from the checkpoint's name or format."""
-    class Ad:
-        def __init__(self, B, A): self.weights = [B, A, None, None, None, None]
-    class Patcher:
-        def __init__(self, patches, sd): self.patches, self._sd = patches, sd
-        def model_state_dict(self): return self._sd
-
-    torch.manual_seed(0)
-    W = torch.randn(256, 256).bfloat16()
-    def lands(scale, dtype=torch.bfloat16):
-        A = torch.randn(8, 256) * scale
-        B = torch.randn(256, 8) * scale
-        sd = {f"blocks.{i}.attn.out_proj.weight": W.to(dtype) for i in range(8)}
-        pt = {f"blocks.{i}.attn.out_proj.weight": [(1.0, Ad(B, A))] for i in range(8)}
-        return S.lora_delta_survival(Patcher(pt, sd))
-
-    small, n = lands(3e-3)
-    check(f"a small delta mostly rounds off at bf16 ({small:.0%})", small < 0.5)
-    check("...over the sampled layers", n == S.LORA_SURVIVAL_SAMPLE)
-    big, _ = lands(3e-2)
-    check(f"a delta twenty times larger lands whole ({big:.0%})", big > 0.9)
-    check("...and the floor sits between them", small < S.LORA_LANDS_FLOOR < big)
-    # The same delta in a wider dtype is the control: the LoRA did not change, the
-    # width did, which is what makes this a dtype finding and not a LoRA one.
-    wide, _ = lands(3e-3, torch.float32)
-    check(f"the same small delta lands whole at fp32 ({wide:.0%})", wide > 0.99)
-    # Never raises: it runs on every render that has a LoRA on it.
-    for _bad in (None, "model", 7, Patcher({}, {}), Patcher({"k": [(1.0, None)]}, {}),
-                 Patcher({"k": [(1.0, Ad(torch.zeros(2, 2), torch.zeros(2, 2)))]}, {})):
-        check(f"{type(_bad).__name__} is harmless", S.lora_delta_survival(_bad) == (None, 0))
-    # An integer weight has no rounding question to ask and must not be measured.
-    ints = {"blocks.0.attn.out_proj.weight": torch.zeros(8, 8, dtype=torch.int8)}
-    check("an int weight is skipped", S.lora_delta_survival(
-        Patcher({"blocks.0.attn.out_proj.weight": [(1.0, Ad(torch.zeros(8, 2), torch.zeros(2, 8)))]},
-                ints)) == (None, 0))
 
 
 def test_silence_reports_what_happened():
@@ -4219,9 +4163,8 @@ def main():
     test_a_lora_states_its_step_count_in_its_name()
     test_the_graph_says_whether_the_schedule_is_already_set()
     test_a_repeated_naming_is_spent_as_a_pronoun()
+    test_no_report_touches_weight_data()
     test_a_lora_that_does_not_fit_is_reported_not_silent()
-    test_a_lora_on_a_quantized_checkpoint_is_reported()
-    test_a_lora_too_small_for_the_dtype_is_measured()
     test_widget_values_are_usable()
     test_the_allocator_that_aborts_is_refused_before_sampling()
     test_schema()
