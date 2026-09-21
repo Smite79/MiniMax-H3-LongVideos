@@ -8349,14 +8349,6 @@ class H3LongVideos:
             _seal = SEALED_HOLD.format(item=sealed) if sealed else ""
             _seal_led = False
             _pose_led = ""
-            if (_pose or _seal) and body:
-                _at = line.find(body)
-                if _at >= 0:
-                    _cut = _at + len(body)
-                    _lead = (_pose if _arms_pos else "") + _seal
-                    line = (line[:_cut] + _lead + line[_cut:]).strip()
-                    _pose_led = _pose if _arms_pos else ""
-                    _seal_led = bool(_seal)
             hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
@@ -8463,6 +8455,26 @@ class H3LongVideos:
                     named_shots.append(len(plan) + 1)
             else:
                 hold = own_hold(hold, _wearers, _described)
+            # HOISTED HERE, BELOW THE GATE ABOVE, and that is the whole of the fix.
+            #
+            # _wearer_here clears the pose and the hold for a shot the restrained
+            # person is not described in -- a body that is not in the frame does not
+            # get its arms placed. The hoist that puts the position in the opening
+            # tokens was written ABOVE it, so the sentence was already spliced into
+            # `line` by the time the gate cleared the variable, and clearing it no
+            # longer removed anything. A shot reading "Dan: he, 40" and "There is one
+            # person in the shot" also read "Both arms are behind the body, wrists
+            # together at the small of the back" -- her position, on him. Reported as
+            # the restraint changing mid-scene, and worst where beats name one of two
+            # people and lean on continuity for the other.
+            if (_pose or _seal) and body:
+                _at = line.find(body)
+                if _at >= 0:
+                    _cut = _at + len(body)
+                    _lead = (_pose if _arms_pos else "") + _seal
+                    line = (line[:_cut] + _lead + line[_cut:]).strip()
+                    _pose_led = _pose if _arms_pos else ""
+                    _seal_led = bool(_seal)
             _speaks = has_speech(body)
             _own = sound_described(body)
             if not _own and not _speaks and _BREATH_PREP.search(body):

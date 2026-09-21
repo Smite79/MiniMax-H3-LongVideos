@@ -2219,6 +2219,45 @@ def test_hardware_closed_over_the_groin_stays_closed():
     check("...and cuffs are not either", S.crotch_seal("Dan cuffs her wrists behind her back") == "")
 
 
+def test_a_body_not_in_the_shot_gets_no_position():
+    """Her arms, placed on him.
+
+    _wearer_here has always cleared `hold` and `_pose` for a shot the restrained
+    person is not described in -- a body that is not in the frame does not get its
+    arms put anywhere. The hoist that moved the limb position into the opening tokens
+    was written ABOVE that gate, so the sentence was already spliced into the shot's
+    line by the time the gate cleared the variable, and clearing it removed nothing.
+
+    The shot then read "Dan: he, 40", "There is one person in the shot", and "Both
+    arms are behind the body, wrists together at the small of the back" -- her
+    position, on the only body left in the frame. Reported as the restraint changing
+    mid-scene, and worst on beats that name one of two people and lean on continuity
+    for the other, which is most of a sex scene.
+
+    The hoist now runs after the whole hold branch, so the gate is what decides."""
+    print("\n=== a body that is not in the shot gets no position ===")
+    MEM = ("Mara: she, 26, dark hair, steel handcuffs behind her back, a collar.\n"
+           "Dan: he, 40, a work shirt.")
+    P = ("A bedroom with a lamp on the table.\n\n"
+         "Dan cuffs Mara's wrists behind her back and lays her on the bed.\n\n"
+         "Mara lies still.\n\nDan stops and sits back.")
+    sh = [" ".join(b.split("]", 1)[1].split()) for b in
+          run_node(P, plan_only=True, character_memory=MEM)[3].split("[Shot ")[1:]]
+    POSE = "arms are behind the body"
+    check("the shot that cuffs her places her arms", POSE in sh[0], sh[0][:170])
+    check("...and so does the one she is in", POSE in sh[1], sh[1][:170])
+    # The beat names only him, so the guard drops her -- and her body must go too.
+    check("the shot she is not described in names her", "Mara:" not in sh[2], sh[2][:170])
+    check("...and does NOT place her arms on him", POSE not in sh[2], sh[2][:220])
+    check("...and says nothing about her cuffs", "cuffs" not in sh[2], sh[2][:220])
+    # The latch is intact: it comes back with her, it was not thrown away.
+    back = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        P + "\n\nMara turns her head.", plan_only=True,
+        character_memory=MEM)[3].split("[Shot ")[1:]]
+    check("it is back on the shot she returns to", POSE in back[3], back[3][:200])
+    check("...with the hardware", "cuffs" in back[3])
+
+
 def test_the_limb_position_leads_the_shot():
     """Reported, and not fixed by saying it more: wrists cuffed in FRONT of the body
     on every shot using handcuffs, while the text said behind the back five times.
@@ -8385,6 +8424,7 @@ def main():
     test_an_exact_line_is_yours_untouched()
     test_metal_hardware_is_told_what_it_is_made_of()
     test_hardware_closed_over_the_groin_stays_closed()
+    test_a_body_not_in_the_shot_gets_no_position()
     test_the_limb_position_leads_the_shot()
     test_the_pronoun_swap_never_touches_your_words()
     test_verbatim_sends_your_text_and_nothing_else()
