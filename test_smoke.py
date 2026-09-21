@@ -2227,36 +2227,37 @@ def test_a_body_not_in_the_shot_gets_no_position():
     arms put anywhere. The hoist that moved the limb position into the opening tokens
     was written ABOVE that gate, so the sentence was already spliced into the shot's
     line by the time the gate cleared the variable, and clearing it removed nothing.
+    The shot read "Dan: he, 40", "There is one person in the shot", and "Both arms
+    are behind the body, wrists together at the small of the back" -- her position,
+    on the only body left in the frame.
 
-    The shot then read "Dan: he, 40", "There is one person in the shot", and "Both
-    arms are behind the body, wrists together at the small of the back" -- her
-    position, on the only body left in the frame. Reported as the restraint changing
-    mid-scene, and worst on beats that name one of two people and lean on continuity
-    for the other, which is most of a sex scene.
-
-    The hoist now runs after the whole hold branch, so the gate is what decides."""
+    A fastened person now STAYS in the shot when the beat names somebody else, so
+    reaching this gate takes a beat that really removes her: somebody leaving takes
+    the camera with them. That is the case here, and the gate still has to hold."""
     print("\n=== a body that is not in the shot gets no position ===")
     MEM = ("Mara: she, 26, dark hair, steel handcuffs behind her back, a collar.\n"
            "Dan: he, 40, a work shirt.")
     P = ("A bedroom with a lamp on the table.\n\n"
          "Dan cuffs Mara's wrists behind her back and lays her on the bed.\n\n"
-         "Mara lies still.\n\nDan stops and sits back.")
+         "Mara lies still.\n\nDan stops and sits back.\n\n"
+         "Dan walks out and shuts the door.")
     sh = [" ".join(b.split("]", 1)[1].split()) for b in
           run_node(P, plan_only=True, character_memory=MEM)[3].split("[Shot ")[1:]]
     POSE = "arms are behind the body"
     check("the shot that cuffs her places her arms", POSE in sh[0], sh[0][:170])
     check("...and so does the one she is in", POSE in sh[1], sh[1][:170])
-    # The beat names only him, so the guard drops her -- and her body must go too.
-    check("the shot she is not described in names her", "Mara:" not in sh[2], sh[2][:170])
-    check("...and does NOT place her arms on him", POSE not in sh[2], sh[2][:220])
-    check("...and says nothing about her cuffs", "cuffs" not in sh[2], sh[2][:220])
-    # The latch is intact: it comes back with her, it was not thrown away.
-    back = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
-        P + "\n\nMara turns her head.", plan_only=True,
-        character_memory=MEM)[3].split("[Shot ")[1:]]
-    check("it is back on the shot she returns to", POSE in back[3], back[3][:200])
-    check("...with the hardware", "cuffs" in back[3])
-
+    # She is fastened and nobody leaves, so she stays in his beat.
+    check("a beat naming only him keeps her, because she is fastened",
+          "Mara:" in sh[2], sh[2][:200])
+    check("...with her arms still placed", POSE in sh[2], sh[2][:200])
+    check("...and her cuffs still described", "cuffs" in sh[2], sh[2][:220])
+    check("info says she was kept", "kept in frame by their hardware" in
+          str(run_node(P, plan_only=True, character_memory=MEM)[2]))
+    # He LEAVES, and the camera goes with him: she is not in that shot, and her
+    # body must not be described on his.
+    check("the shot he walks out of does not name her", "Mara:" not in sh[3], sh[3][:200])
+    check("...and does NOT place her arms on him", POSE not in sh[3], sh[3][:220])
+    check("...and says nothing about her cuffs", "cuffs" not in sh[3], sh[3][:220])
 
 def test_the_limb_position_leads_the_shot():
     """Reported, and not fixed by saying it more: wrists cuffed in FRONT of the body
@@ -2808,9 +2809,12 @@ def test_no_cuffs_described_without_their_wearer():
     check("before it goes on, nothing", hw[0] == "no", str(hw))
     check("the applying shot has it", hw[1] == "yes", str(hw))
     check("the wearer's own shots have it", hw[2] == "yes" and hw[4] == "yes", str(hw))
-    check("the shot with only the other man does NOT",
-          hw[3] == "no", sh[3][-90:])
-    check("info names that shot", "shot(s) 4 describe nobody who is wearing" in info, "")
+    # CHANGED BY THE PERSISTENCE RULE. "Dan checks the cuffs" is a shot with the
+    # cuffs in it, so the woman wearing them is in it too -- she was here last beat,
+    # she is fastened, and nobody leaves. The old expectation was that naming one
+    # person dropped the other, which is what lost her cuffs mid-scene.
+    check("the shot that only names him still has her hardware",
+          hw[3] == "yes", str(hw))
     # It LATCHES: leaving it out of his shot must not lose it for hers.
     check("...and it is back when she is", "closed and fastened" in sh[4], "")
 
@@ -3664,8 +3668,10 @@ def test_a_grim_film_is_grim_in_every_shot():
               "The mood is grim" in sh[_i], sh[_i][-140:])
     check("the shot with the restrained person still gets her face",
           "shows the strain" in sh[1], sh[1][-140:])
-    check("...and the shot with only the captor gets the mood alone",
-          "The mood is grim" in sh[3] and "shows the strain" not in sh[3], sh[3][-140:])
+    # She is cuffed in the back of the van and nobody leaves, so the persistence
+    # rule keeps her in his shots -- and a shot with her in it gets her face.
+    check("...and the captor's shot carries her face too, because she is in it",
+          "The mood is grim" in sh[3] and "shows the strain" in sh[3], sh[3][-140:])
 
     PLAIN = "Kate: she, 30, a grey coat.\nSam: he, 33."
     Q = ("A kitchen, morning.\n\nKate makes the coffee.\n\n"
@@ -3738,8 +3744,12 @@ def test_a_look_survives_the_next_beat():
     for _second in ("Dan opens the driver's door.",
                     "Dan lifts the case into the back."):
         _, c = two(_second)
+        # Named while she was only carried, pronoun now that she is described --
+        # she is fastened, so the persistence rule keeps her in the shot. The fact
+        # carried is the same fact.
         check(f"her look is carried past {_second[:22]!r}",
-              "McKenna's eyes and head are turned to the van" in c, c[-200:])
+              ("McKenna's eyes and head are turned to the van" in c
+               or "Her eyes and head are turned to the van" in c), c[-200:])
     sh = [" ".join(x.split()) for x in
           re.split(r"(?=\[Shot )",
                    run_node("A lane at night.\n\nMcKenna looks at the van.\n\n"
@@ -7260,10 +7270,17 @@ def test_hardware_is_named_only_on_its_own_wearer():
     shots = _shots_of(run_node(
         "A workshop.\n\nAna and Mara kneel side by side.\n\nAna looks up.\n\n"
         "Mara looks down.", character_memory=mem, plan_only=True))
-    check("Ana's own shot names her handcuffs", "handcuffs" in shots[1])
-    check("...and not the other woman's collar", "collar" not in shots[1])
-    check("Mara's own shot names her collar", "collar" in shots[2])
-    check("...and not the other woman's handcuffs", "handcuffs" not in shots[2])
+    # BOTH ARE FASTENED AND BOTH STAY IN FRAME, so both pieces are in both shots --
+    # and the sentence has to say which is on which, which is the rule this test was
+    # written for. Pooled, it read "The steel handcuffs and leather collar on Ana and
+    # Mara", naming both pieces and both bodies and pairing neither.
+    check("Ana's handcuffs are attributed to Ana",
+          "steel handcuffs on Ana" in shots[1], shots[1][-200:])
+    check("...and Mara's collar to Mara", "leather collar on Mara" in shots[1])
+    check("the other shot attributes them the same way",
+          "steel handcuffs on Ana" in shots[2] and "leather collar on Mara" in shots[2])
+    check("...and neither piece is put on the wrong body",
+          "handcuffs on Mara" not in shots[2] and "collar on Ana" not in shots[2])
     # Both wearers in frame: both pieces belong in the sentence.
     check("the shot with both of them names both", "handcuffs" in shots[0]
           and "collar" in shots[0])
@@ -7283,9 +7300,14 @@ def test_a_soft_restraint_is_not_called_metal():
     shots = _shots_of(run_node(
         "A workshop.\n\nAna and Mara kneel side by side.\n\nAna looks up.\n\n"
         "Mara looks down.", character_memory=mem, plan_only=True))
-    check("the collar is not called metal", "the metal" not in shots[2])
+    # Ana is in the shot too now, and her handcuffs ARE metal, so the shot contains
+    # the word. What must not happen is the COLLAR being called metal, so the check
+    # is on the collar's own sentence rather than on the whole shot.
+    _collar = next((s for s in shots[2].split(". ") if "leather collar on Mara" in s), "")
+    check("the collar sentence exists", bool(_collar), shots[2][-200:])
+    check("the collar is not called metal", "the metal" not in _collar, _collar)
     check("...but it is still held at its full length",
-          "already drawn to its full length" in shots[2])
+          "already drawn to its full length" in _collar, _collar)
     check("steel is still called metal", "the metal" in shots[1])
     # Rope, all the way soft, is not metal on any shot of its own.
     rope = _shots_of(run_node(

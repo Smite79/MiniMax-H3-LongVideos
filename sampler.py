@@ -7650,6 +7650,7 @@ class H3LongVideos:
         camera_shots = []           # shots told the camera holds still
         named_often = []            # (shot, name, times named, times this node named them)
         contact_shots = []          # shots told which body is with which
+        held_over = []              # (shot, people kept in frame by their hardware)
         led_shots = []              # shots whose beat was put ahead of the sheet
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
@@ -7740,6 +7741,32 @@ class H3LongVideos:
             _carried_on, _carried = [], []
             if character_guard:
                 shot_sheet, active = sheet_for_beat(sheet, body, active)
+                # A PERSON IN HARDWARE STAYS IN THE SHOT.
+                #
+                # sheet_for_beat keeps whoever the beat names and drops the rest, and
+                # for ordinary beats that is right: describing everybody in every shot
+                # puts everybody in every shot. It is wrong about somebody FASTENED.
+                # "Dan stops and sits back" names one of the two, so the woman cuffed
+                # to the bed beside him left the shot -- and her entry went with her,
+                # so the cuffs, the collar and everything else she wore stopped being
+                # described. Reported as items going missing and the restraint
+                # changing, on the beats that name one person and lean on continuity
+                # for the other, which is most of a sex scene.
+                #
+                # Three conditions, all required. She was HERE last shot; she is in
+                # hardware NOW; and nobody LEAVES in this beat -- "Jon walks out and
+                # shuts the door" takes the camera with him, and being fastened is the
+                # reason she did not follow, not a reason the shot stayed with her.
+                # Not across a cut to another room either, for the same reason.
+                _held_on = [n for n, _l in sheet_lines(sheet)
+                            if n and n in (restrained_who or set())
+                            and n in (_was or []) and n not in (active or [])]
+                if _held_on and not _is_cut and not leaves_in(body, sheet, _was):
+                    _keep = set(list(active or []) + _held_on)
+                    active = [n for n, _l in sheet_lines(sheet) if n in _keep]
+                    shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
+                                           if n in _keep)
+                    held_over.append((len(plan) + 1, list(_held_on)))
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
                     notes.append(f"shot {len(plan) + 1} describes only "
                                  f"{', '.join(active) or 'the scene'} -- the rest of the "
@@ -8446,11 +8473,34 @@ class H3LongVideos:
                 _here_item = ", ".join(_here_items)
                 _here_rigid = bool(rigid) and (rigid_hardware(_here_item)
                                                if _here_item else True)
-                hold = restraint_sentence(
-                    _here_item if not _named_item else "",
-                    _wearers, _described, anchor=("" if _anchor_now else anchored),
-                    rigid=_here_rigid, posed=bool(posed),
-                    part=held_part(_here_items or ([_here_item] if _here_item else [])))
+                # ONE SENTENCE PER WEARER WHERE THEY WEAR DIFFERENT THINGS. Pooled,
+                # two restrained people in one shot read "The steel handcuffs and
+                # leather collar on Ana and Mara stay closed", which says both pieces
+                # and both bodies and never which goes on which -- and hardware named
+                # on a body that is not wearing it is hardware the model draws there.
+                # It used to be rare, because a shot naming one person described only
+                # her; now that a fastened person stays in frame it is the ordinary
+                # case, so the sentence has to carry the attribution.
+                _own = [n for n in (_described or []) if _hw_by_wearer.get(n)]
+                _split = (len(_own) > 1 and not _named_item
+                          and len({tuple(merge_hardware_names(_hw_by_wearer[n]))
+                                   for n in _own}) > 1)
+                if _split:
+                    hold = "".join(
+                        restraint_sentence(
+                            ", ".join(merge_hardware_names(_hw_by_wearer[n])),
+                            [n], _described, anchor=("" if _anchor_now else anchored),
+                            rigid=bool(rigid) and rigid_hardware(
+                                " ".join(_hw_by_wearer[n])),
+                            posed=bool(posed),
+                            part=held_part(merge_hardware_names(_hw_by_wearer[n])))
+                        for n in _own)
+                else:
+                    hold = restraint_sentence(
+                        _here_item if not _named_item else "",
+                        _wearers, _described, anchor=("" if _anchor_now else anchored),
+                        rigid=_here_rigid, posed=bool(posed),
+                        part=held_part(_here_items or ([_here_item] if _here_item else [])))
                 if _here_item and not _named_item:
                     named_shots.append(len(plan) + 1)
             else:
@@ -8962,6 +9012,16 @@ class H3LongVideos:
                 f"settles the frame on, and at cfg 1 no later sentence outvotes it. Your "
                 f"words are identical and none are rewritten; only the order changed, which "
                 f"is the one thing about this that had never been tried")
+        if held_over:
+            notes.append(
+                "kept in frame by their hardware -- "
+                + "; ".join(f"shot {n}: {_join_names(w)}" for n, w in held_over)
+                + ". The beat named somebody else and the guard would have dropped "
+                  "them, which drops their sheet entry and every restraint on it with "
+                  "it. A fastened person does not leave because the text stopped "
+                  "mentioning them. They are let go by a beat that takes somebody out "
+                  "of the room, by a cut to another room, or by the hardware coming "
+                  "off -- write them out and they go")
         if contact_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in contact_shots)} have three or more "
