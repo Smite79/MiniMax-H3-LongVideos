@@ -2182,7 +2182,7 @@ def test_metal_hardware_is_told_what_it_is_made_of():
     only ever fills a GAP: an author who writes steel, or black leather, keeps their
     own word and this says nothing."""
     print("\n=== the metal is told what it is ===")
-    STEEL = "bright bare steel"
+    STEEL = "bare unpainted steel"
     MEM = "Mara: she, 26, dark hair."
     sh = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
         "A cell.\n\nDan cuffs Mara's wrists behind her back.\n\n"
@@ -2190,8 +2190,15 @@ def test_metal_hardware_is_told_what_it_is_made_of():
         character_memory=MEM)[3].split("[Shot ")[1:]]
     check("the applying shot says what the metal is", STEEL in sh[0], sh[0][:200])
     check("...and every shot holding them does too", all(STEEL in s for s in sh))
-    check("...agreeing with a plural pair", "The cuffs are bright bare steel" in sh[0],
+    check("...agreeing with a plural pair", "The cuffs are bare unpainted steel" in sh[0],
           sh[0][:200])
+    # THE MATERIAL, NOT THE FINISH. Saying it is polished put a mirror finish on
+    # every pair of cuffs in every film -- one kind of handcuff, everywhere. What has
+    # to be excluded is a black coating; polished, brushed, satin or worn is the
+    # author's to write, and the sheet saying so stands this clause down entirely.
+    for _finish in ("polished", "catching the light", "mirror", "bright"):
+        check(f"the finish is left open: no {_finish!r}",
+              _finish not in sh[0], sh[0][:200])
     # The author's own word always wins -- this fills a gap, it does not argue.
     leather = " ".join(run_node(
         "A cell.\n\nDan puts black leather cuffs on Mara's wrists.\n\nMara stands still.",
@@ -2208,7 +2215,10 @@ def test_metal_hardware_is_told_what_it_is_made_of():
         plan_only=True, character_memory=MEM)[3].split())
     check("rope gets no metal sentence", STEEL not in rope, rope[:180])
     # The unit, straight.
-    check("bare cuffs get a material", S.hardware_material(["handcuffs"])[1].startswith(STEEL))
+    check("bare cuffs get a material", S.hardware_material(["handcuffs"])[1] == STEEL)
+    check("...and nothing about how shiny", 
+          not re.search(r"polish|shine|shiny|gleam|mirror|bright",
+                        S.hardware_material(["handcuffs"])[1], re.I))
     check("...and a chain names its links",
           "links" in S.hardware_material(["chain"])[1])
     for said in ("steel handcuffs", "chrome cuffs", "blackened shackles"):

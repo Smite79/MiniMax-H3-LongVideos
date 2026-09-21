@@ -4312,12 +4312,20 @@ SEALED_HOLD = (" The {item} runs around the waist and passes between the legs, "
 #
 # Metal only. Rope, tape and leather come back the way they are written, and a
 # default on those would be the node inventing a colour the author did not ask for.
+# SAYS THE MATERIAL, NOT THE FINISH. The first version of this read "bright bare
+# steel, the metal polished and catching the light" -- which is a mirror finish, and
+# it went on every pair of handcuffs in every film, so there was exactly one kind of
+# cuff. That is the same fault as the black it was written to fix, from the other
+# end: a default filling in more than the gap.
+#
+# What has to be said is that the metal is METAL and not a black coating. Everything
+# past that -- polished, brushed, satin, dulled, worn -- is the finish, and leaving it
+# open is what lets one film's cuffs differ from another's. Write it into the sheet
+# ("Mara: she, 26, brushed steel handcuffs") and this stands down entirely.
 _HARDWARE_MATERIAL = (
-    (r"\b(?:handcuffs?|manacles?|leg\s+irons?|irons?)\b",
-     "bright bare steel, the metal polished and catching the light"),
-    (r"\b(?:shackles?|cuffs?)\b",
-     "bright bare steel, the metal polished and catching the light"),
-    (r"\b(?:chains?)\b", "bright bare steel, the links unpainted metal"),
+    (r"\b(?:handcuffs?|manacles?|leg\s+irons?|irons?)\b", "bare unpainted steel"),
+    (r"\b(?:shackles?|cuffs?)\b", "bare unpainted steel"),
+    (r"\b(?:chains?)\b", "bare unpainted steel, the links uncoated metal"),
 )
 # The author having already said. _HARDWARE_NOUN carries an adjective group, so a
 # beat writing "black steel cuffs" or "leather cuffs" keeps its own word and this
