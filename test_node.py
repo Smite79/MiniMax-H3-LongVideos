@@ -3854,7 +3854,16 @@ def test_a_bound_body_lying_down_has_something_under_it():
     _up = S.pose_clause("behind the back")
     _down = S.pose_clause("behind the back", lying=True)
     check("on her feet, the pose clause is unchanged", "take the weight" not in _up)
-    check("lying down, the weight is named", "shoulder and the hip" in _down)
+    # WORDING CHANGED, GUARANTEE DID NOT. "The shoulder and the hip take the
+    # weight" is a body on its SIDE, and it was said about every lying body. What
+    # must hold is that the region under one is never left unsaid.
+    check("lying down, the weight is named", "the weight of the body" in _down)
+    check("...without claiming a side nobody wrote", "shoulder and the hip" not in _down)
+    _prone = S.pose_clause("behind the back", lying=True, facing="face down")
+    check("a facing the author wrote is used", "face down" in _prone
+          and "the weight of the body" in _prone)
+    _side = S.pose_clause("behind the back", lying=True, facing="on the side")
+    check("...and the side wording belongs to the side", "shoulder and the hip" in _side)
     check("...and the arms are still said to be behind", "behind the body" in _down)
     for _neg in (" no ", " not ", "nothing", "never", "without"):
         check(f"no negation in the clause: {_neg.strip()!r}", _neg not in _down.lower())

@@ -4278,7 +4278,70 @@ _POSE_OF_POSITION = {
 }
 
 
-POSE_LYING_WEIGHT = "The shoulder and the hip take the weight of the body"
+# WHICH WAY UP A LYING BODY IS. The posture table has one entry for every way of
+# being down -- "lies", "lays", "sprawls", and even "rolls onto her stomach", which
+# names the facing in the beat and then discards it on the way in. Everything after
+# that knows only `lying down`.
+#
+# So a woman laid face down and cuffed was described in the next shot as lying, with
+# no side named, and an unspecified attribute is filled from the prior. Reported as
+# her flipping onto her back in the following beat, unasked.
+#
+# And the one sentence there was said the wrong thing anyway: "The shoulder and the
+# hip take the weight of the body" is a body on its SIDE, and it was being said about
+# every lying body, prone and supine alike.
+_FACE_DOWN = re.compile(
+    r"\bface[-\s]?down\b|\bprone\b|\bfront[-\s]?down\b"
+    r"|\bon\s+(?:her|his|their|its)\s+(?:stomach|belly|front|face)\b"
+    r"|\bonto\s+(?:her|his|their)\s+(?:stomach|belly|front)\b", re.I)
+_FACE_UP = re.compile(
+    r"\bface[-\s]?up\b|\bsupine\b|\bback[-\s]?down\b"
+    r"|\bon\s+(?:her|his|their)\s+back\b|\bonto\s+(?:her|his|their)\s+back\b", re.I)
+_ON_SIDE = re.compile(
+    r"\bon\s+(?:her|his|their)\s+side\b|\bonto\s+(?:her|his|their)\s+side\b"
+    r"|\bside[-\s]?lying\b|\bon\s+one\s+side\b", re.I)
+
+# What is against the surface, for each. Said because it is what makes the facing
+# legible in a frame: "face down" alone leaves the torso unplaced, and the prior puts
+# it back over. Positively phrased, like everything here.
+# For a lying body whose facing the author never wrote. True of every one of them,
+# and it keeps the guarantee the weight sentence was added for -- that the region
+# under a lying body is not left for the prior to fill -- without claiming a side.
+POSE_LYING_WEIGHT = ("The whole length of the body is along the surface, which "
+                     "takes the weight of the body")
+
+# Each names what is against the surface, and each ends on the same guarantee the
+# generic one carries -- the region under a lying body is never left unsaid.
+LYING_FACING = {
+    "face down": ("lying face down, the chest, the stomach and the hips flat to the "
+                  "surface, which takes the weight of the body, the head turned to "
+                  "one side"),
+    "face up": ("lying face up, the back of the shoulders and the back of the hips "
+                "against the surface, which takes the weight of the body"),
+    "on the side": ("lying on one side, the shoulder and the hip against the surface, "
+                    "which takes the weight of the body"),
+}
+
+
+def lying_facing(text):
+    """"face down", "face up", "on the side", or "" where the text does not say.
+
+    Read from the author's own words only. A lying body whose facing nobody wrote is
+    left unwritten -- guessing one is how this went wrong in the other direction."""
+    t = str(text or "")
+    if _FACE_DOWN.search(t):
+        return "face down"
+    if _ON_SIDE.search(t):
+        return "on the side"
+    if _FACE_UP.search(t):
+        return "face up"
+    return ""
+
+
+def facing_clause(facing):
+    """The sentence for a facing, or "" for one that was never named."""
+    said = LYING_FACING.get(str(facing or "").strip().lower(), "")
+    return f" The body is {said}." if said else ""
 
 
 _LEG_WORD = r"(?:ankles?|legs?|feet|knees?|thighs?|calves)"
@@ -4350,10 +4413,11 @@ def legs_anchor(text):
     return ""
 
 
-def pose_clause(position, lying=False, legs=""):
+def pose_clause(position, lying=False, legs="", facing=""):
     """One sentence describing the BODY a limb position makes. "" when unknown.
 
-    `lying` adds what is under it -- see POSE_LYING_WEIGHT. `legs` adds where the
+    `lying` adds what is under it, and `facing` decides WHICH sentence that is --
+    prone, supine and on the side do not rest on the same parts. `legs` adds where the
     legs are held, which is a second fact and not an alternative: a hogtie has its
     arms behind the back AND its ankles drawn to them, and the one this file knew
     how to say was the arms."""
@@ -4363,7 +4427,14 @@ def pose_clause(position, lying=False, legs=""):
     if not said and not legs_said:
         return ""
     if said and lying and key == "behind the back":
-        said = f"{said}. {POSE_LYING_WEIGHT}"
+        # THE OLD WORDING WAS A BODY ON ITS SIDE -- "The shoulder and the hip take the
+        # weight" -- asserted over a prone one and a supine one alike. The facing the
+        # author wrote decides it now; one they did not write gets the sentence that
+        # is true of any lying body, because the guarantee this was added for is that
+        # the region UNDER a lying body is not left for the prior to fill.
+        _said_facing = LYING_FACING.get(str(facing or "").strip().lower(), "")
+        said = (f"{said}. The body is {_said_facing}" if _said_facing
+                else f"{said}. {POSE_LYING_WEIGHT}")
     return "".join(f" {part}." for part in (said, legs_said) if part)
 
 
@@ -5195,6 +5266,25 @@ def _real_travel(span):
     return False
 
 
+# THINGS A BODY DOES WITHOUT GETTING UP. "turns her head" read as travel, and
+# "closes her eyes" read as handling an object, so a woman laid face down lost her
+# posture on the next beat that had her do anything at all -- and the facing went
+# with it, which is her rolling onto her back unasked.
+#
+# Narrow on purpose: one of these verbs, directly on one of these parts, and the part
+# is her own. "lifts her to her feet" does not match -- the possessive is not on a
+# part -- and neither does "opens the door" or "takes the cup". Feet, legs and knees
+# are left out: those are how somebody gets up.
+_STILL_LYING = re.compile(
+    r"\b(?:turns?|turned|turning|lifts?|lifted|lifting|raises?|raised|raising|"
+    r"drops?|dropped|dropping|lowers?|lowered|lowering|opens?|opened|opening|"
+    r"closes?|closed|closing|shuts?|shutting|moves?|moved|moving|shifts?|shifted|"
+    r"shifting|rests?|rested|resting|presses?|pressed|pressing|tilts?|tilted|"
+    r"tilting|buries|buried|burying)\s+(?:her|his|their|the)\s+"
+    r"(?:head|face|eyes?|eyelids?|chin|jaw|mouth|lips?|cheek|temple|forehead|"
+    r"shoulders?|arms?|hands?|fingers?|gaze|breath|weight)\b", re.I)
+
+
 def posture_cleared(beat, poses):
     """{name} whose latched posture this beat contradicts without restating one.
 
@@ -5212,6 +5302,8 @@ def posture_cleared(beat, poses):
         # What this beat has them doing, up to the end of the clause.
         stop = re.search(r"[.;!?]", b[m.end():])
         span = b[m.end():m.end() + (stop.start() if stop else len(b))]
+        if _STILL_LYING.search(span):
+            continue                  # done lying down as readily as standing
         if _real_travel(span):
             out.add(name)
         elif pose == "lying down" and _HANDLES.search(span):
@@ -7539,6 +7631,7 @@ class H3LongVideos:
         told_shots = []           # shots whose line orders somebody about
         dialogue_marked = []      # shots whose quotes became <d>...</d>
         poses = {}                # name -> the posture a beat put them in
+        facing = ""               # which way up a lying body is, until it gets up
         here = place_named(scene) or first_place(scene)
         _opening = extract_directives(beats[0])[0] if beats else ""
         ambient_bed = (scene_ambient(anchor, scene)
@@ -8181,6 +8274,7 @@ class H3LongVideos:
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
             for _gone_pose in posture_cleared(body, poses):
                 poses.pop(_gone_pose, None)
+                facing = ""          # up off the floor is no longer facing anywhere
             _posture = ("" if not hold_scene_state
                         else posture_hold({n: p for n, p in poses.items()
                                            if n not in _pose_now},
@@ -8278,6 +8372,13 @@ class H3LongVideos:
                     _ends_at = RESTRAINT_ENDS_AT.format(
                         part=engine.held_part_of(worn_items) or "wrists",
                         where=_pos)
+            # WHICH WAY UP, held like the posture itself. The beat that lays her
+            # down names it; every beat after it does not, and an unnamed facing is
+            # one the prior picks -- which is how a woman laid face down came back
+            # over onto her back in the following shot.
+            _face_now = lying_facing(body)
+            if _face_now:
+                facing = _face_now
             _lying_now = any(_p == "lying down" for _p in poses.values())
             if engine.posture_in(body):
                 beat_said_posture = True
@@ -8293,7 +8394,8 @@ class H3LongVideos:
             _arms_pos = _pose_pos.split(", at the")[0].strip()
             if not _arms_pos and _legs_pos == "ankles to the wrists":
                 _arms_pos = "behind the back"
-            _pose = pose_clause(_arms_pos, lying=_lying_now, legs=_legs_pos)
+            _pose = pose_clause(_arms_pos, lying=_lying_now, legs=_legs_pos,
+                                facing=facing)
             # WHERE THE LIMBS ARE GOES IN THE OPENING TOKENS, beside the beat, not
             # eight sentences down with the other continuity clauses.
             #
@@ -8314,6 +8416,10 @@ class H3LongVideos:
             _mat_item, _mat = (hardware_material(worn_items, f"{body} {shot_sheet}")
                                if restrained else ("", ""))
             _material = hardware_material_clause(_mat_item, _mat)
+            # pose_clause carries the facing where there IS an arm position; this
+            # is for a lying body that has none, so the facing is still said.
+            _facing = (facing_clause(facing)
+                       if (_lying_now and not _arms_pos) else "")
             _seal = SEALED_HOLD.format(item=sealed) if sealed else ""
             _seal_led = False
             _pose_led = ""
@@ -8410,6 +8516,7 @@ class H3LongVideos:
             if not _wearer_here:
                 hold = ""
                 _pose = ""
+                _facing = ""
                 if (len(plan) + 1) in anchored_shots:
                     anchored_shots.remove(len(plan) + 1)
                 absent_hold.append(len(plan) + 1)
@@ -8464,11 +8571,11 @@ class H3LongVideos:
             # together at the small of the back" -- her position, on him. Reported as
             # the restraint changing mid-scene, and worst where beats name one of two
             # people and lean on continuity for the other.
-            if (_pose or _seal) and body:
+            if (_pose or _seal or _facing) and body:
                 _at = line.find(body)
                 if _at >= 0:
                     _cut = _at + len(body)
-                    _lead = (_pose if _arms_pos else "") + _seal
+                    _lead = (_pose if _arms_pos else "") + _facing + _seal
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
                     _pose_led = _pose if _arms_pos else ""
                     _seal_led = bool(_seal)

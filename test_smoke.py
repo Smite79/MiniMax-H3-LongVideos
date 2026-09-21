@@ -2285,6 +2285,72 @@ def test_hardware_closed_over_the_groin_stays_closed():
     check("...and cuffs are not either", S.crotch_seal("Dan cuffs her wrists behind her back") == "")
 
 
+def test_which_way_up_a_lying_body_is_holds():
+    """Reported: laid face down and restrained, she is on her back in the next beat.
+
+    The posture table has ONE entry for every way of being down. "lies", "lays",
+    "sprawls" -- and "rolls onto her stomach", which names the facing in the beat and
+    discards it on the way in. Everything downstream knew only `lying down`, so the
+    shot after the one that laid her down said nothing about which way up she was,
+    and an unspecified attribute is filled from the prior.
+
+    The one sentence there was said the wrong thing anyway: "The shoulder and the hip
+    take the weight of the body" is a body on its SIDE, and it was being said about
+    prone and supine bodies alike.
+
+    AND THE POSTURE ITSELF WAS BEING DROPPED. posture_cleared read "turns her head"
+    as travel and "closes her eyes" as handling an object, so the latch let go on the
+    next beat that had her do anything at all -- taking the facing with it."""
+    print("\n=== which way up she is lying holds ===")
+    MEM = "Mara: she, 26, dark hair."
+    DOWN, UP, SIDE = "lying face down", "lying face up", "lying on one side"
+    sh = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A cell.\n\nDan cuffs Mara's wrists behind her back and lays her face down "
+        "on the bunk.\n\nMara lies still.\n\nMara turns her head.\n\n"
+        "Dan watches her.\n\nMara closes her eyes.",
+        plan_only=True, character_memory=MEM)[3].split("[Shot ")[1:]]
+    check("the beat that lays her down says which way up", DOWN in sh[0], sh[0][:200])
+    for i in (1, 2, 3, 4):
+        check(f"shot {i + 1} still has her face down", DOWN in sh[i], sh[i][:200])
+        check(f"...and never turns her over", UP not in sh[i])
+    # Moving her own head or eyes is done lying down as readily as standing.
+    check("turning her head does not stand her up", DOWN in sh[2], sh[2][:200])
+    check("closing her eyes does not either", DOWN in sh[4], sh[4][:200])
+    # The author can turn her over, and then it holds the other way.
+    roll = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A cell.\n\nMara lies on her back on the bunk.\n\nMara rolls onto her "
+        "stomach.\n\nMara lies still.", plan_only=True,
+        character_memory=MEM)[3].split("[Shot ")[1:]]
+    check("on her back is read as face up", UP in roll[0], roll[0][:200])
+    check("rolling over is read, not discarded", DOWN in roll[1], roll[1][:200])
+    check("...and the new facing holds", DOWN in roll[2] and UP not in roll[2])
+    # Getting up ends it.
+    stand = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A cell.\n\nDan lays Mara face down on the bunk.\n\nMara lies still.\n\n"
+        "Mara stands up.\n\nMara walks to the door.", plan_only=True,
+        character_memory=MEM)[3].split("[Shot ")[1:]]
+    check("standing up lets the facing go", DOWN not in stand[2], stand[2][:200])
+    check("...and it does not come back", DOWN not in stand[3])
+    # The unit, both directions.
+    for _t, _want in (("Dan lays her face down", "face down"),
+                      ("Dan lays her on her stomach", "face down"),
+                      ("He pushes her prone on the floor", "face down"),
+                      ("She lies on her back", "face up"),
+                      ("She rolls onto her side", "on the side"),
+                      ("Dan cuffs her wrists behind her back", ""),
+                      ("She lies down on the bed", "")):
+        check(f"{_t!r} -> {_want!r}", S.lying_facing(_t) == _want)
+    # The weight sentence belongs to the facing that has it.
+    _side = S.pose_clause("behind the back", lying=True, facing="on the side")
+    _prone = S.pose_clause("behind the back", lying=True, facing="face down")
+    check("the side wording is the side's", "shoulder and the hip" in _side)
+    check("...and prone gets its own", "chest" in _prone and "shoulder and the hip" not in _prone)
+    check("an unwritten facing claims no side",
+          "shoulder and the hip" not in S.pose_clause("behind the back", lying=True))
+    check("...but still says what is under her",
+          "the weight of the body" in S.pose_clause("behind the back", lying=True))
+
+
 def test_a_body_not_in_the_shot_gets_no_position():
     """Her arms, placed on him.
 
@@ -5171,14 +5237,14 @@ def test_the_position_may_only_be_written_once_in_the_scene():
     check("the position reaches every shot from the scene alone",
           all("wrists together at the small of the back" in _s for _s in _shots))
     check("...and the lying shot is told what carries her weight",
-          "take the weight of the body" in _shots[-1])
+          "the weight of the body" in _shots[-1])
     # A BEAT THAT MOVES THEM STILL WINS. The scene is only the fallback.
     _moved = run_node("Inside a van. McKenna sits, wrists cuffed behind her back.\n\n"
                       "Dan cuffs her wrists above her head.")[3]
     check("a beat that moves the wrists overrides the scene",
           "above the head" in _moved and "small of the back" not in _moved.split("Both arms")[-1])
     def _weight(_p):
-        return ["take the weight" in _s for _s in run_node(_p)[3].split("\n---\n")]
+        return ["the weight of the body" in _s for _s in run_node(_p)[3].split("\n---\n")]
     check("the scene alone can say she is lying",
           _weight("Inside a van at night. McKenna lies in the back, wrists cuffed "
                   "behind her back.\n\nDan gets into the van and looks at her.\n\n"
@@ -8519,6 +8585,7 @@ def main():
     test_cuffs_are_not_described_as_a_chain()
     test_metal_hardware_is_told_what_it_is_made_of()
     test_hardware_closed_over_the_groin_stays_closed()
+    test_which_way_up_a_lying_body_is_holds()
     test_a_body_not_in_the_shot_gets_no_position()
     test_the_limb_position_leads_the_shot()
     test_the_pronoun_swap_never_touches_your_words()
