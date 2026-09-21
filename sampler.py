@@ -3462,6 +3462,56 @@ RESTRAINT_GOING_ON = (" The hardware goes on during this shot: it is open and of
 RESTRAINT_ENDS_AT = (" The {part} are already {where} when the hardware closes, and it "
                      "closes on them there. By the last frame the {part} are {where}, "
                      "and stay there.")
+# WHAT A PAIR OF CUFFS IS, as opposed to what a chain is.
+#
+# _RIGID_HARDWARE puts handcuffs, manacles, shackles and irons in the same bucket as
+# chains and padlocks, which is right about the one thing it was asked -- none of them
+# flex. The SENTENCE built from it was written for a chain and says so: "its links keep
+# their size and the run between them stays taut". Links, a run between them, taut.
+# Handed that about a pair of handcuffs, with nothing anywhere saying what handcuffs
+# look like, the model draws the thing the words describe. Reported as cuffs turning
+# into chains in the shot that uses them.
+#
+# A chain's rigidity is about its LENGTH holding. A cuff's is about two closed rings a
+# fixed distance apart. Same guarantee, and it cannot be said in the same words.
+_CUFF_FORM = re.compile(
+    r"\b(?:handcuffs?|cuffs?|cuffed|manacles?|shackles?|"
+    r"(?:leg|ankle|wrist)\s*irons?|irons)\b", re.I)
+_ONE_OF = {"wrists": "wrist", "ankles": "ankle", "hands": "hand", "legs": "leg",
+           "arms": "arm", "thumbs": "thumb", "toes": "toe"}
+
+
+def rigid_tail(item, part="wrists", plural=False):
+    """The clause that says HOW a rigid restraint holds its shape.
+
+    Cuffs get what cuffs are -- a closed ring round each limb, the pair held a fixed
+    distance apart. Everything else keeps the chain wording, which is correct for a
+    chain and was only ever wrong when it was handed to something that is not one.
+
+    The distance is given as a hand's width because a length that is not stated is a
+    length the model picks, and the one it picks for metal between two wrists is a
+    chain's."""
+    one = _ONE_OF.get(str(part or "wrists").lower(), str(part or "wrist").rstrip("s"))
+    if _CUFF_FORM.search(str(item or "")) and not re.search(r"\bchain", str(item or ""), re.I):
+        return (f", a closed ring locked round each {one} and the two held a hand's "
+                f"width apart, that spacing keeping")
+    return (f", {'their' if plural else 'its'} links keeping their size and the run "
+            f"between them taut")
+
+
+def cuff_rigid_sentence(part="wrists"):
+    """The standalone form of the cuff shape, for the shot that puts it ON.
+
+    Takes the part from the hardware rather than assuming wrists -- leg irons close
+    round ankles, and a sentence saying wrists about a pair of leg irons is the same
+    class of error as calling cuffs a chain."""
+    one = _ONE_OF.get(str(part or "wrists").lower(), str(part or "wrist").rstrip("s"))
+    return (f" It is a closed ring locked round each {one}, the two held a hand's "
+            f"width apart, and that spacing keeps.")
+
+
+CUFF_RIGID_TAIL = cuff_rigid_sentence("wrists")
+
 CHAIN_RIGID_TAIL = " Its links keep their size and the run between them stays taut."
 _APPLY_NOW = re.compile(
     _A_DETERMINER +
@@ -4507,12 +4557,19 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
         _stuff = ("the metal" if (rigid or (item and rigid_hardware(item)))
                   else "it" if not plural else "they")
         _drawn = "is" if _stuff != "they" else "are"
-        out += (f"; {_stuff} {_drawn} already drawn to {'their' if _stuff == 'they' else 'its'} "
-                "full length, so the position it fixes is the position that keeps, "
-                "and the body strains against it while the fastenings hold")
+        # A CHAIN IS DRAWN TO ITS FULL LENGTH. A pair of cuffs has no length to draw
+        # -- it has two rings a fixed distance apart -- and telling the model metal is
+        # at full length between two wrists is telling it to draw a chain there.
+        if item and _CUFF_FORM.search(item) and not re.search(r"\bchain", item, re.I):
+            out += ("; the rings are locked where they are and that spacing does not "
+                    "change, so the position it fixes is the position that keeps, and "
+                    "the body strains against it while the fastenings hold")
+        else:
+            out += (f"; {_stuff} {_drawn} already drawn to {'their' if _stuff == 'they' else 'its'} "
+                    "full length, so the position it fixes is the position that keeps, "
+                    "and the body strains against it while the fastenings hold")
     elif rigid:
-        out += (f", {'their' if plural else 'its'} links keeping their size and the run "
-                f"between them taut")
+        out += rigid_tail(item, part or held_part([item] if item else []), plural)
     out += FORM_HOLD
     if who:
         out += OTHERS_UNCHANGED
@@ -8376,7 +8433,13 @@ class H3LongVideos:
             _seal = SEALED_HOLD.format(item=sealed) if sealed else ""
             _seal_led = False
             _pose_led = ""
-            hold = (RESTRAINT_GOING_ON + (CHAIN_RIGID_TAIL if rigid else "") + _ends_at
+            _hw_text = " ".join(worn_items or [])
+            _rigid_tail = ("" if not rigid else
+                           cuff_rigid_sentence(held_part(worn_items))
+                           if (_hw_text and _CUFF_FORM.search(_hw_text)
+                               and not re.search(r"\bchain", _hw_text, re.I))
+                           else CHAIN_RIGID_TAIL)
+            hold = (RESTRAINT_GOING_ON + _rigid_tail + _ends_at
                     if _applying
                     else chain if chain else (RESTRAINT_HOLD if restrained else ""))
             if _applying:

@@ -1047,8 +1047,13 @@ def test_fall_keeps_the_hardware():
     fall = S.FALL_HOLD.strip()
     check("the applying shot is told both ends",
           S.RESTRAINT_GOING_ON.strip() in blocks[0], blocks[0][-90:])
-    check("...and keeps the metal rigid while it goes on",
-          S.CHAIN_RIGID_TAIL.strip() in blocks[0], "")
+    # Rigid while it goes on -- in the wording for what it IS. A pair of cuffs held
+    # its shape by "its links keeping their size and the run between them taut",
+    # which is a chain, and is what made cuffs render as chains.
+    check("...and keeps it rigid while it goes on, as cuffs and not as a chain",
+          S.CUFF_RIGID_TAIL.strip() in blocks[0], blocks[0][-140:])
+    check("...and is not handed a chain's wording",
+          S.CHAIN_RIGID_TAIL.strip() not in blocks[0], blocks[0][-140:])
     check("...and is not also told it is already fastened",
           "closed and fastened as" not in blocks[0], "")
     for i, b in enumerate(blocks[1:], 2):
@@ -2110,6 +2115,57 @@ def test_a_lora_is_reported():
     # A run with no LoRA anywhere says nothing about LoRA at all.
     quiet = str(run_node(P, character_memory=mem)[2])
     check("a run with no LoRA reports none", "LoRA:" not in quiet)
+
+
+def test_cuffs_are_not_described_as_a_chain():
+    """Reported: handcuffs turn into chains in the shot that uses them.
+
+    _RIGID_HARDWARE puts handcuffs, manacles, shackles and irons in the same bucket
+    as chains and padlocks, which is right about the one thing it was asked -- none
+    of them flex. The SENTENCE built from it was written for a chain and says so:
+    "its links keep their size and the run between them stays taut". Links, a run
+    between them, taut. Handed that about a pair of handcuffs, with nothing anywhere
+    saying what handcuffs look like, the model draws the thing the words describe.
+
+    A chain's rigidity is its LENGTH holding. A cuff's is two closed rings a fixed
+    distance apart. The same guarantee, and it cannot be said in the same words. The
+    distance is given, because a length that is not stated is a length the model
+    picks, and the one it picks for metal between two wrists is a chain's."""
+    print("\n=== cuffs are cuffs, not a length of chain ===")
+    MEM = "Mara: she, 26, dark hair."
+    sh = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A cell.\n\nDan cuffs Mara's wrists behind her back.\n\n"
+        "Mara stands still.\n\nMara waits.", plan_only=True,
+        character_memory=MEM)[3].split("[Shot ")[1:]]
+    RING, CHAIN = "closed ring locked round each wrist", "run between them"
+    check("the applying shot says what cuffs are", RING in sh[0], sh[0][-170:])
+    check("...and not what a chain is", CHAIN not in sh[0], sh[0][-170:])
+    check("...giving the spacing, so it is not left to the prior",
+          "a hand's width apart" in sh[0])
+    for i in (1, 2):
+        check(f"shot {i + 1} holds the same shape", RING in sh[i], sh[i][-170:])
+        check(f"...still not a chain", CHAIN not in sh[i])
+    # A CHAIN IS STILL A CHAIN. This fixes what cuffs are told, not what chains are.
+    ch = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A basement.\n\nJon locks a chain around her waist.\n\nMaya pulls against the chain.",
+        plan_only=True, character_memory="Maya: 27, grey coat.")[3].split("[Shot ")[1:]]
+    check("a chain keeps its links", all(CHAIN in s for s in ch), ch[-1][-170:])
+    check("...and is not given rings", all("closed ring" not in s for s in ch))
+    # Leg irons close round ankles, and the sentence has to say so.
+    li = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
+        "A cell.\n\nDan locks leg irons on Mara's ankles.\n\nMara shuffles forward.",
+        plan_only=True, character_memory=MEM)[3].split("[Shot ")[1:]]
+    check("leg irons close round ankles, not wrists",
+          all("round each ankle" in s for s in li), li[0][-170:])
+    check("...and never say wrist", all("round each wrist" not in s for s in li))
+    # The unit, both directions.
+    check("cuffs get rings", "closed ring" in S.rigid_tail("handcuffs", "wrists", True))
+    check("chains keep links", "links keeping" in S.rigid_tail("chain", "waist", False))
+    check("a shot holding both keeps the chain wording",
+          "links keeping" in S.rigid_tail("chain and cuffs", "wrists", True))
+    check("the sentence form follows the part too",
+          "each ankle" in S.cuff_rigid_sentence("ankles")
+          and "each wrist" in S.cuff_rigid_sentence("wrists"))
 
 
 def test_metal_hardware_is_told_what_it_is_made_of():
@@ -7308,7 +7364,13 @@ def test_a_soft_restraint_is_not_called_metal():
     check("the collar is not called metal", "the metal" not in _collar, _collar)
     check("...but it is still held at its full length",
           "already drawn to its full length" in _collar, _collar)
-    check("steel is still called metal", "the metal" in shots[1])
+    # Steel cuffs no longer say "the metal is drawn to its full length" -- a pair of
+    # cuffs has no length to draw. They say what holds their shape instead, and the
+    # leather collar still says what holds its.
+    _cuffs = next((s for s in shots[1].split(". ") if "steel handcuffs on Ana" in s), "")
+    check("the cuffs sentence exists", bool(_cuffs), shots[1][-200:])
+    check("steel cuffs are held as rings, not as a run of chain",
+          "rings are locked" in _cuffs and "full length" not in _cuffs, _cuffs)
     # Rope, all the way soft, is not metal on any shot of its own.
     rope = _shots_of(run_node(
         "A workshop.\n\nAna kneels on the floor.\n\nAna breathes.",
@@ -8444,6 +8506,7 @@ def main():
     test_a_thing_that_opens_itself_is_a_staged_change()
     test_a_walk_is_not_its_own_reverse()
     test_an_exact_line_is_yours_untouched()
+    test_cuffs_are_not_described_as_a_chain()
     test_metal_hardware_is_told_what_it_is_made_of()
     test_hardware_closed_over_the_groin_stays_closed()
     test_a_body_not_in_the_shot_gets_no_position()
