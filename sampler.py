@@ -8827,24 +8827,14 @@ class H3LongVideos:
             if _lora_clip[0]:
                 _said.append(f"{_lora_clip[0]} on the TEXT ENCODER over {_lora_clip[1]} weights at "
                              f"strength {', '.join(f'{v:g}' for v in _lora_clip[2][:4])}")
-            _mm = lora_patch_mismatches(model) + lora_patch_mismatches(getattr(clip, "patcher", None))
-            if _mm:
-                notes.append(
-                    "LoRA PARTLY APPLIED -- "
-                    + "; ".join(f"{n} x {fam} wanted {produced} for a {target} weight"
-                               for fam, n, produced, target in _mm)
-                    + ". comfy drops a pair it cannot reshape and keeps every pair it "
-                      "can, logging one line and continuing, so this LoRA is HALF ON: "
-                      "the layers that fit are adapted and these are not. It is built "
-                      "for a different variant of this model. H3's variants differ in "
-                      "the AdaLN input (2688 on the full fl2va, 8 on the pruned and on "
-                      "the hybrid) while attention and MLP are identical, so a LoRA "
-                      "crosses over looking like it loaded. A distilled trajectory on "
-                      "the attention stack with its timestep modulation missing is "
-                      "anatomy that does not resolve -- a third leg, a limb that stops "
-                      "-- and it happens on some LoRAs and not others. Use this LoRA on "
-                      "the checkpoint it was built for, or a build of it converted for "
-                      "this one")
+            # NOT CALLED ON A RENDER. lora_patch_mismatches needs each patched
+            # weight's shape, and it got them from model_state_dict() -- which walks
+            # every parameter of the model. The build this node was fast on never
+            # called it, and under --enable-dynamic-vram the model is being streamed,
+            # so walking all of it before sampling is not free in a way that can be
+            # shown by reading. Reported as disk reads thrashing and a render running
+            # four times slower. The function stays, and is tested, for use off the
+            # render path; the node touches the model exactly as that build did.
             notes.append(
                 f"LoRA: {'; '.join(_said)}"
                 + (f" -- last one applied: {_name}" if _name else "")
