@@ -382,9 +382,43 @@ def _evict_all_but(keep_model, latent=None):
                 need = 1e30
     except Exception:
         need = 1e30
+    # ...AND ROOM TO STAGE THE DiT'S WEIGHTS, which is a different pool.
+    #
+    # Everything above sizes VRAM for the sampler's ACTIVATIONS, and free_memory's
+    # eviction loop only ever measures VRAM. Under --enable-dynamic-vram the weights
+    # are staged in the PINNED HOST POOL instead, and nothing here asked for room
+    # there -- so the text encoder encoded a moment ago stayed staged in it. Read off
+    # a real render's log:
+    #
+    #     Model MiniMaxH3TEModel_ ... 25140MB Staged
+    #     Requested to load MiniMaxH3
+    #     0 models unloaded.
+    #     Model MiniMaxH3 ... 32427MB Staged
+    #
+    # 25 GB + 32 GB against a 49 GB pool. The DiT cannot all be staged, so part of it
+    # is paged in on every step at a different place -- and the model compiler's CUDA
+    # graph is keyed on where each module's weights sit (vbar_signature_compare), so
+    # it breaks and never replays. Reported as every step as slow as the first, where
+    # it used to be slow once and then fast: "graph breaks: 3, rogues: 19", 87 s/step.
+    #
+    # pins_required is how free_memory is asked for pinned room; it hands the figure
+    # to ensure_pin_budget, which evicts other models' pins to cover it. The text
+    # encoder is re-staged next shot -- one read per shot, against a graph that can
+    # replay across every step of this one.
+    _pins = 0
     try:
-        mm.free_memory(need, mm.get_torch_device(),
-                       keep_loaded=_resident([keep_model]))
+        _pins = int(keep_model.model_size())
+    except Exception:
+        _pins = 0
+    try:
+        try:
+            mm.free_memory(need, mm.get_torch_device(),
+                           keep_loaded=_resident([keep_model]), pins_required=_pins)
+        except TypeError:
+            # A ComfyUI older than the pinned pool has no pins_required; the weights
+            # are not staged there on such a build, so the old call is the right one.
+            mm.free_memory(need, mm.get_torch_device(),
+                           keep_loaded=_resident([keep_model]))
     except Exception:
         try:
             mm.soft_empty_cache(True)

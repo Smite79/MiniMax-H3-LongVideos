@@ -910,6 +910,62 @@ def test_a_repeated_naming_is_spent_as_a_pronoun():
               S.pronoun_rewrite(" Mara waits. Mara sits.", _who)[1] == [])
 
 
+def test_the_dit_asks_for_room_in_the_pinned_pool():
+    """Every step as slow as the first, where it used to be slow once and then fast.
+
+    Under --enable-dynamic-vram the DiT's weights are staged in the PINNED HOST POOL,
+    and the model compiler's CUDA graph is keyed on where each module's weights sit.
+    _evict_all_but sized VRAM for the sampler's activations and never asked for room
+    in that pool, so the text encoder encoded a moment before stayed staged in it --
+    25 GB beside a 32 GB DiT in a 49 GB pool. The DiT could not all be staged, part of
+    it was paged in at a different place every step, the graph never replayed, and the
+    log said "0 models unloaded" and "graph breaks: 3, rogues: 19".
+
+    pins_required is how free_memory is asked; ensure_pin_budget evicts other models'
+    pins to cover it."""
+    _rt = S._runtime_module
+    saved = {k: getattr(_rt.mm, k, None) for k in ("free_memory", "get_torch_device",
+                                                   "soft_empty_cache")}
+    saved_res = _rt._resident
+    calls = []
+    class DiT:
+        def model_size(self): return 32427 * 1024 ** 2
+        class model:
+            @staticmethod
+            def memory_required(shape): return 2 * 1024 ** 3
+    lat = {"samples": torch.zeros(1, 16, 8, 32, 32)}
+    try:
+        _rt._resident = lambda models: list(models)
+        _rt.mm.get_torch_device = lambda: "cuda:0"
+        _rt.mm.soft_empty_cache = lambda *a, **k: calls.append(("empty", None))
+        _rt.mm.free_memory = (lambda need, dev, keep_loaded=(), pins_required=0:
+                              calls.append(("free", pins_required)))
+        _rt._evict_all_but(DiT(), lat)
+        check("pinned room is asked for, sized to the DiT",
+              calls and calls[-1] == ("free", 32427 * 1024 ** 2))
+        # A ComfyUI older than the pinned pool has no pins_required, and must still
+        # free rather than fall through to the bare cache-empty.
+        calls.clear()
+        def _old(need, dev, keep_loaded=()):
+            calls.append(("old", None))
+        _rt.mm.free_memory = _old
+        _rt._evict_all_but(DiT(), lat)
+        check("an older ComfyUI gets the old call, not a crash", calls == [("old", None)])
+        # A model that cannot size itself asks for nothing extra.
+        calls.clear()
+        class Blind(DiT):
+            def model_size(self): raise RuntimeError("no size")
+        _rt.mm.free_memory = (lambda need, dev, keep_loaded=(), pins_required=0:
+                              calls.append(("free", pins_required)))
+        _rt._evict_all_but(Blind(), lat)
+        check("an unsizable model asks for no extra pins", calls == [("free", 0)])
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                setattr(_rt.mm, k, v)
+        _rt._resident = saved_res
+
+
 def test_no_report_touches_weight_data():
     """Reported: renders went several times slower.
 
@@ -4172,6 +4228,7 @@ def main():
     test_a_lora_states_its_step_count_in_its_name()
     test_the_graph_says_whether_the_schedule_is_already_set()
     test_a_repeated_naming_is_spent_as_a_pronoun()
+    test_the_dit_asks_for_room_in_the_pinned_pool()
     test_no_report_touches_weight_data()
     test_a_lora_that_does_not_fit_is_reported_not_silent()
     test_widget_values_are_usable()
