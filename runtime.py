@@ -478,6 +478,60 @@ def _release_pins_for(keep_model, keep):
     return freed
 
 
+def chain_noise(latent_image, seed, noise_inds=None, fallback=None):
+    """One seed's noise, laid out TIME-FIRST, so a frame's noise does not depend on
+    how long its shot is.
+
+    ComfyUI's prepare_noise draws the whole latent in memory order from one
+    generator -- channel, then time, then space, and the audio after the video. So
+    the noise at any frame depends on the shot's LENGTH: a 4-second shot and a
+    6-second one, on the same seed, share nothing, not even their first frame. With
+    shot_length 'from the beat' every shot is a different length, so the one seed
+    was a different noise field at every beat and the surface detail -- the weave,
+    the print, the small things on a garment -- was redrawn at every cut. Reported
+    as the seed changing drastically each beat and the clothes not staying the same.
+
+    Drawn one frame at a time instead, frame t gets the same noise in every shot,
+    whatever its length. Video and audio each get their own generator, so the audio
+    does not shift with the video's length either. Anything that is not H3's
+    [B, C, T, H, W] video and [B, C, 2, T] audio -- or a batch_index, which asks for
+    ComfyUI's own per-item draw -- gets ComfyUI's noise, unchanged."""
+    parts = latent_image.unbind() if latent_image.is_nested else [latent_image]
+    if noise_inds is not None or not parts or any(p.ndim not in (4, 5) for p in parts):
+        return (fallback or comfy.sample.prepare_noise)(latent_image, seed, noise_inds)
+    out = []
+    for k, part in enumerate(parts):
+        axis = 2 if part.ndim == 5 else part.ndim - 1
+        gen = torch.Generator(device="cpu").manual_seed(
+            (int(seed) + k * 0x9E3779B97F4A7C15) % (1 << 64))
+        shape = list(part.shape)
+        frames = shape.pop(axis)
+        noise = torch.randn([frames] + shape, generator=gen, dtype=torch.float32,
+                            device="cpu")
+        out.append(noise.movedim(0, axis).contiguous().to(dtype=part.dtype))
+    if latent_image.is_nested:
+        return comfy.nested_tensor.NestedTensor(out)
+    return out[0]
+
+
+class _ChainNoise:
+    """While sampling, ComfyUI's noise is chain_noise. common_ksampler draws its own
+    through comfy.sample.prepare_noise, so that is what is swapped, and put back."""
+
+    def __enter__(self):
+        self._was = getattr(comfy.sample, "prepare_noise", None)
+        if self._was is not None:
+            was = self._was
+            comfy.sample.prepare_noise = (
+                lambda img, seed, inds=None: chain_noise(img, seed, inds, fallback=was))
+        return self
+
+    def __exit__(self, *exc):
+        if self._was is not None:
+            comfy.sample.prepare_noise = self._was
+        return False
+
+
 def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent, sigmas):
     """common_ksampler, driven by an EXTERNAL sigma schedule.
 
@@ -495,7 +549,7 @@ def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent
         model, latent_image,
         latent.get("downscale_ratio_spacial", None),
         latent.get("downscale_ratio_temporal", None))
-    noise = comfy.sample.prepare_noise(latent_image, seed, latent.get("batch_index"))
+    noise = chain_noise(latent_image, seed, latent.get("batch_index"))
     callback = latent_preview.prepare_callback(model, max(len(sigmas) - 1, 1))
     samples = comfy.sample.sample_custom(
         model, noise, cfg, comfy.samplers.sampler_object(sampler_name), sigmas,

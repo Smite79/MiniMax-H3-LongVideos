@@ -8611,6 +8611,50 @@ def test_the_anchor_and_the_body_agree():
               shots[i][:160])
 
 
+def test_one_seed_is_one_noise_field_at_any_length():
+    """REPORTED: the seed seems to change drastically at every beat; the clothes do not
+    stay the same.
+
+    The seed never changed -- but ComfyUI draws noise in memory order, so with shot
+    lengths sized from each beat, the same seed was an unrelated noise field in every
+    shot, not even sharing its first frame. Drawn frame by frame, a frame's noise no
+    longer depends on how long its shot is."""
+    print("\n=== one seed is one noise field at any length ===")
+    R = S._runtime_module
+
+    def lat(frames, audio):
+        return FakeNested([torch.zeros(1, 24, frames, 4, 4), torch.zeros(1, 32, 2, audio)])
+
+    sv, sa = R.chain_noise(lat(7, 50), 123).unbind()
+    lv, la = R.chain_noise(lat(12, 90), 123).unbind()
+    check("a short and a long shot share their frames' video noise",
+          torch.equal(sv, lv[:, :, :7]))
+    check("...and their audio noise", torch.equal(sa, la[..., :50]))
+    check("the same shot on the same seed is the same noise",
+          torch.equal(R.chain_noise(lat(7, 50), 123).unbind()[0], sv))
+    check("another seed is another field",
+          not torch.equal(R.chain_noise(lat(7, 50), 124).unbind()[0], sv))
+    check("it is still unit gaussian noise", abs(float(lv.std()) - 1.0) < 0.1)
+    fallback = lambda img, seed, inds=None: "comfy"
+    check("a batch_index gets ComfyUI's own draw",
+          R.chain_noise(lat(7, 50), 1, [0], fallback=fallback) == "comfy")
+    check("...and so does a latent that is not H3's",
+          R.chain_noise(torch.zeros(1, 4, 8, 8, 8, 2), 1, fallback=fallback) == "comfy")
+    had = getattr(S.comfy.sample, "prepare_noise", None)
+    S.comfy.sample.prepare_noise = fallback
+    try:
+        with R._ChainNoise():
+            swapped = S.comfy.sample.prepare_noise is not fallback
+            inside = S.comfy.sample.prepare_noise(lat(7, 50), 123).unbind()[0]
+        check("sampling draws the chain's noise", swapped and torch.equal(inside, sv))
+        check("...and ComfyUI's is put back after", S.comfy.sample.prepare_noise is fallback)
+    finally:
+        if had is None:
+            del S.comfy.sample.prepare_noise
+        else:
+            S.comfy.sample.prepare_noise = had
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -8840,6 +8884,7 @@ def main():
     test_a_removal_stays_off_in_every_later_shot()
     test_a_scene_keeps_its_room_and_its_people()
     test_the_anchor_and_the_body_agree()
+    test_one_seed_is_one_noise_field_at_any_length()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

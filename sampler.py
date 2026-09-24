@@ -1473,10 +1473,9 @@ def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
         note += (
                 "shot lengths are sized from each beat ("
                 + ", ".join(f"{n}f/{n / H3_FPS:.1f}s" for n in lens)
-                + "). They differ, so one seed does not give them one noise field -- "
-                  "noise is drawn to the latent's shape -- and surface detail resets at "
-                  "each cut. Set shot_length to 'fixed' if that matters more than "
-                  "pacing. The frames_per_shot output is ONE number and cannot "
+                + "). They differ, and they still share one noise field: the seed's "
+                  "noise is drawn frame by frame, so a frame's noise does not depend on "
+                  "how long its shot is. The frames_per_shot output is ONE number and cannot "
                   "describe shots of different lengths: it reports the first one, so "
                   "do not split or index the image batch with it here -- the list "
                   "above is the split")
@@ -7119,8 +7118,10 @@ def sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
         if _own is not None:
             return _sample_on_sigmas(model, seed, cfg, sampler_name, cond, negative,
                                      latent, _own)
-    (out,) = nodes.common_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
-                                   cond, negative, latent, denoise=1.0)
+    # The same noise field at every beat, whatever each shot's length. See chain_noise.
+    with _runtime_module._ChainNoise():
+        (out,) = nodes.common_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
+                                       cond, negative, latent, denoise=1.0)
     return out
 
 
@@ -7286,8 +7287,9 @@ class H3LongVideos:
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "simple"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff,
                     "control_after_generate": True,
-                    "tooltip": "One seed for the whole chain. Every shot is the same length, so "
-                               "they share a noise field."}),
+                    "tooltip": "One seed for the whole chain. Its noise is drawn frame by "
+                               "frame, so every shot shares one noise field whatever its "
+                               "length."}),
             },
             "optional": {
                 "first_frame": ("IMAGE", {"tooltip":
@@ -7367,11 +7369,9 @@ class H3LongVideos:
                                "for two -- which is what makes an action carry on past its "
                                "end, repeating itself on whatever is nearest once it has "
                                "run out of what it was given.\n\n"
-                               "'fixed' gives every shot shot_seconds. Uniform lengths mean "
-                               "uniform latent SHAPES, and noise is drawn to the shape -- so "
-                               "one seed gives the whole chain one noise field and surface "
-                               "detail does not reset at each cut. That consistency is what "
-                               "you trade away for pacing.\n\n"
+                               "'fixed' gives every shot shot_seconds. Either way the "
+                               "chain shares one noise field: the seed's noise is drawn "
+                               "frame by frame, so a shot's length does not change it.\n\n"
                                "The estimate leans short on purpose: a shot that ends before "
                                "its action does hands a mid-motion frame to the next shot, "
                                "which the chain continues from. A shot that outlasts its "
