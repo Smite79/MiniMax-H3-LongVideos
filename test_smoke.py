@@ -8511,6 +8511,56 @@ def test_a_removal_stays_off_in_every_later_shot():
           "white shirt" not in entry(shots[2], "Kate"), entry(shots[2], "Kate"))
 
 
+def test_a_scene_keeps_its_room_and_its_people():
+    """REPORTED: the scenery resets when it should not, positions reset, and a sex
+    scene resets the scenery.
+
+    "across the room" was a journey to a room called "room", so the shot was told it
+    arrived somewhere else and the woman it did not name was left behind in the
+    bedroom it had supposedly left. "Dan enters her" was Dan walking in, so a shot of
+    two people already in bed started fresh. And a beat naming one partner counted
+    one body over a first frame holding two."""
+    print("\n=== a scene keeps its room and its people ===")
+    mem = "Kate: she, 25, grey sweater, blue jeans.\nDan: he, 40, grey shirt, black trousers."
+    room = ("A small bedroom with a double bed, grey walls and a lamp on the nightstand. "
+            "The kitchen has white tiles.")
+    shots = _shots_of(run_node(
+        room + "\n\nKate sits on the bed. Dan stands by the window.\n\n"
+        "Dan walks across the room to the bed.\n\nDan sits beside Kate.",
+        character_memory=mem, plan_only=True))
+    check("across the room is not a journey",
+          not any("arrives in the room" in s or "place in the room" in s for s in shots),
+          shots[1][:200])
+    check("...and the woman it did not name is still there", "Kate:" in shots[2], shots[2][:160])
+
+    info, script = run_node(
+        room + "\n\nKate and Dan kiss on the bed.\n\nKate lies back on the bed.\n\n"
+        "Dan enters her.\n\nKate arches her back.\n\nDan comes inside her.\n\nKate lies still.",
+        character_memory=mem, plan_only=True)[2:4]
+    shots = _shots_of((None, None, info, script))
+    check("nobody already in bed is staged walking in",
+          "staged walking in" not in info, info[:200])
+    for i, s in enumerate(shots, 1):
+        check(f"shot {i} describes both partners and counts two",
+              "Kate:" in s and "Dan:" in s and "two people" in s, s[:180])
+    check("the partner rule says what it did", "kept in frame as a partner" in info)
+
+    shots = _shots_of(run_node(
+        room + "\n\nKate and Dan kiss on the bed.\n\nKate smiles.\n\n"
+        "Kate walks into the kitchen.\n\nKate pours a glass of water.",
+        character_memory=mem, plan_only=True))
+    check("a partner does not follow her into another room",
+          "Dan:" not in shots[2] and "Dan:" not in shots[3], shots[3][:160])
+    shots = _shots_of(run_node(
+        room + "\n\nKate and Dan kiss on the bed.\n\nKate smiles.\n\nDan walks out."
+        "\n\nKate lies still.", character_memory=mem, plan_only=True))
+    check("...or stay once he has walked out", "Dan:" not in shots[3], shots[3][:160])
+    shots = _shots_of(run_node(
+        room + "\n\nKate and Dan sit on the bed.\n\nKate reads a book.",
+        character_memory=mem, plan_only=True))
+    check("a scene with no contact in it is unchanged", "Dan:" not in shots[1], shots[1][:160])
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -8738,6 +8788,7 @@ def main():
     test_a_beam_in_a_roof_is_not_a_smile()
     test_the_shot_that_takes_it_off_is_not_told_where_it_sits()
     test_a_removal_stays_off_in_every_later_shot()
+    test_a_scene_keeps_its_room_and_its_people()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

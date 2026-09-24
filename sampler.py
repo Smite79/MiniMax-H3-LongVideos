@@ -415,10 +415,22 @@ def sheet_for_beat(sheet, beat, previous=None):
     return "\n".join(keep), named
 
 
+# Into a PERSON is not into a room: "Dan enters her", "comes inside her", "slips into
+# Kate". Read as an arrival, a partner already in the frame was staged walking in
+# again, and the shot threw its keyframe away -- the room and both bodies redrawn in
+# the middle of a scene nobody left. "Enters her bedroom" is still an entrance.
+_NOT_INTO_A_BODY = (
+    r"(?!\s+(?:her|him|them|me|you|us|herself|himself|themselves)\b"
+    r"(?!\s+(?:[\w-]+\s+)?(?:" + engine.PLACES + r"|house|home|building|flat|"
+    r"apartment|car)\b)"
+    r"|\s+(?:(?:her|his|their)\s+)?(?:mouth|body|throat|ass|arse|anus|vagina|pussy|"
+    r"cunt|cock|penis|dick|hand|hands|fist|thighs?)\b"
+    r"|(?-i:\s+(?!(?i:" + engine.PLACES + r"|house|home|building|flat|apartment)\b)"
+    r"[A-Z][a-z-]+\b(?!['\u2019]s)))")
 _ENTRANCE = re.compile(
     r"\b(?:walk|step|come|run|stride|hurry|move|wander|burst|barge|slip|climb)"
-    r"(?:s|ed|ing)?\s+(?:in|into|through|up|over|back|out\s+of)\b"
-    r"|\benter(?:s|ed|ing)?\b|\barriv(?:es?|ed|ing)\b"
+    r"(?:s|ed|ing)?\s+(?:in|into|through|up|over|back|out\s+of)\b" + _NOT_INTO_A_BODY
+    + r"|\benter(?:s|ed|ing)?\b" + _NOT_INTO_A_BODY + r"|\barriv(?:es?|ed|ing)\b"
     r"|\bjoin(?:s|ed|ing)?\b|\breturn(?:s|ed|ing)?\b|\bfollow(?:s|ed|ing)?\b"
     r"|\blets?\s+\w+\s+in\b", re.I)
 
@@ -548,10 +560,11 @@ _COMES_IN = re.compile(
     r"strid(?:e|es|ing)|strode|stroll(?:s|ed|ing)?|wander(?:s|ed|ing)?|rush(?:es|ed|ing)?|"
     r"storm(?:s|ed|ing)?|march(?:es|ed|ing)?|sneak(?:s|ed|ing)?|snuck|limp(?:s|ed|ing)?|"
     r"stagger(?:s|ed|ing)?)\s+(?:\w+ly\s+)?(?:back\s+)?"
-    r"(?:in\b(?!\s+(?:the|a|an|his|her|their)\b)|inside\b"
-    r"|into\s+(?:the|this|that|a)\s+(?:[\w-]+\s+)?(?:" + _EXIT_ROOMS
+    r"(?:in\b(?!\s+(?:the|a|an|his|her|their)\b)|inside\b" + _NOT_INTO_A_BODY
+    + r"|into\s+(?:the|this|that|a)\s+(?:[\w-]+\s+)?(?:" + _EXIT_ROOMS
     + r"|house|building|apartment|flat)\b)"
     r"|\benter(?:s|ed|ing)?\b(?!\s+(?:the|a|his|her)\s+(?:code|number|password|data|pin)\b)"
+    + _NOT_INTO_A_BODY +
     r"|\barriv(?:e|es|ed|ing)\b"
     r"|\b(?:com(?:e|es|ing)|came)\s+back\b(?=\s*(?:[.,;:!?]|$)"
     r"|\s+(?:in|into|inside|home|with|and|carrying|holding)\b)"
@@ -809,6 +822,19 @@ _SEXUAL_STAGING = re.compile(
     r"cocks?|dicks?|pussy|clit\w*|erections?|foreplay|straddl\w*|"
     r"topless|bottomless|naked|nude|nudity|undress\w*|strips?\s+(?:off|naked|bare)|"
     r"moans?|moaning|moaned)\b", re.I)
+
+
+# Bodily contact between two people, as a sex scene is actually written: most of its
+# beats name none of _SEXUAL_STAGING's words -- "Dan enters her", "Kate rides him",
+# "they kiss" -- and the partner rule below needs to know the scene is one.
+_INTIMATE = re.compile(
+    r"\b(?:kiss(?:es|ed|ing)?|straddl\w*|thrust\w*|grind(?:s|ing)?|caress\w*|fondl\w*|"
+    r"lick(?:s|ed|ing)?|suck(?:s|ed|ing)?|mak(?:e|es|ing)\s+love|made\s+love|"
+    r"rid(?:e|es|ing)\s+(?:him|her|them)|on\s+top\s+of\s+(?:him|her|them)|"
+    r"between\s+(?:her|his|their)\s+(?:legs|thighs)|"
+    r"(?:enter(?:s|ed|ing)?|inside|into)\s+(?:her|him|them)\b(?!\s+(?:[\w-]+\s+)?"
+    r"(?:room|bedroom|house|flat|car)\b)|"
+    r"spreads?\s+(?:her|his|their)\s+legs)\b", re.I)
 
 
 def minor_with_sexual_staging(sheet, script):
@@ -5421,19 +5447,45 @@ _NOT_A_ROOM_MODIFIER = {"the", "a", "an", "this", "that", "her", "his", "their",
                         "from", "to", "at", "on", "and", "or", "same", "other"}
 _MOD = engine._ROOM_MOD
 _DET_POSS = engine.DET_POSS
+_NOT_AN_OBJECT = engine.PLACE_NOT_AN_OBJECT
 _GOES_TO = re.compile(r"\b(?:to|into|toward|towards|through\s+to|"
                       r"enters?|entered|entering|reaches|reached|arrives?\s+(?:at|in)|"
                       r"steps?\s+into|stepped\s+into)\s+"
                       + _DET_POSS + r"\s+" + _MOD
-                      + r"(" + _PLACE + r")\b", re.I)
+                      + r"(" + _PLACE + r")\b" + _NOT_AN_OBJECT, re.I)
 # "down the hallway", "along the corridor" -- what it passes THROUGH.
 _GOES_VIA = re.compile(r"\b(?:down|along|across|through|up|via|past)\s+"
                        + _DET_POSS + r"\s+" + _MOD
-                       + r"(" + _PLACE + r")\b", re.I)
+                       + r"(" + _PLACE + r")\b" + _NOT_AN_OBJECT, re.I)
 # "from the living room", "out of the kitchen" -- where it STARTS.
 _GOES_FROM = re.compile(r"\b(?:from|out\s+of|leaves?|leaving)\s+"
                         + _DET_POSS + r"?\s*" + _MOD
-                        + r"(" + _PLACE + r")\b", re.I)
+                        + r"(" + _PLACE + r")\b" + _NOT_AN_OBJECT, re.I)
+# What makes "X room" a DIFFERENT room. Anything else in front of it -- "the room",
+# "her room", "the dark room" -- is the room the shot is already in.
+_ROOM_QUALIFIER = frozenset("""
+other next adjoining neighbouring neighboring spare guest back front side hotel motel
+box store storage boiler sitting drawing family games music panic reading computer
+play sun throne war interview interrogation hospital operating recovery exam treatment
+server control engine stock staff common living dining
+""".split())
+
+
+def _named_place(m, text):
+    """The place match `m` names, or "" when it is only the word "room".
+
+    "Dan walks across the room to the bed" read as travel to a place called "room":
+    the shot was told it opens in the bedroom and arrives in the room, the next one
+    that it takes place in "the room" instead of the bedroom the scene describes, and
+    whoever the walk did not name was left behind in the room he had supposedly left.
+    A bare room is the one they are in. A qualified one -- "the other room", "the
+    spare room" -- is somewhere else, and keeps its qualifier."""
+    got = re.sub(r"\s+", " ", m.group(1)).strip().lower()
+    if got != "room":
+        return got
+    before = re.search(r"([A-Za-z][\w-]*)\s+$", str(text or "")[:m.start(1)])
+    word = before.group(1).lower() if before else ""
+    return f"{word} room" if word in _ROOM_QUALIFIER else ""
 # A verb that actually MOVES somebody. "looks to the bedroom" is not travel.
 _TRAVEL_VERB = re.compile(
     r"\b(?:walk|walks|walked|walking|lead|leads|led|leading|take|takes|took|taking|"
@@ -5460,8 +5512,7 @@ def travel_in(beat):
         return ("", "", "")
 
     def _one(rx):
-        m = rx.search(b)
-        return re.sub(r"\s+", " ", m.group(1)).strip().lower() if m else ""
+        return next((p for p in (_named_place(m, b) for m in rx.finditer(b)) if p), "")
 
     to, via, frm = _one(_GOES_TO), _one(_GOES_VIA), _one(_GOES_FROM)
     # A place cannot be two ends of the same journey.
@@ -5623,7 +5674,7 @@ def travel_anchor(frm, via, to, here="", beat=""):
 
 
 _IS_IN = re.compile(r"\b(?:in|inside|within|at)\s+(?:the|her|his|their|a)\s+"
-                    + _MOD + r"(" + _PLACE + r")\b", re.I)
+                    + _MOD + r"(" + _PLACE + r")\b" + _NOT_AN_OBJECT, re.I)
 
 
 def first_place(text):
@@ -5659,7 +5710,9 @@ def place_named(text):
     for m in _IS_IN.finditer(text):
         if _AIMED_AT.search(text[:m.start()]):
             continue
-        return re.sub(r"\s+", " ", m.group(1)).strip().lower()
+        got = _named_place(m, text)
+        if got:
+            return got
     return ""
 
 
@@ -7862,6 +7915,8 @@ class H3LongVideos:
         named_often = []            # (shot, name, times named, times this node named them)
         contact_shots = []          # shots told which body is with which
         held_over = []              # (shot, people kept in frame by their hardware)
+        partners_held = []          # (shot, people kept in frame as a sex-scene partner)
+        _intimate = set()           # who a sex scene in this room involves, until a cut
         led_shots = []              # shots whose beat was put ahead of the sheet
         restarted = []              # shots started fresh after a removal
         restored = []               # garments an add: put back on
@@ -7949,11 +8004,31 @@ class H3LongVideos:
                               shot=len(plan) + 1, pronouns=_pron_of)
             if _ch.get("applied") or _ch.get("released"):
                 hardware_changed.add(len(plan) + 1)
+            # Where the shot is comes before who is in it. The rules below keep a person
+            # described only within one room, and read the cut before it was worked out
+            # -- the previous beat's, so a cut let them through and the shot after it
+            # did not.
+            _frm, _via, _to = travel_legs(body)
+            _is_travel = bool(travel_anchor(_frm, _via, _to, here, body))
+            _room_before = here
+            _place_now = _to or _frm or place_named(body) or here
+            _opens_in = _frm or (_room_before if _is_travel else _place_now)
+            _is_cut = bool(len(plan) and _opens_in and _room_before
+                           and _opens_in != _room_before)
+            # ...and a walk into another room leaves the room as surely as a cut does.
+            _leaves_room = _is_cut or bool(_to and _to != _room_before)
             _was = list(active)
+            _still_there = shot_frames.get(len(plan) - 1, ([], []))[1] if plan else []
+            if _leaves_room:
+                _intimate = set()
+            _intimate -= set(leaves_in(body, sheet, _still_there))
             _back_cands = []
             _carried_on, _carried = [], []
             if character_guard:
                 shot_sheet, active = sheet_for_beat(sheet, body, active)
+                _staged_now = engine.staged_text(body)
+                if _SEXUAL_STAGING.search(_staged_now) or _INTIMATE.search(_staged_now):
+                    _intimate |= set(active) | set(_still_there)
                 # A PERSON IN HARDWARE STAYS IN THE SHOT.
                 #
                 # sheet_for_beat keeps whoever the beat names and drops the rest, and
@@ -7974,12 +8049,28 @@ class H3LongVideos:
                 _held_on = [n for n, _l in sheet_lines(sheet)
                             if n and n in (restrained_who or set())
                             and n in (_was or []) and n not in (active or [])]
-                if _held_on and not _is_cut and not leaves_in(body, sheet, _was):
+                if _held_on and not _leaves_room and not leaves_in(body, sheet, _was):
                     _keep = set(list(active or []) + _held_on)
                     active = [n for n, _l in sheet_lines(sheet) if n in _keep]
                     shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
                                            if n in _keep)
                     held_over.append((len(plan) + 1, list(_held_on)))
+                # A PARTNER STAYS IN THE SHOT, on the same three conditions, while the
+                # scene is a sex scene. "Kate arches her back" names one of two bodies
+                # in contact, and dropping the other told the shot "There is one person
+                # in the shot" over a first frame holding both -- so the model moved or
+                # removed him to agree, and he came back from somewhere else on the
+                # next beat that named him. Reported as positions resetting mid-scene.
+                _partners = [n for n, _l in sheet_lines(sheet)
+                             if n and n in _intimate and n in (_was or [])
+                             and n in _still_there and n not in (active or [])]
+                if (_partners and any(n in _intimate for n in (active or []))
+                        and not _leaves_room and not leaves_in(body, sheet, _was)):
+                    _keep = set(list(active or []) + _partners)
+                    active = [n for n, _l in sheet_lines(sheet) if n in _keep]
+                    shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
+                                           if n in _keep)
+                    partners_held.append((len(plan) + 1, list(_partners)))
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
                     notes.append(f"shot {len(plan) + 1} describes only "
                                  f"{', '.join(active) or 'the scene'} -- the rest of the "
@@ -8035,13 +8126,6 @@ class H3LongVideos:
                 _seen_before.update(active)
             else:
                 shot_sheet = sheet
-            _frm, _via, _to = travel_legs(body)
-            _is_travel = bool(travel_anchor(_frm, _via, _to, here, body))
-            _room_before = here
-            _place_now = _to or _frm or place_named(body) or here
-            _opens_in = _frm or (_room_before if _is_travel else _place_now)
-            _is_cut = bool(len(plan) and _opens_in and _room_before
-                           and _opens_in != _room_before)
             _prev_stays = shot_frames.get(len(plan) - 1, ([], []))[1]
             _no_carry = not _cond_module.may_carry_frame(
                 _prev_stays, active,
@@ -9270,6 +9354,14 @@ class H3LongVideos:
                   "mentioning them. They are let go by a beat that takes somebody out "
                   "of the room, by a cut to another room, or by the hardware coming "
                   "off -- write them out and they go")
+        if partners_held:
+            notes.append(
+                "kept in frame as a partner in a sex scene -- "
+                + "; ".join(f"shot {n}: {_join_names(w)}" for n, w in partners_held)
+                + ". The beat named only the other person, and the guard would have "
+                  "dropped them and counted one body over a first frame holding two. "
+                  "They are let go by a beat that takes them out of the room or by a "
+                  "cut to another room -- write them out and they go")
         if contact_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in contact_shots)} have three or more "

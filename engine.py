@@ -209,6 +209,14 @@ PLACE_ALSO_A_VERB = {"steps", "landing", "study", "lounge", "garage", "porch",
                      "studio", "reception"}
 _ROOM_MOD = (r"(?:(?!(?:of|the|an?|and|or|to|in|into|from|with|on|at|by|for|her|"
              r"his|their|its|my|our|your)\b)[A-Za-z][A-Za-z-]*\s+){0,3}?")
+# A place word naming an OBJECT: "the laundry basket", "an office chair", "a pool of
+# light", "her studio flat". Nobody is IN that room, and reading one as a room cut
+# the shot to it -- a fresh start, the scenery redrawn, in a scene that never moved.
+# A door or a table belongs to its room: "at the kitchen door" still puts them there.
+PLACE_NOT_AN_OBJECT = (r"(?!\s+(?:baskets?|hampers?|bags?|piles?|heaps?|chairs?|stools?|"
+                       r"towels?|lamps?|lights?|phones?|keys?|flat|apartment|shoes|"
+                       r"shorts|clothes|gear|kit|hose|gel|cues?|sale|party)\b)"
+                       r"(?!(?<=pool)\s+of\b)")
 
 GARMENT_PHRASES = (r"chastity[\s-]*(?:belts?|devices?|cages?)|g[\s-]?strings?|"
                    r"boxer[\s-]+shorts?|sports?[\s-]+bras?|body[\s-]?suits?|"
@@ -403,7 +411,7 @@ _APPLY = _rx(r"\b(?:" + APPLY_VERB + r")\b")
 _RELEASE = _rx(r"\b(?:" + RELEASE_VERB + r")\b")
 _PLACE_IN = _rx(r"\b(?:in|into|inside|through|down|along|across|to|onto|at)\s+"
                 r"(?:the|a|an|her|his|their)\s+(" + _ROOM_MOD + r"(?:" + PLACES
-                + r"))\b")
+                + r"))\b" + PLACE_NOT_AN_OBJECT)
 _PLACE_WORD = _rx(r"\b(?:" + PLACES + r")\b")
 _GARMENT_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
                    + _GARMENT + r"s?)\b")

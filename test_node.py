@@ -303,6 +303,38 @@ def test_every_way_a_garment_comes_off_is_read():
           S.strips_who("Dan undresses her.", ["Kate", "Dan"], mem) == ["Kate"])
 
 
+def test_a_word_does_not_move_the_room():
+    """REPORTED: the scenery changes when it should not, and positions reset.
+
+    Every one of these cut the film to a room it was never in, or staged somebody
+    already in the frame walking in -- and either one starts the shot fresh, with the
+    room and the bodies redrawn."""
+    print("\n=== a word does not move the room ===")
+    for text in ("Kate lies on the bed in her room.", "Dan waits in the room.",
+                 "Kate tosses her jeans in the laundry basket.",
+                 "Kate sits in the office chair.", "Kate lies in the pool of light.",
+                 "Kate lies back on the bed in the studio flat."):
+        check(f"no room in {text!r}", S.place_named(text) == "")
+    for text in ("Dan walks across the room to the bed.", "Dan walks into the room."):
+        check(f"no journey in {text!r}", S.travel_legs(text) == ("", "", ""))
+    check("the other room is somewhere else",
+          S.travel_legs("Dan goes into the other room.")[2] == "other room")
+    check("...and so is the spare room",
+          S.travel_legs("Dan walks into the spare room.")[2] == "spare room")
+    check("a door still belongs to its room",
+          S.place_named("They stand at the kitchen door.") == "kitchen")
+    check("...and a garden is still a garden",
+          S.place_named("Maya sits in the garden.") == "garden")
+    sheet = "Kate: she, 25, grey sweater.\nDan: he, 40, grey shirt."
+    for text in ("Dan enters her.", "Dan comes inside her.", "Dan slips inside Kate.",
+                 "Dan enters Kate.", "Dan slips into her."):
+        check(f"into a person is not into the room: {text!r}",
+              S.comes_in(text, sheet) == [] and not S.arrives_in(text))
+    for text in ("Dan enters the room.", "Dan enters her bedroom.", "Dan enters Kate's room.",
+                 "Dan enters Room 12.", "Dan walks in."):
+        check(f"...but this is an entrance: {text!r}", S.comes_in(text, sheet) == ["Dan"])
+
+
 def test_character_sheet():
     print("\n=== a character sheet is not a beat ===")
     sheet = ("Maya: 27, silver hair, grey shorts, red jacket\n"
@@ -4173,6 +4205,7 @@ def main():
     test_inferred_removals()
     test_a_remove_line_is_read_as_the_garment()
     test_every_way_a_garment_comes_off_is_read()
+    test_a_word_does_not_move_the_room()
     test_character_sheet()
     test_no_one_is_described_twice()
     test_sheet_lines_are_terminated()
