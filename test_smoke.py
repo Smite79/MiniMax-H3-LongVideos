@@ -457,7 +457,7 @@ def test_a_move_to_any_place_is_performed():
         out = run_node(P, plan_only=True, character_memory=mem)
         last = " ".join([x for x in out[3].split("---") if x.strip()][-1].split())
         check(f"{label}: the arrival is performed",
-              f"travels to the {dest}" in last and "first step to its last" in last,
+              f"move to the {dest}" in last and "first step to its last" in last,
               last[-120:])
         check(f"{label}: and it is reported",
               f"to the {dest}" in out[2] and "cannot name" in out[2], "")
@@ -465,7 +465,7 @@ def test_a_move_to_any_place_is_performed():
     plain = run_node("A kitchen.\n\nMia fills the kettle.\n\nMia walks to the window.",
                      plan_only=True, character_memory=mem)[3]
     check("a move to an object inside the room adds no clause",
-          "travels to the" not in plain, plain[-110:])
+          "The move to the" not in plain, plain[-110:])
 
 
 def test_an_unstated_frame_becomes_a_portrait():
@@ -1673,6 +1673,20 @@ def test_the_camera_is_held_where_nothing_places_it():
               S.camera_hold("Maya pours tea.", anchor_text) == "", anchor_text)
     check("a plain anchor does not stand it down",
           S.camera_hold("Maya pours tea.", "A warm kitchen at night.") != "")
+    # REPORTED: the camera kept moving. Ordinary prose was read as the author's camera
+    # and freed it -- in the anchor, for the whole film.
+    for words in ("Maya tilts her head and smiles.", "Owen pulls out a chair and sits.",
+                  "Maya fries eggs in a pan.", "Owen puts his handheld radio down.",
+                  "Maya circles around the table.", "A drone of traffic outside.",
+                  "Maya looks into the camera.", "Dolly in the kitchen pours tea."):
+        check(f"prose is not a camera note: {words[:28]!r}", S.camera_hold(words) != "", words)
+    check("a lens or a stock is the look, not a move",
+          S.camera_hold("Maya pours tea.", "Shot on 35mm, anamorphic lens.") != "")
+    for words in ("The camera slowly pushes in on Maya.", "Camera: locked off.",
+                  "Maya pours tea, handheld and shaky.", "A drone shot of the farm.",
+                  "Maya's point of view."):
+        check(f"...while the camera's own words still count: {words[:28]!r}",
+              S.camera_hold(words) == "", words)
 
     mem = "Maya: she, 30, green sweater.\nOwen: he, 34, blue shirt."
     P = ("A kitchen with white tiles.\n\nMaya pours tea.\n\nOwen sits at the table.\n\n"
@@ -1686,6 +1700,12 @@ def test_the_camera_is_held_where_nothing_places_it():
     check("...and the run says which shots and why",
           "shot(s) 1, 2, 4 say nothing about the camera" in str(out[2])
           and "opens on the PREVIOUS shot's last frame" in str(out[2]), "")
+    # A move inside the room is watched from where the camera already is.
+    inside = _shots_of(run_node("A living room with a fireplace.\n\nMaya steps towards "
+                                "the fireplace.", character_memory=mem, plan_only=True))[0]
+    check("a move inside the room keeps the hold",
+          "The move to the fireplace" in inside and "one unbroken take" in inside,
+          inside[-200:])
 
 
 class FakePatcher:
@@ -2578,8 +2598,10 @@ def test_a_walk_is_not_its_own_reverse():
     said = S.move_clause("office door", "Mara walks Ana to the office door.")
     check("a move to an unlisted place says which way the bodies face",
           "each body facing the way it goes" in said, said)
-    check("...and that the destination gets nearer",
-          "office door nearer at the last frame than at the first" in said, said)
+    check("...and that the bodies get nearer the destination",
+          "nearer the office door at the last frame than at the first" in said, said)
+    check("...and never that the destination gets nearer the lens",
+          "travels to" not in said and "door nearer at" not in said, said)
     between = S.travel_anchor("garage", "", "hallway", "", "Mara walks Ana to the hallway.")
     check("a walk between two rooms says it too",
           "each body facing the way it goes" in between, between)
@@ -2598,7 +2620,7 @@ def test_a_walk_is_not_its_own_reverse():
         shot = _shots_of(run_node("A depot at night.\n\n" + beat, plan_only=True,
                                   character_memory=mem))[0]
         check(f"travel clause={want}: {beat[:34]!r}",
-              ("The shot travels to" in shot) == want, shot[-140:])
+              ("The move to the" in shot) == want, shot[-140:])
 
 
 def test_a_thing_that_opens_itself_is_a_staged_change():
@@ -8426,6 +8448,69 @@ def test_the_shot_that_takes_it_off_is_not_told_where_it_sits():
     check("...while boots are", S.plural_item("black boots") is True)
 
 
+def test_a_removal_stays_off_in_every_later_shot():
+    """REPORTED: a garment taken off is still listed in the beats that follow.
+
+    Run through the whole shot loop, because the failures were spread over it: the
+    `remove:` line read word for word, the removal verb read only in front of its
+    object, the wearer read off whoever was named first, and a garment word already
+    gone for one person swallowing every later removal of it for anybody else."""
+    print("\n=== a removal stays off in every later shot ===")
+    mem = ("Kate: she, 25, blue denim jacket, white shirt, black jeans, white bra, "
+           "black panties.\nDan: he, 40, grey shirt, black trousers.")
+    rest = "\n\nKate sits on the bed. Dan sits beside her.\n\nKate and Dan talk quietly."
+
+    def after(beat):
+        shots = _shots_of(run_node("A small flat.\n\nKate and Dan stand in the bedroom."
+                                   "\n\n" + beat + rest, plan_only=True,
+                                   character_memory=mem))
+        return shots[2:]
+
+    def entry(shot, who):
+        m = re.search(who + r": [^.\n]*\.", shot)
+        return m.group(0) if m else ""
+
+    for beat, gone in (("Kate shrugs.\nremove: her jacket", ["jacket"]),
+                       ("Kate shrugs.\nremove: the jacket", ["jacket"]),
+                       ("Kate shrugs.\nremove: Jacket.", ["jacket"]),
+                       ("Kate shrugs.\nremove: jacket and shirt", ["jacket", "white shirt"]),
+                       ("Kate shrugs.\nremove: blue jacket", ["jacket"]),
+                       ("Kate's jacket comes off.", ["jacket"]),
+                       ("Her jacket is removed.", ["jacket"]),
+                       ("Kate takes off her jacket, shirt and jeans.",
+                        ["jacket", "white shirt", "jeans"])):
+        later = after(beat)
+        check(f"stays off after {beat.splitlines()[-1]!r}",
+              all(g not in entry(s, "Kate") for s in later for g in gone),
+              entry(later[-1], "Kate"))
+    later = after("Dan takes off her jacket and shirt.")
+    check("her shirt comes off her", all("white shirt" not in entry(s, "Kate") for s in later),
+          entry(later[-1], "Kate"))
+    check("...and his stays on him", all("grey shirt" in entry(s, "Dan") for s in later),
+          entry(later[-1], "Dan"))
+    later = after("Dan undresses Kate.")
+    check("the one undressed has nothing listed",
+          all("jeans" not in entry(s, "Kate") for s in later), entry(later[-1], "Kate"))
+    check("...and the one undressing keeps his clothes",
+          all("trousers" in entry(s, "Dan") for s in later), entry(later[-1], "Dan"))
+    later = after("Kate strips to her bra and panties.")
+    check("a partial strip takes the rest off",
+          all("jeans" not in entry(s, "Kate") for s in later), entry(later[-1], "Kate"))
+    check("...and keeps what it names",
+          all("white bra" in entry(s, "Kate") and "black panties" in entry(s, "Kate")
+              for s in later), entry(later[-1], "Kate"))
+    shots = _shots_of(run_node(
+        "A small flat.\n\nKate and Dan stand in the bedroom.\n\nKate takes off her shirt."
+        "\n\nDan takes off his shirt." + rest, plan_only=True, character_memory=mem))
+    # Shot 3 follows a removal, so it starts fresh and still describes what comes off
+    # in it -- on him. Hers came off a shot earlier and stays off.
+    check("the same word off a second person comes off him too",
+          all("grey shirt" not in entry(s, "Dan") for s in shots[3:]), entry(shots[-1], "Dan"))
+    check("...named as his own", "grey shirt comes off" in shots[2].lower(), shots[2])
+    check("...and hers does not come back while his comes off",
+          "white shirt" not in entry(shots[2], "Kate"), entry(shots[2], "Kate"))
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -8652,6 +8737,7 @@ def main():
     test_the_two_wardrobe_readers_agree()
     test_a_beam_in_a_roof_is_not_a_smile()
     test_the_shot_that_takes_it_off_is_not_told_where_it_sits()
+    test_a_removal_stays_off_in_every_later_shot()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

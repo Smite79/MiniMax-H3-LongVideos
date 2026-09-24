@@ -2862,7 +2862,10 @@ _REMOVAL_PROSE = re.compile(
     + engine.TO_THE_FLOOR + r"))"
     r"|\b(?:" + _STRIP_VERB + r"|" + _PUSH_VERB + r"|drop(?:s|ped|ping)?|"
     r"let(?:s|ting)?|lob(?:s|bed)?|fling(?:s|ing)?|flung|discard(?:s|ed|ing)?)\b"
-    r"(?=[^.;!?]{0,40}?" + engine.TO_THE_FLOOR + r")",
+    r"(?=[^.;!?]{0,40}?" + engine.TO_THE_FLOOR + r")"
+    # "gets her jacket off" -- the object between, and no second verb.
+    r"|\b(?:get(?:s|ting)?|got)\b(?=(?:\s+(?!(?:and|then|up|out|back|down|in|on|into|"
+    r"onto|to|off)\b)[\w’'-]+){1,4}\s+off\b)",
     re.I)
 
 
@@ -2983,8 +2986,12 @@ def scene_tag_for(head, scene):
     return ""
 
 
-def off_by_last_frame(items, agent="", scene="", beat=""):
+def off_by_last_frame(items, agent="", scene="", beat="", wearer_sheet=""):
     """State that a removal FINISHES inside this shot. Empty when nothing came off.
+
+    `wearer_sheet` is the sheet line of the person it comes off, read first for the
+    garment's name: two people in shirts are two shirts, and the whole scene's
+    longest "shirt" was the other person's.
 
     Scrubbing the scene stops a garment being described. It does not tell the model
     to complete the removal, and the last frame is what the next shot inherits as
@@ -3001,8 +3008,8 @@ def off_by_last_frame(items, agent="", scene="", beat=""):
         return ""
     named = []
     for i in items:
-        nm = scene_name_for(i, scene) or i
-        tag = scene_tag_for(i, scene)
+        nm = scene_name_for(i, wearer_sheet) or scene_name_for(i, scene) or i
+        tag = scene_tag_for(i, wearer_sheet) or scene_tag_for(i, scene)
         nm = f"{nm} {tag}" if tag else nm
         if nm not in named:
             named.append(nm)
@@ -4817,14 +4824,31 @@ _FRAME_SIZE = re.compile(
     r"\bknees?[-\s]up\b|\bhead\s+to\s+(?:toe|foot|feet)\b", re.I)
 
 
+# WHAT COUNTS AS THE AUTHOR PLACING THE CAMERA: a word that is about the camera in any
+# sentence, or an ordinary verb with the camera as its subject. The bare words stood
+# the hold down on prose that never mentions the camera -- "tilts her head", "pulls
+# out a chair", "eggs in a pan", "a handheld radio", "circles around the table", "the
+# drone of traffic", "looks into the camera" -- and one of them in the anchor freed
+# the camera for the whole film. A lens or a film stock is the look, not a move, so
+# the hold stays. ("dolly in" is left out: Dolly is a name.)
+_CAMERA_VERBS = (r"moves?|moving|movement|motion|work|angle|position|shake|pans?|"
+                 r"panning|tilts?|tilting|tracks?|tracking|follows?|following|pushes|"
+                 r"pushing|pulls?|pulling|zooms?|zooming|dollies|dollying|cranes?|"
+                 r"craning|booms?|trucks?|trucking|orbits?|orbiting|circles?|circling|"
+                 r"arcs?|arcing|rises?|rising|drops?|dropping|lowers?|glides?|drifts?|"
+                 r"swings?|rotates?|holds?|stays?|remains?|sits?|stands?|is")
 _CAMERA_ASKED = re.compile(
-    r"\bcameras?\b|\blens\b|\bshot\s+on\b|\bpans?\b|\bpanning\b|\btilts?\b|\btilting\b|"
-    r"\bdolly(?:ing)?\b|\btracking\s+shot\b|\btrucks?\s+(?:in|out|left|right)\b|"
-    r"\bzoom(?:s|ing|ed)?\b|\bpush(?:es|ing)?\s+in\b|\bpull(?:s|ing)?\s+(?:back|out)\b|"
-    r"\bcrane\b|\bjib\b|\bsteadicam\b|\bhand-?held\b|\bgimbal\b|\bdrone\b|"
-    r"\borbit(?:s|ing)?\b|\barc(?:s|ing)?\s+around\b|\bcircles?\s+around\b|"
-    r"\bwhip\s+pan\b|\brack\s+focus\b|\bfollow(?:s|ing)?\s+shot\b|\bpov\b|"
-    r"\blocked[-\s]off\b|\bstatic\s+(?:shot|frame|camera)\b|\bcrash\s+zoom\b", re.I)
+    r"\bcameras?\s+(?:\w+ly\s+|then\s+|never\s+|always\s+)?(?:" + _CAMERA_VERBS + r")\b|"
+    r"\bcameras?\s*:|"
+    r"\b(?:static|still|fixed|locked[-\s]off|stationary|steady|hand-?held|moving|"
+    r"tracking|shaky|overhead|tripod|slow)\s+(?:cameras?|shots?|frames?|takes?)\b|"
+    r"\b(?:dolly|crane|jib|drone|aerial|orbit(?:ing)?|arc|follow|pov)\s+shots?\b|"
+    r"\b(?:slow|quick|fast|gentle|smooth|slight|subtle|steady|gradual|whip|swish|crash|"
+    r"snap)\s+(?:pans?|tilts?|dolly|zoom|push[-\s]?in|pull[-\s]?(?:back|out)|crane|orbit)\b|"
+    r"\bzoom(?:s|ing|ed)?\s+(?:in|out)\b|\bpan(?:s|ning|ned)?\s+(?:left|right|across|over\s+to)\b|"
+    r"\bhand-?held\b(?=\s*(?:[.,;:!?)]|$|and\b|throughout\b|footage\b|look\b|style\b))|"
+    r"\bdolly\s+zoom\b|\bsteadicam\b|\bgimbal\b|\brack\s+focus\b|\bpov\b|"
+    r"\bpoint[-\s]of[-\s]view\b|\blocked[-\s]off\b|\bdutch\s+(?:angle|tilt)\b", re.I)
 
 
 def camera_hold(beat, anchor="", moving=False):
@@ -5558,13 +5582,18 @@ def facing_phrase(beat=""):
 
 
 def move_clause(dest, beat=""):
-    """Perform an arrival the place list cannot name. "" when there is nowhere."""
+    """Perform an arrival the place list cannot name. "" when there is nowhere.
+
+    The BODIES end nearer the destination. It was "the shot travels to the {dest}"
+    with "the {dest} nearer at the last frame" -- the destination nearer the lens,
+    which is a push-in, and the camera did it. The last-frame comparison stays,
+    because it is what says which way the walk runs."""
     if not dest:
         return ""
     facing = facing_phrase(beat)
-    return (f" The shot travels to the {dest} on screen, the whole move played out "
-            f"from its first step to its last,{facing + ' and' if facing else ''} the "
-            f"{dest} nearer at the last frame than at the first.")
+    return (f" The move to the {dest} plays out on screen from its first step to its "
+            f"last,{facing + ' and' if facing else ' each body'} nearer the {dest} at "
+            f"the last frame than at the first.")
 
 
 def travel_anchor(frm, via, to, here="", beat=""):
@@ -6330,6 +6359,10 @@ def infer_removals(beat, scene):
         tail = beat[m.end():]
         cut = _OBJECT_END.search(tail)
         span = tail[:cut.start()] if cut else tail
+        if cut and cut.group(0) == ",":
+            more = _list_runs_on(tail[cut.start():], scene)
+            if more:
+                span = span + ", " + more
         if not (re.fullmatch(_UNDO_VERB, m.group(0), re.I)
                 or re.search(r"\b(?:off|away|out\s+of|down)$", m.group(0), re.I)):
             part = re.search(r"\b(?:off|away)\b", span, re.I)
@@ -6371,8 +6404,74 @@ def infer_removals(beat, scene):
                                            == engine._garment_key(_near[0])
                                            for x in found):
                 found.append(_near[0])
+    # The garment as the subject: "Kate's jacket comes off", "her dress drops to the
+    # floor", "her jacket is removed". See engine.COMES_OFF.
+    for m in engine.GARMENT_COMES_OFF.finditer(beat):
+        if _in_a_request(beat, m.start()):
+            continue
+        word = m.group(1)
+        low = engine.singular_garment(word)
+        if not low or low in found or low in _NOT_A_GARMENT or _RESTRAINT_WORD.match(low):
+            continue
+        if not _is_entry_head(low, scene):
+            _kin = [k for k in _GARMENT_KIN.get(low, ()) if _is_entry_head(k, scene)]
+            if len(_kin) != 1 or _kin[0] in found:
+                continue
+            low = _kin[0]
+        if re.search(r"\b" + re.escape(word) + r"\b\s*(?:is|was|walks|stands|sits|=)",
+                     scene, re.I):
+            continue
+        found.append(low)
     shown_off = exposed_by(beat, scene)
     return [f for f in found if f not in shown_off]
+
+
+def _list_runs_on(rest, scene):
+    """The rest of a garment LIST past a comma -- ", shirt and bra" -- or "".
+
+    The object of a removal verb ended at the first comma, so "takes off her jacket,
+    shirt and bra" took off the jacket and left the shirt and bra listed on every
+    later shot. Only a list that CLOSES with "and"/"or" and names nothing but
+    garments runs on: "her jacket, the shirt underneath" is an aside, and "her
+    jacket, sits down" is the next action."""
+    segs, pos = [], 0
+    while True:
+        m = re.match(r",\s*", rest[pos:])
+        if not m:
+            return ""
+        start = pos + m.end()
+        nxt = _OBJECT_END.search(rest, start)
+        seg = rest[start:nxt.start() if nxt else len(rest)]
+        words = re.findall(r"\b[\w-]{3,}\b", seg)
+        if (_HAS_VERB.search(seg) or _REMOVAL_PROSE.search(seg)
+                or not any(_is_entry_head(engine.singular_garment(w), scene)
+                           for w in words)):
+            return ""
+        segs.append(seg.strip())
+        if re.search(r"\b(?:and|or)\b", seg, re.I):
+            return ", ".join(segs)
+        if not nxt or nxt.group(0) != ",":
+            return ""
+        pos = nxt.start()
+
+
+def removal_owner(beat, token, sheet):
+    """Whose `token` this beat takes off, off the possessive in front of it. "" if none.
+
+    "Dan takes off her shirt" is Kate's shirt, and "Dan takes off his shirt" after
+    it is Dan's -- the same word, two garments. See engine.possessor_at."""
+    people = [n for n, _ in sheet_lines(sheet) if n]
+    head = str(token or "").split()[-1] if str(token or "").strip() else ""
+    b = str(beat or "")
+    if not people or not head:
+        return ""
+    m = re.search(r"\b" + re.escape(head) + r"(?:e?s)?\b", b, re.I)
+    if not m:
+        return ""
+    pron = {n: sheet_pronoun(ln) for n, ln in sheet_lines(sheet) if n}
+    who = engine.names_in(b, people)
+    subject = engine._agent_before(b, m.start(), people) or (who[0] if who else "")
+    return engine.possessor_at(b, m.start(), people, subject, pron)
 
 
 garments_in = engine.garment_words
@@ -6382,7 +6481,7 @@ region_of = engine.region_of
 _NAKED_CUE = engine.STRIPS_BARE
 
 
-def strips_who(beat, cast):
+def strips_who(beat, cast, sheet=""):
     """Who this beat undresses. [] when it cannot tell.
 
     strips_bare only answers WHETHER somebody ends up with no clothes on. The
@@ -6390,15 +6489,21 @@ def strips_who(beat, cast):
     people BOTH were stripped -- one character undressing made the other undress
     too. Reported as the second character mimicking the first.
 
-    The subject is the name before the cue, the same reading posture_in uses. With
-    one person in the shot there is nobody else it can be."""
+    The subject is the name before the cue, the same reading posture_in uses -- unless
+    somebody ELSE is being undressed: "Dan undresses Kate", "Dan strips her naked".
+    See engine.undressed_object; `sheet` is what resolves the "her". With one person
+    in the shot there is nobody else it can be."""
     people = [n for n in (cast or []) if n]
     b = str(beat or "")
     if not people or not b:
         return []
     if len(people) == 1:
         return people[:1]
-    m = _NAKED_CUE.search(b)
+    _pron = {n: sheet_pronoun(ln) for n, ln in sheet_lines(sheet) if n}
+    obj = [n for n in engine.undressed_object(b, people, pronouns=_pron) if n in people]
+    if obj:
+        return obj
+    m = _NAKED_CUE.search(b) or engine.STRIPS_TO.search(b)
     if not m:
         return []
     before = b[:m.start()]
@@ -6444,6 +6549,75 @@ def missing_removals(beat, scene, already):
         r"\b" + re.escape(h) + r"\b\s*(?:is|was|walks|stands|sits)", scene, re.I)]
 
 
+_REMOVE_ITEM_SEP = re.compile(r"\s*[,;&+]\s*")
+_REMOVE_ITEM_AND = re.compile(r"\s+(?:and|plus)\s+", re.I)
+
+
+def removal_items(line):
+    """The items of one `remove:` line. "jacket and shirt" is two; "black and white
+    shirt" is one, because "black" is not a garment -- split, it would take the black
+    jeans off as well."""
+    out = []
+    for piece in _REMOVE_ITEM_SEP.split(str(line or "")):
+        parts = _REMOVE_ITEM_AND.split(piece)
+        heads = [(re.findall(r"[\w-]+", p.lower()) or [""])[-1] for p in parts]
+        if len(parts) > 1 and all(engine._WORD_ONE.match(h) or _RESTRAINT_WORD.match(h)
+                                  or engine._PHRASE_ONE.search(p) or engine._HW_ONE.search(p)
+                                  for h, p in zip(heads, parts)):
+            out.extend(parts)
+        else:
+            out.append(piece)
+    return [p for p in out if p.strip()]
+
+
+def sheet_form(token, scene):
+    """The sheet's own words for a `remove:` item it writes differently. Else as given.
+
+    The scrub finds an item by its exact words, so "remove: blue jacket" found
+    nothing in "blue denim jacket" and the jacket stayed on. Where exactly one entry
+    has the item's head noun and every one of its words, that entry is the item."""
+    t = str(token or "").strip()
+    if (not t or not scene or " " not in t
+            or re.search(r"\b" + re.escape(t) + r"\b", scene, re.I)):
+        return t
+    words = t.lower().split()
+    hits = []
+    for line in str(scene).split("\n"):
+        for item in re.split(r"[,;.]", line.split(":", 1)[-1]):
+            item = re.sub(r"<\s*picture[\s_\-]*\d+\s*>", " ", item, flags=re.I)
+            have = re.findall(r"[\w-]+", item.lower())
+            if words[-1] not in have or not all(w in have for w in words):
+                continue
+            name = engine.bare_name(re.sub(r"\s+", " ", item).strip())
+            end = re.search(r"\b" + re.escape(words[-1]) + r"\b", name, re.I)
+            name = name[:end.end()] if end else ""
+            if name and name.lower() not in [h.lower() for h in hits]:
+                hits.append(name)
+    return hits[0].lower() if len(hits) == 1 else t
+
+
+_REMOVE_ITEM_LEAD = re.compile(
+    r"^(?:(?:a|an|the|her|his|their|its|my|your|our|some|both)\s+"
+    r"|[A-Za-z][\w’'-]*['’]s\s+)+", re.I)
+
+
+def removal_token(item):
+    """One `remove:` item written the way the scrub can find it in the sheet.
+
+    The scrub looks the item up in the sheet word for word, so "remove: her jacket"
+    found nothing in "blue denim jacket" and the jacket stayed in every later shot,
+    and the removal clause said "takes the her jacket off". So did "the jacket",
+    "Kate's jacket", "jackets" against a sheet saying "jacket", and "Jacket." with
+    its full stop. What is left is the garment: lower case, no article or
+    possessive in front, the head noun as the vocabulary spells it."""
+    t = re.sub(r"\s+", " ", str(item or "")).strip().strip(".!?:;\"'“”")
+    t = _REMOVE_ITEM_LEAD.sub("", t).strip().lower()
+    if not t:
+        return ""
+    words = t.split()
+    return " ".join(words[:-1] + [engine.singular_garment(words[-1])])
+
+
 def extract_directives(beat):
     """(beat text with directive lines taken out, [removed tokens], [added phrases]).
 
@@ -6465,7 +6639,10 @@ def extract_directives(beat):
     removed, added = [], []
 
     def take_removed(m):
-        removed.extend(t.strip() for t in m.group(1).split(",") if t.strip())
+        for t in removal_items(m.group(1)):
+            t = removal_token(t)
+            if t and t not in removed:
+                removed.append(t)
         return ""
 
     def take_added(m):
@@ -7751,8 +7928,10 @@ class H3LongVideos:
         _staged_at = engine.staged_applications(
             [extract_directives(b)[0] for b in beats])
         _sheet_hw = {c for c, _p, _w, _a in engine.hardware_spans(sheet or "")}
+        _pron_of = {n: sheet_pronoun(ln) for n, ln in sheet_lines(sheet) if n}
         for b in beats:
             body, toks, adds = extract_directives(b)
+            toks = [sheet_form(t, scene) for t in toks]
             _said = _exact_all[len(plan)] if len(plan) < len(_exact_all) else []
             _exact = (" " + " ".join(terminate_lines(x) for x in _said)) if _said else ""
             if _said:
@@ -7767,7 +7946,7 @@ class H3LongVideos:
                 if _n:
                     _state.declare(_n, _line, staged_later=_later_for_state)
             _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
-                              shot=len(plan) + 1)
+                              shot=len(plan) + 1, pronouns=_pron_of)
             if _ch.get("applied") or _ch.get("released"):
                 hardware_changed.add(len(plan) + 1)
             _was = list(active)
@@ -7879,9 +8058,24 @@ class H3LongVideos:
                 reentry_shots[len(plan)] = _again
                 _kept = []
             _carry = [n for n in _kept if n not in active]
+            # Removals are per PERSON. "shirt" off Kate is not "shirt" off Dan, and a
+            # token already gone used to swallow every later removal of the same
+            # word: his shirt stayed on his sheet line while the shot called his
+            # chest bare. See removal_owner.
+            _taken_from = {}            # token -> who it comes off in THIS beat
+            _gone_before = list(gone)
+            _gone_by_before = {t: set(w) for t, w in gone_by.items()}
             if auto_remove:
-                inferred = [t for t in infer_removals(body, scene)
-                            if t not in toks and t not in gone]
+                inferred = []
+                for t in infer_removals(body, scene):
+                    if t in toks:
+                        continue
+                    _o = removal_owner(body, t, sheet)
+                    if _o:
+                        _taken_from[t] = [_o]
+                    if t in gone and not (_o and gone_by.get(t) and _o not in gone_by[t]):
+                        continue
+                    inferred.append(t)
                 if hold_restraints and restraint_coming_off(body):
                     for _n, _ln in sheet_lines(sheet if sheet_lines(sheet) else scene):
                         for _hw in restraint_words(_ln):
@@ -7897,14 +8091,43 @@ class H3LongVideos:
                     notes.append(f"shot {len(plan) + 1}: read '{', '.join(inferred)}' as "
                                  f"coming off, from the beat's own wording")
             bare = auto_remove and strips_bare(body)
-            if bare:
+            _down_to = engine.strips_to(body) if auto_remove and not bare else None
+            if bare or _down_to is not None:
                 _strippers = strips_who(body, active if character_guard and active
-                                        else [n for n, _ in sheet_lines(shot_sheet) if n])
+                                        else [n for n, _ in sheet_lines(shot_sheet) if n],
+                                        shot_sheet)
+            if _down_to is not None and _strippers:
+                # A PARTIAL strip: everything on the sheet comes off except what the
+                # beat keeps. "underwear" keeps whatever the sheet has underneath.
+                _their_sheet = "\n".join(
+                    ln for n, ln in sheet_lines(shot_sheet) if n in set(_strippers))
+                _kept_on = [g for g in garments_in(_their_sheet)
+                            if g in _down_to
+                            or ("underwear" in _down_to and is_undergarment(g))]
+                _taken = [g for g in garments_in(_their_sheet)
+                          if g not in _kept_on and g not in toks
+                          and (g not in gone or (gone_by.get(g)
+                                                 and not set(_strippers) <= gone_by[g]))]
+                for g in _taken:
+                    _taken_from[g] = list(_strippers)
+                if _taken:
+                    toks = list(toks) + _taken
+                    notes.append(
+                        f"shot {len(plan) + 1} reads as {', '.join(_strippers)} stripping "
+                        f"down to {', '.join(_kept_on) or ', '.join(_down_to)} -- so the rest "
+                        f"of the wardrobe on the character sheet was taken off: "
+                        f"{', '.join(_taken)}")
+            if bare:
                 _their_sheet = "\n".join(
                     ln for n, ln in sheet_lines(shot_sheet) if n in set(_strippers)
                 ) or shot_sheet
                 stripped = [g for g in garments_in(_their_sheet)
-                            if g not in toks and g not in gone]
+                            if g not in toks
+                            and (g not in gone or (_strippers and gone_by.get(g)
+                                                   and not set(_strippers) <= gone_by[g]))]
+                for g in stripped:
+                    if _strippers:
+                        _taken_from[g] = list(_strippers)
                 if stripped:
                     toks = list(toks) + stripped
                     notes.append(
@@ -7920,7 +8143,7 @@ class H3LongVideos:
                         f"garment was recognised in the character sheet, so nothing was "
                         f"taken off and every later shot still describes the clothes. Add "
                         f"a 'remove:' line naming them")
-            revived = [t for t in gone if names_any(body, [t])]
+            revived = [t for t in gone if names_any(body, [t]) and t not in toks]
             if revived:
                 notes.append(
                     f"shot {len(plan) + 1} names {', '.join(revived)} in its own text, and "
@@ -7937,8 +8160,14 @@ class H3LongVideos:
                     _wears = [n for n, _wl in sheet_lines(sheet)
                               if n and re.search(r"\b" + re.escape(_t) + r"\b",
                                                  _wl or "", re.I)]
-                    gone_by.setdefault(_t, set()).update(
-                        [n for n in _took if n in _wears] or _wears)
+                    # Whose it is, when the beat says -- "Dan takes off HER shirt" is
+                    # hers, whoever else wears one -- before who is doing it.
+                    _whose = [n for n in (_taken_from.get(_t)
+                                          or [removal_owner(body, _t, sheet)])
+                              if n in _wears]
+                    _whose = _whose or [n for n in _took if n in _wears] or _wears
+                    _taken_from[_t] = _whose
+                    gone_by.setdefault(_t, set()).update(_whose)
                 _retired = [a for a in shown if names_any(a, toks)]
                 if _retired:
                     shown = [a for a in shown if a not in _retired]
@@ -7996,7 +8225,13 @@ class H3LongVideos:
                             and _anchoring
                             and not (restart_after_removal
                                      and (i_shot - 1) in stripped_shots))
-            visible = gone if has_keyframe else [g for g in gone if g not in toks]
+            # Without a keyframe the removal shot keeps describing what comes off in
+            # it -- but only on the person it comes off. Somebody who lost the same
+            # garment earlier stays without it.
+            visible = gone if has_keyframe else [g for g in gone
+                                                 if g not in toks or g in _gone_before]
+            _gone_by_here = {t: (_gone_by_before.get(t) if not has_keyframe and t in toks
+                                 else gone_by.get(t)) for t in gone}
             if (i_shot > 0 and restart_after_removal
                     and (i_shot - 1) in stripped_shots):
                 restarted.append(i_shot + 1)
@@ -8116,8 +8351,8 @@ class H3LongVideos:
                 _m = re.match(r"\s*([A-Za-z][\w'\u2019-]*)\s*:", _ln)
                 _who = _m.group(1).lower() if _m else ""
                 _allow = [t for t in _toks_all
-                          if not (_who and gone_by.get(t) and _who not in
-                                  {str(x).lower() for x in gone_by[t]})]
+                          if not (_who and _gone_by_here.get(t) and _who not in
+                                  {str(x).lower() for x in _gone_by_here[t]})]
                 _scrubbed.append(scrub_removed(_ln, _allow))
             shot_scene = "\n".join(p for p in _scrubbed if p.strip())
             _holds = frame_holds(anchor) or frame_holds(body)
@@ -8179,16 +8414,20 @@ class H3LongVideos:
                           [n for n, _ in sheet_lines(_who_sheet) if n])
             _by_agent = {}
             for _t in (toks if not bare else []):
-                _w = next((n for n, ln in sheet_lines(_who_sheet)
-                           if n and names_any(ln, [_t])), _wearer)
+                _w = next((n for n in (_taken_from.get(_t) or [])), None) or next(
+                    (n for n, ln in sheet_lines(_who_sheet) if n and names_any(ln, [_t])),
+                    _wearer)
                 _a = removal_agent(body, _cast_here, _w, _t)
-                _by_agent.setdefault(_a, []).append(_t)
+                _by_agent.setdefault((_a, _w), []).append(_t)
             tail = (own_body(BARE_HOLD, _wearer or (active[:1] if active else []),
                              active if character_guard else
                              [n for n, _ in sheet_lines(_who_sheet) if n])
                     if (bare and toks)
-                    else "".join(off_by_last_frame(_items, _a, scene, body)
-                                 for _a, _items in _by_agent.items()))
+                    else "".join(off_by_last_frame(
+                        _items, _a, scene, body,
+                        wearer_sheet="\n".join(ln for n, ln in sheet_lines(sheet)
+                                               if n and n == _w))
+                        for (_a, _w), _items in _by_agent.items()))
             _was_restrained = restrained
             if hold_restraints:
                 if (names_any(RESTRAINT_HOLD_KEY, toks)
@@ -8238,6 +8477,7 @@ class H3LongVideos:
             if _pace:
                 paced_shots.append(len(plan) + 1)
             _travel = travel_anchor(_frm, _via, _to, here, body)
+            _journey = bool(_travel)     # between places: the camera has to go too
             if _travel:
                 travel_shots.append(len(plan) + 1)
             else:
@@ -8506,7 +8746,9 @@ class H3LongVideos:
             _frame = frame_hold(body, anchor, len(_described or []) or 1)
             if _frame:
                 frame_shots.append(len(plan) + 1)
-            _camera = camera_hold(body, anchor, moving=bool(_travel)) if hold_camera else ""
+            # A move inside the room keeps the hold: a still camera can watch somebody
+            # cross to the fireplace, and freeing it there was the camera wandering.
+            _camera = camera_hold(body, anchor, moving=_journey) if hold_camera else ""
             if _camera:
                 camera_shots.append(len(plan) + 1)
             _wearer_here = (not restrained_who

@@ -579,6 +579,86 @@ def test_descriptions_and_places_have_owners():
     check("pointing at a room does not move the scene", st.place == "studio", st.place)
 
 
+def test_a_garment_comes_off_the_person_it_belongs_to():
+    """REPORTED: a garment taken off is still listed in the beats that follow.
+
+    Every one of these came off the WRONG person, or nobody: "Dan takes off her
+    shirt" took his, "Dan undresses Kate" undressed him, "strips to her bra and
+    panties" took nothing, and "Kate's jacket comes off" had no verb in front of the
+    garment for any reader to find."""
+    print("\n=== a garment comes off the person it belongs to ===")
+    pro = {"Kate": "she", "Dan": "he", "Ana": "she"}
+    cast = ["Kate", "Dan"]
+    for text, word, want in (("Dan takes off her jacket and shirt.", "shirt", "Kate"),
+                             ("Dan takes off his shirt.", "shirt", "Dan"),
+                             ("Dan takes off Kate's shirt.", "shirt", "Kate"),
+                             ("Dan takes off his shirt and her jacket.", "jacket", "Kate"),
+                             ("Kate takes off her shirt.", "shirt", "Kate"),
+                             ("Dan takes off the shirt.", "shirt", "")):
+        got = E.possessor_at(text, text.index(word), cast, "Dan", pro)
+        check(f"whose: {text!r}", got == want, got)
+    check("'their' with nobody declared 'they' is plural, not one person",
+          E.possessor_at("Kate and Ana take off their shirts.", 27, ["Kate", "Ana"],
+                         "Ana", {"Kate": "she", "Ana": "she"}) == "")
+    for text, want in (("Dan undresses Kate.", ["Kate"]),
+                       ("Dan strips her naked.", ["Kate"]),
+                       ("Dan undresses her.", ["Kate"]),
+                       ("Dan takes her clothes off.", ["Kate"]),
+                       ("Kate strips her clothes off.", ["Kate"]),
+                       ("Dan helps Kate undress.", ["Kate"]),
+                       ("Dan strips naked.", []),
+                       ("Dan takes Kate to bed.", [])):
+        got = E.undressed_object(text, cast, "Dan", pro)
+        check(f"undressed: {text!r}", got == want, str(got))
+    for text, want in (("Kate strips to her bra and panties.", ["bra", "panties"]),
+                       ("Kate strips down to her underwear.", ["underwear"]),
+                       ("Kate takes off everything but her panties.", ["panties"]),
+                       ("Kate strips to her lacy red bra, then sits down.", ["bra"]),
+                       ("Kate strips down.", None),
+                       ("Kate strips down to get into the bath.", None),
+                       ("Kate is wearing everything but her hat.", None)):
+        got = E.strips_to(text)
+        check(f"strips to: {text!r}", got == want, str(got))
+    check("down to her underwear is not a full strip",
+          not E.STRIPS_BARE.search("Kate strips down to her underwear."))
+    check("...but down to get in the bath still is",
+          bool(E.STRIPS_BARE.search("Kate strips down to get into the bath.")))
+    for text, want in (("Kate's jacket comes off.", ["jacket"]),
+                       ("Her dress slowly slides to the floor.", ["dress"]),
+                       ("Her jacket is removed.", ["jacket"]),
+                       ("The red dress comes off the rack.", []),
+                       ("Her jacket is taken off the hook.", [])):
+        got = [m.group(1) for m in E.GARMENT_COMES_OFF.finditer(text)]
+        check(f"comes off: {text!r}", got == want, str(got))
+    check("a plural in -es finds its garment", E.singular_garment("dresses") == "dress")
+
+    st = E.SceneState()
+    st.declare("Kate", "Kate: she, 25, white shirt, jeans.")
+    st.declare("Dan", "Dan: he, 40, grey shirt, trousers.")
+    st.read("Dan takes off her shirt.", cast, 1, pronouns=pro)
+    check("her shirt comes off her", "shirt" not in str(st.person("Kate").worn),
+          str(st.person("Kate").worn))
+    check("...and his stays on him", "grey shirt" in st.person("Dan").worn
+          and not st.person("Dan").bare, str(st.person("Dan").worn))
+    st.read("Dan undresses Kate.", cast, 2, pronouns=pro)
+    check("the one undressed is bare", st.person("Kate").bare, str(st.person("Kate").bare))
+    check("...and the one undressing is not", not st.person("Dan").bare,
+          str(st.person("Dan").bare))
+    st2 = E.SceneState()
+    st2.declare("Kate", "Kate: she, 25, grey sweater, jeans, white bra, black panties.")
+    st2.read("Kate strips to her bra and panties.", ["Kate"], 1)
+    check("a partial strip keeps what it names",
+          sorted(st2.person("Kate").worn) == ["black panties", "white bra"],
+          str(st2.person("Kate").worn))
+    st3 = E.SceneState()
+    st3.declare("Kate", "Kate: she, 25, grey sweater, jeans.")
+    st3.read("Kate's sweater comes off.", ["Kate"], 1)
+    check("a garment that comes off by itself is off",
+          [E._garment_key(g) for g in st3.person("Kate").removed] == ["sweater"]
+          and "sweater" not in str(st3.person("Kate").worn),
+          str(st3.person("Kate").removed))
+
+
 def main():
     test_two_things_in_one_beat()
     test_a_neck_is_not_behind_a_back()
@@ -603,6 +683,7 @@ def main():
     test_pulled_aside_is_not_taken_off()
     test_each_clause_owns_its_change()
     test_descriptions_and_places_have_owners()
+    test_a_garment_comes_off_the_person_it_belongs_to()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

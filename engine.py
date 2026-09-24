@@ -499,17 +499,23 @@ _REGION_RX = tuple((_rx(r"\b(?:" + p + r")\b"), region, said)
                    for p, region, said in REGION_OF)
 _NUDITY_RX = tuple((_rx(r"\b(?:" + p + r")\b"), regions) for p, regions in NUDITY)
 
+# "down to her underwear" keeps the underwear, so it is not a full strip. "Down to
+# her skin", "down to nothing" and "down to get in the bath" keep nothing.
+_KEEPS = (r"\s+to\s+(?:just\s+|only\s+|nothing\s+but\s+)?"
+          r"(?:(?:her|his|their)\s+(?!(?:bare\s+)?skin\b|birthday\s+suit\b)|(?:a|an)\s+|"
+          r"(?:" + GARMENT_PHRASES + r"|" + GARMENT_WORDS + r")s?\b)")
 STRIPS_BARE = _rx(
     r"\bnaked\b(?!\s+(?:eye|flame))"
     r"|\bnude\b|\bin\s+the\s+nude\b"
-    r"|\bundress(?:es|ed|ing)?\b"
-    r"|\bstrips?\s+(?:down|naked|bare)\b|\bstripp(?:ed|ing)\s+(?:down|naked|bare)\b"
+    r"|\bundress(?:es|ed|ing)?\b(?!(?:\s+(?:right\s+)?down)?" + _KEEPS + r")"
+    r"|\b(?:strips?|stripp(?:ed|ing))\s+(?:naked|bare)\b"
+    r"|\b(?:strips?|stripp(?:ed|ing))\s+down\b(?!" + _KEEPS + r")"
     r"|\b(?:strips?|stripp(?:ed|ing))\s+(?:out\s+of|off)\b"
     r"(?=\s*(?:[.,;!?]|$)|\s+(?:and|then|while|as)\b|\s+(?:everything|it\s+all|all\s+of\s+it)\b"
     r"|\s+(?:(?:his|her|their|all\s+(?:his|her|their))\s+)?(?:clothes|clothing|garments|things|kit|outfit|gear)\b)"
     r"|\btakes?\s+(?:everything|it\s+all|all\s+of\s+it|the\s+lot)\s+off\b"
     r"|\b(?:takes?|took|taking|pulls?|pulled|peels?|peeled|sheds?|shed|"
-    r"removes?|removed|gets?|got|slips?|slipped)\b"
+    r"removes?|removed|gets?|got|slips?|slipped|strips?|stripped|stripping)\b"
     r"(?:\s+(?:off|out\s+of))?\s+(?:his|her|their|its|the|all\s+(?:his|her|their))?"
     r"\s*(?:clothes|clothing|garments|things|kit|outfit|gear)\b"
     r"(?:\s+off)?"
@@ -718,6 +724,9 @@ def singular_garment(word):
     low = str(word or "").lower().strip("-")
     if low.endswith("s") and _WORD_EXACT.match(low[:-1]):
         return low[:-1]
+    # "their dresses": the stem is "dress", not "dresse".
+    if low.endswith("es") and _WORD_EXACT.match(low[:-2]):
+        return low[:-2]
     return low
 
 
@@ -1220,12 +1229,16 @@ class SceneState:
         return p
 
     # -- reading a beat ----------------------------------------------------
-    def read(self, beat, cast=(), shot=0):
+    def read(self, beat, cast=(), shot=0, pronouns=None):
         """Update the state from one beat, and report what CHANGED.
 
         The change matters separately from the result: the shot that puts the
         cuffs on has to say both ends of that, and every shot after it says only
-        the result."""
+        the result.
+
+        `pronouns` is {name: "she"|"he"|"they"} off the sheet, so "her" in "Dan
+        takes off her shirt" can find Kate. Without it a possessive stays with the
+        subject."""
         self.shot = shot
         beat = beat or ""
         changed = {"applied": [], "released": [], "moved_to": "", "posture": {},
@@ -1280,10 +1293,15 @@ class SceneState:
                 while p.hardware:
                     changed["released"].append((wearer, p.hardware.popitem()[1]))
 
+        # What a partial strip keeps is named after "takes off", and is not coming off.
+        _keeps = strips_to(beat)
+        _kept_keys = {_garment_key(k) for k in (_keeps or [])}
         if subject:
             for m in garments:
                 g = f"{(m.group(1) or '').strip()} {m.group(2)}".strip().lower()
                 key = _garment_key(g)
+                if key in _kept_keys:
+                    continue
                 clause, lo = _clause_at(beat, m.start(), boundaries)
                 item_at = m.start() - lo
                 actions = [(x.start(), "off") for x in _TAKES_OFF.finditer(clause)
@@ -1310,8 +1328,15 @@ class SceneState:
                 if action == "aside" and _OPENS_GARMENT.search(clause[:item_at]):
                     if _COMPLETES_OFF.search(re.split(r"[.;!?]", beat[m.end():])[0]):
                         action = "off"
+                if not action and _COMES_OFF_HERE.match(beat[m.end():]):
+                    action = "off"
                 local_who = names_in(clause, cast)
-                wearer_g = _wearer(clause, local_who, subject)
+                # Off or aside, "her" says whose it is. Going ON it may be the giver's:
+                # "Ana puts her coat on Bea".
+                wearer_g = ((possessor_at(beat, m.start(), list(cast or self.people),
+                                          subject, pronouns)
+                             if action in ("off", "aside") else "")
+                            or _wearer(clause, local_who, subject))
                 p = self.person(wearer_g)
                 if action == "off":
                     if key not in [_garment_key(x) for x in p.removed]:
@@ -1342,7 +1367,8 @@ class SceneState:
                           + ([_strip.start()] if _strip else []),
                           default=len(beat))
             located = [(abs(beat.find(n) - nude_at), n) for n in who if beat.find(n) >= 0]
-            owners = [min(located)[1]] if located else ([subject] if subject else [])
+            owners = (undressed_object(beat, list(cast or self.people), subject, pronouns)
+                      or ([min(located)[1]] if located else ([subject] if subject else [])))
             for n in owners:
                 q = self.person(n)
                 _bare_on(q, _nude)
@@ -1353,6 +1379,24 @@ class SceneState:
                                                    for x in q.removed]:
                             q.removed.append(g)
                             changed["removed"].append((n, g))
+
+        if _keeps is not None and not _nude:
+            _to = STRIPS_TO.search(staged_text(beat))
+            owners = (undressed_object(beat, list(cast or self.people), subject, pronouns)
+                      or [_agent_before(staged_text(beat), _to.start() if _to else 0, who)
+                          or subject])
+            for n in [o for o in owners if o]:
+                q = self.person(n)
+                keep = [g for g in q.worn if _garment_key(g) in _kept_keys
+                        or ("underwear" in _keeps and is_undergarment(g))]
+                off = [g for g in q.worn if g not in keep]
+                for g in off:
+                    q.worn.remove(g)
+                    if _garment_key(g) not in [_garment_key(x) for x in q.removed]:
+                        q.removed.append(g)
+                        changed["removed"].append((n, g))
+                covered = {r for g in keep for r in regions_of(g)}
+                _bare_on(q, [r for g in off for r in regions_of(g) if r not in covered])
 
         pose = posture_in(beat)
         if pose and subject:
@@ -1531,6 +1575,197 @@ def _wearer(beat, who, fallback, cast=()):
                         nearest = (m.start(), name)
         agent = nearest[1] if nearest else who[0]
     return next((n for n in who if n != agent), fallback)
+
+
+_PRONOUN_GROUP = {"her": "she", "hers": "she", "him": "he", "his": "he",
+                  "them": "they", "their": "they", "theirs": "they"}
+
+
+def _by_pronoun(word, cast, pronouns, subject, reflexive):
+    """The one person in `cast` a pronoun can mean here, or "".
+
+    `reflexive` is the possessive reading -- "Kate takes off HER shirt" is her own
+    shirt -- so the subject wins whenever the pronoun fits them. The object reading
+    -- "Dan undresses HER" -- is never the subject; that would be "herself".
+
+    `pronouns` is {name: "she"|"he"|"they"} off the sheet. Where nobody declared
+    the pronoun, the possessive stays with the subject, which is how this read
+    before it knew any pronouns, and the object is the only other person or nobody."""
+    group = _PRONOUN_GROUP.get(str(word or "").lower())
+    people = [n for n in (cast or []) if n]
+    if not group or not people:
+        return ""
+    fits = [n for n in people if (pronouns or {}).get(n) == group]
+    if not fits:
+        if group == "they":
+            # Nobody's own pronoun: it is plural -- "McKenna and Tess take off
+            # THEIR shirts" -- and no one person is the answer.
+            return ""
+        if reflexive:
+            return subject or ""
+        others = [n for n in people if n != subject]
+        return others[0] if len(others) == 1 else ""
+    if reflexive and subject in fits:
+        return subject
+    others = [n for n in fits if n != subject]
+    return others[0] if len(others) == 1 else ""
+
+
+_POSSESSIVE = re.compile(r"\b(?:([A-Z][\w’'-]*?)['’]s|((?i:her|his|their)))\s+")
+_OWNER_BREAK = _rx(r"[.;:!?]|\b(?:the|a|an|this|that|these|those|is|are|was|were|has|have|"
+                   r"had|then|puts?|putting|wears?|wearing|" + _STRIP_VERB + r"|"
+                   + _UNDO_VERB + r")\b")
+
+
+def possessor_at(text, at, cast, subject="", pronouns=None):
+    """Whose garment the one named at `at` is, off the possessive in front of it.
+
+    "" when nothing in front of it says. "Dan takes off her jacket and shirt" is two
+    of HER garments, and reading the wearer off the sentence's subject instead put
+    them on Dan -- who wears a shirt too, so his came off the sheet, the shot called
+    his chest bare, and hers stayed listed in every shot after. The possessive
+    reaches over a list ("her jacket and shirt") but not over a verb or a new
+    determiner, which would make it a different phrase's."""
+    before = str(text or "")[:max(0, int(at))]
+    m = None
+    for m in _POSSESSIVE.finditer(before):
+        pass
+    if not m:
+        return ""
+    between = before[m.end():]
+    if len(between.split()) > 5 or _OWNER_BREAK.search(between):
+        return ""
+    if m.group(1):
+        return next((n for n in (cast or []) if n and n == m.group(1)), "")
+    return _by_pronoun(m.group(2), cast, pronouns, subject, reflexive=True)
+
+
+_UNDRESSES = _rx(r"\b(?:undress(?:es|ed|ing)?|strip(?:s|ped|ping)?)\s+([\w’'-]+)"
+                 r"(?:\s+([\w-]+))?")
+_HELPS_UNDRESS = _rx(r"\bhelp(?:s|ed|ing)?\s+([\w’'-]+)\s+(?:to\s+)?"
+                     r"(?:undress|strip|get\s+undressed)\b")
+_CLOTHES = r"(?:clothes|clothing|garments|things|kit|outfit|gear)"
+_TAKES_CLOTHES = _rx(r"\b(?:undress|strip|take|took|pull|peel|remove|get|got|slip|shed)\w*"
+                     r"(?:\s+(?:off|out\s+of))?\s+(?:all\s+(?:of\s+)?)?"
+                     r"(her|his|their|[A-Z][\w’'-]*?['’]s)\s+" + _CLOTHES + r"\b")
+_CLOTHES_WORD = _rx(r"^(?:" + _CLOTHES + r"|" + GARMENT_PHRASES + r"|" + GARMENT_WORDS
+                    + r")s?$")
+
+
+def _agent_before(text, at, people):
+    """The person the sentence names last before `at`. "" when it names nobody."""
+    sent = re.split(r"[.;!?]", str(text or "")[:at])[-1]
+    hits = [(m.start(), n) for n in people
+            for m in re.finditer(r"\b" + re.escape(n) + r"\b", sent)]
+    return max(hits)[1] if hits else ""
+
+
+def undressed_object(beat, cast, subject="", pronouns=None):
+    """[who] a beat undresses when somebody ELSE does the undressing. [] otherwise.
+
+    "Dan undresses Kate" and "Dan strips her naked" put Dan in front of the cue, and
+    the reader that takes the name before the cue undressed him: Kate stayed in her
+    clothes for the rest of the film and every later shot described Dan as bare.
+    The person after the verb is the one it happens to. A possessive -- "takes off
+    her clothes" -- names them too, but reads as the subject's own when it fits."""
+    staged = staged_text(beat or "")
+    people = [n for n in (cast or []) if n]
+    for rx in (_HELPS_UNDRESS, _UNDRESSES, _TAKES_CLOTHES):
+        for m in rx.finditer(staged):
+            word = re.sub(r"['’]s$", "", m.group(1)) if rx is _TAKES_CLOTHES \
+                else m.group(1)
+            name = next((n for n in people if n == word), "")
+            if name:
+                return [name]
+            low = word.lower()
+            if low not in _PRONOUN_GROUP:
+                continue
+            nxt = (m.group(2) or "") if rx is _UNDRESSES else ""
+            possessive = (rx is _TAKES_CLOTHES or low in ("his", "their")
+                          or (low == "her" and bool(_CLOTHES_WORD.match(nxt))))
+            agent = _agent_before(staged, m.start(), people) or subject
+            got = _by_pronoun(low, people, pronouns, agent, possessive)
+            if got:
+                return [got]
+    return []
+
+
+# The garment as the SUBJECT of its own removal: "Kate's jacket comes off", "her
+# dress drops to the floor", "the shirt is pulled off". Every removal reader here
+# starts at a verb and reads its object, so a garment that comes off by itself, or
+# in the passive, came off nobody and stayed listed on every later shot. Off a THING
+# -- "off the rack", "off its hanger" -- is not off the body.
+_OFF = r"(?:off|away)\b(?!\s+(?:the|a|an|its|this|that)\b)"
+COMES_OFF = (r"(?:\s+(?:slowly|then|finally|now|quickly|gently|easily|\w+ly))*\s+(?:"
+             r"(?:comes?|came|coming)\s+(?:right\s+|straight\s+)?" + _OFF +
+             r"|(?:falls?|fell|falling|drops?|dropped|dropping|slides?|slid|sliding|"
+             r"slips?|slipped|slipping|slithers?|slithered|tumbles?|tumbled|pools?|"
+             r"pooled|puddles?|puddled|crumples?|crumpled)\s+"
+             r"(?:(?:right\s+|straight\s+)?" + _OFF +
+             r"|down\s+(?:her|his|their)\s+(?:legs?|body|hips|thighs)\b"
+             r"|(?:to|around|at|about)\s+(?:her|his|their)\s+(?:ankles?|feet)\b"
+             r"|" + TO_THE_FLOOR + r")"
+             r"|(?:is|are|was|were|gets?|got|has\s+been|have\s+been|had\s+been)\s+"
+             r"(?:\w+ly\s+)?(?:(?:removed|discarded|shed)\b|" + _OFF +
+             r"|(?:taken|pulled|stripped|peeled|cut|torn|ripped|yanked|tugged|slipped|"
+             r"eased|worked|wriggled|kicked|thrown|tossed|shrugged)\s+"
+             r"(?:" + _OFF + r"|aside\b)))")
+GARMENT_COMES_OFF = _rx(r"\b([\w-]{3,})" + COMES_OFF)
+_COMES_OFF_HERE = _rx(r"^" + COMES_OFF)
+
+_UNDER_WORD = _rx(r"\b(?:underwear|underclothes|underclothing|undies|lingerie|smalls)\b")
+_STRIP_ANY = _rx(r"\b(?:" + _STRIP_VERB + r"|" + _UNDO_VERB + r")\b")
+STRIPS_TO = _rx(
+    r"\b(?:strip(?:s|ped|ping)?|undress(?:es|ed|ing)?)(?:\s+(?:right\s+)?down)?"
+    r"(?=" + _KEEPS + r")\s+to\s+([^.;!?]+)"
+    r"|\b(?:everything|all\s+(?:of\s+)?(?:her|his|their)\s+(?:clothes|clothing))"
+    r"(?:\s+(?:off|away))?\s+(?:but|except(?:\s+for)?|apart\s+from|save\s+for)\s+"
+    r"([^.;!?]+)")
+_KEPT_FILLER = frozenset("""
+her his their a an the and or just only nothing but pair pairs of matching
+""".split())
+_KEPT_STOP = _rx(r"^(?:" + _STRIP_VERB + r"|" + _UNDO_VERB + r"|puts?|sits?|stands?|lies?|"
+                 r"climbs?|walks?|turns?|looks?|goes|heads?|moves?|kneels?|lays?|folds?|"
+                 r"drops?|hangs?|leaves?|waits?|shivers?|shivering|then|before|while|as|"
+                 r"so|until|into|onto|in|on|at|with)$")
+_ADJ_ONE = _rx(r"^" + _ADJ + r"$")
+
+
+def strips_to(beat):
+    """The garment words a PARTIAL strip keeps on, or None when there is none.
+
+    "strips to her bra and panties", "strips down to his boxers", "takes off
+    everything but her socks". Read as nothing coming off at all, the sweater and
+    jeans stayed in every later shot; read as a full strip, so did nothing -- the
+    underwear went too. `underwear` is in the list when the beat keeps the
+    underwear without naming it, for the caller to match against the sheet."""
+    staged = staged_text(beat or "")
+    for m in STRIPS_TO.finditer(staged):
+        tail = m.group(1) if m.group(1) is not None else m.group(2)
+        if m.group(2) is not None:
+            sent = re.split(r"[.;!?]", staged[:m.start()])[-1]
+            if not _STRIP_ANY.search(sent):
+                continue
+        kept, unknown = [], 0
+        for tok in re.findall(r"[\w'’-]+|[,;]", tail):
+            low = tok.lower()
+            if _KEPT_STOP.match(low):
+                break
+            words = garment_words(tok)
+            if words or _UNDER_WORD.search(low):
+                kept += [w for w in words if w not in kept]
+                if _UNDER_WORD.search(low) and "underwear" not in kept:
+                    kept.append("underwear")
+                unknown = 0
+                continue
+            if low in _KEPT_FILLER or tok in ",;" or _ADJ_ONE.match(low):
+                continue
+            unknown += 1
+            if unknown > 2:
+                break
+        if kept:
+            return kept
+    return None
 
 
 _LEADING_ARTICLE = re.compile(r"^(?:a|an|the|her|his|their|its)\s+", re.I)

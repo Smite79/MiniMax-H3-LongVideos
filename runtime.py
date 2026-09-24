@@ -344,7 +344,7 @@ def _image_out_dtype():
 
 
 def _evict_all_but(keep_model, latent=None):
-    """Unload every model EXCEPT the diffusion model from the GPU.
+    """Unload every model EXCEPT the diffusion model from the GPU and pinned RAM.
 
     This is the fix for VRAM ratcheting across a long chain. soft_empty_cache()
     only drops the CUDA allocator's cached blocks -- it does NOT unload models, so
@@ -382,48 +382,38 @@ def _evict_all_but(keep_model, latent=None):
                 need = 1e30
     except Exception:
         need = 1e30
-    # ...AND ROOM TO STAGE THE DiT'S WEIGHTS, which is a different pool.
-    #
-    # Everything above sizes VRAM for the sampler's ACTIVATIONS, and free_memory's
-    # eviction loop only ever measures VRAM. Under --enable-dynamic-vram the weights
-    # are staged in the PINNED HOST POOL instead, and nothing here asked for room
-    # there -- so the text encoder encoded a moment ago stayed staged in it. Read off
-    # a real render's log:
-    #
-    #     Model MiniMaxH3TEModel_ ... 25140MB Staged
-    #     Requested to load MiniMaxH3
-    #     0 models unloaded.
-    #     Model MiniMaxH3 ... 32427MB Staged
-    #
-    # 25 GB + 32 GB against a 49 GB pool. The DiT cannot all be staged, so part of it
-    # is paged in on every step at a different place -- and the model compiler's CUDA
-    # graph is keyed on where each module's weights sit (vbar_signature_compare), so
-    # it breaks and never replays. Reported as every step as slow as the first, where
-    # it used to be slow once and then fast: "graph breaks: 3, rogues: 19", 87 s/step.
-    #
-    # pins_required is how free_memory is asked for pinned room; it hands the figure
-    # to ensure_pin_budget, which evicts other models' pins to cover it. The text
-    # encoder is re-staged next shot -- one read per shot, against a graph that can
-    # replay across every step of this one.
-    _pins = 0
+    keep = _resident([keep_model])
     try:
-        _pins = int(keep_model.model_size())
-    except Exception:
-        _pins = 0
-    try:
-        try:
-            mm.free_memory(need, mm.get_torch_device(),
-                           keep_loaded=_resident([keep_model]), pins_required=_pins)
-        except TypeError:
-            # A ComfyUI older than the pinned pool has no pins_required; the weights
-            # are not staged there on such a build, so the old call is the right one.
-            mm.free_memory(need, mm.get_torch_device(),
-                           keep_loaded=_resident([keep_model]))
+        mm.free_memory(need, mm.get_torch_device(), keep_loaded=keep)
     except Exception:
         try:
             mm.soft_empty_cache(True)
         except Exception:
             pass
+    # ...AND THE PINNED RAM EVERY OTHER MODEL HOLDS, which nothing else here can free.
+    #
+    # Under --enable-dynamic-vram whatever part of the DiT does not fit the card
+    # streams from PINNED host RAM on every step. ComfyUI lets another model's pins go
+    # only once that model is idle, and a model is marked idle only BETWEEN nodes
+    # (reset_cast_buffers, after each node in execution.py). This node encodes and
+    # samples inside one node, so the text encoder is still "active" when the DiT
+    # starts, and its pins are never evicted for it -- free_memory's pins_required
+    # included, which evicts only idle models. Read off a real render: a 25 GB text
+    # encoder and a 32 GB DiT against a 49.6 GB pin limit on a 62 GB machine. The DiT
+    # could not pin the rest of itself, so what did not fit the card was read from
+    # pageable RAM or disk on every step. Reported as every step at 87 s, where only
+    # the first used to be slow.
+    #
+    # Dropping the other models' pins gives the DiT the whole pool. The text encoder
+    # re-reads its weights at the next shot's encode: once per shot, against every
+    # step of this one. A ComfyUI without dynamic VRAM has no is_dynamic, and pins
+    # nothing this way.
+    try:
+        for lm in list(mm.current_loaded_models):
+            if lm not in keep and lm.model is not None and lm.model.is_dynamic():
+                lm.model.unpin_all_weights()
+    except AttributeError:
+        pass
 
 
 def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent, sigmas):

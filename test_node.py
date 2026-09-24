@@ -247,6 +247,62 @@ def test_inferred_removals():
     check("...and reads cleanly", ",black" not in _s and "  " not in _s)
 
 
+def test_a_remove_line_is_read_as_the_garment():
+    """REPORTED: a garment taken off is still listed in the beats that follow.
+
+    A `remove:` item was looked up in the sheet word for word, so anything but the
+    bare noun -- "her jacket", "the jacket", "jackets", "Jacket." -- matched nothing
+    and the jacket stayed on for the rest of the film."""
+    print("\n=== a remove: line is read as the garment ===")
+    for line, want in (("her jacket", ["jacket"]), ("the jacket", ["jacket"]),
+                       ("jackets", ["jacket"]), ("Jacket.", ["jacket"]),
+                       ("Kate's jacket", ["jacket"]), ("jacket and shirt", ["jacket", "shirt"]),
+                       ("jacket; shirt", ["jacket", "shirt"]), ("bra & panties", ["bra", "panties"]),
+                       ("black and white shirt", ["black and white shirt"]),
+                       ("cuffs and collar", ["cuffs", "collar"]),
+                       ("coat, shirt", ["coat", "shirt"])):
+        got = S.extract_directives("x\nremove: " + line)[1]
+        check(f"remove: {line!r} -> {want}", got == want)
+    sc = ("Kate: she, 25, blue denim jacket, black and white striped shirt, black jeans.\n"
+          "Ana: she, 30, green jacket.")
+    for tok, want in (("blue jacket", "blue denim jacket"),
+                      ("black and white shirt", "black and white striped shirt"),
+                      ("jacket", "jacket"), ("red jacket", "red jacket")):
+        check(f"the sheet's own words for {tok!r}", S.sheet_form(tok, sc) == want)
+    check("'takes the her jacket off' is gone",
+          "the her" not in S.off_by_last_frame(
+              S.extract_directives("x\nremove: her jacket")[1], "Kate", sc, "x"))
+
+
+def test_every_way_a_garment_comes_off_is_read():
+    """REPORTED with the one above. A removal written any way but verb-then-object
+    was not read, so the garment stayed on the sheet line of every later shot."""
+    print("\n=== every way a garment comes off is read ===")
+    sc = "Kate: she, 25, blue denim jacket, white shirt, black jeans, red bra."
+    for beat, want in (("Kate's jacket comes off.", ["jacket"]),
+                       ("Her jacket is removed.", ["jacket"]),
+                       ("Her jacket is quickly pulled off.", ["jacket"]),
+                       ("Kate gets her jeans off.", ["jeans"]),
+                       ("Kate takes off her jacket, shirt and bra.", ["jacket", "shirt", "bra"]),
+                       ("Kate takes off her jacket, shirt, and jeans, then sits.",
+                        ["jacket", "shirt", "jeans"]),
+                       ("Kate takes off her jacket, sits down and sighs.", ["jacket"]),
+                       ("Kate takes off her jacket, the white shirt underneath clinging to her.",
+                        ["jacket"])):
+        got = S.infer_removals(beat, sc)
+        check(f"read: {beat!r}", got == want)
+    for beat in ("Kate gets her jacket and heads out.", "Kate holds her jacket, shirt and bag.",
+                 "The red bra comes off the rack.", "Her jacket is taken off the hook.",
+                 "Is her jacket coming off?", "Kate asks Dan to take off her jacket."):
+        check(f"not a removal: {beat!r}", S.infer_removals(beat, sc) == [])
+    mem = "Kate: she, 25, white shirt.\nDan: he, 40, grey shirt."
+    check("whose it is, by the possessive",
+          S.removal_owner("Dan takes off her shirt.", "shirt", mem) == "Kate")
+    check("...and his own", S.removal_owner("Dan takes off his shirt.", "shirt", mem) == "Dan")
+    check("the one undressed, not the one undressing",
+          S.strips_who("Dan undresses her.", ["Kate", "Dan"], mem) == ["Kate"])
+
+
 def test_character_sheet():
     print("\n=== a character sheet is not a beat ===")
     sheet = ("Maya: 27, silver hair, grey shorts, red jacket\n"
@@ -910,60 +966,55 @@ def test_a_repeated_naming_is_spent_as_a_pronoun():
               S.pronoun_rewrite(" Mara waits. Mara sits.", _who)[1] == [])
 
 
-def test_the_dit_asks_for_room_in_the_pinned_pool():
+def test_the_dit_gets_the_pinned_pool_to_itself():
     """Every step as slow as the first, where it used to be slow once and then fast.
 
-    Under --enable-dynamic-vram the DiT's weights are staged in the PINNED HOST POOL,
-    and the model compiler's CUDA graph is keyed on where each module's weights sit.
-    _evict_all_but sized VRAM for the sampler's activations and never asked for room
-    in that pool, so the text encoder encoded a moment before stayed staged in it --
-    25 GB beside a 32 GB DiT in a 49 GB pool. The DiT could not all be staged, part of
-    it was paged in at a different place every step, the graph never replayed, and the
-    log said "0 models unloaded" and "graph breaks: 3, rogues: 19".
-
-    pins_required is how free_memory is asked; ensure_pin_budget evicts other models'
-    pins to cover it."""
+    Under --enable-dynamic-vram whatever part of the DiT does not fit the card streams
+    from pinned host RAM every step. ComfyUI marks a model idle, and so lets its pins
+    go, only between nodes -- and this node encodes and samples inside one, so the
+    25 GB text encoder was still holding its pins beside a 32 GB DiT against a 49.6 GB
+    limit. The DiT could not pin the rest of itself and re-read it every step.
+    Asking free_memory for pins_required did not help: it evicts idle models only."""
     _rt = S._runtime_module
     saved = {k: getattr(_rt.mm, k, None) for k in ("free_memory", "get_torch_device",
-                                                   "soft_empty_cache")}
-    saved_res = _rt._resident
-    calls = []
-    class DiT:
-        def model_size(self): return 32427 * 1024 ** 2
-        class model:
-            @staticmethod
-            def memory_required(shape): return 2 * 1024 ** 3
+                                                   "soft_empty_cache",
+                                                   "current_loaded_models")}
+    calls, unpinned = [], []
+
+    class Patcher:
+        def __init__(self, name, dynamic=True):
+            self.name, self.dynamic, self.model = name, dynamic, object()
+        def is_dynamic(self): return self.dynamic
+        def unpin_all_weights(self): unpinned.append(self.name)
+
+    class Loaded:
+        def __init__(self, patcher): self.model = patcher
+
+    dit, te, vae = Patcher("dit"), Patcher("te"), Patcher("vae", dynamic=False)
+    dit.model = type("M", (), {"memory_required": staticmethod(lambda s: 2 * 1024 ** 3)})()
     lat = {"samples": torch.zeros(1, 16, 8, 32, 32)}
     try:
-        _rt._resident = lambda models: list(models)
         _rt.mm.get_torch_device = lambda: "cuda:0"
-        _rt.mm.soft_empty_cache = lambda *a, **k: calls.append(("empty", None))
-        _rt.mm.free_memory = (lambda need, dev, keep_loaded=(), pins_required=0:
-                              calls.append(("free", pins_required)))
-        _rt._evict_all_but(DiT(), lat)
-        check("pinned room is asked for, sized to the DiT",
-              calls and calls[-1] == ("free", 32427 * 1024 ** 2))
-        # A ComfyUI older than the pinned pool has no pins_required, and must still
-        # free rather than fall through to the bare cache-empty.
-        calls.clear()
-        def _old(need, dev, keep_loaded=()):
-            calls.append(("old", None))
-        _rt.mm.free_memory = _old
-        _rt._evict_all_but(DiT(), lat)
-        check("an older ComfyUI gets the old call, not a crash", calls == [("old", None)])
-        # A model that cannot size itself asks for nothing extra.
-        calls.clear()
-        class Blind(DiT):
-            def model_size(self): raise RuntimeError("no size")
-        _rt.mm.free_memory = (lambda need, dev, keep_loaded=(), pins_required=0:
-                              calls.append(("free", pins_required)))
-        _rt._evict_all_but(Blind(), lat)
-        check("an unsizable model asks for no extra pins", calls == [("free", 0)])
+        _rt.mm.soft_empty_cache = lambda *a, **k: calls.append("empty")
+        _rt.mm.free_memory = lambda need, dev, keep_loaded=(): calls.append(
+            [lm.model.name for lm in keep_loaded])
+        _rt.mm.current_loaded_models = [Loaded(te), Loaded(dit), Loaded(vae)]
+        _rt._evict_all_but(dit, lat)
+        check("VRAM is freed around the DiT, as before", calls == [["dit"]])
+        check("the text encoder lets its pinned RAM go", "te" in unpinned)
+        check("...and the DiT keeps its own", "dit" not in unpinned)
+        check("a model outside dynamic VRAM is left alone", "vae" not in unpinned)
+        # A ComfyUI without dynamic VRAM has no is_dynamic, and must still sample.
+        unpinned.clear()
+        del Patcher.is_dynamic
+        _rt._evict_all_but(dit, lat)
+        check("an older ComfyUI unpins nothing and does not crash", unpinned == [])
     finally:
         for k, v in saved.items():
             if v is not None:
                 setattr(_rt.mm, k, v)
-        _rt._resident = saved_res
+            elif hasattr(_rt.mm, k):
+                delattr(_rt.mm, k)
 
 
 def test_no_report_touches_weight_data():
@@ -4120,6 +4171,8 @@ def main():
     test_speech_and_refs()
     test_removals()
     test_inferred_removals()
+    test_a_remove_line_is_read_as_the_garment()
+    test_every_way_a_garment_comes_off_is_read()
     test_character_sheet()
     test_no_one_is_described_twice()
     test_sheet_lines_are_terminated()
@@ -4228,7 +4281,7 @@ def main():
     test_a_lora_states_its_step_count_in_its_name()
     test_the_graph_says_whether_the_schedule_is_already_set()
     test_a_repeated_naming_is_spent_as_a_pronoun()
-    test_the_dit_asks_for_room_in_the_pinned_pool()
+    test_the_dit_gets_the_pinned_pool_to_itself()
     test_no_report_touches_weight_data()
     test_a_lora_that_does_not_fit_is_reported_not_silent()
     test_widget_values_are_usable()
