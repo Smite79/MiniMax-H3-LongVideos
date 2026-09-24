@@ -602,15 +602,37 @@ def sheet_pronoun(line):
         word = item.strip().strip(".;").lower()
         if word in _PRONOUN_SET:
             return word
-    hits = [(m.start(), group_of[m.group(0).lower()])
-            for m in re.finditer(r"\b(?:" + "|".join(group_of) + r")\b", body, re.I)]
-    if hits:
-        return min(hits)[1]
+    # A SUBJECT pronoun is the person; "his" and "her" are as often somebody else's.
+    # "Kate: 25, woman, his hoodie" was read as a man off the hoodie's owner -- and
+    # the body, the figure and the genitals every bare shot describes followed it.
+    m = re.search(r"\b(she|he)\b", body, re.I)
+    if m:
+        return m.group(1).lower()
     for item in body.split(","):
         m = _PERSON_NOUN.match(item.strip())
         if m:
             return "she" if m.group(1).lower() in _SHE_NOUNS else "he"
+    hits = [(m.start(), group_of[m.group(0).lower()])
+            for m in re.finditer(r"\b(?:" + "|".join(group_of) + r")\b", body, re.I)]
+    if hits:
+        return min(hits)[1]
     return None
+
+
+def pronoun_is_a_guess(line):
+    """Did sheet_pronoun only have a "his" or a "her" to go on?
+
+    "Kate: 25, blonde, wearing his hoodie" reads as a man, and nothing in the line
+    can say otherwise. Worth telling the author: the pronoun decides the body, and
+    one written into the entry ("Kate: she, 25, ...") settles it."""
+    body = (line or "").split(":", 1)[-1]
+    if not sheet_pronoun(line):
+        return False
+    if any(i.strip().strip(".;").lower() in _PRONOUN_SET for i in body.split(",")):
+        return False
+    if re.search(r"\b(?:she|he)\b", body, re.I):
+        return False
+    return not any(_PERSON_NOUN.match(i.strip()) for i in body.split(","))
 
 
 ADULT_AGE = 18                 # below this the node describes no body at all
@@ -910,7 +932,11 @@ def groin_of(pronoun, age=0):
     age = int(age or 0)
     if not age or age < ADULT_AGE:
         return ""
-    return "the hips and groin bare as well, the genitals uncovered and in plain view"
+    # WHOSE, in the same breath. "the genitals" named nobody's, so in a shot with a
+    # man and a woman in it the model drew whichever its prior reached for first --
+    # reported as the wrong genitalia. The sex was worked out above and never said.
+    return (f"the hips and groin bare as well, a {who}'s genitals uncovered and in "
+            f"plain view")
 
 
 def bare_clause(gone, covers=None, worn="", body="", figure="", groin=""):
@@ -1218,6 +1244,57 @@ def _setting_of(sentence):
     return phrase[0].upper() + phrase[1:] + "."
 
 
+def _subject_clauses(sentence, forms):
+    """A sentence cut where a new clause opens on a NAME. [sentence] when none does.
+
+    "Kate wears a black thong and Dan wears boxers." is two statements about two
+    people. A shot without Dan dropped the whole sentence, and Kate's thong with it.
+    "Kate and Dan sit on the bed" is ONE statement -- a piece that is nothing but a
+    name is half a compound subject, not a clause -- and is not cut."""
+    s = str(sentence or "")
+    if not forms or not s.strip():
+        return [s]
+    alt = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+    cut = re.compile(r"(?:\s*[,;]\s*(?:and\s+|but\s+|while\s+)?|\s+(?:and|but|while)\s+)"
+                     r"(?=(?:" + alt + r")(?![\w-])\s+(?!(?:and|or)\b)[a-z])")
+    pieces = [p.strip() for p in cut.split(s) if p.strip()]
+    if len(pieces) < 2 or any(re.fullmatch(r"(?:" + alt + r")", p.strip(" .!?"))
+                              for p in pieces):
+        return [s]
+    return pieces
+
+
+def static_wardrobe(static, names):
+    """{name: [garment as written]} that the anchor and opening paragraph dress each
+    person in.
+
+    Garments written there are worn exactly as much as the sheet's -- but only the
+    sheet's were ever counted as worn, so taking the jeans off somebody the anchor had
+    put in a black thong told the shot the hips and groin were bare, the genitals
+    uncovered, over a thong that was still on and still described. A sentence about
+    one person is theirs; one that opens on "she" or "he" is the last-named person's."""
+    names = [n for n in (names or []) if n]
+    forms_of = {n: _name_forms(n) for n in names}
+    every = set().union(*forms_of.values()) if forms_of else set()
+    out, last = {}, ""
+    for line in str(static or "").split("\n"):
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            for piece in _subject_clauses(sentence, every):
+                who = [n for n in names
+                       if any(re.search(r"(?<![\w'’-])" + re.escape(f) + r"(?![\w-])",
+                                        piece) for f in forms_of[n])]
+                if not who and last and _LEADING_PRONOUN.match(piece):
+                    who = [last]
+                if len(who) != 1:
+                    last = ""
+                    continue
+                last = who[0]
+                for g in engine.garments_in(piece):
+                    if g not in out.setdefault(last, []):
+                        out[last].append(g)
+    return out
+
+
 def static_for_shot(static, sheet, shot_sheet):
     """The anchor and opening paragraph for one shot: nobody named who is not in it.
 
@@ -1238,6 +1315,7 @@ def static_for_shot(static, sheet, shot_sheet):
         return static
     named = re.compile(r"(?<![\w'\u2019-])(?:" + "|".join(
         re.escape(f) for f in sorted(absent, key=len, reverse=True)) + r")(?![\w-])")
+    every = set().union(*(_name_forms(n) for n, _ in sheet_lines(sheet) if n))
 
     out = []
     for line in static.split("\n"):
@@ -1245,6 +1323,16 @@ def static_for_shot(static, sheet, shot_sheet):
         for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
             if not sentence:
                 continue
+            # Only the clauses about the absent go. See _subject_clauses.
+            if named.search(sentence) and not cut_last:
+                pieces = _subject_clauses(sentence, every)
+                mine = [p for p in pieces if not named.search(p)]
+                if len(pieces) > 1 and mine:
+                    said = "; ".join(p.rstrip(" .!?,;") for p in mine)
+                    kept.append(said + (sentence.rstrip()[-1]
+                                        if sentence.rstrip()[-1:] in ".!?" else "."))
+                    cut_last = False
+                    continue
             if named.search(sentence) or (cut_last and _LEADING_PRONOUN.match(sentence)):
                 setting = _setting_of(sentence)
                 if setting and not named.search(setting):
@@ -4587,7 +4675,11 @@ def own_body(clause, who, described):
         ", ".join(names[:-1]) + " and " + names[-1]
     body = clause.strip()
     body = re.sub(r"^The\s+", f"{subject}'s ", body)
-    body = re.sub(r"^Everything worn\b", f"Everything {subject} is wearing", body)
+    body = re.sub(r"^Everything worn\b",
+                  f"Everything {subject} {'are' if len(names) > 1 else 'is'} wearing", body)
+    # Nobody else to hold to their entry when everyone in the shot is undressing.
+    if all(n in names for n in (described or [])):
+        return " " + body
     return (" " + body
             + " Everyone else in the shot keeps on exactly what their own entry "
               "lists.")
@@ -7767,6 +7859,16 @@ class H3LongVideos:
                 f"using both put the person in every shot twice. A model told about one "
                 f"person twice renders two of them. Kept the character_memory entry and "
                 f"dropped the duplicate")
+        _guessed = [(n, sheet_pronoun(ln)) for n, ln in sheet_lines(sheet)
+                    if n and pronoun_is_a_guess(ln)]
+        if _guessed:
+            notes.append(
+                "pronoun read off a possessive -- "
+                + "; ".join(f"{n} as '{p}'" for n, p in _guessed)
+                + ". The entry declares none, and the only one in it is a 'his' or a "
+                  "'her', which is as often somebody else's ('wearing his hoodie'). The "
+                  "pronoun decides the body every bare shot describes, so write it into "
+                  "the entry ('Kate: she, 25, ...') if that is wrong")
         _undeclared = [n for n, ln in sheet_lines(sheet) if n and not sheet_pronoun(ln)]
         if _undeclared and any(re.search(r"\b(?:he|she|him|her|his|hers)\b", b or "", re.I)
                                for b in beats):
@@ -7984,6 +8086,7 @@ class H3LongVideos:
             [extract_directives(b)[0] for b in beats])
         _sheet_hw = {c for c, _p, _w, _a in engine.hardware_spans(sheet or "")}
         _pron_of = {n: sheet_pronoun(ln) for n, ln in sheet_lines(sheet) if n}
+        _static_wear = static_wardrobe(static, [n for n, _ in sheet_lines(sheet) if n])
         for b in beats:
             body, toks, adds = extract_directives(b)
             toks = [sheet_form(t, scene) for t in toks]
@@ -7999,7 +8102,11 @@ class H3LongVideos:
                                 if at > len(plan) + 1}
             for _n, _line in sheet_lines(sheet):
                 if _n:
-                    _state.declare(_n, _line, staged_later=_later_for_state)
+                    # What the anchor dresses them in is worn too. See static_wardrobe.
+                    _wear = [g for g in _static_wear.get(_n, [])
+                             if not names_any(g, [x for x in gone if x not in restored])]
+                    _state.declare(_n, _line + "".join(f", {g}" for g in _wear),
+                                   staged_later=_later_for_state)
             _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
                               shot=len(plan) + 1, pronouns=_pron_of)
             if _ch.get("applied") or _ch.get("released"):
@@ -8180,15 +8287,21 @@ class H3LongVideos:
                 _strippers = strips_who(body, active if character_guard and active
                                         else [n for n, _ in sheet_lines(shot_sheet) if n],
                                         shot_sheet)
+                # ...and what the anchor dresses them in, which is worn as much as the
+                # sheet's: "Kate and Dan undress" left her bra and his boxers in the
+                # anchor text of every later shot that called them bare.
+                _their_wear = ", ".join(
+                    g for n in (_strippers or [n for n, _ in sheet_lines(shot_sheet) if n])
+                    for g in _static_wear.get(n, []))
             if _down_to is not None and _strippers:
                 # A PARTIAL strip: everything on the sheet comes off except what the
                 # beat keeps. "underwear" keeps whatever the sheet has underneath.
                 _their_sheet = "\n".join(
                     ln for n, ln in sheet_lines(shot_sheet) if n in set(_strippers))
-                _kept_on = [g for g in garments_in(_their_sheet)
+                _kept_on = [g for g in garments_in(_their_sheet + "\n" + _their_wear)
                             if g in _down_to
                             or ("underwear" in _down_to and is_undergarment(g))]
-                _taken = [g for g in garments_in(_their_sheet)
+                _taken = [g for g in garments_in(_their_sheet + "\n" + _their_wear)
                           if g not in _kept_on and g not in toks
                           and (g not in gone or (gone_by.get(g)
                                                  and not set(_strippers) <= gone_by[g]))]
@@ -8205,7 +8318,7 @@ class H3LongVideos:
                 _their_sheet = "\n".join(
                     ln for n, ln in sheet_lines(shot_sheet) if n in set(_strippers)
                 ) or shot_sheet
-                stripped = [g for g in garments_in(_their_sheet)
+                stripped = [g for g in garments_in(_their_sheet + "\n" + _their_wear)
                             if g not in toks
                             and (g not in gone or (_strippers and gone_by.get(g)
                                                    and not set(_strippers) <= gone_by[g]))]
@@ -8242,8 +8355,10 @@ class H3LongVideos:
                 _took = strippers_in(body, shot_sheet if shot_sheet else sheet)
                 for _t in toks:
                     _wears = [n for n, _wl in sheet_lines(sheet)
-                              if n and re.search(r"\b" + re.escape(_t) + r"\b",
-                                                 _wl or "", re.I)]
+                              if n and (re.search(r"\b" + re.escape(_t) + r"\b",
+                                                  _wl or "", re.I)
+                                        or names_any(", ".join(_static_wear.get(n, [])),
+                                                     [_t]))]
                     # Whose it is, when the beat says -- "Dan takes off HER shirt" is
                     # hers, whoever else wears one -- before who is doing it.
                     _whose = [n for n in (_taken_from.get(_t)
@@ -8381,8 +8496,14 @@ class H3LongVideos:
             # an owner and it is not this.
             _one_groin = ("" if sealed else
                           (groin_of(_one_pron, _one_age) if len(active or []) == 1 else ""))
-            _bare_sheet = "\n".join(ln for n, ln in sheet_lines(shot_sheet)
-                                    if n and names_any(ln, toks)) or shot_sheet
+            # Each line with what the anchor still has that person wearing, so a thong
+            # written there keeps the hips covered when the jeans over it come off.
+            _off_now = [g for g in gone if g not in restored]
+            _worn_lines = [(n, ln + "".join(f", {g}" for g in _static_wear.get(n, [])
+                                             if not names_any(g, _off_now)))
+                           for n, ln in sheet_lines(shot_sheet)]
+            _bare_sheet = ("\n".join(ln for n, ln in _worn_lines if n and names_any(ln, toks))
+                           or "\n".join(ln for _n, ln in _worn_lines) or shot_sheet)
             _bare = ("" if (_revealed or bare)
                      else bare_clause(toks, covers, _bare_sheet, body=_one_body,
                                       figure=_one_fig, groin=_one_groin))
@@ -8503,7 +8624,11 @@ class H3LongVideos:
                     _wearer)
                 _a = removal_agent(body, _cast_here, _w, _t)
                 _by_agent.setdefault((_a, _w), []).append(_t)
-            tail = (own_body(BARE_HOLD, _wearer or (active[:1] if active else []),
+            # Everyone a full strip undresses, not the first of them: "Kate and Dan
+            # undress" told Dan to keep on what his entry lists, in the shot where
+            # he takes it off.
+            tail = (own_body(BARE_HOLD, (_strippers if (bare and _strippers) else None)
+                             or _wearer or (active[:1] if active else []),
                              active if character_guard else
                              [n for n, _ in sheet_lines(_who_sheet) if n])
                     if (bare and toks)

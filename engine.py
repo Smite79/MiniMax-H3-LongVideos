@@ -832,6 +832,11 @@ _DISPLACE = re.compile(
     r"(?=[.,;:!?]|\s+(?:and|to|so|while|as|then)\b|$)", re.I)
 
 
+_CLAUSE_BEFORE_GARMENT = _rx(r"\b(?:wears?|wearing|dressed(?:\s+in)?|in|is|are|was|were|"
+                             r"has\s+on|puts?\s+on|only|just|a|an|the|her|his|their|its)"
+                             r"\s+")
+
+
 def scene_name_for(head, scene):
     """The sheet's OWN full name for a garment, found by its head noun. "" if absent.
 
@@ -861,6 +866,10 @@ def scene_name_for(head, scene):
                     continue
                 # Drop a leading article or possessive; they are not description.
                 part = bare_name(part)
+                # ...and the clause in front of it when the scene is PROSE: "Kate
+                # wears a red skirt" named the skirt "Kate wears a red skirt", and the
+                # removal said "The Kate wears a red skirt comes off".
+                part = _CLAUSE_BEFORE_GARMENT.split(part)[-1].strip()
                 if len(part) > len(best):
                     best = part
     return best
@@ -1375,7 +1384,15 @@ class SceneState:
                           + ([_strip.start()] if _strip else []),
                           default=len(beat))
             located = [(abs(beat.find(n) - nude_at), n) for n in who if beat.find(n) >= 0]
+            # "Kate and Dan undress" is BOTH of them. The nearest name to the cue was
+            # Dan alone, so every later shot described his body and said nothing of
+            # hers -- and a bare region nobody describes is drawn from the prior.
+            # Only for a VERB: "Ana looks at topless Bea" is still the nearest name.
+            _doers = (_subjects_before(beat, _strip.start(), who)
+                      if _strip and _strip.start() == nude_at
+                      and _STRIPPING.match(_strip.group(0)) else [])
             owners = (undressed_object(beat, list(cast or self.people), subject, pronouns)
+                      or _doers
                       or ([min(located)[1]] if located else ([subject] if subject else [])))
             for n in owners:
                 q = self.person(n)
@@ -1658,6 +1675,21 @@ _TAKES_CLOTHES = _rx(r"\b(?:undress|strip|take|took|pull|peel|remove|get|got|sli
                      r"(her|his|their|[A-Z][\w’'-]*?['’]s)\s+" + _CLOTHES + r"\b")
 _CLOTHES_WORD = _rx(r"^(?:" + _CLOTHES + r"|" + GARMENT_PHRASES + r"|" + GARMENT_WORDS
                     + r")s?$")
+
+
+_STRIPPING = _rx(r"(?:undress|strip|take|took|pull|peel|shed|remove|get|got|slip)")
+
+
+def _subjects_before(text, at, who):
+    """Everyone the clause names in front of `at`: "Kate and Dan undress" is both.
+
+    The same reading sampler.strips_who makes, so the two halves of the node agree
+    about who ended up with nothing on."""
+    before = str(text or "")[:max(0, int(at))]
+    cut = max((m.end() for m in re.finditer(
+        r"[.;!?]\s+|,\s*|\s+(?:as|while|and\s+then|then|but)\s+", before)), default=0)
+    span = before[cut:]
+    return [n for n in (who or []) if re.search(r"\b" + re.escape(n) + r"\b", span)]
 
 
 def _agent_before(text, at, people):

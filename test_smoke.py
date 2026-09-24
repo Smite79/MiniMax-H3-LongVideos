@@ -8561,6 +8561,56 @@ def test_a_scene_keeps_its_room_and_its_people():
     check("a scene with no contact in it is unchanged", "Dan:" not in shots[1], shots[1][:160])
 
 
+def test_the_anchor_and_the_body_agree():
+    """REPORTED: the wrong genitalia is used, and a thong written in the anchor is
+    dropped from the prompt.
+
+    "Kate and Dan undress" undressed Dan alone, so later shots described his body and
+    nothing of hers; the genitals were nobody's in particular; a shared anchor sentence
+    went whole from a shot without Dan; and a thong the anchor put on her did not count
+    as worn, so the jeans coming off told the shot her groin was bare over it."""
+    print("\n=== the anchor and the body agree ===")
+    mem = "Kate: she, 25, grey sweater, blue jeans.\nDan: he, 40, grey shirt, black trousers."
+    shots = _shots_of(run_node(
+        "A small bedroom.\n\nKate and Dan stand by the bed.\n\nKate and Dan undress.\n\n"
+        "Kate and Dan lie on the bed.", character_memory=mem, plan_only=True))
+    check("both of them are bare after both undress",
+          "a woman's genitals" in shots[2] and "a man's genitals" in shots[2], shots[2][-240:])
+    shots = _shots_of(run_node(
+        "Kate sits on the bed.\n\nKate stands up.",
+        anchor="A bedroom at night. Kate wears a black thong and Dan wears boxers.",
+        character_memory="Kate: she, 25, blonde.\nDan: he, 40, beard.", plan_only=True))
+    check("a thong in a shared anchor sentence survives a shot without Dan",
+          all("black thong" in s and "boxers" not in s for s in shots), shots[0][:160])
+    shots = _shots_of(run_node(
+        "Kate sits on the bed.\n\nKate takes off her jeans.\n\nKate stands up.",
+        anchor="A bedroom at night. Kate wears a black thong.",
+        character_memory="Kate: she, 25, blue jeans, grey sweater.", plan_only=True))
+    check("the anchor's thong keeps the hips covered when the jeans come off",
+          not any("genitals" in s for s in shots) and all("black thong" in s for s in shots),
+          shots[1][-200:])
+    shots = _shots_of(run_node(
+        "Kate sits on the bed.\n\nKate takes off her skirt.",
+        anchor="A bedroom at night. Kate wears a red skirt over a black thong.",
+        character_memory="Kate: she, 25, blonde.", plan_only=True))
+    check("a garment named in anchor prose comes off by its own name",
+          "The red skirt comes off" in shots[1] and "Kate wears a red skirt comes" not in shots[1],
+          shots[1][:260])
+    # A full strip takes the anchor's clothes too, off everyone it undresses.
+    shots = _shots_of(run_node(
+        "Kate and Dan stand by the bed.\n\nKate and Dan undress.\n\nKate and Dan lie on the bed."
+        "\n\nKate and Dan kiss.",
+        anchor="A bedroom at night. Kate wears a white bra and a black thong. Dan wears grey boxers.",
+        character_memory=mem, plan_only=True))
+    check("the stripping shot undresses both of them",
+          "Everything Kate and Dan are wearing comes off" in shots[1]
+          and "keeps on exactly what" not in shots[1], shots[1][:300])
+    for i in (2, 3):
+        check(f"shot {i + 1} lists none of the anchor's underwear",
+              not any(g in shots[i] for g in ("white bra", "black thong", "grey boxers")),
+              shots[i][:160])
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -8789,6 +8839,7 @@ def main():
     test_the_shot_that_takes_it_off_is_not_told_where_it_sits()
     test_a_removal_stays_off_in_every_later_shot()
     test_a_scene_keeps_its_room_and_its_people()
+    test_the_anchor_and_the_body_agree()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

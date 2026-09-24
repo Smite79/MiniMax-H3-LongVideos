@@ -335,6 +335,38 @@ def test_a_word_does_not_move_the_room():
         check(f"...but this is an entrance: {text!r}", S.comes_in(text, sheet) == ["Dan"])
 
 
+def test_the_body_described_is_the_right_one():
+    """REPORTED: the wrong genitalia, and a thong in the anchor dropped from the prompt."""
+    print("\n=== the body described is the right one ===")
+    check("a woman's genitals are a woman's", "a woman's genitals" in S.groin_of("she", 25))
+    check("...and a man's are a man's", "a man's genitals" in S.groin_of("he", 40))
+    check("a person noun outranks somebody else's possessive",
+          S.sheet_pronoun("Kate: 25, woman, his hoodie.") == "she")
+    check("...and so does a subject pronoun",
+          S.sheet_pronoun("Kate: 25, blonde, his hoodie, she is tall.") == "she")
+    check("a pronoun read only off a possessive is flagged as a guess",
+          S.pronoun_is_a_guess("Kate: 25, blonde, wearing his hoodie."))
+    check("...and a declared one is not",
+          not S.pronoun_is_a_guess("Kate: she, 25, wearing his hoodie."))
+    names = S._name_forms("Kate") | S._name_forms("Dan")
+    check("two people's clauses come apart",
+          S._subject_clauses("Kate wears a black thong and Dan wears boxers.", names)
+          == ["Kate wears a black thong", "Dan wears boxers."])
+    check("...but a compound subject does not",
+          len(S._subject_clauses("Kate and Dan sit on the bed.", names)) == 1)
+    check("the anchor dresses the person it names",
+          S.static_wardrobe("A bedroom. Kate wears a black thong and Dan wears boxers. "
+                            "She sits.", ["Kate", "Dan"])
+          == {"Kate": ["black thong"], "Dan": ["boxers"]})
+    check("a prose scene names the garment, not the sentence",
+          S.scene_name_for("skirt", "A bedroom. Kate wears a red skirt over a black thong.")
+          == "red skirt")
+    check("a shot without Dan keeps Kate's half of a shared sentence",
+          "black thong" in S.static_for_shot(
+              "A bedroom. Kate wears a black thong and Dan wears boxers.",
+              "Kate: she, 25.\nDan: he, 40.", "Kate: she, 25."))
+
+
 def test_character_sheet():
     print("\n=== a character sheet is not a beat ===")
     sheet = ("Maya: 27, silver hair, grey shorts, red jacket\n"
@@ -4246,6 +4278,7 @@ def main():
     test_a_remove_line_is_read_as_the_garment()
     test_every_way_a_garment_comes_off_is_read()
     test_a_word_does_not_move_the_room()
+    test_the_body_described_is_the_right_one()
     test_character_sheet()
     test_no_one_is_described_twice()
     test_sheet_lines_are_terminated()
