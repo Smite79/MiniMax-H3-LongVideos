@@ -21,7 +21,7 @@ workflows.**
 
 **Please note that RealRebelAI has been blacklisted from this project. If you want further
 updates for the node, please continue to use my updates as the node is being continously
-worked on. Don't support those who steal over people's work for their own credit.**
+worked on. Don't support those who steal other people's work for their own credit.**
 
 # H3-LongVideos
 
