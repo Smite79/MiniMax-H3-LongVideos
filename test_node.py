@@ -1050,7 +1050,8 @@ def test_the_dit_gets_the_pinned_pool_to_itself():
                                                    "soft_empty_cache",
                                                    "current_loaded_models",
                                                    "MAX_PINNED_MEMORY",
-                                                   "TOTAL_PINNED_MEMORY")}
+                                                   "TOTAL_PINNED_MEMORY",
+                                                   "synchronize")}
     saved_ram = _rt._ram_available
     calls, freed = [], {}
 
@@ -1069,6 +1070,7 @@ def test_the_dit_gets_the_pinned_pool_to_itself():
             got = min(n, self.pins[0])
             self.pins[0] -= got
             freed[self.name] = freed.get(self.name, 0) + got
+            calls.append("unpin")
             return got
 
     class Loaded:
@@ -1089,6 +1091,7 @@ def test_the_dit_gets_the_pinned_pool_to_itself():
 
     try:
         _rt.mm.get_torch_device = lambda: "cuda:0"
+        _rt.mm.synchronize = lambda: calls.append("sync")
         _rt.mm.soft_empty_cache = lambda *a, **k: calls.append("empty")
         _rt.mm.free_memory = lambda need, dev, keep_loaded=(): calls.append(
             [lm.model.name for lm in keep_loaded])
@@ -1103,6 +1106,13 @@ def test_the_dit_gets_the_pinned_pool_to_itself():
               got.get("te") == _short)
         check("...and the VAEs about to decode keep theirs", "vae" not in got)
         check("...and the DiT keeps its own", "dit" not in got)
+        # REPORTED: "CUDA error: an illegal memory access" at the end of a render.
+        # The pins are what the text encoder's non-blocking copies read from, so the
+        # GPU has to be finished with them first -- ComfyUI's own rule.
+        check("the GPU is waited for before any pin is freed",
+              "sync" in calls and calls.index("sync") < calls.index("unpin"))
+        run(ram=60 * GB)
+        check("...and not waited for when nothing is freed", "sync" not in calls)
         got = run(ram=40 * GB, cap=int(49.6 * GB), total=26 * GB)
         check("the pin cap is a shortfall too",
               got.get("te") == int(26 * GB + 32 * GB - int(49.6 * GB)) + 256 * 1024 ** 2)

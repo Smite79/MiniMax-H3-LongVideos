@@ -470,6 +470,21 @@ def _release_pins_for(keep_model, keep):
               if lm not in keep and lm.model is not None and lm.model is not keep_model
               and lm.model.is_dynamic()]
     others.sort(key=_pinned_bytes, reverse=True)
+    if not others:
+        return 0
+    # NOTHING MAY STILL BE READING WHAT IS ABOUT TO BE FREED. The text encoder ran a
+    # moment ago, and its weights reach the card by NON-BLOCKING copies out of these
+    # very pins -- the CPU is back here while the GPU may still be reading them.
+    # Freeing and unregistering them under it is an illegal memory access, and CUDA
+    # makes that sticky: the render dies at the next allocation or free, reported as
+    # "CUDA error: an illegal memory access" from cuMemFreeAsync once the prompt had
+    # finished. ComfyUI itself only lets a model's pins go inside reset_cast_buffers,
+    # after synchronising every stream -- so the same wait comes first here.
+    _sync = getattr(mm, "synchronize", None)
+    if _sync is not None:
+        _sync()
+    elif torch.cuda.is_available():
+        torch.cuda.synchronize()
     freed = 0
     for patcher in others:
         if freed >= short:
