@@ -1006,42 +1006,82 @@ def test_the_dit_gets_the_pinned_pool_to_itself():
     go, only between nodes -- and this node encodes and samples inside one, so the
     25 GB text encoder was still holding its pins beside a 32 GB DiT against a 49.6 GB
     limit. The DiT could not pin the rest of itself and re-read it every step.
-    Asking free_memory for pins_required did not help: it evicts idle models only."""
+    Asking free_memory for pins_required did not help: it evicts idle models only.
+
+    REPORTED NEXT: the ComfyUI drive reading on every beat. The fix above dropped every
+    other model's pins outright, every shot, so the whole text encoder came back off
+    the drive at every encode and both VAEs at every decode. Only the DiT's SHORTFALL
+    is released now, from the biggest holder first -- and nothing when RAM allows."""
     _rt = S._runtime_module
+    GB = 1024 ** 3
     saved = {k: getattr(_rt.mm, k, None) for k in ("free_memory", "get_torch_device",
                                                    "soft_empty_cache",
-                                                   "current_loaded_models")}
-    calls, unpinned = [], []
+                                                   "current_loaded_models",
+                                                   "MAX_PINNED_MEMORY",
+                                                   "TOTAL_PINNED_MEMORY")}
+    saved_ram = _rt._ram_available
+    calls, freed = [], {}
 
     class Patcher:
-        def __init__(self, name, dynamic=True):
-            self.name, self.dynamic, self.model = name, dynamic, object()
+        def __init__(self, name, size, pinned, dynamic=True):
+            self.name, self.dynamic, self.size = name, dynamic, size
+            self.load_device = "cuda:0"
+            self.pins = [pinned]
+            self.model = type("M", (), {})()
+            self.model.dynamic_pins = {"cuda:0": {"weights": (None, [], [-1], self.pins,
+                                                              [0], {})}}
+            self.model.memory_required = lambda s: 2 * GB
         def is_dynamic(self): return self.dynamic
-        def unpin_all_weights(self): unpinned.append(self.name)
+        def model_size(self): return self.size
+        def partially_unload_ram(self, n):
+            got = min(n, self.pins[0])
+            self.pins[0] -= got
+            freed[self.name] = freed.get(self.name, 0) + got
+            return got
 
     class Loaded:
         def __init__(self, patcher): self.model = patcher
 
-    dit, te, vae = Patcher("dit"), Patcher("te"), Patcher("vae", dynamic=False)
-    dit.model = type("M", (), {"memory_required": staticmethod(lambda s: 2 * 1024 ** 3)})()
     lat = {"samples": torch.zeros(1, 16, 8, 32, 32)}
+
+    def run(ram, dit_pinned=0, cap=-1, total=0):
+        calls.clear()
+        freed.clear()
+        dit = Patcher("dit", 32 * GB, dit_pinned)
+        te, vae = Patcher("te", 25 * GB, 25 * GB), Patcher("vae", 1 * GB, 1 * GB)
+        _rt.mm.current_loaded_models = [Loaded(te), Loaded(dit), Loaded(vae)]
+        _rt.mm.MAX_PINNED_MEMORY, _rt.mm.TOTAL_PINNED_MEMORY = cap, total
+        _rt._ram_available = lambda: ram
+        _rt._evict_all_but(dit, lat)
+        return freed
+
     try:
         _rt.mm.get_torch_device = lambda: "cuda:0"
         _rt.mm.soft_empty_cache = lambda *a, **k: calls.append("empty")
         _rt.mm.free_memory = lambda need, dev, keep_loaded=(): calls.append(
             [lm.model.name for lm in keep_loaded])
-        _rt.mm.current_loaded_models = [Loaded(te), Loaded(dit), Loaded(vae)]
-        _rt._evict_all_but(dit, lat)
+        got = run(ram=60 * GB)
         check("VRAM is freed around the DiT, as before", calls == [["dit"]])
-        check("the text encoder lets its pinned RAM go", "te" in unpinned)
-        check("...and the DiT keeps its own", "dit" not in unpinned)
-        check("a model outside dynamic VRAM is left alone", "vae" not in unpinned)
-        # A ComfyUI without dynamic VRAM has no is_dynamic, and must still sample.
-        unpinned.clear()
-        del Patcher.is_dynamic
-        _rt._evict_all_but(dit, lat)
-        check("an older ComfyUI unpins nothing and does not crash", unpinned == [])
+        check("with RAM to spare nothing is unpinned -- the drive is not read", got == {})
+        check("...nor once the DiT is already pinned",
+              run(ram=4 * GB, dit_pinned=32 * GB) == {})
+        got = run(ram=20 * GB)
+        _short = 32 * GB + 2 * GB - 20 * GB + 256 * 1024 ** 2
+        check("short of RAM, the text encoder gives up exactly the shortfall",
+              got.get("te") == _short)
+        check("...and the VAEs about to decode keep theirs", "vae" not in got)
+        check("...and the DiT keeps its own", "dit" not in got)
+        got = run(ram=40 * GB, cap=int(49.6 * GB), total=26 * GB)
+        check("the pin cap is a shortfall too",
+              got.get("te") == int(26 * GB + 32 * GB - int(49.6 * GB)) + 256 * 1024 ** 2)
+        # A ComfyUI without dynamic VRAM has no pins to measure, and must still sample.
+        freed.clear()
+        _rt.mm.current_loaded_models = [Loaded(object())]
+        _rt._evict_all_but(type("P", (), {"model": type("M", (), {
+            "memory_required": staticmethod(lambda s: GB)})()})(), lat)
+        check("an older ComfyUI unpins nothing and does not crash", freed == {})
     finally:
+        _rt._ram_available = saved_ram
         for k, v in saved.items():
             if v is not None:
                 setattr(_rt.mm, k, v)

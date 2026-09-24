@@ -344,7 +344,8 @@ def _image_out_dtype():
 
 
 def _evict_all_but(keep_model, latent=None):
-    """Unload every model EXCEPT the diffusion model from the GPU and pinned RAM.
+    """Unload every model EXCEPT the diffusion model from the GPU, and make it room in
+    pinned RAM.
 
     This is the fix for VRAM ratcheting across a long chain. soft_empty_cache()
     only drops the CUDA allocator's cached blocks -- it does NOT unload models, so
@@ -404,16 +405,77 @@ def _evict_all_but(keep_model, latent=None):
     # pageable RAM or disk on every step. Reported as every step at 87 s, where only
     # the first used to be slow.
     #
-    # Dropping the other models' pins gives the DiT the whole pool. The text encoder
-    # re-reads its weights at the next shot's encode: once per shot, against every
-    # step of this one. A ComfyUI without dynamic VRAM has no is_dynamic, and pins
-    # nothing this way.
+    # ONLY AS MUCH AS THE DiT IS SHORT, THOUGH. This used to drop every other model's
+    # pins outright, every shot -- and what goes unpinned is read back from its model
+    # file the next time it runs. The text encoder runs at every shot's encode, so all
+    # 25 GB of it came off the drive at every beat, and both VAEs with it at every
+    # decode. Reported as the ComfyUI drive reading on every beat, which it had not
+    # done before this. What the DiT is actually short is a fraction of that, and
+    # nothing at all when RAM allows -- which is the render that never touched the
+    # drive. See _release_pins_for. A ComfyUI without dynamic VRAM has no pins to
+    # measure, and nothing is released.
     try:
-        for lm in list(mm.current_loaded_models):
-            if lm not in keep and lm.model is not None and lm.model.is_dynamic():
-                lm.model.unpin_all_weights()
-    except AttributeError:
+        _release_pins_for(keep_model, keep)
+    except Exception:
         pass
+
+
+_PIN_SUBSETS = ("weights", "patches", "weights-loaded", "patches-loaded")
+
+
+def _pinned_bytes(patcher):
+    """What a dynamic-VRAM model already holds in pinned host RAM, in bytes."""
+    state = patcher.model.dynamic_pins[patcher.load_device]
+    return sum(int(state[s][3][0]) for s in _PIN_SUBSETS if s in state)
+
+
+def _ram_available():
+    """Host RAM free for pinning, measured the way ComfyUI measures it."""
+    import comfy.system_memory
+    return int(comfy.system_memory.virtual_memory_available())
+
+
+def _pin_shortfall(keep_model):
+    """Bytes of pinned RAM the DiT still needs and cannot get. 0 when it fits.
+
+    The two limits ComfyUI's own ensure_pin_budget applies: the RAM actually
+    available less a headroom, and the pin cap."""
+    want = int(keep_model.model_size()) - _pinned_bytes(keep_model)
+    if want <= 0:
+        return 0
+    try:
+        import comfy.memory_management as _cmm
+        headroom = max(_cmm.RAM_CACHE_HEADROOM / 2, 2048 * 1024 ** 2)
+    except Exception:
+        headroom = 2048 * 1024 ** 2
+    short = want + headroom - _ram_available()
+    cap = getattr(mm, "MAX_PINNED_MEMORY", -1) or -1
+    if cap > 0:
+        short = max(short, getattr(mm, "TOTAL_PINNED_MEMORY", 0) + want - cap)
+    return max(0, int(short))
+
+
+def _release_pins_for(keep_model, keep):
+    """Free the other models' pinned RAM until the DiT fits, largest first. Bytes freed.
+
+    ComfyUI's own ensure_pin_budget cannot be asked: with evict_active it may take the
+    pins back off the DiT itself, which is active too. So the same measure, applied
+    here to everything but the DiT -- the biggest holder first, which is the text
+    encoder, so the VAEs about to decode keep theirs whenever it covers the gap."""
+    short = _pin_shortfall(keep_model)
+    if short <= 0:
+        return 0
+    short += int(getattr(mm, "PIN_PRESSURE_HYSTERESIS", 256 * 1024 ** 2))
+    others = [lm.model for lm in list(mm.current_loaded_models)
+              if lm not in keep and lm.model is not None and lm.model is not keep_model
+              and lm.model.is_dynamic()]
+    others.sort(key=_pinned_bytes, reverse=True)
+    freed = 0
+    for patcher in others:
+        if freed >= short:
+            break
+        freed += int(patcher.partially_unload_ram(short - freed) or 0)
+    return freed
 
 
 def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent, sigmas):
