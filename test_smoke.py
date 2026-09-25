@@ -5226,8 +5226,14 @@ def test_the_chain_is_never_held_twice():
         _out = run_node(_P)
         _v = _out[0]
         _slack = _v.untyped_storage().nbytes() - _v.numel() * _v.element_size()
-        check(f"{_n} beats: no storage retained for trimmed seam frames",
-              _slack == 0, f"unused storage: {_slack} bytes")
+        _frame = _v[0].numel() * _v.element_size()
+        # The join is a view of the one buffer, so the seam frames trim_seam dropped
+        # are its tail -- never written, so never committed, so no RAM. Making this 0
+        # took a second copy of the whole chain at the join, at the end of the run,
+        # with RAM at its fullest: a server killed by the OOM killer.
+        check(f"{_n} beats: the only slack is the trimmed seam frames, never written",
+              _slack % _frame == 0 and _slack // _frame <= _n - 1,
+              f"unused storage: {_slack} bytes = {_slack / _frame:g} frames")
     # ...and it is still the right pixels, in range, in the output dtype.
     _out = run_node("A room.\n\nOne.\n\nTwo.\n\nThree.")
     _v = _out[0]

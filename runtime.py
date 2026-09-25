@@ -4,7 +4,9 @@
 # This notice may not be removed or altered. See LICENSE.
 """Sampling, decoding, resizing, memory handling, and frame assembly."""
 
+import logging
 import math
+import time
 
 import torch
 import nodes
@@ -58,12 +60,13 @@ class FrameAccumulator:
         if not self.overflow:
             if self.tensor is None:
                 return torch.cat(self.overflow, dim=0)
-            if self.used == self.tensor.shape[0]:
-                out = self.tensor
-            else:
-                out = torch.empty((self.used,) + tuple(self.tensor.shape[1:]),
-                                  dtype=self.dtype, device=self.tensor.device)
-                out.copy_(self.tensor[:self.used])
+            # A VIEW, NOT A COPY. trim_seam drops frame one of every shot after the
+            # first, so `used` falls short of capacity on nearly every real run -- and
+            # this allocated the whole chain a second time to copy it into, both live
+            # at once, at the end of the run when RAM is fullest. The unused tail was
+            # never written, so its pages were never committed: dropping the copy
+            # gives up nothing.
+            out = self.tensor if self.used == self.tensor.shape[0] else self.tensor[:self.used]
             self.tensor = None
             return out
 
@@ -207,9 +210,7 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
                            keep_loaded=_resident(keep or (vae,)))
         except Exception:
             pass
-    _owns_tiling = bool(getattr(vae, "handles_tiling", False) and getattr(
-        getattr(vae, "first_stage_model", None), "comfy_has_chunked_io", False))
-    if tiled and _owns_tiling:
+    if tiled and _vae_owns_tiling(vae):
         imgs = vae.decode(latent)
     elif tiled:
         args = {}
@@ -229,6 +230,41 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
     if len(imgs.shape) == 5:
         imgs = imgs.reshape(-1, imgs.shape[-3], imgs.shape[-2], imgs.shape[-1])
     return imgs
+
+
+def _vae_owns_tiling(vae):
+    return bool(getattr(vae, "handles_tiling", False) and getattr(
+        getattr(vae, "first_stage_model", None), "comfy_has_chunked_io", False))
+
+
+DECODE_RAM_COPIES = 2       # the decode's output, and its copy into the frame buffer
+TILED_DECODE_RAM_COPIES = 4 # ...plus the tiler's float32 canvas, its divisor, and the cast
+
+
+def _decode_ram(vae, out_latent, tiled):
+    """Host RAM one shot's video decode takes before its output is dropped. 0 if unknown.
+
+    One decoded shot is frames x H x W x 3 in the dtype the chain is built in, and it
+    is held twice: the decode's own output, then its copy in the frame buffer, both
+    live until `imgs` goes. ComfyUI's tiler (decode_tiled_3d -> tiled_scale_multidim)
+    builds its canvas in FLOAT32 on the output device with a divisor beside it, then
+    casts -- about twice again at fp16. A VAE that tiles itself preallocates its
+    output in the final dtype, like an untiled decode. Sized from the latent through
+    the VAE's own upscale_ratio, which is what ComfyUI sizes the output from."""
+    try:
+        latent = out_latent["samples"]
+        if getattr(latent, "is_nested", False):
+            latent = latent.unbind()[0]
+        b, _, t, lh, lw = (int(x) for x in latent.shape)
+        rt, rh, rw = vae.upscale_ratio
+        frames = int(rt(t)) if callable(rt) else t * int(rt)
+        shot = b * frames * lh * int(rh) * lw * int(rw) * 3 * \
+            torch.empty((), dtype=_image_out_dtype()).element_size()
+    except Exception:
+        return 0
+    copies = (TILED_DECODE_RAM_COPIES if tiled and not _vae_owns_tiling(vae)
+              else DECODE_RAM_COPIES)
+    return int(shot) * copies
 
 
 def _decode_audio(audio_vae, out_latent):
@@ -300,14 +336,21 @@ def _resident(models):
     That is the form free_memory's keep_loaded wants: it compares against the
     entries in current_loaded_models, not against the ModelPatcher objects a node
     is holding. Anything not matched is simply not kept, so a model that is not
-    resident costs nothing here."""
+    resident costs nothing here.
+
+    A VAE or a CLIP is not what ComfyUI holds -- it holds their `.patcher`. Matched
+    on the wrapper alone, and with no `.model` on a VAE either, keep=(vae, audio_vae)
+    resolved to NOTHING on a real install: the decode's free_memory and the RAM
+    guard protected neither VAE they were told to."""
     out = []
     for lm in list(getattr(mm, "current_loaded_models", [])):
         for m in models or ():
             if m is None:
                 continue
             try:
-                if lm.model is m or getattr(lm, "model", None) is getattr(m, "model", None):
+                p = getattr(m, "patcher", None)
+                if (lm.model is m or (p is not None and lm.model is p)
+                        or getattr(lm, "model", None) is getattr(m, "model", None)):
                     if lm not in out:
                         out.append(lm)
             except Exception:
@@ -435,6 +478,16 @@ def _ram_available():
     return int(comfy.system_memory.virtual_memory_available())
 
 
+def _ram_headroom():
+    """The free RAM ComfyUI keeps in hand when it pins: half the --cache-ram headroom,
+    and never under 2 GB. ensure_pin_budget's own figure."""
+    try:
+        import comfy.memory_management as _cmm
+        return max(_cmm.RAM_CACHE_HEADROOM / 2, 2048 * 1024 ** 2)
+    except Exception:
+        return 2048 * 1024 ** 2
+
+
 def _pin_shortfall(keep_model):
     """Bytes of pinned RAM the DiT still needs and cannot get. 0 when it fits.
 
@@ -443,12 +496,7 @@ def _pin_shortfall(keep_model):
     want = int(keep_model.model_size()) - _pinned_bytes(keep_model)
     if want <= 0:
         return 0
-    try:
-        import comfy.memory_management as _cmm
-        headroom = max(_cmm.RAM_CACHE_HEADROOM / 2, 2048 * 1024 ** 2)
-    except Exception:
-        headroom = 2048 * 1024 ** 2
-    short = want + headroom - _ram_available()
+    short = want + _ram_headroom() - _ram_available()
     cap = getattr(mm, "MAX_PINNED_MEMORY", -1) or -1
     if cap > 0:
         short = max(short, getattr(mm, "TOTAL_PINNED_MEMORY", 0) + want - cap)
@@ -490,6 +538,105 @@ def _release_pins_for(keep_model, keep):
         if freed >= short:
             break
         freed += int(patcher.partially_unload_ram(short - freed) or 0)
+    return freed
+
+
+def _host_bytes(patcher):
+    """Host RAM a dynamic-VRAM model's weight buffers hold, pinned or not, in bytes.
+
+    Not _pinned_bytes. A pin is a registration ON one of these buffers, and a buffer
+    stays committed after its registration goes (unregister_inactive_pins keeps the
+    RAM), so the buffer's size is what the kernel charges the process. The pinned
+    count stands in for a pin state with no buffer object."""
+    state = patcher.model.dynamic_pins[patcher.load_device]
+    total = 0
+    for s in _PIN_SUBSETS:
+        if s in state:
+            size = getattr(state[s][0], "size", None)
+            total += int(size) if size is not None else int(state[s][3][0])
+    return total
+
+
+def ensure_host_ram(need, keep=(), what="an allocation"):
+    """Free host RAM for `need` bytes the node is about to allocate. Bytes freed.
+
+    THIS IS WHAT THE KERNEL WAS KILLING THE SERVER FOR. Read off the OOM reports: a
+    python at 50-60 GB anon-rss on a 62 GB machine, killed at the audio decode of the
+    third or fourth shot, every time. Under --enable-dynamic-vram the text encoder
+    (25 GB) and the DiT (32 GB) keep their weights in host buffers, and ComfyUI grows
+    those only while ensure_pin_budget sees its headroom free -- then never shrinks
+    them for anything but another pin. It gives RAM back under pressure only BETWEEN
+    nodes (execution.py, after each node), and this node runs the whole chain inside
+    one. So each shot's frames were written into the same few GB of headroom the
+    weights had left, the decode's own transient on top, and by shot three or four
+    there was none left. Weight buffers are page-locked, the kernel cannot swap them
+    out, and the OOM killer takes the process.
+
+    The same step ComfyUI takes between nodes, taken here before the allocation that
+    needs it: cached outputs of older prompts first, then weight RAM -- only the
+    shortfall, largest holder first, the models in `keep` last. What is released
+    streams back from its model file the next time it runs, which is a read, not a
+    crash. The GPU is waited for first: a model that just ran may still be reading
+    these buffers through non-blocking copies (see _release_pins_for).
+
+    Nothing is released while RAM allows, and a ComfyUI with nothing to measure or no
+    dynamic VRAM is left alone."""
+    try:
+        headroom = int(_ram_headroom())
+        short = int(need) + headroom - _ram_available()
+    except Exception:
+        return 0
+    if short <= 0:
+        return 0
+    try:
+        import comfy.memory_management as _cmm
+        _cmm.extra_ram_release(int(need) + headroom)
+        short = int(need) + headroom - _ram_available()
+    except Exception:
+        pass
+    if short <= 0:
+        return 0
+    short += int(getattr(mm, "PIN_PRESSURE_HYSTERESIS", 256 * 1024 ** 2))
+    kept = _resident(keep)
+    holders = []
+    for lm in list(getattr(mm, "current_loaded_models", [])):
+        patcher = getattr(lm, "model", None)
+        try:
+            if patcher is not None and patcher.is_dynamic():
+                held = _host_bytes(patcher)
+                if held > 0:
+                    holders.append((lm in kept, -held, patcher))
+        except Exception:
+            continue
+    holders.sort(key=lambda h: h[:2])
+    freed = 0
+    if holders:
+        _sync = getattr(mm, "synchronize", None)
+        if _sync is not None:
+            _sync()
+        elif torch.cuda.is_available():
+            torch.cuda.synchronize()
+        for _, _, patcher in holders:
+            if freed >= short:
+                break
+            try:
+                freed += int(patcher.partially_unload_ram(short - freed) or 0)
+            except Exception:
+                continue
+        if freed > 64 * 1024 ** 2:
+            time.sleep(0.05)        # ComfyUI's own pause: a decommit can outrun psutil
+    try:
+        left = int(need) + headroom - _ram_available()
+    except Exception:
+        left = 0
+    if left > 0:
+        logging.warning(
+            "H3-LongVideos: %s needs %.1f GB of RAM with %.1f GB kept free, and is "
+            "still %.1f GB short after releasing %.1f GB of model weights. The "
+            "finished frames are what is left holding it -- fewer shots per run or a "
+            "lower megapixels is the lever.",
+            what, need / 1024 ** 3, headroom / 1024 ** 3, left / 1024 ** 3,
+            freed / 1024 ** 3)
     return freed
 
 
@@ -604,6 +751,9 @@ def _stream_chunks(total):
 
     def put(piece):
         if state["dst"] is None:
+            if piece.device.type == "cpu" and piece.shape[0]:
+                ensure_host_ram(int(total) * (piece.nbytes // int(piece.shape[0])),
+                                what="the upscaled chain")
             state["dst"] = torch.empty((int(total),) + tuple(piece.shape[1:]),
                                        dtype=piece.dtype, device=piece.device)
         k = int(piece.shape[0])
@@ -654,6 +804,8 @@ def _resize_short_edge(frames, target, method="lanczos", chunk=0):
     else:
         nw = target; nh = max(32, int(round(target * h / w / 32) * 32))
     step = max(1, int(chunk) or RESIZE_CHUNK)
+    if frames.device.type == "cpu":
+        ensure_host_ram(b * nh * nw * c * frames.element_size(), what="the resized chain")
     out = torch.empty((b, nh, nw, c), dtype=frames.dtype, device=frames.device)
     for i in range(0, b, step):
         part = comfy.utils.common_upscale(

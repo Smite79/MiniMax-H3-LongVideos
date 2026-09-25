@@ -1131,6 +1131,124 @@ def test_the_dit_gets_the_pinned_pool_to_itself():
                 delattr(_rt.mm, k)
 
 
+def test_the_chain_makes_room_for_its_own_frames():
+    """REPORTED: the server killed mid-render, at the audio decode of shot 3 or 4.
+
+    The kernel's OOM killer, at 50-60 GB anon-rss on a 62 GB machine. The weights'
+    host buffers had grown until only ComfyUI's headroom was left, ComfyUI returns
+    that RAM only between nodes, and every shot's frames went into the headroom."""
+    print("\n=== a long chain makes room in RAM before each decode ===")
+    _rt = S._runtime_module
+    GB = 1024 ** 3
+    saved = {k: getattr(_rt.mm, k, None) for k in ("current_loaded_models", "synchronize")}
+    saved_ram = _rt._ram_available
+    calls, freed = [], {}
+    ram = {"free": 0}
+
+    class Buf:
+        def __init__(self, size): self.size = size
+
+    class Patcher:
+        def __init__(self, name, held, dynamic=True):
+            self.name, self.dynamic = name, dynamic
+            self.load_device = "cuda:0"
+            self.buf = Buf(held)
+            self.model = type("M", (), {})()
+            # pinned count deliberately 0: the buffer is what holds the RAM
+            self.model.dynamic_pins = {"cuda:0": {"weights": (self.buf, [], [-1], [0],
+                                                              [0], {})}}
+        def is_dynamic(self): return self.dynamic
+        def partially_unload_ram(self, n):
+            got = min(n, self.buf.size)
+            self.buf.size -= got
+            ram["free"] += got
+            freed[self.name] = freed.get(self.name, 0) + got
+            calls.append("unpin")
+            return got
+
+    class Loaded:
+        def __init__(self, patcher): self.model = patcher
+
+    class VAE:                      # ComfyUI's VAE: held by its patcher, no .model
+        def __init__(self, patcher): self.patcher = patcher
+
+    def run(free, need, te=25 * GB, dit=32 * GB):
+        calls.clear()
+        freed.clear()
+        ram["free"] = free
+        p = {"te": Patcher("te", te), "dit": Patcher("dit", dit),
+             "vae": Patcher("vae", 3 * GB), "avae": Patcher("avae", GB // 2)}
+        _rt.mm.current_loaded_models = [Loaded(v) for v in p.values()]
+        got = _rt.ensure_host_ram(need, keep=(VAE(p["vae"]), VAE(p["avae"])))
+        return got, p
+
+    try:
+        _rt.mm.synchronize = lambda: calls.append("sync")
+        _rt._ram_available = lambda: ram["free"]
+        got, _ = run(free=30 * GB, need=6 * GB)
+        check("with RAM to spare nothing is released", got == 0 and freed == {})
+        check("...and the GPU is not waited for", "sync" not in calls)
+        got, _ = run(free=5 * GB, need=6 * GB)
+        _short = 6 * GB + 2 * GB - 5 * GB + 256 * 1024 ** 2
+        check("short of RAM, exactly the shortfall is released", got == _short)
+        check("...from the biggest holder, the DiT that just finished sampling",
+              freed == {"dit": _short})
+        check("the GPU is waited for before any buffer is freed",
+              calls and calls[0] == "sync" and "unpin" in calls)
+        got, _ = run(free=0, need=40 * GB, te=25 * GB, dit=10 * GB)
+        check("a big enough shortfall moves on to the next holder",
+              freed.get("te") == 25 * GB and freed.get("dit") == 10 * GB)
+        check("...and the VAEs about to decode are the last to give",
+              freed.get("vae") == 3 * GB and freed.get("avae", 0) > 0)
+        got, p = run(free=1 * GB, need=2 * GB)
+        check("a VAE is matched through its .patcher, so keep= really keeps it",
+              _rt._resident([VAE(p["vae"])]) and
+              _rt._resident([VAE(p["vae"])])[0].model is p["vae"])
+        # Nothing to measure with -- an older ComfyUI -- is left alone.
+        def _no_meter():
+            raise ImportError("no comfy.system_memory")
+        _rt._ram_available = _no_meter
+        got, _ = run(free=0, need=40 * GB)
+        check("with no way to measure RAM nothing is released", got == 0 and freed == {})
+        _rt._ram_available = lambda: ram["free"]
+        # Non-dynamic models hold nothing this can release, and must not crash it.
+        ram["free"] = 0
+        _rt.mm.current_loaded_models = [Loaded(Patcher("old", 5 * GB, dynamic=False)),
+                                        Loaded(object())]
+        freed.clear()
+        check("a ComfyUI without dynamic VRAM releases nothing and does not crash",
+              _rt.ensure_host_ram(4 * GB) == 0 and freed == {})
+    finally:
+        _rt._ram_available = saved_ram
+        for k, v in saved.items():
+            if v is not None:
+                setattr(_rt.mm, k, v)
+            elif hasattr(_rt.mm, k):
+                delattr(_rt.mm, k)
+
+    # Sized from the latent the way ComfyUI sizes the output: H3's 17k+5 time grid.
+    class H3VAE:
+        upscale_ratio = (lambda a: max(1, (a - 2) // 5 * 17 + 5), 16, 16)
+    lat = {"samples": torch.zeros(1, 24, 107, 48, 84)}      # 362 frames at 1344x768
+    _px = 362 * 768 * 1344 * 3
+    check("a decode is two copies of the shot: its output and the frame buffer's",
+          _rt._decode_ram(H3VAE(), lat, False) == _px * 4 * 2)
+    check("...and four through ComfyUI's float32 tiler",
+          _rt._decode_ram(H3VAE(), lat, True) == _px * 4 * 4)
+    check("an unsizable VAE asks for nothing but the headroom",
+          _rt._decode_ram(object(), lat, False) == 0)
+
+    # The join hands back the frames it already has, not a second copy of them.
+    acc = S.FrameAccumulator(10, torch.float32, True)
+    acc.add(torch.ones((4, 1, 1, 3)))
+    acc.add(torch.ones((3, 1, 1, 3)))
+    _base = acc.tensor.data_ptr()
+    out = acc.finish()
+    check("a chain short of capacity is joined without copying it",
+          out.shape[0] == 7 and out.data_ptr() == _base)
+    check("...and is still contiguous for whatever reads it next", out.is_contiguous())
+
+
 def test_no_report_touches_weight_data():
     """Reported: renders went several times slower.
 
@@ -4398,6 +4516,7 @@ def main():
     test_the_graph_says_whether_the_schedule_is_already_set()
     test_a_repeated_naming_is_spent_as_a_pronoun()
     test_the_dit_gets_the_pinned_pool_to_itself()
+    test_the_chain_makes_room_for_its_own_frames()
     test_no_report_touches_weight_data()
     test_a_lora_that_does_not_fit_is_reported_not_silent()
     test_widget_values_are_usable()

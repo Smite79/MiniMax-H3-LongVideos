@@ -66,6 +66,8 @@ _decode_headroom = _runtime_module._decode_headroom
 _resident = _runtime_module._resident
 _image_out_dtype = _runtime_module._image_out_dtype
 _evict_all_but = _runtime_module._evict_all_but
+ensure_host_ram = _runtime_module.ensure_host_ram
+_decode_ram = _runtime_module._decode_ram
 _SILENCE_STATUS = _audio_module._SILENCE_STATUS
 _silent_audio_latent = _audio_module._silent_audio_latent
 _pin_audio_silence = _audio_module._pin_audio_silence
@@ -10779,6 +10781,12 @@ class H3LongVideos:
                     notes.append(up_note)
 
             _t0 = time.perf_counter()
+            # RAM for this shot's frames BEFORE they are decoded. Every shot's frames
+            # land in the headroom the weights left, and nothing between nodes runs to
+            # give it back mid-chain -- see ensure_host_ram. The DiT and the text
+            # encoder are done with until the next shot; the VAEs are next.
+            ensure_host_ram(_decode_ram(vae, out, shot_tiled), keep=(vae, audio_vae),
+                            what=f"shot {i + 1}'s decode")
             imgs = _decode_video(vae, out, shot_tiled, free_first=model,
                                  keep=(vae, audio_vae))
             wav = _decode_audio(audio_vae, out)
