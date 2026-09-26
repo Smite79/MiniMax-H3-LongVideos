@@ -974,3 +974,95 @@ def apply_levels(img, gain, offset):
     y = x.clone()
     y[..., :c] = ((x[..., :c] - m) * g + m + o).clamp(0.0, 1.0)
     return y.to(img.dtype)
+
+
+GRADE_GAIN_CAP = 0.12        # log-gain either part of a shot's grade may take out: ~12%
+GRADE_OFFSET_CAP = 0.05
+GRADE_OWN_GAIN = 0.25        # a within-shot change this large is the picture changing,
+GRADE_OWN_OFFSET = 0.10      # ...a light going off, not a chain cooking by a few percent
+GRADE_MIN_SIGMA = 0.01       # below this a contrast RATIO means nothing
+GRADE_FLOOR = 1.0 / 255.0    # the handoff is quantised to 8 bits; less than a step is erased
+
+
+def shot_grade(given, first, last, strength, own_change=False, pipe=None):
+    """(start, end) grades taking a shot's OWN cooking back out, or None when there is none.
+
+    Each grade is (log-gain, offset), per colour channel, about the frame's own mean --
+    apply_levels' model. `start` is for the shot's first frame, `end` for its last, and
+    grade_frames ramps between them.
+
+    THE BURN BUILDS INSIDE THE SHOT, NOT ONLY AT THE CUT. The correction before this
+    measured one thing: the handoff against the model's reproduction of it at frame one
+    (`given` against `first`), where nothing was asked to change -- and treated what the
+    shot then did over its length as the author's, taking it out only once three shots
+    agreed on its sign and never more than 1.5% of contrast. A distill cooking a few
+    percent over every take reproduces the handoff faithfully and burns the frames after
+    it, so that measurement read nothing, the last frame went out cooked, the next shot
+    reproduced the cooked frame faithfully and cooked it again. Reported as the scene
+    burning itself in through every beat, after that correction was in.
+
+    Both parts now, from this shot alone:
+      * the boundary -- `given` to `first` -- which is never the author's, and
+      * the take -- `first` to `last` -- unless `own_change` says the beat changes the
+        light, the place or the camera, or the change is too large to be cooking.
+    Frame one carries the boundary part only; the last frame carries both. The video's
+    own frames are graded along that ramp, so the last one IS the handoff: no step at the
+    cut, and nothing left for the next shot to inherit.
+
+    `pipe` is (last frame as decoded, the same frame before latent upscaling), whose
+    difference is the pipeline's and not the shot's; it is taken out of the boundary."""
+    if strength is None or float(strength) <= 0:
+        return None
+    fm, fs = frame_levels(first)
+    lm, ls = frame_levels(last)
+    if fm is None or lm is None or float(fs.min()) < GRADE_MIN_SIGMA:
+        return None
+    zero = torch.zeros(3)
+    bg, bo = zero, zero
+    if given is not None:
+        gm, gs = frame_levels(given)
+        if gm is not None and float(gs.min()) >= GRADE_MIN_SIGMA:
+            ug, uo = zero, zero
+            if pipe is not None:
+                pm, ps = frame_levels(pipe[1])
+                if pm is not None and float(ps.min()) >= GRADE_MIN_SIGMA:
+                    ug, uo = torch.log(ls / ps), lm - pm
+            bg = (torch.log(fs / gs) - ug).clamp(-GRADE_GAIN_CAP, GRADE_GAIN_CAP)
+            bo = (fm - gm - uo).clamp(-GRADE_OFFSET_CAP, GRADE_OFFSET_CAP)
+    wg, wo = zero, zero
+    if not own_change and float(ls.min()) >= GRADE_MIN_SIGMA:
+        g, o = torch.log(ls / fs), lm - fm
+        if float(g.abs().max()) <= GRADE_OWN_GAIN and float(o.abs().max()) <= GRADE_OWN_OFFSET:
+            wg = g.clamp(-GRADE_GAIN_CAP, GRADE_GAIN_CAP)
+            wo = o.clamp(-GRADE_OFFSET_CAP, GRADE_OFFSET_CAP)
+    s = float(strength)
+    start = (-s * bg, -s * bo)
+    end = (-s * (bg + wg), -s * (bo + wo))
+    tiny = lambda gr: (float((torch.exp(gr[0]) - 1.0).abs().max()) < 1e-3
+                       and float(gr[1].abs().max()) < GRADE_FLOOR)
+    if tiny(start) and tiny(end):
+        return None
+    return start, end
+
+
+def grade_frames(frames, start, end, chunk=16):
+    """Grade a shot's frames IN PLACE, ramping from `start` at frame one to `end` at the last.
+
+    In place and in chunks: the shot is the largest thing the node holds, and grading a
+    copy of it is a second shot in RAM at the decode, where RAM is shortest."""
+    n = int(frames.shape[0])
+    c = min(3, int(frames.shape[-1]))
+    if n == 0 or c == 0:
+        return frames
+    g0, o0 = (t[:c].float().to(frames.device) for t in start)
+    g1, o1 = (t[:c].float().to(frames.device) for t in end)
+    for a in range(0, n, max(1, int(chunk))):
+        x = frames[a:a + chunk, ..., :c].float()
+        k = int(x.shape[0])
+        t = (torch.arange(a, a + k, dtype=torch.float32, device=frames.device)
+             / max(1, n - 1)).view(k, 1)
+        g = torch.exp(g0 + (g1 - g0) * t).view(k, 1, 1, c)
+        o = (o0 + (o1 - o0) * t).view(k, 1, 1, c)
+        m = x.mean(dim=(1, 2), keepdim=True)
+        frames[a:a + k, ..., :c] = ((x - m) * g + m + o).clamp(0.0, 1.0).to(frames.dtype)
+    return frames

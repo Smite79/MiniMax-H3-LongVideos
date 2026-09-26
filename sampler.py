@@ -68,6 +68,8 @@ _image_out_dtype = _runtime_module._image_out_dtype
 _evict_all_but = _runtime_module._evict_all_but
 ensure_host_ram = _runtime_module.ensure_host_ram
 _decode_ram = _runtime_module._decode_ram
+shot_grade = _runtime_module.shot_grade
+grade_frames = _runtime_module.grade_frames
 _SILENCE_STATUS = _audio_module._SILENCE_STATUS
 _silent_audio_latent = _audio_module._silent_audio_latent
 _pin_audio_silence = _audio_module._pin_audio_silence
@@ -5033,6 +5035,37 @@ _CAMERA_ASKED = re.compile(
     r"\bpoint[-\s]of[-\s]view\b|\blocked[-\s]off\b|\bdutch\s+(?:angle|tilt)\b", re.I)
 
 
+_LIGHT_THING = (r"(?:lights?|lamps?|candles?|torch(?:es)?|flashlights?|fire(?:place)?|"
+                r"bulbs?|neon|screens?|tv|television|headlights?|sun|moon)")
+_LIGHT_CHANGES = re.compile(
+    r"\b" + _LIGHT_THING + r"\b[^.;]{0,24}?\b(?:go(?:es)?\s+(?:out|off|on|dark|dim)|"
+    r"went\s+(?:out|off|on)|comes?\s+on|came\s+on|dim(?:s|med|ming)?|"
+    r"brighten(?:s|ed|ing)?|flicker(?:s|ed|ing)?|fades?|faded|dies|died|"
+    r"blaze[sd]?|flare[sd]?|rises?|rose|sets?|setting|sinks?|sank)\b|"
+    r"\b(?:turn(?:s|ed|ing)?|switch(?:es|ed|ing)?|flick(?:s|ed|ing)?|click(?:s|ed|ing)?|"
+    r"shut(?:s|ting)?)\s+(?:on|off)\s+(?:the\s+|a\s+|her\s+|his\s+)?" + _LIGHT_THING + r"\b|"
+    r"\b(?:turn(?:s|ed|ing)?|switch(?:es|ed|ing)?|flick(?:s|ed|ing)?|click(?:s|ed|ing)?)\s+"
+    r"(?:the\s+|a\s+|her\s+|his\s+)?" + _LIGHT_THING + r"\s+(?:on|off)\b|"
+    r"\b(?:lights?|blows?\s+out|blew\s+out|snuffs?\s+out)\s+(?:the\s+|a\s+)?"
+    r"(?:candles?|fire|lamp|lantern|match)\b|"
+    r"\b(?:open(?:s|ed|ing)?|clos(?:e|es|ed|ing)|draw(?:s|n|ing)?|pull(?:s|ed|ing)?)\s+"
+    r"(?:the\s+|back\s+the\s+)?(?:curtains?|blinds?|shutters?|drapes?)\b|"
+    r"\b(?:darkness|night|dusk|dawn)\s+(?:falls|fell|comes|came|breaks|broke|fills)\b|"
+    r"\b(?:room|sky|screen|world)\s+(?:goes|went|turns?|turned|grows?|grew|fades?|faded)\s+"
+    r"(?:dark|darker|black|white|bright|brighter|red|blue|orange)\b|"
+    r"\bfades?\s+(?:to|into)\s+(?:black|white)\b|"
+    r"\b(?:lightning|sunrise|sunset|explosion|muzzle\s+flash)\b", re.I)
+
+
+def light_changes(beat):
+    """Does this beat change the light on purpose?
+
+    A shot's change of level across its length is otherwise the chain cooking, and is
+    taken back out (see shot_grade). A lamp switched off is the author's, and keeps
+    its darkness."""
+    return bool(_LIGHT_CHANGES.search(str(beat or "")))
+
+
 def camera_hold(beat, anchor="", moving=False):
     """One sentence holding the camera still, where nothing has placed it.
 
@@ -7618,8 +7651,8 @@ class H3LongVideos:
                 # APPENDED. Saved workflows restore widget values by position.
                 "hold_levels": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0,
                     "step": 0.05,
-                    "tooltip": "Take the grade the chain adds to itself back out of each "
-                               "handoff.\n\n"
+                    "tooltip": "Take the burn the chain adds to itself back out of every "
+                               "shot.\n\n"
                                "Every shot after the first is sampled from the previous "
                                "shot's last frame. The model reproduces that frame "
                                "faithfully -- which is what continuity needs -- so it "
@@ -7630,28 +7663,26 @@ class H3LongVideos:
                                "back. Eleven shots of that is crushed blacks, blown "
                                "highlights and lurid colour, invisible shot to shot and "
                                "obvious end to end.\n\n"
-                               "What makes this correctable without knowing anything about "
-                               "your scene: at every boundary the render holds two pictures "
-                               "that are supposed to be the SAME frame -- the handoff it "
-                               "gave the shot, and the opening frame that came back. "
-                               "Nothing was asked to change between them, so everything "
-                               "separating them is the chain's doing and none of it is "
-                               "yours. That difference is what is measured, per colour "
-                               "channel, per boundary, and the median across boundaries is "
-                               "what is taken back out.\n\n"
-                               "It does NOT aim at a target and never compares a shot to "
-                               "shot 1, so a beat that walks into a darker room stays "
-                               "darker: measured, a deliberate lighting step keeps about "
-                               "98% of its size. The correction is a capped fraction per "
-                               "boundary rather than a reset, because shot N's frames reach "
-                               "the video ungraded while N+1 is sampled from a corrected "
-                               "keyframe -- an uncapped correction would trade burn-in for "
-                               "a pop at every cut.\n\n"
-                               "1.0 flattens the trend hardest; lower leaves more of the "
-                               "look alone. 0 is off. Watch the contrast line in info: if "
-                               "it still says UP, raise this. It cannot undo clipping that "
-                               "earlier shots already baked in, and it corrects levels "
-                               "only -- not softening, and nothing spatial."}),
+                               "Measured per colour channel from each shot alone, in two "
+                               "parts: the handoff against the model's reproduction of it at "
+                               "frame one, where nothing was asked to change, and frame one "
+                               "against the LAST frame, which is where a distill cooks a few "
+                               "percent over every take. The shot's own frames are graded on "
+                               "a ramp from frame one to the last, so the last frame -- which "
+                               "is the next shot's handoff -- carries the whole correction: "
+                               "nothing is left to compound, and there is no step at the "
+                               "cut.\n\n"
+                               "It never aims at a target and never compares a shot to shot "
+                               "1. A beat that changes the light on purpose -- a lamp "
+                               "switched off, curtains drawn, the sun setting -- or travels "
+                               "to another place, or moves the camera, keeps what its take "
+                               "did, and so does any change too large to be cooking.\n\n"
+                               "1.0 takes all of each shot's own drift out; lower leaves a "
+                               "share of it in, and that share still compounds slowly. 0 is "
+                               "off. Watch the contrast line in info: if it still says UP, "
+                               "raise this. It cannot undo clipping already baked in, and it "
+                               "corrects levels only -- not softening, and nothing "
+                               "spatial."}),
                 # APPENDED. Saved workflows restore widget values by position.
                 # APPENDED. Saved workflows restore widget values by position.
             },
@@ -8095,6 +8126,7 @@ class H3LongVideos:
         muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
         cut_shots = set()           # 0-based shots opening in a room the keyframe is not in
+        own_grade_shots = set()     # 0-based shots whose change of level over the take is theirs
         shot_rooms = {}             # 0-based shot -> (room it opens in, room it ends in)
         hardware_changed = set()    # 1-based shots that put hardware on or take it off
         _undescribed = []           # rooms the film enters that the prompt never describes
@@ -9057,6 +9089,11 @@ class H3LongVideos:
             _camera = camera_hold(body, anchor, moving=_journey) if hold_camera else ""
             if _camera:
                 camera_shots.append(len(plan) + 1)
+            # A light changing, a journey, or the author's own camera move changes the
+            # picture's levels over the take on purpose. Anything else is the chain
+            # cooking, and the render takes it back out. See shot_grade.
+            if _journey or light_changes(body) or _CAMERA_ASKED.search(body or ""):
+                own_grade_shots.add(len(plan))
             _k = len(plan)
             _on_keyframe = bool(
                 (first_frame is not None and not _first_is_plate) if _k == 0 else
@@ -10607,7 +10644,7 @@ class H3LongVideos:
             speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, cut_shots=cut_shots,
             shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
-            reentry_shots=reentry_shots,
+            reentry_shots=reentry_shots, own_grade_shots=own_grade_shots,
             upscale=upscale, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
         )
@@ -10622,6 +10659,7 @@ class H3LongVideos:
         shot_rooms = prepared.shot_rooms or {}
         _shot_frames = prepared.shot_frames or {}
         reentry_shots = prepared.reentry_shots or {}
+        own_grade = prepared.own_grade_shots or set()
         hardware_changed = prepared.hardware_changed or set()
         ambient_audio = prepared.ambient_audio
         ambient_level = prepared.ambient_level
@@ -10931,20 +10969,33 @@ class H3LongVideos:
                         hand_src = tail
                 except Exception:
                     pass                  # fall back to the upscaled frames
+            _keyed = bool(shot_handoff is not None and not demoted)
             try:
-                if (shot_handoff is not None and not demoted and imgs is not None
+                if (_keyed and imgs is not None
                         and imgs.shape[0] > 1 and hand_src is not None and hand_src.shape[0]):
                     _levels.observe(shot_handoff, imgs[0], imgs[-1], hand_src[-1])
             except Exception:
                 pass
-            _grade = None               # the correction, kept for the captured face
+            # THE SHOT'S OWN COOKING COMES OUT OF ITS FRAMES, on a ramp from frame one to
+            # the last, and the last frame IS the handoff. The correction before this
+            # graded the handoff alone, by the median drift across cuts, and let what a
+            # shot did over its length through almost untouched -- which is where the
+            # burn builds. See shot_grade. The captured face is taken from these frames
+            # after grading, so it needs no grade of its own.
+            _grade = None
             try:
-                if hold_levels > 0 and hand_src is not None and hand_src.shape[0]:
-                    _lg, _lo = _levels.gains(hold_levels)
-                    if _lg is not None:
-                        hand_src = apply_levels(hand_src, _lg, _lo)
-                        _grade = (_lg, _lo)
-                        _levels.note(_lg, _lo)   # recorded for the end-of-run report
+                if hold_levels > 0 and imgs is not None and imgs.shape[0] > 1:
+                    _pre = (hand_src is not imgs and hand_src is not None
+                            and hand_src.shape[0] > 0)
+                    _sg = shot_grade(shot_handoff if _keyed else None, imgs[0], imgs[-1],
+                                     hold_levels, own_change=(i in own_grade),
+                                     pipe=(imgs[-1], hand_src[-1]) if _pre else None)
+                    if _sg is not None:
+                        grade_frames(imgs, *_sg)
+                        _eg, _eo = torch.exp(_sg[1][0]), _sg[1][1]
+                        if _pre:
+                            hand_src = apply_levels(hand_src[-1:], _eg, _eo)
+                        _levels.note(_eg, _eo)   # recorded for the end-of-run report
             except Exception:
                 pass
             handoff = hand_src[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True)

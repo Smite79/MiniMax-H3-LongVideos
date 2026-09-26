@@ -5495,6 +5495,80 @@ def test_the_chain_does_not_burn_in():
     check("...the rise is named as cooking instead", "COOKING" in rep, rep)
 
 
+class CookVAE(DriftVAE):
+    """A VAE whose shot reproduces the frame it was handed EXACTLY, then cooks over the take.
+
+    DriftVAE burns every frame of a shot by the same amount -- burn at the CUT, the one
+    kind the first correction measured. This reproduces frame one faithfully and expands
+    contrast frame by frame to the last, which is how the burn kept arriving after that
+    correction was in: the cut measures nothing, and the last frame -- the handoff --
+    goes out cooked for the next shot to reproduce faithfully and cook again."""
+
+    GAIN = 1.08
+
+    def decode(self, latent):
+        t = latent.shape[2] if latent.ndim == 5 else 1
+        n = max(1, (t - 2) // 5 * 17 + 5)
+        base = (torch.rand(H, W, 3) * 0.5 + 0.25) if self._last is None else self._last
+        g = (self.GAIN ** torch.linspace(0.0, 1.0, n)).view(n, 1, 1, 1)
+        return ((base.unsqueeze(0) - 0.5) * g + 0.5).clamp(0.0, 1.0).to(_vae_out_dtype())
+
+
+def test_the_take_does_not_cook_the_chain():
+    """REPORTED after hold_levels was in: the scene still burning itself in, every beat."""
+    print("\n=== a shot that cooks over its length does not hand the burn on ===")
+    beats = [f"She takes a step to the left. Beat {i}." for i in range(1, 8)]
+    P = "\n\n".join(["A kitchen at night."] + beats)
+    off, on = CookVAE(), CookVAE()
+    run_node(P, vae=off, hold_levels=0.0)
+    out = run_node(P, vae=on, hold_levels=1.0)
+    s_off = [s for _, s, _ in off.seen]
+    s_on = [s for _, s, _ in on.seen]
+    check("the fixture cooks the chain inside the take with the correction off",
+          len(s_off) >= 3 and s_off[-1] > s_off[0] * 1.15, f"{[round(v, 4) for v in s_off]}")
+    check("...and the handoff no longer carries it on",
+          s_on[-1] < s_on[0] * 1.03, f"on={[round(v, 4) for v in s_on]}")
+    v = out[0].float()
+    check("...and the video's own last frame is not burned against its first",
+          float(v[-1].std()) < float(v[0].std()) * 1.03,
+          f"{float(v[0].std()):.4f} -> {float(v[-1].std()):.4f}")
+    # A beat that changes the light keeps what its take did.
+    lamp = list(beats)
+    lamp[2] = "She switches off the lamp."
+    kept = CookVAE()
+    run_node("\n\n".join(["A kitchen at night."] + lamp), vae=kept, hold_levels=1.0)
+    s_k = [s for _, s, _ in kept.seen]
+    check("a shot that switches the lamp off is not graded back over its take",
+          len(s_k) == len(s_on) and s_k[3] > s_on[3] * 1.04,
+          f"lamp={[round(x, 4) for x in s_k]} plain={[round(x, 4) for x in s_on]}")
+
+    # pure functions, no render
+    check("a light changing is read as the author's",
+          all(S.light_changes(b) for b in ("She switches off the lamp.", "The lights go out.",
+                                           "He draws the curtains.", "The sun sets.",
+                                           "She turns the lamp on.")))
+    check("...and a light that is merely there is not",
+          not any(S.light_changes(b) for b in ("A lamp glows on the desk.",
+                                               "She lies in the warm lamp light.",
+                                               "He sits by the window.")))
+    first = torch.rand(H, W, 3) * 0.5 + 0.25
+    last = ((first - 0.5) * 1.10 + 0.5).clamp(0.0, 1.0)
+    sg = S.shot_grade(None, first, last, 1.0)
+    check("a take that cooked is graded back at its end and not at its start",
+          sg is not None and float(sg[0][0].abs().max()) < 1e-6
+          and float(sg[1][0].max()) < 0.0, f"{sg}")
+    check("...not when the beat changed the light itself",
+          S.shot_grade(None, first, last, 1.0, own_change=True) is None)
+    check("...nor for a change too large to be cooking",
+          S.shot_grade(None, first, first * 0.4, 1.0) is None)
+    check("strength 0 is off", S.shot_grade(None, first, last, 0.0) is None)
+    fr = torch.stack([first, last]).clone()
+    S.grade_frames(fr, *sg)
+    check("grading puts the last frame back at the first frame's contrast",
+          abs(float(fr[1].std()) - float(first.std())) < 0.01 * float(first.std())
+          and torch.equal(fr[0], first), f"{float(first.std()):.4f} {float(fr[1].std()):.4f}")
+
+
 def test_detail_trend():
     print("\n=== the chain is measured for softening ===")
     sharp = torch.rand(48, 48, 3)
@@ -8885,6 +8959,7 @@ def main():
     test_finished_shots_are_held_in_half_precision()
     test_detail_trend()
     test_the_chain_does_not_burn_in()
+    test_the_take_does_not_cook_the_chain()
     test_timing_report()
     test_no_garment_is_ever_invented()
     test_nothing_wearable_is_ever_added()

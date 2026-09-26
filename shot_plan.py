@@ -106,3 +106,4 @@ class PreparedVideo:
     hardware_changed: object = None   # 1-based shots that put hardware on or take it off
     shot_frames: object = None        # {0-based shot: (who its frames show, who is still there at its end)}
     reentry_shots: object = None      # {0-based shot: who walks in while the keyframe still has them}
+    own_grade_shots: object = None    # {0-based shots whose change of level over the take is the author's}
