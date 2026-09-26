@@ -494,9 +494,14 @@ def test_an_unstated_frame_becomes_a_portrait():
          "McKenna walks to the bench and picks up a towel.")
     out = run_node(P, plan_only=True, character_memory=mem)
     sh = [" ".join(x.split()) for x in out[3].split("---") if x.strip()]
-    for i, shot in enumerate(sh, 1):
-        check(f"shot {i} is told what the frame holds",
-              "whole body, head to feet" in shot, shot[-90:])
+    check("shot 1 is told what the frame holds",
+          "whole body, head to feet" in sh[0], sh[0][-90:])
+    # Shot 2 opens on shot 1's last frame with the camera held: that frame IS its frame.
+    # Asking for "head to feet, with the room around it" as well is a wider view than
+    # the take opens on, and the model cuts to get it -- REPORTED as sex scenes turning
+    # into side-angle shots in a different location.
+    check("a shot opening on a keyframe is not told to reframe",
+          "head to feet" not in sh[1] and "one unbroken take" in sh[1], sh[1][-90:])
     check("the reason is reported", "frame HOLDS" in out[2], "")
     check("a destination stops at a conjunction",
           S.moved_to("McKenna walks to the bench and picks up a towel.") == "")
@@ -5281,8 +5286,7 @@ def test_an_exclusive_sound_clause_never_denies_the_beat():
     check("...and finds nothing where nothing is named",
           S.named_vocals_in("He walks in.") == [])
     check("...and it is the same table sounds_for uses",
-          all(v in S._NAMED_VOCALS for _p, v in S._VOCAL_FROM)
-          and len(S._VOCAL_FROM) == len(S._NAMED_VOCALS))
+          {v for _p, v in S._VOCAL_FROM} == set(S._NAMED_VOCALS))
 
 
 def test_the_chain_is_never_held_twice():
@@ -7858,6 +7862,56 @@ def test_a_fall_keeps_its_landing_guard():
           "Mouths in the shot stay closed" in fell, fell[-200:])
 
 
+def test_an_intimate_scene_holds_its_frame_and_its_voices():
+    """REPORTED: in sex scenes moaning and sounds of pleasure came out as gibberish,
+    and the scene kept turning into a side-angle shot in a different location."""
+    print("\n=== an intimate scene holds its frame, and its voices stay wordless ===")
+    mem = "Mara: she, 30, long dark hair.\nDan: he, 35, short brown hair."
+    room = "A bedroom at night, warm lamp light.\n\n"
+    sh = _shots_of(run_node(
+        room + "Mara and Dan kiss on the bed.\n\n"
+        "Dan lays Mara on her back and climbs on top of her.\n\n"
+        "Mara climbs on top and rides Dan.\n\n"
+        "Dan carries Mara to the shower.", character_memory=mem, plan_only=True))
+    for i in (1, 2):
+        check(f"a position change on a keyframe is not reframed wide: shot {i + 1}",
+              "head to feet" not in sh[i] and "with the room around" not in sh[i], sh[i][-120:])
+        check(f"...and keeps the held camera: shot {i + 1}", "one unbroken take" in sh[i])
+    check("a journey keeps its frame, the camera going with them",
+          "head to feet" in sh[3], sh[3][-120:])
+
+    def _sound(beat):
+        s = _shots_of(run_node(room + beat, character_memory=mem, plan_only=True))[0]
+        m = re.search(r"(The only sound[^.]*\.|It sounds like[^.]*\.)", s)
+        return s, (m.group(1) if m else "")
+
+    for beat, word in (("Mara cries out in pleasure.", "wordless crying out"),
+                       ("Mara makes sounds of pleasure.", "wordless moaning"),
+                       ("Mara gasps with pleasure.", "wordless gasping"),
+                       ("Dan grunts.", "wordless grunting"),
+                       ("Mara moans.", "wordless moaning")):
+        s, c = _sound(beat)
+        check(f"the vocal is named, and wordless: {beat}", word in c, c)
+    s, c = _sound("Mara cries out in pleasure.")
+    check("...never an exclusive list of the room alone",
+          "crying out" in c and not c.startswith("The only sounds are the quiet"), c)
+    check("\"cries out\" is not read as crying", "The crying is" not in s, s[-160:])
+    s, c = _sound("Dan grunts as he thrusts, and Mara makes sounds of pleasure.")
+    check("two vocals are credited one each",
+          "the grunting is dan's" in s.lower() and "the moaning is mara's" in s.lower(),
+          s[-200:])
+    check("...and neither mouth is closed on its own sound", "every other mouth" not in s)
+    s, c = _sound("Dan grunts as he thrusts, and she moans.")
+    check("a pronoun's vocal closes nobody's mouth", "every other mouth" not in s, s[-200:])
+    check("the effort sound is wordless too", "wordless" in S.EFFORT_BREATH)
+    check("wordless() folds the vocals into one phrase and keeps the order",
+          S.wordless(["moaning", "breathing", "grunting", "a bed frame working"])
+          == ["wordless moaning and grunting", "breathing", "a bed frame working"])
+    check("...and leaves a list with no vocal alone",
+          S.wordless(["breathing", "rain against the glass"])
+          == ["breathing", "rain against the glass"])
+
+
 def test_a_dropped_clause_is_not_reported_as_sent():
     """The per-shot trackers append where a clause is BUILT, before the budget runs,
     so when the budget binds the notes go on naming shots that never got it.
@@ -7867,20 +7921,21 @@ def test_a_dropped_clause_is_not_reported_as_sent():
     print("\n=== a dropped clause is not reported as sent ===")
     mem = ("Ana: she, 30, a grey t-shirt over a black bra, blue jeans, boots.\n"
            "Mara: she, 41, navy overalls.")
+    # The removal is on shot 1: a later shot opens on a keyframe and is not given the
+    # frame clause at all, so it is not crowded enough to drop one.
     info = str(run_node(
-        "A workshop with white tiles.\n\nAna and Mara walk in from the yard.\n\n"
-        "Ana looks at Mara.\n\nremove: t-shirt\nAna pulls it off.\n\n"
-        "Ana waits.", character_memory=mem, plan_only=True)[2])
+        "A workshop with white tiles.\n\nremove: t-shirt\nAna pulls it off.\n\n"
+        "Ana looks at Mara.\n\nAna waits.", character_memory=mem, plan_only=True)[2])
     drop = next((n for n in info.split(" | ") if "dropped for room" in n), "")
-    check("the run reports a shot whose clauses were dropped", "shot 3:" in drop, drop[:90])
-    # Those exact clause names must not appear in their own notes for shot 3.
+    check("the run reports a shot whose clauses were dropped", "shot 1:" in drop, drop[:90])
+    # Those exact clause names must not appear in their own notes for shot 1.
     for name, marker in (("frame", "told what the frame HOLDS"),
                          ("camera", "one unbroken TAKE")):
         if name in drop:
             said = next((n for n in info.split(" | ") if marker in n), "")
             shots = said.split("shot(s) ")[1].split(" ")[0] if "shot(s) " in said else ""
-            check(f"...and the {name} note does not claim shot 3",
-                  "3" not in shots.split(","), said[:110])
+            check(f"...and the {name} note does not claim shot 1",
+                  "1" not in shots.split(","), said[:110])
 
 
 def test_a_promoted_clause_opens_in_upper_case():
@@ -8823,6 +8878,7 @@ def main():
     test_room_tone_under_every_shot()
     test_the_decode_keeps_the_vae_it_is_about_to_use()
     test_an_exclusive_sound_clause_never_denies_the_beat()
+    test_an_intimate_scene_holds_its_frame_and_its_voices()
     test_a_vocal_shot_says_what_fills_the_gaps()
     test_the_chain_is_never_held_twice()
     test_the_position_may_only_be_written_once_in_the_scene()

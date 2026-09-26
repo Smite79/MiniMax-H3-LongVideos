@@ -1610,16 +1610,30 @@ def sound_described(text):
     return True
 
 
+# Pleasure said as a noun names no sound a branch can make. Heard, it is moaning.
+_PLEASURE_SOUND = (r"(?:sounds?|noises?|cries|moans?|gasps?|sighs?|groans?)\s+of\s+"
+                   r"(?:pleasure|ecstasy|passion|delight|arousal)|"
+                   r"pleasure\s+(?:sounds?|noises?)")
+
 _VOCAL_FROM = (
+    (r"\b(?:" + _PLEASURE_SOUND + r")\b",           "moaning"),
     (r"\bwhimper(?:s|ing|ed)?\b",                   "whimpering"),
     (r"\bsob(?:s|bing|bed)?\b",                     "sobbing"),
     (r"\bmoan(?:s|ing|ed)?\b",                      "moaning"),
     (r"\bgroan(?:s|ing|ed)?\b",                     "groaning"),
     (r"\bscream(?:s|ing|ed)?\b",                    "screaming"),
     (r"\bwhin(?:e|es|ing|ed)\b",                    "whining"),
+    # The rest were already read as somebody's voice (_VOCAL_SOURCE) and never as a
+    # sound, so a beat that said one had its mouth opened and was then told "the only
+    # sound is" the room -- an open branch described as silent fills itself with a
+    # voice. Reported as sounds of pleasure coming out as gibberish.
+    (r"\bcr(?:y|ies|ied|ying)\s+out\b",             "crying out"),
+    (r"\bgrunt(?:s|ing|ed)?\b",                     "grunting"),
+    (r"\bsigh(?:s|ing|ed)?\b",                      "sighing"),
+    (r"\bgasp(?:s|ing|ed)?\b",                      "gasping"),
 )
 
-EFFORT_BREATH = "unsteady breathing, with gasps and moans of effort"
+EFFORT_BREATH = "unsteady breathing, with wordless gasps and moans of effort"   # see wordless()
 
 _SOUND_FROM = (
     *_VOCAL_FROM,
@@ -1677,19 +1691,41 @@ _SOUND_FROM = (
 MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
 _VOCAL_RETIRES = (EFFORT_BREATH, "breathing")
 _VOCAL_BETWEEN = "breathing"
-# The six above, as a set: see the tail of sounds_for for why they are special-cased.
-_NAMED_VOCALS = frozenset(("whimpering", "sobbing", "moaning", "groaning",
-                           "screaming", "whining"))
+# The vocals above, as a set: see the tail of sounds_for for why they are special-cased.
+_NAMED_VOCALS = frozenset(phrase for _, phrase in _VOCAL_FROM)
 _SOUND_SUPERSEDES = {
     "cuffs ratcheting closed": ("cuffs knocking",),
     EFFORT_BREATH: ("breathing",),
-    "whimpering": _VOCAL_RETIRES,
-    "sobbing": _VOCAL_RETIRES,
-    "moaning": _VOCAL_RETIRES,
-    "groaning": _VOCAL_RETIRES,
-    "screaming": _VOCAL_RETIRES,
-    "whining": _VOCAL_RETIRES,
+    **{v: _VOCAL_RETIRES for v in _NAMED_VOCALS},
 }
+
+
+def wordless(phrases):
+    """The heard list with its vocals said to be WORDLESS, folded into one phrase.
+
+    A vocal is a voice, and a voice is what a joint model's audio branch reaches for
+    speech with: at the last few steps it resolves whatever is easiest, and a human
+    voice with nothing saying what shape it takes comes out as syllables. Reported
+    as moaning and sounds of pleasure turned into gibberish. This is the positive
+    way to say it -- at cfg 1 no negative prompt is evaluated, so "no words" is the
+    word "words" -- and it is the word audio captions use for exactly this.
+
+    Folded where the first vocal stood ("wordless moaning and grunting"), so the list
+    keeps its order and gains one word, not one per vocal."""
+    vocals = [p for p in phrases if p in _NAMED_VOCALS]
+    if not vocals:
+        return list(phrases)
+    one = "wordless " + (vocals[0] if len(vocals) == 1
+                         else ", ".join(vocals[:-1]) + " and " + vocals[-1])
+    out, done = [], False
+    for p in phrases:
+        if p in _NAMED_VOCALS:
+            if not done:
+                out.append(one)
+                done = True
+            continue
+        out.append(p)
+    return out
 
 _ROOM_TONE = (
     (r"\b(?:bathroom|shower|tiled?|tiles)\b",       "tiled walls ringing"),
@@ -1809,7 +1845,8 @@ def named_vocals_in(beat):
     nothing the node inferred -- these are the author's words, matched literally --
     and it is what keeps the exclusive sentence true."""
     b = str(beat or "")
-    return [phrase for pat, phrase in _VOCAL_FROM if re.search(pat, b, re.I)]
+    return list(dict.fromkeys(phrase for pat, phrase in _VOCAL_FROM
+                              if re.search(pat, b, re.I)))
 
 
 def sound_clause(phrases, only=False, written=False):
@@ -2035,6 +2072,12 @@ _UP_TO_TWO_WORDS = r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?"
 
 
 _VOCAL_SOURCE = (
+    # Before the bare verbs: "makes sounds of pleasure" is hers, and "cries out" is not
+    # crying. Unread, the first left her out of the voices and CLOSED HER MOUTH on the
+    # shot's own sound whenever somebody else in the beat was named making one.
+    (r"(?:makes?|making|made|lets?\s+out|letting\s+out)\s+(?:[\w,']+\s+){0,2}?"
+     r"(?:" + _PLEASURE_SOUND + r")", "moaning"),
+    (r"cr(?:y|ies|ying|ied)\s+out", "crying out"),
     (r"whimper(?:s|ing|ed)?", "whimpering"), (r"sob(?:s|bing|bed)?", "sobbing"),
     (r"moan(?:s|ing|ed)?", "moaning"),       (r"groan(?:s|ing|ed)?", "groaning"),
     (r"scream(?:s|ing|ed)?", "screaming"),   (r"whin(?:e|es|ing|ed)", "whining"),
@@ -2071,6 +2114,18 @@ def vocal_sources_in(beat, sheet=""):
     return out
 
 
+def unpinned_vocal(beat):
+    """Does a pronoun make a vocal here -- 'she moans' -- that no name can be given?
+
+    vocal_sources_in reads names only, so in "Dan grunts, and she makes sounds of
+    pleasure" it finds Dan alone, and the guard closing every OTHER mouth closes hers:
+    the one making the sound. A vocal the beat does not pin on anybody holds nobody,
+    and that has to hold when it sits beside one that is pinned."""
+    b = str(beat or "")
+    return any(re.search(r"\b(?:she|he|they)\b" + _UP_TO_TWO_WORDS + r"\s+(?:" + pat + r")\b",
+                         b, re.I) for pat, _ in _VOCAL_SOURCE)
+
+
 def _joined(names):
     """'Dan', 'Dan and Sam', 'Dan, Sam and Mara'."""
     ns = [n for n in (names or []) if n]
@@ -2079,7 +2134,7 @@ def _joined(names):
     return ", ".join(ns[:-1]) + " and " + ns[-1]
 
 
-def voice_sources(talkers, vocal, vocalisers, silent):
+def voice_sources(talkers, vocal, vocalisers, silent, pairs=None):
     """Say whose voice is whose, and close the mouths that are neither.
 
     Two jobs, and the second is the reported one. Closing the rest stops the
@@ -2089,16 +2144,24 @@ def voice_sources(talkers, vocal, vocalisers, silent):
 
     So the sentence is emitted for two DIFFERENT sources even when nobody is left to
     hold: with one source and nobody silent there is nothing to disambiguate and
-    nothing to close, and the shot is left alone."""
+    nothing to close, and the shot is left alone.
+
+    `pairs` is vocal_sources_in's (name, vocal) list. Each vocal is credited to whoever
+    makes it: one word for everybody gave "the grunting is Dan and Mara's" to a beat
+    where she was moaning -- her sound, described as his."""
     parts = []
     if len(talkers or []) == 1:
         parts.append(f"only {talkers[0]} speaks")
     elif talkers:
         parts.append(f"{talkers[0]} speaks first, then "
                      + ", then ".join(talkers[1:]))
+    by = {}
     if vocalisers and vocal:
-        parts.append(f"the {vocal} is {_joined(vocalisers)}'s")
-    if not parts or (len(parts) == 1 and not silent and len(talkers or []) < 2):
+        for n, ph in (pairs or [(n, vocal) for n in vocalisers]):
+            by.setdefault(ph, []).append(n)
+        parts.append(" and ".join(f"the {ph} is {_joined(ns)}'s" for ph, ns in by.items()))
+    # Two different sources is a line and a vocal, two lines, or two vocals.
+    if not parts or (not silent and len(talkers or []) + len(by) < 2):
         return ""
     if silent:
         parts.append(MOUTH_HOLD_REST)
@@ -8978,14 +9041,31 @@ class H3LongVideos:
                         if len(_described or []) > 2 else "")
             if _contact:
                 contact_shots.append(len(plan) + 1)
-            _frame = frame_hold(body, anchor, len(_described or []) or 1)
-            if _frame:
-                frame_shots.append(len(plan) + 1)
+            # NOT WHERE THE OPENING FRAME ALREADY IS THE FRAME. A shot that opens on the
+            # last shot's final frame, with the camera held, has its framing fixed twice
+            # over; "head to feet, with the room around them" on top of that asks the
+            # held camera for a wider view than the frame it opens on, and a take cannot
+            # be both. The model settles it by cutting -- to the wide profile that shows
+            # two whole bodies, in a room drawn fresh because the keyframe never showed
+            # that much of it. Reported as sex scenes turning into side-angle shots in a
+            # different location: climbs, lifts, pulls and pushes are all whole-body verbs
+            # here. Only where the camera IS held: a journey's camera goes with them and
+            # the keyframe pins only where they set off, and an author's own camera move
+            # is theirs to frame.
             # A move inside the room keeps the hold: a still camera can watch somebody
             # cross to the fireplace, and freeing it there was the camera wandering.
             _camera = camera_hold(body, anchor, moving=_journey) if hold_camera else ""
             if _camera:
                 camera_shots.append(len(plan) + 1)
+            _k = len(plan)
+            _on_keyframe = bool(
+                (first_frame is not None and not _first_is_plate) if _k == 0 else
+                (_k not in cut_shots and _k not in reentry_shots and _k not in _placed_shots
+                 and not (restart_after_removal and (_k - 1) in stripped_shots)))
+            _frame = ("" if (_on_keyframe and _camera) else
+                      frame_hold(body, anchor, len(_described or []) or 1))
+            if _frame:
+                frame_shots.append(len(plan) + 1)
             _wearer_here = (not restrained_who
                             or not character_guard
                             or not (_described or [])
@@ -9098,7 +9178,10 @@ class H3LongVideos:
                                                            _MOVES_OFF_SRC))]
                 _silent = [n for n in list(_described or []) + _here_too
                            if n not in _open]
-                _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent)
+                if _voiced and unpinned_vocal(body):
+                    _silent = []        # "she moans" may be any of them -- see unpinned_vocal
+                _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent,
+                                       pairs=_vocal_src)
                 if _mouth and _voicers:
                     vocal_shots.append(len(plan) + 1)
                 if (not _mouth and _speaks and not _talkers and not _voicers
@@ -9133,8 +9216,13 @@ class H3LongVideos:
                 device_shots.append(len(plan) + 1)
             heard = ([] if (not auto_sound or _own)
                      else sounds_for(body, held=[_state_key(t) for t, _ in _pairs]))
-            if _own:
-                heard = [v for v in named_vocals_in(body) if v not in heard] + heard
+            # The beat's own vocal goes into the list whether or not the beat also reads
+            # as a written sound. Only when it did was it put back, so "cries out" and
+            # "grunts" were heard as the room alone: an exclusive list, true of nothing,
+            # on a branch the vocal had just opened. See named_vocals_in.
+            _vocals_here = named_vocals_in(body)
+            if _own or _vocals_here:
+                heard = [v for v in _vocals_here if v not in heard] + heard
                 if heard and all(v in _NAMED_VOCALS for v in heard):
                     heard = heard + [_VOCAL_BETWEEN]
             if _will_silence:
@@ -9145,8 +9233,8 @@ class H3LongVideos:
                 heard = heard + [_room_now]
             if heard:
                 inferred_sound.append(len(plan) + 1)
-            _own_unsaid = bool(_own) and not named_vocals_in(body)
-            _sound = sound_clause(heard, only=not _speaks, written=_own_unsaid)
+            _own_unsaid = bool(_own) and not _vocals_here
+            _sound = sound_clause(wordless(heard), only=not _speaks, written=_own_unsaid)
             if hold_gaze and _gazers:
                 _g = _gazers[0]
                 _target, _is_person = looking_at[_g]
