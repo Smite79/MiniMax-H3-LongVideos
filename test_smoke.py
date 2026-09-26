@@ -2006,7 +2006,9 @@ def test_one_photographed_face_and_two_people():
           "Dan: <Picture 1>," in rows[2][0] and "Crystal: <Picture 2>," in rows[2][0],
           rows[2][0][:200])
     check("...numbered 1..n with nothing unclaimed",
-          sorted(int(x) for x in tags[2]) == [1, 2], str(tags[2]))
+          not _unnamed_pictures(_encoder_rows(P, character_memory=mem,
+                                              ref_image_1=torch.rand(1, H, W, 3))),
+          str(tags[2]))
     info = str(run_node(P, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))[2])
     check("the run says whose face it sent and where it came from",
           "shot 3 gave Crystal a face of their own, from shot 2" in info, info[-200:])
@@ -2026,6 +2028,18 @@ def test_one_photographed_face_and_two_people():
                          ref_image_1=torch.rand(1, H, W, 3))[2])
     check("a frame from before she changed clothes is not sent",
           "face of their own" not in stale, stale[-200:])
+
+    # NOT BESIDE THE DEMOTED HANDOFF. Below the safe aug the handoff -- the frame she was
+    # alone in -- rides in the reference rows as soon as any reference does, so her face
+    # sent as well was a second picture of her in the same shot.
+    low = _encoded_refs(P, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3),
+                        ref_noise_aug=0.95)
+    check("below the safe aug she is pictured once: Dan's reference and the handoff",
+          low[2][1] == 2, str([n for _p, n in low]))
+    check("...and every picture is still named",
+          not _unnamed_pictures(_encoder_rows(P, character_memory=mem,
+                                              ref_image_1=torch.rand(1, H, W, 3),
+                                              ref_noise_aug=0.95)))
 
     # NOT WHEN BOTH ARE TAGGED: neither is short of a picture.
     both = "Dan: <Picture 1>, he, 35, black t-shirt.\nCrystal: <Picture 2>, she, 35, white t-shirt."
@@ -2054,7 +2068,9 @@ def test_an_untagged_reference_is_claimed_or_held():
     tags = [sorted({int(x) for x in re.findall(r"<Picture (\d+)>", p)}) for p, _n in rows]
     check("the two-person shot is sent no reference at all", counts[0] == 0, str(counts))
     check("...and the solo shots get it, claimed on the person they describe",
-          counts[1:] == [1, 1] and tags[1] == [1] and tags[2] == [1], f"{counts} {tags}")
+          counts[1:] == [1, 1] and tags[1] == [1, 2] and tags[2] == [1, 2]
+          and all("<Picture 2> is the frame this shot opens on" in p for p, _ in rows[1:]),
+          f"{counts} {tags}")
     check("...on that person's own sheet entry", "Dan: <Picture 1>," in rows[2][0], rows[2][0][:160])
     info = str(run_node(P, character_memory=mem, ref_image_1=img())[2])
     check("the run says which shots claimed it", "claimed on the one person they describe" in info)
@@ -3486,13 +3502,16 @@ def test_a_covered_object_does_not_send_its_picture():
     rows = []
     ob = S.build_conditioning
     def spy(clip, vae, audio_vae, prompt, *a, **k):
-        rows.append((prompt, [which(r) for r in (k.get("refs") or [])]))
+        rows.append((prompt, [which(r) for r in (k.get("refs") or [])],
+                     k.get("handoff") is not None))
         return ob(clip, vae, audio_vae, prompt, *a, **k)
     S.build_conditioning = spy
     try:
         run_node(P, character_memory=mem, ref_image_1=FACE, ref_image_2=OBJ)
     finally:
         S.build_conditioning = ob
+    # A keyframe beside the references is named after them, as the opening frame.
+    kf = lambda r: 1 if (r[2] and r[1]) else 0
     check("the covered shot sends only the face", rows[0][1] == ["FACE"], str(rows[0][1]))
     check("...and names no picture it does not carry",
           sorted(set(re.findall(r"<Picture (\d+)>", rows[0][0]))) == ["1"], rows[0][0][:80])
@@ -3501,11 +3520,12 @@ def test_a_covered_object_does_not_send_its_picture():
     # Back in view: the words and the picture return together.
     check("the reveal brings the picture back", rows[1][1] == ["FACE", "OBJ"], str(rows[1][1]))
     check("...claimed by the text",
-          sorted(set(re.findall(r"<Picture (\d+)>", rows[1][0]))) == ["1", "2"], "")
+          sorted(set(re.findall(r"<Picture (\d+)>", rows[1][0])))
+          == [str(n) for n in range(1, 3 + kf(rows[1]))], "")
     check("...and it stays for the shot after", rows[2][1] == ["FACE", "OBJ"], str(rows[2][1]))
-    # Every shot: as many references as the text names. The invariant this broke.
-    bad = [i + 1 for i, (p, imgs) in enumerate(rows)
-           if len(imgs) != len(set(re.findall(r"<Picture (\d+)>", p)))]
+    # Every shot: as many pictures as the text names. The invariant this broke.
+    bad = [i + 1 for i, r in enumerate(rows)
+           if len(r[1]) + kf(r) != len(set(re.findall(r"<Picture (\d+)>", r[0])))]
     check("no shot carries a picture its text never names", not bad, str(bad))
 
 
@@ -4166,12 +4186,7 @@ def test_every_reference_is_claimed():
               ref_image_1=img(), ref_image_2=img())),
     ]
     for name, P, kw in cases:
-        sent = _encoded_refs(P, **kw)
-        bad = []
-        for i, (p, n) in enumerate(sent, 1):
-            tags = sorted({int(x) for x in re.findall(r"<Picture (\d+)>", p)})
-            if n != len(tags) or tags != list(range(1, n + 1)):
-                bad.append(f"shot {i}: {n} sent, tags {tags}")
+        bad = _unnamed_pictures(_encoder_rows(P, **kw))
         check(f"{name}: every picture is claimed", not bad, "; ".join(bad))
 
 
@@ -4197,18 +4212,54 @@ def _encoded_refs(P, **kw):
     return rows
 
 
+def _encoder_rows(P, **kw):
+    """(prompt, pictures the ENCODER is shown, whether they must all be named) per shot.
+
+    _encoded_refs counts the reference rows; this counts what tokenize receives,
+    keyframe included. tokenize_with_weights labels every image item <Picture N>, so
+    this is the roster the text has to name."""
+    rows, box = [], {}
+    ob, ot = S.build_conditioning, FakeCLIP.tokenize
+    def spy_t(self, text, minimax_ref_items=None, **k):
+        box["pics"] = sum(1 for it in (minimax_ref_items or []) if it["type"] == "image")
+        return ot(self, text, minimax_ref_items=minimax_ref_items, **k)
+    def spy_b(clip, vae, audio_vae, prompt, *a, **k):
+        box["pics"] = 0
+        out = ob(clip, vae, audio_vae, prompt, *a, **k)
+        refs = sum(1 for r in (k.get("refs") or []) if r is not None)
+        rows.append((prompt, box["pics"], bool(refs or k.get("handoff_as_ref"))))
+        return out
+    FakeCLIP.tokenize, S.build_conditioning = spy_t, spy_b
+    try:
+        run_node(P, **kw)
+    finally:
+        FakeCLIP.tokenize, S.build_conditioning = ot, ob
+    return rows
+
+
+def _unnamed_pictures(rows):
+    """Shots whose text does not name exactly the pictures the encoder is shown.
+
+    One exception, and it is ComfyUI's own format: a keyframe riding ALONE is
+    <Picture 1> with nothing naming it, the way MiniMaxH3ImageToVideo sends a first
+    frame. Beside a reference it is one more picture of the people that reference
+    names, and unnamed it is a second copy of them."""
+    bad = []
+    for i, (p, pics, named) in enumerate(rows, 1):
+        tags = sorted({int(x) for x in re.findall(r"<Picture (\d+)>", p)})
+        if tags != (list(range(1, pics + 1)) if named else []):
+            bad.append(f"shot {i}: {pics} shown, tags {tags}")
+    return bad
+
+
 def test_the_demoted_handoff_is_claimed():
     print("\n=== below the safe aug, the handoff is named too ===")
     mem = "Dan: <Picture 1>, he, 41, grey jacket.\nMara: she, 30, red coat."
     P = "A yard.\n\nDan waits.\n\nMara arrives.\n\nDan and Mara talk.\n\nDan looks up."
     img = torch.rand(1, H, W, 3)
     for aug in (0.999, 0.98, 0.95, 0.90):
-        rows = _encoded_refs(P, character_memory=mem, ref_image_1=img, ref_noise_aug=aug)
-        bad = []
-        for i, (p, enc) in enumerate(rows, 1):
-            tags = {int(x) for x in re.findall(r"<Picture (\d+)>", p)}
-            if enc != len(tags) or sorted(tags) != list(range(1, enc + 1)):
-                bad.append(f"shot {i}: {enc} encoded, tags {sorted(tags)}")
+        bad = _unnamed_pictures(_encoder_rows(P, character_memory=mem, ref_image_1=img,
+                                              ref_noise_aug=aug))
         check(f"every picture claimed at aug {aug}", not bad, "; ".join(bad))
     # The claim must say it is the SAME people, or naming it invites a new one.
     rows = _encoded_refs(P, character_memory=mem, ref_image_1=img, ref_noise_aug=0.95)
@@ -4217,10 +4268,19 @@ def test_the_demoted_handoff_is_claimed():
           "is the frame this shot opens on" in late, "")
     check("...and as the same people, not new ones",
           "the same people" in late and "anybody new" in late, "")
-    # At a safe aug nothing is demoted, so nothing extra is said.
-    early = _encoded_refs(P, character_memory=mem, ref_image_1=img, ref_noise_aug=0.999)
-    check("nothing added when the handoff stays a keyframe",
-          all("opens on" not in p for p, _ in early), "")
+    # At a safe aug nothing is demoted -- but beside a reference the keyframe is still a
+    # picture to the encoder, and REPORTED: the same person twice in one frame while it
+    # went unnamed. Named the same way; a keyframe riding alone is not.
+    early = _encoder_rows(P, character_memory=mem, ref_image_1=img, ref_noise_aug=0.999)
+    beside = [p for p, pics, named in early if named and pics > 1]
+    check("a keyframe beside a reference is named as the opening frame",
+          beside and all("is the frame this shot opens on" in p and "anybody new" in p
+                         for p in beside), str(len(beside)))
+    check("...and a keyframe riding alone is not",
+          all("opens on" not in p for p, pics, named in early if not named), "")
+    check("a chain with no reference names no keyframe",
+          all("opens on" not in p for p, _, _ in _encoder_rows("A yard.\n\nOne.\n\nTwo.")),
+          "")
     info = run_node(P, character_memory=mem, ref_image_1=img, ref_noise_aug=0.95)[2]
     check("info explains it", "encoded as a reference rather than a keyframe" in info, "")
 
@@ -4260,12 +4320,15 @@ def test_a_gapped_socket_still_sends_its_image():
                  ref_image_1=A, ref_image_3=B)
     finally:
         S.build_conditioning = orig
+    # Each shot also names its keyframe, after the references: that is the last tag.
     check("the lone-reference shot renumbers to 1",
-          re.findall(r"<Picture (\d+)>", seen[1][0]) == ["1"], str(seen[1][0][-60:]))
+          re.findall(r"<Picture (\d+)>", seen[1][0]) == ["1", "2"]
+          and "<Picture 2> is the frame this shot opens on" in seen[1][0],
+          str(seen[1][0][-60:]))
     check("...and still sends that person's own image",
           seen[1][1] == [0.7], str(seen[1][1]))
     check("the shared shot keeps both, in order",
-          sorted(re.findall(r"<Picture (\d+)>", seen[2][0])) == ["1", "2"]
+          sorted(re.findall(r"<Picture (\d+)>", seen[2][0])) == ["1", "2", "3"]
           and seen[2][1] == [0.1, 0.7], str(seen[2][1]))
     # And a tag on an empty socket is reported rather than silently dropped.
     info = run_node(P, plan_only=True, character_memory="Mara: <Picture 3>, she, 30.",
@@ -4498,8 +4561,9 @@ def test_back_after_a_shot_away():
         _pics, _tags, _txt = tagseen[4]          # [0] is the negative; shot 4
         check("the return shot carries the recovered frame and its keyframe",
               _pics == 2, str(_pics))
-        check("...and the prose claims the recovered one", _tags == ["<Picture 1>"],
-              str(_tags))
+        check("...and the prose claims the recovered one, then the keyframe",
+              _tags == ["<Picture 1>", "<Picture 2>"]
+              and "<Picture 2> is the frame this shot opens on" in _txt, str(_tags))
         check("...on the entry of the person it depicts",
               "Dan: <Picture 1>," in _txt, _txt[:80])
         shared = ["Nora walks into the workshop.",
@@ -4559,8 +4623,10 @@ def test_references_ride_with_the_keyframe():
         shots = seen[1:]                     # seen[0] is the negative
         check("the roster is ref + keyframe, not one or the other",
               [p for p, _ in shots] == [1, 2, 1], str([p for p, _ in shots]))
-        check("the shot carrying both still names exactly one picture",
-              shots[1] == (2, 1), str(shots[1]))
+        # Both are pictures to the encoder, so both are named: the reference on Kate,
+        # the keyframe as the frame the shot opens on.
+        check("the shot carrying both names both pictures",
+              shots[1] == (2, 2), str(shots[1]))
         check("a shot the guard trimmed carries no reference", shots[2][1] == 0)
         info, script = run_node("Kate walks in.\n\nKate sits down.", plan_only=True,
                                 anchor="A room.", character_memory=mem,

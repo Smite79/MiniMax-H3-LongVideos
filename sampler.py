@@ -6102,7 +6102,31 @@ def handoff_claim(n):
             f"anybody new.")
 
 
-_COUNT_ONE = " There is one person in the shot: one body, one face."
+def keyframe_claim(n, first=False):
+    """Name the keyframe where it rides beside references.
+
+    A keyframe is not only frame one. tokenize_with_weights labels EVERY image item
+    `<Picture N>:`, and build_conditioning appends the handoff after the references so
+    it disturbs no numbering -- so the encoder is shown it as a picture too. Alone it
+    is <Picture 1> with nothing naming it, which is exactly how ComfyUI's own
+    MiniMaxH3ImageToVideo hands over a first frame, and nothing needs saying.
+
+    Beside a reference it is picture N+1 of N+1 with nothing naming it, and the rule
+    for that is the node's oldest: a picture the prompt never names is ANOTHER
+    subject. It shows the very people the references name, so what arrives is a copy
+    of somebody already in the shot -- reported as the same person twice in one
+    frame. handoff_claim fixed this for the same picture once it was demoted into the
+    reference rows, and the keyframe was left unnamed on the reading that a first
+    frame is not a subject; to the encoder it is one. On shot 1 it is the author's
+    first_frame, with nothing earlier to be carried from."""
+    if first:
+        return (f" <Picture {n}> is the frame this shot opens on: the same place and "
+                f"the people this shot describes, already in place rather than joined "
+                f"by anybody new.")
+    return handoff_claim(n)
+
+
+_COUNT_ONE =" There is one person in the shot: one body, one face."
 _COUNT_TWO = " There are two people in the shot, with one body for each person."
 
 
@@ -10347,7 +10371,9 @@ class H3LongVideos:
                 f"is, and ComfyUI packs both (keyframe rows then ref rows, in the same "
                 f"order model_base builds the latents). References keep slots 1..N so the "
                 f"tag points at the right image; the handoff is appended after them and "
-                f"disturbs no numbering. Expect the NUMBER in script to differ from the "
+                f"disturbs no numbering, and is NAMED there as the frame the shot opens "
+                f"on -- the encoder is shown it as a picture too, and an unnamed picture "
+                f"beside a reference is a second copy of the person it shows. Expect the NUMBER in script to differ from the "
                 f"one you wrote: it is the picture's place in THAT shot's reference "
                 f"list, not a name for the image, so a shot carrying one reference "
                 f"always says <Picture 1> whichever socket it came from. The image is "
@@ -10644,12 +10670,18 @@ class H3LongVideos:
             _extra = []
             _evened_who = ""            # who the evening-up frame below pictures
             _cast = plan.shots[i].cast
+            # Below the safe aug the handoff goes into the reference rows the moment
+            # any reference rides, so a face added below would sit beside a second
+            # picture of the same person -- the demoted handoff -- exactly as it would
+            # beside a carried frame.
+            _demotes = bool(shot_handoff is not None and not (
+                ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG))
             _returning = {w for n, ws in _returns if n == i + 1 for w in ws}
             _who = _cond_module.recoverable_subject(
                 _cast, _tagged_names, _returning,
                 {k: v for k, v in _captured.items()
                  if _captured_gen.get(k) == _wardrobe_gen})
-            if _who and _carry_rooms is not None and _who in _prev_people:
+            if _who and (_carry_rooms is not None or _demotes) and _who in _prev_people:
                 _who = ""               # the carried frame is already a picture of them
             if _who:
                 _extra = [_captured[_who]]
@@ -10667,7 +10699,7 @@ class H3LongVideos:
                           and _captured.get(n) is not None
                           and _captured_gen.get(n) == _wardrobe_gen]
                 if (len(_short) == 1 and f"{_short[0]}:" in shot_prompt
-                        and not ((_carry_rooms is not None or _handoff_ref)
+                        and not ((_carry_rooms is not None or _handoff_ref or _demotes)
                                  and _short[0] in _prev_people)):
                     _extra = [_captured[_short[0]]]
                     _evened_who = _short[0]
@@ -10730,6 +10762,13 @@ class H3LongVideos:
                 shot_prompt = shot_prompt + handoff_claim(len(_shot_refs) + 1)
                 _handoff_claimed.append(i + 1)
                 _aug_claimed.append(i + 1)
+            elif shot_handoff is not None and any(r is not None for r in _shot_refs):
+                # Still a keyframe, but the encoder is shown it as the picture after
+                # the references, and an unnamed one is a second copy of whoever the
+                # references name. See keyframe_claim.
+                shot_prompt = shot_prompt + keyframe_claim(
+                    sum(1 for r in _shot_refs if r is not None) + 1, first=(i == 0))
+                _handoff_claimed.append(i + 1)
             # Whatever this shot ends up being, that is what `script` reports.
             shot.prompt = shot_prompt
             cond, latent, fc, demoted = build_conditioning(
