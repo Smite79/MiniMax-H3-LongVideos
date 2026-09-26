@@ -3714,6 +3714,50 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...in one sentence", cl.count(".") == 1, cl)
 
 
+class FakeFastH3(FakeModel):
+    """A model carrying FastH3's VSA gate layers -- what fast_h3 keys on."""
+    model = types.SimpleNamespace(
+        model_config=types.SimpleNamespace(__class__=object),
+        diffusion_model=types.SimpleNamespace(blocks=[types.SimpleNamespace(
+            attn=types.SimpleNamespace(to_gate_compress=object()))]))
+
+
+def test_a_fast_h3_is_sent_no_reference():
+    """REPORTED: character duplication back on a FastH3 model.
+
+    FastH3 distilled first/last-frame generation only; ref2va was not distilled. Every
+    reference row this node sends -- tagged, recovered, evened, carried -- is a picture
+    it was never taught to read, and it draws one as another person."""
+    print("\n=== a FastH3 model is sent no reference row ===")
+    check("fast_h3 reads the gate layers", S.fast_h3(FakeFastH3()) is True)
+    check("...and a stock or hybrid H3 is not one", S.fast_h3(FakeModel()) is False)
+    mem = "Dan: <Picture 1>, he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
+    P = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
+         "Dan and Crystal talk.\n\nDan walks out.\n\nCrystal looks up.\n\n"
+         "Dan comes back in and sits down.")
+    kw = dict(character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))
+    base = _encoded_refs(P, **kw)
+    check("the same run on a stock H3 does send references",
+          any(n > 0 for _p, n in base), str([n for _p, n in base]))
+    fast = _encoded_refs(P, model=FakeFastH3(), **kw)
+    check("on FastH3 not one reference row is encoded",
+          all(n == 0 for _p, n in fast), str([n for _p, n in fast]))
+    check("...no <Picture N> is left in any shot's text",
+          not any(re.search(r"<Picture \d+>", p) for p, _n in fast))
+    rows = _encoder_rows(P, model=FakeFastH3(), **kw)
+    check("...and the encoder is shown the keyframe alone, at most",
+          all(pics <= 1 for _p, pics, _named in rows), str([pics for _p, pics, _ in rows]))
+    info = str(run_node(P, model=FakeFastH3(), **kw)[2])
+    check("the run says why", "FastH3 model detected" in info and "REFERENCES ARE OFF" in info)
+    check("...sets FastH3's own shift where the widget was untouched",
+          "sigma shift set to 10" in info, info[:200])
+    check("...splices no extra audio step into a distilled schedule",
+          "ONE extra step is spliced" not in info)
+    odd = str(run_node(P, model=FakeFastH3(), steps=5, shift_video=8.0, **kw)[2])
+    check("...and names settings it was not distilled for",
+          "steps is 5" in odd and "your sigma shift is 8/3" in odd, odd[:300])
+
+
 def test_only_the_speaker_has_a_voice():
     """REPORTED: other characters babbling in a beat where only one has a line.
 
@@ -9020,6 +9064,7 @@ def main():
     test_a_face_under_duress_is_not_a_portrait()
     test_her_whimper_does_not_free_his_mouth()
     test_only_the_speaker_has_a_voice()
+    test_a_fast_h3_is_sent_no_reference()
     test_a_line_is_locked_to_the_person_who_says_it()
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()

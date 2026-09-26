@@ -2946,6 +2946,31 @@ def apply_h3_model_sampling(model, shift_video, shift_audio):
                    "MXFP8/turbo profile and the audio sounds wrong")
 
 
+# FastVideo's FastH3 V2, as ComfyUI's own guide runs it: 8 steps, res_multistep on
+# simple, sigma shift 10 video / 3 audio, VSA at keep 10 from 20% of the schedule.
+FAST_H3_STEPS = 8
+FAST_H3_SHIFT_VIDEO = 10.0
+FAST_H3_SHIFT_AUDIO = 3.0
+
+
+def fast_h3(model):
+    """Is this a FastVideo FastH3 checkpoint?
+
+    The one H3 build with VSA gate layers (attn.to_gate_compress): ComfyUI's own
+    detection marks exactly those checkpoints "VSA-trained", and FastH3 is what is
+    trained that way. It MATTERS here because FastH3 is a DMD2 distill of first/last
+    frame generation only -- "Ref2VA (multi-reference conditioning) was not distilled"
+    -- and this node leans on reference rows everywhere: tagged pictures, recovered
+    and evened faces, returning rooms, the frame carried across a cut. A model that
+    never learned what a reference row is draws the picture as somebody else.
+    REPORTED as character duplication coming back on a FastH3 model."""
+    try:
+        blk = model.model.diffusion_model.blocks[0]
+        return getattr(blk.attn, "to_gate_compress", None) is not None
+    except Exception:
+        return False
+
+
 def sparse_dit_patched(model):
     """True when something upstream installed a per-block DiT replace patch, False when it
     provably did not, None when this model cannot say.
@@ -7848,6 +7873,39 @@ class H3LongVideos:
         speech_tail_seconds = _fixed["speech_tail_seconds"]
         hold_levels = _fixed["hold_levels"]
         notes.extend(_fixnotes)
+        # FASTH3: a distill runs as it was distilled. See fast_h3.
+        _fast = fast_h3(model)
+        if _fast:
+            _fast_said = []
+            if float(shift_video) == 12.0:       # the node's default, i.e. untouched
+                shift_video = FAST_H3_SHIFT_VIDEO
+                _fast_said.append(f"sigma shift set to {FAST_H3_SHIFT_VIDEO:g} video / "
+                                  f"{float(shift_audio):g} audio, FastH3's own")
+            elif (float(shift_video), float(shift_audio)) != (FAST_H3_SHIFT_VIDEO,
+                                                               FAST_H3_SHIFT_AUDIO):
+                _fast_said.append(f"your sigma shift is {float(shift_video):g}/"
+                                  f"{float(shift_audio):g}; FastH3 is distilled at "
+                                  f"{FAST_H3_SHIFT_VIDEO:g}/{FAST_H3_SHIFT_AUDIO:g}")
+            if int(steps) != FAST_H3_STEPS:
+                _fast_said.append(f"steps is {int(steps)}; FastH3 V2 is distilled for "
+                                  f"exactly {FAST_H3_STEPS}, and any other count degrades it")
+            if (sampler_name, scheduler) != ("res_multistep", "simple"):
+                _fast_said.append(f"it runs on res_multistep with the simple scheduler, "
+                                  f"not {sampler_name}/{scheduler}")
+            notes.append(
+                "FastH3 model detected (FastVideo's 8-step distill). REFERENCES ARE OFF for "
+                "this run: FastH3 distilled first/last-frame generation only -- ref2va was "
+                "not distilled -- so a reference row is a picture it was never taught to "
+                "read, and it draws one as another person. No tagged picture, recovered "
+                "face, evened face, returning room or carried frame is sent, <Picture N> "
+                "tags come out of the text, and a shot that would have carried the last "
+                "frame as a reference starts fresh instead. Identity rides the keyframe "
+                "chain alone; for reference-driven likeness, render with a base or hybrid "
+                "H3. No extra audio step is spliced into the schedule either -- it changes "
+                "the step count the model was distilled for. Wire ComfyUI's Model Sparse "
+                "Attention node set to vsa (keep 10, from 0.20) in front of this node to "
+                "run it with the attention it was trained on"
+                + ("; " + "; ".join(_fast_said) if _fast_said else ""))
         # WIDGETS THAT WERE NOT CHOICES. Each of these had one right answer that the
         # node could reach and the reader could not, so each was a question whose
         # wrong answer only ever made the render worse.
@@ -8371,7 +8429,9 @@ class H3LongVideos:
                         f"character walks into a shot. Write the name instead of the "
                         f"pronoun in that beat and it resolves")
                 _new = [n for n in active if n not in _seen_before]
-                if (_new and not arrives_in(body) and not plan
+                # A plate rides as a reference, which FastH3 cannot read; there the
+                # first_frame is what its model supports -- frame one.
+                if (_new and not arrives_in(body) and not plan and not _fast
                         and first_frame is not None
                         and all(_n in _portrait_of for _n in _new)):
                     _first_is_plate = True
@@ -9534,6 +9594,8 @@ class H3LongVideos:
                    if guard_words > beat_words * 3 else ""))
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
                     if r is not None]
+        if _fast:
+            refs_all = []           # FastH3 reads no reference rows -- see fast_h3
         if refs_all and covers and not _PICTURE_TAG.search(f"{scene}\n" + "\n".join(beats)):
             notes.append(
                 f"{len(refs_all)} reference image(s) and not one <Picture N> tag anywhere, "
@@ -10448,6 +10510,12 @@ class H3LongVideos:
                 f"IT and neither happens: 'Nora: <Picture 1>, 34, she, ...' sends it into "
                 f"the shots Nora is in, and only those")
         for _i, _s in enumerate(plan.prompts):
+            if _fast:
+                # The tags come out with nothing to point at, and nothing is reported
+                # missing: the images are there, the model cannot read them.
+                plan.shots[_i].prompt = resolve_tags(_s, [])[0]
+                plan.shots[_i].refs = []
+                continue
             if not _tagged:
                 _here = [n for n in plan.shots[_i].cast if n]
                 if not _here:
@@ -10602,7 +10670,7 @@ class H3LongVideos:
         _alt_sched = scheduler_that_finishes_audio(steps, shift_audio, shift_video,
                                                    scheduler)
         _fix_a = min(shift_audio_for(steps), float(shift_audio or 0.0) or 1.0)
-        _soft_landing = bool(apply_model_sampling
+        _soft_landing = bool(apply_model_sampling and not _fast
                              and not (sigmas is not None and len(sigmas)))
         _landing_on = bool(_soft_landing and _last_a > 0.10)
         if _landing_on:
@@ -10715,6 +10783,7 @@ class H3LongVideos:
             stripped_shots=stripped_shots, cut_shots=cut_shots,
             shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
             reentry_shots=reentry_shots, own_grade_shots=own_grade_shots,
+            refs_ok=not _fast,
             upscale=upscale, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
         )
@@ -10730,6 +10799,10 @@ class H3LongVideos:
         _shot_frames = prepared.shot_frames or {}
         reentry_shots = prepared.reentry_shots or {}
         own_grade = prepared.own_grade_shots or set()
+        # Every picture this loop adds on its own -- the frame carried across a cut,
+        # a recovered or evened face, a returning room -- is a reference row. Off where
+        # the model reads none: see fast_h3.
+        refs_ok = prepared.refs_ok is not False
         hardware_changed = prepared.hardware_changed or set()
         ambient_audio = prepared.ambient_audio
         ambient_level = prepared.ambient_level
@@ -10828,7 +10901,7 @@ class H3LongVideos:
             shot_handoff = handoff
             _handoff_ref = False
             _prev_people = _frame_cast(i - 1, last=True) if i else []
-            _carry_ok = bool(i and handoff is not None and i not in reentry_shots
+            _carry_ok = bool(refs_ok and i and handoff is not None and i not in reentry_shots
                              and (_cond_module.may_carry_room if i in cut_shots
                                   else _cond_module.may_carry_frame)(
                                  _prev_people, plan.shots[i].cast, _tagged_names))
@@ -10855,7 +10928,7 @@ class H3LongVideos:
             elif i in _placed_shots:
                 _was_here = _frame_cast(i - 1, last=True)
                 _here_now = plan.shots[i].cast
-                if _cond_module.may_carry_frame(_was_here, _here_now, _tagged_names):
+                if refs_ok and _cond_module.may_carry_frame(_was_here, _here_now, _tagged_names):
                     _handoff_ref = True
                     _carried.append((i + 1, list(_was_here),
                                      list(_placed_shots[i])))
@@ -10877,6 +10950,8 @@ class H3LongVideos:
                 _cast, _tagged_names, _returning,
                 {k: v for k, v in _captured.items()
                  if _captured_gen.get(k) == _wardrobe_gen})
+            if not refs_ok:
+                _who = ""
             if _who and (_carry_rooms is not None or _demotes) and _who in _prev_people:
                 _who = ""               # the carried frame is already a picture of them
             if _who:
@@ -10889,7 +10964,8 @@ class H3LongVideos:
                         f"{_who}:", f"{_who}: {_tag},", 1)
                 else:
                     shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
-            elif _tagged_names and len(_cast) > 1 and any(n in _tagged_names for n in _cast):
+            elif (refs_ok and _tagged_names and len(_cast) > 1
+                  and any(n in _tagged_names for n in _cast)):
                 _short = [n for n in _cast
                           if n and n not in _tagged_names
                           and _captured.get(n) is not None
@@ -10907,7 +10983,9 @@ class H3LongVideos:
             _opens, _ends = shot_rooms.get(i, ("", ""))
             _prev_end = shot_rooms.get(i - 1, ("", ""))[1] if i else ""
             _back, _arriving = "", False
-            if (i in cut_shots or i in reentry_shots) and _opens in _room_frames:
+            if not refs_ok:
+                pass                    # a returning room is a reference row too
+            elif (i in cut_shots or i in reentry_shots) and _opens in _room_frames:
                 _back = _opens
             elif _ends and _ends != _prev_end and _ends != _opens and _ends in _room_frames:
                 _back, _arriving = _ends, True
