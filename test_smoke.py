@@ -3714,6 +3714,55 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...in one sentence", cl.count(".") == 1, cl)
 
 
+def test_only_the_speaker_has_a_voice():
+    """REPORTED: other characters babbling in a beat where only one has a line.
+
+    Two ways it happened. Any smile, kiss, grin, bitten lip or named emotion in the
+    beat stood the whole voice guard down, so the listener's mouth was as free as the
+    speaker's. And a line given to a pronoun went to whoever the beat named first --
+    "Only Dan speaks" on her line, with her mouth the one held shut."""
+    print("\n=== in a one-line beat, only the speaker has a voice ===")
+    mem = "Mara: she, 30, long dark hair.\nDan: he, 35, short brown hair."
+
+    def last(beat, **kw):
+        return " ".join(_shots_of(run_node("A bedroom at night.\n\nDan and Mara are together."
+                                           "\n\n" + beat, plan_only=True, **kw))[-1].split())
+
+    for beat in ('Mara looks at Dan and says: "Stay with me."',
+                 '"Stay with me," Mara says to Dan.',
+                 'Dan holds her. "Stay with me," she whispers.',
+                 'Mara and Dan lie in bed. She says: "Stay."'):
+        s = last(beat, character_memory=mem)
+        check(f"the line is hers, and his mouth is held: {beat}",
+              "Only Mara speaks; every other mouth in the shot stays closed" in s, s[-160:])
+    for beat in ('Mara smiles at Dan and says: "Stay with me."',
+                 'Dan kisses her neck as Mara says: "Don\'t stop."',
+                 'Dan grins while Mara says: "Stay."',
+                 'Mara, angry, says to Dan: "Get out."'):
+        s = last(beat, character_memory=mem)
+        check(f"a busy mouth keeps the guard, as silent: {beat}",
+              "Only Mara speaks; every other mouth in the shot is silent" in s, s[-160:])
+    s = last('A man and a woman sit on the bed. The woman says: "Stay."')
+    check("with no character sheet the line is still one voice",
+          "Only the person speaking has their mouth moving" in s, s[-160:])
+    check("speakers_in reads a pronoun's line",
+          S.speakers_in('Dan holds her. "Stay," she whispers.', mem) == ["Mara"])
+    two = mem + "\nAna: she, 28, red hair."
+    check("...and names nobody where the pronoun fits two people, rather than guess",
+          S.speakers_in('Dan holds her. "Stay," she whispers.', two) == [],
+          str(S.speakers_in('Dan holds her. "Stay," she whispers.', two)))
+    # The shot's own sheet holds only who is in it, so with Ana elsewhere "she" is Mara.
+    s = last('Dan holds her. "Stay," she whispers.', character_memory=two)
+    check("...while a woman who is not in the shot does not make it ambiguous",
+          "Only Mara speaks" in s, s[-160:])
+    s = " ".join(_shots_of(run_node(
+        'A bedroom at night.\n\nMara and Ana sit with Dan. "Stay," she whispers.',
+        plan_only=True, character_memory=two))[-1].split())
+    check("...and with both women in it, the shot holds the listeners without choosing",
+          "Only the person speaking has their mouth moving" in s
+          and not re.search(r"Only (?:Dan|Mara|Ana) speaks", s), s[-160:])
+
+
 def test_her_whimper_does_not_free_his_mouth():
     print("\n=== a vocal belongs to somebody ===")
     MEM = ("McKenna: she, 26, dark hair, handcuffs behind her back.\n"
@@ -3748,7 +3797,7 @@ def test_her_whimper_does_not_free_his_mouth():
     info = run_node("A van interior, night.\n\nMcKenna sobs while Dan watches.",
                     plan_only=True, character_memory=MEM, auto_sound=False)[2]
     check("the vocal still keeps its audio",
-          re.search(r"shot\(s\) [^|]*\b1\b[^|]*stage EFFORT", info) is not None,
+          re.search(r"shot\(s\) [^|]*\b1\b[^|]*give somebody a VOICE", info) is not None,
           info[:300])
     check("info names the shots whose vocal was attributed",
           "belongs to somebody" in info, info[:300])
@@ -4122,6 +4171,44 @@ def test_a_line_is_locked_to_the_person_who_says_it():
           "Only the person speaking" in amb, amb[-190:])
 
 
+def test_an_action_beat_opens_no_voice():
+    """REPORTED: characters inventing babble on beats with no dialogue, only actions.
+
+    Every verb of effort or reaction left the audio branch open and every mouth free.
+    Measured before the fix: sixteen of seventeen plain action beats did."""
+    print("\n=== an action beat is silent, and a voice is heard ===")
+    mem = "Mara: she, 30, long dark hair.\nDan: he, 35, short brown hair."
+
+    def first_shot(beat):
+        rows = []
+        ob = S.build_conditioning
+        def spy(clip, vae, audio_vae, prompt, *a, **k):
+            rows.append((prompt, bool(k.get("silent"))))
+            return ob(clip, vae, audio_vae, prompt, *a, **k)
+        S.build_conditioning = spy
+        try:
+            run_node("A bedroom at night.\n\n" + beat, character_memory=mem)
+        finally:
+            S.build_conditioning = ob
+        return rows[0]
+
+    for beat in ("Mara shakes her head.", "Dan kicks the door shut.",
+                 "Mara struggles against the ropes.", "Mara jerks her hand away.",
+                 "Mara trembles.", "Mara flinches.", "Dan wakes up.",
+                 "Mara arches her back.", "Dan thrusts into Mara.", "Mara grips the sheets.",
+                 "Dan strains to lift the crate.", "Mara writhes on the bed.",
+                 "Mara shudders.", "Dan panics."):
+        p, silent = first_shot(beat)
+        check(f"silent, mouths held: {beat}",
+              silent and "Mouths in the shot stay closed" in p, p[-120:])
+    for beat in ("Mara gasps.", "Mara laughs.", "Mara moans.", "Dan grunts.",
+                 "Mara pants.", 'Mara says: "Stay."'):
+        p, silent = first_shot(beat)
+        check(f"a voice keeps its audio: {beat}", not silent, p[-120:])
+    check("voice_in reads a voice", S.voice_in("She pants.") and S.voice_in("He laughs."))
+    check("...and not a body working", not S.voice_in("She grips the sheets and arches her back."))
+
+
 def test_mouths_stay_shut_with_no_line():
     print("\n=== a shot with nobody speaking keeps its mouth closed ===")
     P = ('A workshop.\n\n'
@@ -4134,15 +4221,18 @@ def test_mouths_stay_shut_with_no_line():
                             auto_sound=False)[2:4]
     sh = [s for s in script.split("---") if s.strip()]
     mouth = [i + 1 for i, s in enumerate(sh) if "Mouths in the shot stay closed" in s]
-    check("the wordless shot with a person is told to close", mouth == [1], str(mouth))
+    # A body straining with no voice written is an ACTION, and holds like one: REPORTED
+    # as characters babbling on beats that were only actions, when effort left the
+    # branch open and every mouth free.
+    check("the wordless shots with a person are told to close", mouth == [1, 4], str(mouth))
     check("the speaking shot is not", "Mouths in the shot stay closed" not in sh[1], "")
     check("the scenery beat is told nothing about mouths",
           "Mouths in the shot stay closed" not in sh[2], "")
     check("...but is still silenced", "sound is" not in sh[2], "")
-    check("a straining body is left alone", "Mouths in the shot stay closed" not in sh[3], "")
-    check("...and keeps its audio",
-          "either describe a sound IN THE BEAT or stage EFFORT" in info
-          and re.search(r"shot\(s\) [^|]*\b4\b[^|]*stage EFFORT", info) is not None,
+    check("a straining body with no voice is held like any action",
+          "Mouths in the shot stay closed" in sh[3], "")
+    check("...and does not open its audio",
+          re.search(r"shot\(s\) [^|]*\b4\b[^|]*give somebody a VOICE", info) is None,
           "")
     check("the wordless sound shot is silenced", "sound is" not in sh[2], "")
     check("info names the shots held closed", "mouths held closed on shot(s) 1" in info, "")
@@ -8134,8 +8224,11 @@ def test_a_written_sound_is_not_denied():
     name everything audible."""
     print("\n=== a written sound is not denied ===")
     mem = "Mara: she, 41, overalls."
+    # A VOICE in the beat keeps the branch open -- pants, not strains: effort alone no
+    # longer opens it, and a written non-vocal sound on a closed branch takes the muted
+    # path, which is a different test.
     shot = _shots_of(run_node(
-        "A workshop.\n\nMara strains against the vice as rain hammers the tin roof."
+        "A workshop.\n\nMara pants against the vice as rain hammers the tin roof."
         "\n\nMara wipes her face.", character_memory=mem, plan_only=True,
         mouths_shut_when_no_line=False))[0]
     said = " ".join(shot.split())
@@ -8921,10 +9014,12 @@ def main():
     test_a_covered_object_does_not_send_its_picture()
     test_the_anchor_survives_a_close_shot()
     test_mouths_stay_shut_with_no_line()
+    test_an_action_beat_opens_no_voice()
     test_a_grin_is_not_a_closed_mouth()
     test_nothing_tells_the_cast_to_hold_still()
     test_a_face_under_duress_is_not_a_portrait()
     test_her_whimper_does_not_free_his_mouth()
+    test_only_the_speaker_has_a_voice()
     test_a_line_is_locked_to_the_person_who_says_it()
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()

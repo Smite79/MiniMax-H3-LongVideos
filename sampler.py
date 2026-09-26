@@ -1563,6 +1563,31 @@ _EXERTION_NARROW_SRC = (
 _EXERTION_NARROW = re.compile(r"\b(?:" + _EXERTION_NARROW_SRC + r")", re.I)
 
 
+_VOICE_VERB = re.compile(
+    r"\b(?:gasp(?:s|ing|ed)?|pant(?:s|ing|ed)?|cr(?:y|ies|ying|ied)|sob(?:s|bing|bed)?|"
+    r"scream(?:s|ing|ed)?|shout(?:s|ing|ed)?|yell(?:s|ing|ed)?|moan(?:s|ing|ed)?|"
+    r"whimper(?:s|ing|ed)?|laugh(?:s|ing|ed)?)\b", re.I)
+
+
+def voice_in(beat):
+    """Does this beat give somebody a VOICE -- a sound a mouth makes?
+
+    This, not exertion_in, is what opens a shot's audio branch when it has no line.
+    Exertion used to: every verb of effort or reaction -- shakes her head, kicks the
+    door shut, trembles, flinches, wakes up, grips the sheets, arches her back -- left
+    the branch open and every mouth free, and told the model the shot sounds like
+    gasps and moans of effort. An open branch with a face free and nothing to say is
+    a voice inventing words. REPORTED as characters babbling on beats that were only
+    actions: measured, sixteen of seventeen plain action beats opened the branch.
+
+    A body working is silent now unless the beat says a mouth makes a sound -- she
+    moans, he grunts, she pants, he laughs -- and then that sound is heard. named_vocals_in
+    is the named half of this; the verbs below are the voices that are not named
+    vocals of their own."""
+    b = str(beat or "")
+    return bool(named_vocals_in(b) or _VOICE_VERB.search(b))
+
+
 def exertion_in(beat):
     """Does this beat stage effort or reaction -- something a face performs?
 
@@ -1987,6 +2012,28 @@ def speakers_in(beat, sheet=""):
                     r"(?:[\"'”’]|</d>)\s*[,.;]?\s*(?:" + _SAYS + r")\s+"
                     + re.escape(n) + r"\b", b, re.I):
                 out.append(n)
+    # A PRONOUN SAYING IT, before anything positional. 'Dan holds her. "Stay," she
+    # whispers.' fell through to "whoever the beat names first" -- Dan -- so the shot
+    # went out as "Only Dan speaks" with HER mouth held shut: the listener lip-syncing
+    # the speaker's line. The pronoun is the subject of the verb; it resolves where
+    # exactly one person on the sheet declares it.
+    if not out and has_speech(b):
+        said_by = [g for g in ("she", "he", "they")
+                   if re.search(r"\b" + g + r"\b" + _UP_TO_TWO_WORDS
+                                + r"\s+(?:" + _SAYS + r")\b", b, re.I)
+                   or re.search(r"(?:[\"'”’]|</d>)\s*[,.;]?\s*(?:" + _SAYS + r")\s+"
+                                + g + r"\b", b, re.I)]
+        for n, ln in sheet_lines(sheet):
+            group = sheet_pronoun(ln) if n else None
+            if (group in said_by
+                    and sum(1 for _n, _l in sheet_lines(sheet)
+                            if _n and sheet_pronoun(_l) == group) == 1):
+                out.append(n)
+        # A pronoun said it and fits more than one person: naming whoever comes first
+        # is a guess that can hand her line to him. Unattributed, the shot still gets
+        # "only the person speaking" -- which holds the listener without choosing.
+        if not out and said_by:
+            return []
     if not out and has_speech(b):
         at = {}
         for n, ln in sheet_lines(sheet):
@@ -2136,7 +2183,7 @@ def _joined(names):
     return ", ".join(ns[:-1]) + " and " + ns[-1]
 
 
-def voice_sources(talkers, vocal, vocalisers, silent, pairs=None):
+def voice_sources(talkers, vocal, vocalisers, silent, pairs=None, rest=None):
     """Say whose voice is whose, and close the mouths that are neither.
 
     Two jobs, and the second is the reported one. Closing the rest stops the
@@ -2166,12 +2213,21 @@ def voice_sources(talkers, vocal, vocalisers, silent, pairs=None):
     if not parts or (not silent and len(talkers or []) + len(by) < 2):
         return ""
     if silent:
-        parts.append(MOUTH_HOLD_REST)
+        parts.append(rest or MOUTH_HOLD_REST)
     said = "; ".join(parts)
     return f" {said[0].upper()}{said[1:]}."
 
 ONE_VOICE = (" Only the person speaking has their mouth moving; every other mouth "
              "in the shot stays closed, those expressions moving.")
+
+# The same guards where the beat puts somebody's mouth to work -- a smile, a kiss, a
+# bitten lip, an angry face. "Stays closed" would argue with that, and the guard used
+# to stand down ENTIRELY there instead, leaving the listener's mouth as free as the
+# speaker's. REPORTED as other characters babbling in a beat where only one has a
+# line. Silent says what matters -- no voice -- and leaves the mouth its expression.
+MOUTH_SILENT_REST = "every other mouth in the shot is silent, those expressions moving"
+ONE_VOICE_BUSY = (" Only the person speaking has a voice; every other mouth in the "
+                  "shot is silent, those expressions moving.")
 
 
 _PLAIN_QUOTED = re.compile(r"[\"“]([^\"“”]{1,400}?)[\"”]")
@@ -9177,7 +9233,7 @@ class H3LongVideos:
             _own = sound_described(body)
             if not _own and not _speaks and _BREATH_PREP.search(body):
                 _breath_shots.append(len(plan) + 1)
-            _voiced = bool(exertion_in(body) or named_vocals_in(body))
+            _voiced = voice_in(body)     # a voice opens the branch; effort alone does not
             _bed = _bed_now if auto_sound and _bed_now else ""
             if _bed:
                 ambient_shots.append(len(plan) + 1)
@@ -9204,8 +9260,11 @@ class H3LongVideos:
             _vocal_src = vocal_sources_in(body, shot_sheet) if _voiced else []
             _voicers = [n for n, _ in _vocal_src]
             _vocal_word = _vocal_src[0][1] if _vocal_src else ""
+            # A busy mouth no longer stands the voice guard down: whoever does NOT
+            # have the line is still told so, as silent rather than closed. See
+            # MOUTH_SILENT_REST.
             if (not _mouth and mouths_shut_when_no_line and (_speaks or _voicers)
-                    and not _mouth_busy and not _device_line
+                    and not _device_line
                     and not (_voiced and not _voicers)):
                 _talkers = speakers_in(body, shot_sheet) if _speaks else []
                 _open = set(_talkers) | set(_voicers)
@@ -9218,12 +9277,20 @@ class H3LongVideos:
                 if _voiced and unpinned_vocal(body):
                     _silent = []        # "she moans" may be any of them -- see unpinned_vocal
                 _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent,
-                                       pairs=_vocal_src)
+                                       pairs=_vocal_src,
+                                       rest=MOUTH_SILENT_REST if _mouth_busy else None)
                 if _mouth and _voicers:
                     vocal_shots.append(len(plan) + 1)
+                # With no sheet the node knows nobody by name, and "more than one
+                # described" can never be true -- so a two-person dialogue with no
+                # character_memory had no voice guard at all. Said to one person it
+                # holds nobody else; said to two it is the whole point.
+                # ...and the people still in frame from the last shot count too: a beat
+                # naming only the listener ("Dan holds her") is two people.
                 if (not _mouth and _speaks and not _talkers and not _voicers
-                        and len(_described or []) > 1):
-                    _mouth = ONE_VOICE
+                        and (len(set(_described or []) | set(_here_too)) > 1
+                             or (not _described and _has_people))):
+                    _mouth = ONE_VOICE_BUSY if _mouth_busy else ONE_VOICE
                     unattributed.append(len(plan) + 1)
             if _mouth:
                 (mouth_shut if _mouth_from_silence
@@ -10285,9 +10352,12 @@ class H3LongVideos:
         if silence_nonspeech and n_kept:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in _open_br)} have no line but either "
-                f"describe a sound IN THE BEAT or "
-                f"stage EFFORT, so their audio is left free to make it -- writing the "
-                f"sound, or the verb that produces one, is asking for audio on purpose. "
+                f"describe a sound IN THE BEAT or give somebody a VOICE -- a moan, a "
+                f"gasp, a laugh, a scream -- so their audio is left free to make it: "
+                f"writing the sound is asking for audio on purpose. Effort alone -- "
+                f"struggling, trembling, gripping, thrusting -- no longer opens it, "
+                f"because a free branch with nothing to say was inventing words on "
+                f"beats that were only actions. "
                 f"Those are the only shots without a line "
                 f"where the branch is open, and an open branch on a joint model can "
                 f"still put a voice in the gap. If one of them babbles, that beat's own "
