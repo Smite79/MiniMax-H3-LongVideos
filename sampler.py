@@ -5160,7 +5160,7 @@ def camera_hold(beat, anchor="", moving=False):
     return " The shot is one unbroken take from one position, angle and distance."
 
 
-def frame_hold(beat, anchor="", people=1):
+def frame_hold(beat, anchor="", people=1, outdoor=False):
     """Say the frame holds a whole body, where nothing else says what the frame is.
 
     THE PORTRAIT IS WHAT AN UNSTATED FRAME BECOMES. This file already records the
@@ -5186,10 +5186,11 @@ def frame_hold(beat, anchor="", people=1):
         return ""
     if not (_WHOLE_BODY.search(b) or _TRAVEL_VERB.search(b)):
         return ""
+    place = "the surroundings" if outdoor else "the room"     # see outdoors()
     if int(people or 1) > 1:
-        return (" The frame holds every body in it whole, head to feet, with the room "
+        return (f" The frame holds every body in it whole, head to feet, with {place} "
                 "around them.")
-    return (" The frame holds the whole body, head to feet, with the room around it.")
+    return (f" The frame holds the whole body, head to feet, with {place} around it.")
 
 
 def tight_framing(text):
@@ -5814,7 +5815,58 @@ def travel_legs(beat):
     return frm, via, to
 
 
-def where_hold(here, scene):
+_OUTDOOR = re.compile(
+    r"\b(?:streets?|roads?|avenues?|boulevards?|alley(?:way)?s?|sidewalks?|pavements?|"
+    r"crosswalks?|crossroads|intersections?|squares?|plazas?|parks?|gardens?|yards?|"
+    r"backyards?|lawns?|forests?|woods|woodland|beach(?:es)?|shores?|seafront|"
+    r"fields?|meadows?|desert|mountains?|hills?|hillside|cliffs?|car\s+parks?|"
+    r"parking\s+lots?|rooftops?|bridges?|highways?|motorways?|outdoors|outside|"
+    r"open\s+air|courtyards?|campsite|riverbank|river|lakeside|lake|docks?|piers?|"
+    r"harbou?r|playground|countryside|trail|bus\s+stop|train\s+platform|"
+    r"marketplace|market\s+square|town\s+square|village\s+green)\b"
+    r"(?<!depth of field)", re.I)
+_INDOOR = re.compile(
+    r"\b(?:rooms?|bedrooms?|kitchens?|bathrooms?|showers?|living\s+rooms?|lounges?|"
+    r"hallways?|corridors?|offices?|studios?|apartments?|flats?|basements?|cellars?|"
+    r"garages?|attics?|lofts?|shops?|stores?|caf[eé]s?|bars?|pubs?|restaurants?|"
+    r"clubs?|gyms?|classrooms?|wards?|cells?|warehouses?|barns?|sheds?|elevators?|"
+    r"lifts?|churche?s?|halls?|hotels?|motels?|cabins?|indoors|inside|interior|"
+    r"stairwells?|workshops?|diners?|lobb(?:y|ies)|changing\s+rooms?|locker\s+rooms?)\b",
+    re.I)
+
+
+def outdoors(here="", scene="", opening=""):
+    """Is the place this shot is in OUTSIDE? True only on evidence of it.
+
+    Every clause that holds a place still was written for a room -- "this room a
+    moment earlier: the same walls, floor, furniture and light", "with the room around
+    it". Said on a public street it is an instruction to draw walls and furniture,
+    and the model did: REPORTED as a street scene turning into a house on the second
+    beat, the one where the last frame rides along claimed as "this room".
+
+    The shot's own place decides first; where it is not named, the scene -- or, with
+    an anchor standing in for the scene, the opening beat -- and only when the text
+    says outdoors and does not also name an interior: "a café on a busy street" is
+    kept as a room, which is what these clauses already said."""
+    h = str(here or "")
+    if h.strip():
+        if _OUTDOOR.search(h) and not _INDOOR.search(h):
+            return True
+        if _INDOOR.search(h):
+            return False
+    for text in (scene, opening):
+        t = str(text or "")
+        if _OUTDOOR.search(t) or _INDOOR.search(t):
+            return bool(_OUTDOOR.search(t) and not _INDOOR.search(t))
+    return False
+
+
+# What holds a place still, said of a room and of anywhere else.
+_SURROUND_IN = "walls, floor, furniture and light"
+_SURROUND_OUT = "surroundings, ground and light"
+
+
+def where_hold(here, scene, outdoor=False):
     """Say which room the shot is in, once the film has left the one in the scene.
 
     The scene paragraph is stamped into EVERY shot -- it has to be, or a removal
@@ -5838,6 +5890,9 @@ def where_hold(here, scene):
         return ""
     if not _PLACE_WORD.search(txt):
         return ""
+    if outdoor:
+        return (f" This shot takes place in the {here}: the ground, surroundings and "
+                f"light are the {here}'s throughout.")
     return (f" This shot takes place in the {here}: the walls, floor, light and "
             f"furniture are the {here}'s throughout.")
 
@@ -6334,7 +6389,7 @@ def recount_with_claim(prompt, described, added):
     return prompt.replace(_COUNT_ONE, _COUNT_TWO if len(total) == 2 else "", 1)
 
 
-def room_claim(n, present, joining):
+def room_claim(n, present, joining, outdoor=False):
     """Claim a handoff carried as a reference because somebody NEW is in the shot.
 
     The keyframe used to be thrown away here, and throwing it away is what the
@@ -6350,15 +6405,18 @@ def room_claim(n, present, joining):
 
     Claimed, and specifically. An unclaimed picture of somebody is another person
     who looks like them, and the standing claim is worse than nothing here: it says
-    the shot is joined by nobody new, in the one case where it is."""
-    said = (f" <Picture {n}> is this room a moment earlier: the same walls, floor, "
-            f"furniture and light, from the same camera.")
+    the shot is joined by nobody new, in the one case where it is.
+
+    OUTDOORS it is "this place", held by its surroundings -- see outdoors()."""
+    where = "this place" if outdoor else "this room"
+    said = (f" <Picture {n}> is {where} a moment earlier: the same "
+            f"{_SURROUND_OUT if outdoor else _SURROUND_IN}, from the same camera.")
     if present:
         said += (f" {' and '.join(present)} "
                  f"{'are the people' if len(present) > 1 else 'is the person'} there.")
     if joining:
         said += (f" {' and '.join(joining)} {'are' if len(joining) > 1 else 'is'} in "
-                 f"this room too, already in place at the first frame.")
+                 f"{where} too, already in place at the first frame.")
     return said
 
 
@@ -6377,15 +6435,15 @@ def carried_people_claim(n, present, was_room="", now_room=""):
     return said
 
 
-def returning_room_claim(n, room, present, arriving):
+def returning_room_claim(n, room, present, arriving, outdoor=False):
     """Claim a frame of a room the film showed before and has come back to.
 
     Its own claim, not room_claim's: that one says "a moment earlier", and this
     picture is from shots ago. It names who is in it, because an unclaimed person
     in a picture is another person."""
     said = (f" <Picture {n}> is the {room} as the film last showed it"
-            f"{', where this shot arrives' if arriving else ''}: the same walls, floor, "
-            f"furniture and light.")
+            f"{', where this shot arrives' if arriving else ''}: the same "
+            f"{_SURROUND_OUT if (outdoor or outdoors(room)) else _SURROUND_IN}.")
     if present:
         said += (f" {_join_names(present)} "
                  f"{'are the people' if len(present) > 1 else 'is the person'} in it.")
@@ -6400,7 +6458,7 @@ def _join_names(names):
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def plate_claim(n):
+def plate_claim(n, outdoor=False):
     """Claim shot 1's first_frame when it is carried as the SET rather than frame one.
 
     room_claim cannot serve here and saying so is the point: it calls the picture
@@ -6409,8 +6467,8 @@ def plate_claim(n):
     people in it, and the claim has to say exactly that -- an unclaimed picture is
     read as another subject, and a picture of an empty room claimed as a person is
     how a figure gets invented to stand in it."""
-    return (f" <Picture {n}> is the set this shot takes place in: the same walls, "
-            f"floor, furniture and light, from the same camera. It is a picture of "
+    return (f" <Picture {n}> is the set this shot takes place in: the same "
+            f"{_SURROUND_OUT if outdoor else _SURROUND_IN}, from the same camera. It is a picture of "
             f"the place only, with nobody in it -- the people in this shot are the "
             f"ones named above, standing where the text puts them.")
 
@@ -6680,6 +6738,31 @@ _GARMENT_KIN = {word: tuple(w for w in family if w != word)
                 for family in _GARMENT_FAMILIES for word in family}
 
 
+# A PART OF A GARMENT MOVED IS NOT THE GARMENT REMOVED, and a one-piece off a SHOULDER
+# is lowered, not off: it is still on from the waist down. Both were read as the whole
+# garment gone -- "slips the straps of her dress off her shoulders" came out as "the
+# red dress comes off ... fully removed", and with nothing declared under it the bare
+# clause filled everything the dress covered, genitals included. REPORTED as a clothed
+# character exposing their genitals. A shirt or jacket slid off the shoulders is how
+# those come off, so the shoulder rule is for one-pieces only.
+_GARMENT_PART = (r"(?:shoulder\s+)?(?:straps?|sleeves?|hems?|collars?|necklines?|bodices?|"
+                 r"cups?|waistbands?|hoods?)")
+_PART_OF = (r"\b" + _GARMENT_PART + r"\s+of\s+(?:her|his|their|the|its)\s+"
+            r"(?:[\w-]+\s+){0,2}?")
+_OFF_SHOULDER = re.compile(
+    r"^\s*(?:off\s+)?(?:(?:her|his|their|the|one|both)\s+)+shoulders?\b", re.I)
+_ONE_PIECE = frozenset("""dress gown nightgown nightdress nightie slip sundress minidress
+    maxidress jumpsuit romper playsuit bodysuit catsuit leotard swimsuit""".split())
+
+
+def _lowered_not_off(word, span, after):
+    """True where `word` is only a part of the garment moved, or a one-piece lowered."""
+    if span and re.search(_PART_OF + re.escape(word) + r"\b", span, re.I):
+        return True
+    return bool(_OFF_SHOULDER.match(after or "")
+                and (engine.singular_garment(word) or word).lower() in _ONE_PIECE)
+
+
 def infer_removals(beat, scene):
     """Garments this beat takes off, read from its own prose. [] when none.
 
@@ -6710,16 +6793,20 @@ def infer_removals(beat, scene):
             more = _list_runs_on(tail[cut.start():], scene)
             if more:
                 span = span + ", " + more
+        _after = ""                 # what follows the "off": "her shoulders", or nothing
         if not (re.fullmatch(_UNDO_VERB, m.group(0), re.I)
                 or re.search(r"\b(?:off|away|out\s+of|down)$", m.group(0), re.I)):
             part = re.search(r"\b(?:off|away)\b", span, re.I)
             if part:
                 if _HAS_VERB.search(span[:part.start()]):
                     continue
+                _after = span[part.end():]
                 span = span[:part.start()]
         for word in re.findall(r"\b[\w-]{3,}\b", span):
             low = engine.singular_garment(word)
             if not low or low in found:
+                continue
+            if _lowered_not_off(word, span, _after):
                 continue
             # Grammar, prepositions and anatomy are not garments.
             if low in _NOT_A_GARMENT:
@@ -6759,6 +6846,10 @@ def infer_removals(beat, scene):
         word = m.group(1)
         low = engine.singular_garment(word)
         if not low or low in found or low in _NOT_A_GARMENT or _RESTRAINT_WORD.match(low):
+            continue
+        # "Her dress slips off her shoulders" -- lowered, not off. See _lowered_not_off.
+        if (_lowered_not_off(word, "", beat[m.end():])
+                or (re.search(r"\bshoulders?\b", m.group(0), re.I) and low in _ONE_PIECE)):
             continue
         if not _is_entry_head(low, scene):
             _kin = [k for k in _GARMENT_KIN.get(low, ()) if _is_entry_head(k, scene)]
@@ -7893,15 +7984,18 @@ class H3LongVideos:
                 _fast_said.append(f"it runs on res_multistep with the simple scheduler, "
                                   f"not {sampler_name}/{scheduler}")
             notes.append(
-                "FastH3 model detected (FastVideo's 8-step distill). REFERENCES ARE OFF for "
-                "this run: FastH3 distilled first/last-frame generation only -- ref2va was "
-                "not distilled -- so a reference row is a picture it was never taught to "
-                "read, and it draws one as another person. No tagged picture, recovered "
-                "face, evened face, returning room or carried frame is sent, <Picture N> "
-                "tags come out of the text, and a shot that would have carried the last "
-                "frame as a reference starts fresh instead. Identity rides the keyframe "
-                "chain alone; for reference-driven likeness, render with a base or hybrid "
-                "H3. No extra audio step is spliced into the schedule either -- it changes "
+                "FastH3 model detected (FastVideo's 8-step distill). It distilled first/"
+                "last-frame generation only -- ref2va was not distilled -- so a reference "
+                "row is a picture it was never taught to read, and it can draw one as "
+                "another person. The pictures YOU tag with <Picture N> are still sent, "
+                "because that is your choice; every picture the node would add on its "
+                "own is not -- no recovered face, evened face, returning room or frame "
+                "carried across a cut, and an untagged picture is not claimed onto "
+                "anybody. A shot that would have carried the last frame as a reference "
+                "starts fresh, and the handoff always stays a keyframe. If a tagged "
+                "person still doubles, the tag is the cause -- for reference-driven "
+                "likeness render with a base or hybrid H3. No extra audio step is spliced "
+                "into the schedule either -- it changes "
                 "the step count the model was distilled for. Wire ComfyUI's Model Sparse "
                 "Attention node set to vsa (keep 10, from 0.20) in front of this node to "
                 "run it with the attention it was trained on"
@@ -8241,6 +8335,7 @@ class H3LongVideos:
         stripped_shots = set()      # 0-based shots that took something off
         cut_shots = set()           # 0-based shots opening in a room the keyframe is not in
         own_grade_shots = set()     # 0-based shots whose change of level over the take is theirs
+        outdoor_shots = set()       # 0-based shots whose place is outside -- see outdoors()
         shot_rooms = {}             # 0-based shot -> (room it opens in, room it ends in)
         hardware_changed = set()    # 1-based shots that put hardware on or take it off
         _undescribed = []           # rooms the film enters that the prompt never describes
@@ -8935,6 +9030,9 @@ class H3LongVideos:
             if _is_cut:
                 cut_shots.add(len(plan))
             shot_rooms[len(plan)] = (_opens_in or "", here or "")
+            _outside = outdoors(here, scene, beats[0] if beats else "")
+            if _outside:
+                outdoor_shots.add(len(plan))
             _carry = [n for n in _kept if n not in active]
             _shows = list(active) + _carry
             # A walk to another room leaves behind whoever it does not describe.
@@ -8948,7 +9046,7 @@ class H3LongVideos:
             shot_frames[len(plan)] = (_shows, list(_in_frame))
             if here and here not in _described_rooms and here not in _undescribed:
                 _undescribed.append(here)
-            _where = where_hold(here, scene) if not _travel else ""
+            _where = where_hold(here, scene, outdoor=_outside) if not _travel else ""
             if _where:
                 where_shots.append(len(plan) + 1)
             _room_now = (room_tone(here) or _room) if (auto_sound and _where) else _room
@@ -9216,7 +9314,7 @@ class H3LongVideos:
                 (_k not in cut_shots and _k not in reentry_shots and _k not in _placed_shots
                  and not (restart_after_removal and (_k - 1) in stripped_shots)))
             _frame = ("" if (_on_keyframe and _camera) else
-                      frame_hold(body, anchor, len(_described or []) or 1))
+                      frame_hold(body, anchor, len(_described or []) or 1, outdoor=_outside))
             if _frame:
                 frame_shots.append(len(plan) + 1)
             _wearer_here = (not restrained_who
@@ -9594,8 +9692,6 @@ class H3LongVideos:
                    if guard_words > beat_words * 3 else ""))
         refs_all = [r for r in (ref_image_1, ref_image_2, ref_image_3, ref_image_4)
                     if r is not None]
-        if _fast:
-            refs_all = []           # FastH3 reads no reference rows -- see fast_h3
         if refs_all and covers and not _PICTURE_TAG.search(f"{scene}\n" + "\n".join(beats)):
             notes.append(
                 f"{len(refs_all)} reference image(s) and not one <Picture N> tag anywhere, "
@@ -10510,10 +10606,10 @@ class H3LongVideos:
                 f"IT and neither happens: 'Nora: <Picture 1>, 34, she, ...' sends it into "
                 f"the shots Nora is in, and only those")
         for _i, _s in enumerate(plan.prompts):
-            if _fast:
-                # The tags come out with nothing to point at, and nothing is reported
-                # missing: the images are there, the model cannot read them.
-                plan.shots[_i].prompt = resolve_tags(_s, [])[0]
+            if _fast and not _tagged:
+                # FastH3: a picture YOU tagged is your call and rides as tagged (below).
+                # An untagged one is not claimed onto anybody for you -- that is the
+                # node guessing, on a model that never learned to read the guess.
                 plan.shots[_i].refs = []
                 continue
             if not _tagged:
@@ -10783,7 +10879,7 @@ class H3LongVideos:
             stripped_shots=stripped_shots, cut_shots=cut_shots,
             shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
             reentry_shots=reentry_shots, own_grade_shots=own_grade_shots,
-            refs_ok=not _fast,
+            refs_ok=not _fast, outdoor_shots=outdoor_shots,
             upscale=upscale, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
         )
@@ -10803,6 +10899,7 @@ class H3LongVideos:
         # a recovered or evened face, a returning room -- is a reference row. Off where
         # the model reads none: see fast_h3.
         refs_ok = prepared.refs_ok is not False
+        outdoor_shots = prepared.outdoor_shots or set()
         hardware_changed = prepared.hardware_changed or set()
         ambient_audio = prepared.ambient_audio
         ambient_level = prepared.ambient_level
@@ -10825,6 +10922,11 @@ class H3LongVideos:
         notes = prepared.notes
         plan = prepared.plan
         ref_noise_aug = prepared.ref_noise_aug
+        # FastH3 reads a keyframe and not a reference row, so the handoff is never
+        # demoted into one: below the safe aug it would be. See fast_h3.
+        if (not refs_ok and ref_noise_aug is not None
+                and float(ref_noise_aug) < KEYFRAME_SAFE_AUG):
+            ref_noise_aug = KEYFRAME_SAFE_AUG
         restart_after_removal = prepared.restart_after_removal
         revealed_shots = prepared.revealed_shots
         sampler_name = prepared.sampler_name
@@ -11007,13 +11109,15 @@ class H3LongVideos:
                             _soft_cuts.pop()
                         _extra.append(_frame)
                         shot_prompt = shot_prompt + returning_room_claim(
-                            len(shot.refs) + len(_extra), _back, _in_it, _arriving)
+                            len(shot.refs) + len(_extra), _back, _in_it, _arriving,
+                            outdoor=i in outdoor_shots)
                         _room_returns.append((i + 1, _back, _from))
                         break
             _shot_refs = list(shot.refs) + _extra
             if _handoff_ref and _plate_on == i + 1:
                 # A SET, not a room a moment earlier. See plate_claim.
-                shot_prompt = shot_prompt + plate_claim(len(_shot_refs) + 1)
+                shot_prompt = shot_prompt + plate_claim(len(_shot_refs) + 1,
+                                                        outdoor=i in outdoor_shots)
                 _handoff_claimed.append(i + 1)
             elif _carry_rooms is not None:
                 _was_room, _now_room = _carry_rooms
@@ -11022,14 +11126,16 @@ class H3LongVideos:
                         len(_shot_refs) + 1, _prev_people, _was_room, _now_room)
                 else:
                     shot_prompt = shot_prompt + room_claim(len(_shot_refs) + 1,
-                                                           _prev_people, [])
+                                                           _prev_people, [],
+                                                           outdoor=i in outdoor_shots)
                 shot_prompt = recount_with_claim(shot_prompt, plan.shots[i].cast,
                                                  _prev_people)
                 _handoff_claimed.append(i + 1)
             elif _handoff_ref:
                 _was, _join = next(((w, j) for s, w, j in _carried if s == i + 1),
                                    ([], []))
-                shot_prompt = shot_prompt + room_claim(len(_shot_refs) + 1, _was, _join)
+                shot_prompt = shot_prompt + room_claim(len(_shot_refs) + 1, _was, _join,
+                                                       outdoor=i in outdoor_shots)
                 shot_prompt = recount_with_claim(shot_prompt, plan.shots[i].cast, _was)
                 _handoff_claimed.append(i + 1)
             elif handoff_rides_as_ref(shot_handoff, _shot_refs, ref_noise_aug):

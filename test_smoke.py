@@ -3737,18 +3737,32 @@ def test_a_fast_h3_is_sent_no_reference():
          "Dan comes back in and sits down.")
     kw = dict(character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))
     base = _encoded_refs(P, **kw)
-    check("the same run on a stock H3 does send references",
-          any(n > 0 for _p, n in base), str([n for _p, n in base]))
+    check("the same run on a stock H3 adds pictures of its own -- here a second one",
+          any(n > 1 for _p, n in base), str([n for _p, n in base]))
     fast = _encoded_refs(P, model=FakeFastH3(), **kw)
-    check("on FastH3 not one reference row is encoded",
-          all(n == 0 for _p, n in fast), str([n for _p, n in fast]))
-    check("...no <Picture N> is left in any shot's text",
-          not any(re.search(r"<Picture \d+>", p) for p, _n in fast))
-    rows = _encoder_rows(P, model=FakeFastH3(), **kw)
-    check("...and the encoder is shown the keyframe alone, at most",
-          all(pics <= 1 for _p, pics, _named in rows), str([pics for _p, pics, _ in rows]))
+    # REPORTED on the first cut of this: "FastH3 is stripping my <picture> reference".
+    # The author's tag is theirs to send; only the node's own pictures stay off.
+    check("on FastH3 the author's tagged picture still rides, where it is tagged",
+          any(n == 1 for _p, n in fast)
+          and all((n == 1) == ("Dan: <Picture 1>" in p) for p, n in fast),
+          str([n for _p, n in fast]))
+    check("...and never a second picture the node added itself",
+          all(n <= 1 for _p, n in fast), str([n for _p, n in fast]))
+    check("...and no shot names a picture it does not carry",
+          not _unnamed_pictures(_encoder_rows(P, model=FakeFastH3(), **kw)))
+    loose = _encoded_refs("A kitchen.\n\nDan pours coffee.\n\nDan sits down.",
+                          model=FakeFastH3(),
+                          character_memory="Dan: he, 35, black t-shirt.",
+                          ref_image_1=torch.rand(1, H, W, 3))
+    check("an UNTAGGED picture is not claimed onto anybody on FastH3",
+          all(n == 0 for _p, n in loose)
+          and not any("<Picture" in p for p, _n in loose), str([n for _p, n in loose]))
     info = str(run_node(P, model=FakeFastH3(), **kw)[2])
-    check("the run says why", "FastH3 model detected" in info and "REFERENCES ARE OFF" in info)
+    check("the run says why", "FastH3 model detected" in info
+          and "The pictures YOU tag with <Picture N> are still sent" in info)
+    low = _encoded_refs(P, model=FakeFastH3(), ref_noise_aug=0.95, **kw)
+    check("...and below the safe aug the handoff is still a keyframe, never a reference",
+          all(n <= 1 for _p, n in low), str([n for _p, n in low]))
     check("...sets FastH3's own shift where the widget was untouched",
           "sigma shift set to 10" in info, info[:200])
     check("...splices no extra audio step into a distilled schedule",
@@ -3756,6 +3770,66 @@ def test_a_fast_h3_is_sent_no_reference():
     odd = str(run_node(P, model=FakeFastH3(), steps=5, shift_video=8.0, **kw)[2])
     check("...and names settings it was not distilled for",
           "steps is 5" in odd and "your sigma shift is 8/3" in odd, odd[:300])
+
+
+def test_a_street_is_not_told_it_is_a_room():
+    """REPORTED: a scene on a public street rendering a house on the second beat.
+
+    The last frame rode into shot 2 claimed as "this room a moment earlier: the same
+    walls, floor, furniture and light" -- an instruction to draw walls and furniture."""
+    print("\n=== a street is not called a room ===")
+    mem = "Mara: she, 30, a denim jacket, jeans.\nDan: he, 35, a grey hoodie, jeans."
+    street = _encoder_rows("A busy public street in the afternoon.\n\nMara waits at the "
+                           "corner.\n\nDan stands beside Mara at the corner.",
+                           character_memory=mem)
+    s2 = street[1][0]
+    check("the carried frame on a street is claimed as this PLACE, by its surroundings",
+          "is this place a moment earlier: the same surroundings, ground and light" in s2,
+          s2[-240:])
+    check("...with no walls, floor, furniture or room anywhere the node added",
+          not re.search(r"\b(?:walls?|floor|furniture|room)\b",
+                        s2.split("with one body for each person.")[-1], re.I), s2[-240:])
+    walk = " ".join(_shots_of(run_node("A public street, daylight.\n\nMara crosses the road.",
+                                       character_memory=mem, plan_only=True))[0].split())
+    check("the frame clause holds the surroundings, not a room",
+          "with the surroundings around it" in walk, walk[-160:])
+    room = _encoder_rows("A kitchen.\n\nMara waits by the sink.\n\nDan stands beside Mara "
+                         "by the sink.", character_memory=mem)
+    check("...while an interior keeps the walls and furniture that hold a room still",
+          "is this room a moment earlier: the same walls, floor, furniture and light"
+          in room[1][0], room[1][0][-240:])
+    check("outdoors() needs evidence and keeps a café on a street a room",
+          S.outdoors("", "A public street at night.") and S.outdoors("park")
+          and not S.outdoors("", "A café on a busy street.")
+          and not S.outdoors("", "A dark night.") and not S.outdoors("kitchen"))
+
+
+def test_a_lowered_garment_is_not_removed():
+    """REPORTED: a clothed character exposing their genitals.
+
+    "Slips the straps of her dress off her shoulders" was read as the whole dress off,
+    and with nothing declared under it the bare clause wrote her genitals into the
+    shot. A strap moved and a one-piece lowered off the shoulders are still worn."""
+    print("\n=== a lowered garment is not a removed one ===")
+    scene = "Mara: she, 30, a red dress, black heels.\nDan: he, 35, a white shirt, jeans."
+    for b in ("Mara slips the straps of her dress off her shoulders.",
+              "Mara slips her dress off her shoulders.", "Her dress slips off her shoulders.",
+              "Mara lets the dress slide off one shoulder.",
+              "Dan pushes the straps of her dress off her shoulders."):
+        check(f"still worn: {b}", S.infer_removals(b, scene) == [], str(S.infer_removals(b, scene)))
+    for b, g in (("Mara slips her dress off.", "dress"), ("Mara slips off her dress.", "dress"),
+                 ("Her dress slips off and falls to the floor.", "dress"),
+                 ("Mara pulls her dress off over her head.", "dress"),
+                 ("Dan slides his shirt off his shoulders.", "shirt"),
+                 ("Mara takes off her heels.", "heels")):
+        check(f"still removed: {b}", S.infer_removals(b, scene) == [g], str(S.infer_removals(b, scene)))
+    s = " ".join(_shots_of(run_node(
+        "A bedroom.\n\nMara slips the straps of her dress off her shoulders.",
+        character_memory="Mara: she, 30, long dark hair, a red dress, black heels.",
+        plan_only=True))[0].split())
+    check("...and the shot neither removes the dress nor bares anything",
+          "red dress comes off" not in s
+          and not re.search(r"\b(?:genitals|bare|uncovered)\b", s), s[-240:])
 
 
 def test_only_the_speaker_has_a_voice():
@@ -9065,6 +9139,8 @@ def main():
     test_her_whimper_does_not_free_his_mouth()
     test_only_the_speaker_has_a_voice()
     test_a_fast_h3_is_sent_no_reference()
+    test_a_street_is_not_told_it_is_a_room()
+    test_a_lowered_garment_is_not_removed()
     test_a_line_is_locked_to_the_person_who_says_it()
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()

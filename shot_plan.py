@@ -108,3 +108,4 @@ class PreparedVideo:
     reentry_shots: object = None      # {0-based shot: who walks in while the keyframe still has them}
     own_grade_shots: object = None    # {0-based shots whose change of level over the take is the author's}
     refs_ok: bool = True              # False on a model that reads no reference rows (FastH3)
+    outdoor_shots: object = None      # {0-based shots whose place is outside}
