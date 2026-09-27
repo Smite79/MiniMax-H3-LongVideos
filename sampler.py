@@ -3792,6 +3792,10 @@ _APPLY_PHRASE = re.compile(
     r"\b(?:put|puts|putting|pull|pulls|pulling|force|forces|forcing|get|gets|"
     r"getting|work|works|snap|snaps)\s+(?:[\w,']+\s+){0,4}?"
     r"(?:on|onto|around|behind|together|shut|closed)\b"
+    # Tape goes on by being pressed, stuck or slapped OVER something -- the engine's
+    # APPLY_VERB, mirrored here in the -s forms.
+    r"|\b(?:puts|places|presses|sticks|slaps|smooths|plasters)\s+(?:[\w,'’]+\s+){0,5}?"
+    r"(?:over|across)\s+(?:[\w'’]+\s+){0,2}?(?:mouth|lips|eyes|face)\b"
     r"|\b(?:loops?|wraps?|winds?|coils?|threads?|passes|runs|cinch(?:es)?|knots?|"
     r"laces?|hitch(?:es)?|slings?)\s+(?:[\w,']+\s+){0,5}?"
     r"(?:around|round|through|under|over|behind|between)\b", re.I)
@@ -4727,8 +4731,60 @@ def merge_hardware_names(items):
     return out
 
 
+_PART_AT = {"neck": "round the neck", "throat": "round the throat", "mouth": "over the mouth",
+            "eyes": "over the eyes", "head": "over the head", "waist": "round the waist",
+            "body": "round the body", "chest": "round the chest"}
+
+
+def hardware_where(restraints):
+    """{item: where it holds}, from the state's own records of each piece.
+
+    The hold named every item and placed none of them -- "The leather collar, steel
+    handcuffs and duct tape stay closed and fastened" -- so nothing said the cuffs are
+    on the WRISTS, the collar round the NECK, the tape over the MOUTH. An unstated
+    attribute is the model's to choose, and it chose: REPORTED as handcuffs on the
+    ankles, a collar gone, the tape off by the next beat. Where one item holds two
+    parts -- rope on the wrists and the ankles -- both are said."""
+    out = {}
+    for r in restraints or ():
+        item, part = getattr(r, "item", ""), getattr(r, "part", "")
+        if not item or not part:
+            continue
+        at = (part, getattr(r, "position", "") or "")
+        out.setdefault(item, [])
+        if at not in out[item]:
+            out[item].append(at)
+    return out
+
+
+def _where_of(item, where, who=""):
+    """Where a (possibly merged) item name holds, as English -- on `who`'s body when a
+    single wearer is named ("on Ana's wrists"), else on "the" part. "" if unknown."""
+    if not where:
+        return ""
+    at = where.get(item)
+    if at is None:
+        head = item.split()[-1].lower() if item.split() else ""
+        at = next((v for k, v in where.items()
+                   if k.split() and k.split()[-1].lower() == head), None)
+    if not at:
+        return ""
+    said = []
+    # The PART only: where the arms are is the pose sentence's to say, and it does --
+    # repeating "behind the back" here spent the words the shot's other guards needed.
+    for part, _position in at:
+        if who:
+            prep = "over" if part in ("mouth", "eyes", "head") else "on"
+            s = f"{prep} {who}'s {part}"
+        else:
+            s = _PART_AT.get(part, f"on the {part}")
+        if s not in said:
+            said.append(s)
+    return " and ".join(said)
+
+
 def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False,
-                       part=""):
+                       part="", where=None):
     """ONE sentence for the hardware: what it is, that it is closed, and where it holds.
 
     These used to be three, written at three different times for three different bug
@@ -4755,8 +4811,17 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
     if wearers and len(described) >= 2:
         who = (wearers[0] if len(wearers) == 1
                else ", ".join(wearers[:-1]) + " and " + wearers[-1])
+    # Each piece where it is -- see hardware_where. With ONE wearer named the place
+    # carries the name ("the steel handcuffs on Ana's wrists"); the plain names still
+    # decide the grammar and the material below.
+    _one = who if (who and len(wearers) == 1) else ""
+    _placed = [f"{i} {_where_of(i, where, _one)}".strip() for i in items]
+    _subject_item = (", ".join(_placed[:-1]) + " and " + _placed[-1]) if len(_placed) > 1 \
+        else (_placed[0] if _placed else item)
+    _named_in_place = bool(_one) and any(f"{_one}'s" in p for p in _placed)
     if item:
-        subject = f"The {item} on {who}" if who else f"The {item}"
+        subject = (f"The {_subject_item}" if (not who or _named_in_place)
+                   else f"The {_subject_item} on {who}")
         verb = "stay" if plural else "stays"
     else:
         subject = f"Every restraint on {who}" if who else "Every restraint"
@@ -6659,16 +6724,68 @@ puts_it_back = engine.puts_it_back
 restored_garments = engine.restored_garments
 
 
-def displaced_hold(items):
+_DISPLACED_TO = re.compile(
+    r"\b(?:down|up|off)\s+(?:to|around|round|past|below|over|at)\s+"
+    r"(?:(?:her|his|their|the)\s+)?(mid[-\s]?thighs?|thighs?|knees?|ankles?|calves|shins|"
+    r"hips|waist|feet|chest|ribs|belly|stomach|armpits|shoulders?)\b"
+    r"|\b(?:down|up)\s+to\s+(mid[-\s]?thigh)\b", re.I)
+
+
+def displaced_to(beat, garment):
+    """How far the beat moved `garment` -- " to the thighs" -- or ""."""
+    b = str(beat or "")
+    head = str(garment or "").split()[-1] if str(garment or "").split() else ""
+    at = re.search(r"\b" + re.escape(head) + r"\b", b, re.I) if head else None
+    m = _DISPLACED_TO.search(b, at.end() if at else 0)
+    if not m:
+        return ""
+    part = (m.group(1) or m.group(2) or "").lower()
+    return f" to {part}" if part.startswith("mid") else f" to the {part}"
+
+
+def under_displaced(garment, sheet, moved=()):
+    """The undergarments a moved garment now shows: same wearer, same region, not moved.
+
+    The sheet listed "denim shorts, a black thong" side by side and nothing said the
+    thong is what the lowered shorts uncover -- so the thong was left to chance.
+    REPORTED as shorts pulled down with no thong to be seen."""
+    if engine.is_undergarment(garment):
+        return []
+    line = next((ln for n, ln in sheet_lines(sheet or "")
+                 if re.search(r"\b" + re.escape(garment) + r"\b", ln, re.I)), "")
+    regs = set(engine.regions_of(garment))
+    moved_heads = {str(m).split()[-1].lower() for m in (moved or ()) if str(m).split()}
+    return [g for g in engine.garments_in(line)
+            if g != garment and engine.is_undergarment(g)
+            and regs & set(engine.regions_of(g))
+            and g.split()[-1].lower() not in moved_heads]
+
+
+def displaced_hold(items, dest=None, beneath=None):
     """Say where a moved garment now sits, so the next shot does not put it back.
 
     Without this the garment is described by the sheet in the state it was WORN, and
     the sheet is re-stamped into every shot -- so shorts pulled down are pulled back
-    up by the next beat, or come back looking like a different pair."""
+    up by the next beat, or come back looking like a different pair.
+
+    It was also not a sentence: "On the body and the denim shorts pulled down, left
+    exactly where the beat put them" -- no verb, no destination, nothing about what
+    the lowered garment uncovers. REPORTED as the shorts coming back up, and as shorts
+    pulled down with no thong to be seen. Now: where it is, how far, and what shows."""
     if not items:
         return ""
-    said = ", ".join(f"the {thing} {how}" for thing, how in items[:2])
-    return f" On the body and {said}, left exactly where the beat put them."
+    said = []
+    for thing, how in items[:2]:
+        plural = thing.endswith("s") and not thing.endswith("ss")
+        it = "them" if plural else "it"
+        s = (f"The {thing} {'stay' if plural else 'stays'} on, {how}"
+             f"{(dest or {}).get(thing, '')}, where the beat left {it}")
+        under = (beneath or {}).get(thing) or []
+        if under:
+            names = " and ".join(f"the {u}" for u in under[:2])
+            s += (f", with {names} under {it} in view and still on")
+        said.append(s)
+    return " " + "; ".join(said) + "."
 
 
 _ASK_VERB = (r"asks?|asked|asking|begs?|begged|begging|pleads?|pleaded|pleading|"
@@ -8276,6 +8393,7 @@ class H3LongVideos:
         worn_item = ""            # the hardware, in the author's words
         worn_items = []           # ...each piece of it, in order
         displaced = {}            # garment -> how it was moved
+        displaced_dest = {}       # garment -> how far: " to the thighs" -- see displaced_to
         moved_shots = []          # shots reminded of it
         revealed_shots = []       # shots that uncover a layer
         unattributed = []         # shots whose line names no speaker
@@ -9229,6 +9347,7 @@ class H3LongVideos:
                     displaced.pop(_g, None)
                 else:
                     displaced[_g] = _how
+                    displaced_dest[_g] = displaced_to(body, _g)
             for _g in [g for g in displaced if names_any(g, toks)]:
                 displaced.pop(_g, None)
             for _g in restored_garments(body, shot_scene):
@@ -9239,9 +9358,20 @@ class H3LongVideos:
             if len(displaced) == 1 and puts_it_back(body):
                 displaced.clear()
             _body_low = (body or "").lower()
-            _moved = displaced_hold([(g, h) for g, h in displaced.items()
-                                     if not re.search(r"\b" + re.escape(g.split()[-1])
-                                                      + r"\b", _body_low)])
+            _moved = displaced_hold(
+                [(g, h) for g, h in displaced.items()
+                 if not re.search(r"\b" + re.escape(g.split()[-1]) + r"\b", _body_low)],
+                dest=displaced_dest,
+                beneath={g: under_displaced(g, shot_sheet or sheet, displaced)
+                         for g in displaced})
+            # ...and on the shot that moves it, what it uncovers -- unless the beat says.
+            for _g, _how in _staged_here:
+                for _u in under_displaced(_g, shot_sheet or sheet, displaced):
+                    if re.search(r"\b" + re.escape(_u.split()[-1]) + r"\b", _body_low):
+                        continue
+                    _pl = _g.endswith("s") and not _g.endswith("ss")
+                    _moved += (f" The {_u} under the {_g} comes into view as "
+                               f"{'they move' if _pl else 'it moves'}, and stays on.")
             if _moved:
                 moved_shots.append(len(plan) + 1)
 
@@ -9317,6 +9447,7 @@ class H3LongVideos:
                       frame_hold(body, anchor, len(_described or []) or 1, outdoor=_outside))
             if _frame:
                 frame_shots.append(len(plan) + 1)
+            _place_words = 0            # words the hold spends saying where -- see _placed_hold
             _wearer_here = (not restrained_who
                             or not character_guard
                             or not (_described or [])
@@ -9347,22 +9478,39 @@ class H3LongVideos:
                 _split = (len(_own) > 1 and not _named_item
                           and len({tuple(merge_hardware_names(_hw_by_wearer[n]))
                                    for n in _own}) > 1)
+
+                def _placed_on(names):
+                    return hardware_where([_r for _n in names
+                                           for _r in (_state.people[_n].hardware.values()
+                                                      if _n in _state.people else ())])
+
+                def _placed_hold(*a, where=None, **k):
+                    """The hold with each piece's place, and how many words the places
+                    cost -- given back to the shot's guard budget below, so saying
+                    WHERE never pushes another guard out."""
+                    with_place = restraint_sentence(*a, where=where, **k)
+                    plain = restraint_sentence(*a, **k)
+                    return with_place, max(0, len(with_place.split()) - len(plain.split()))
                 if _split:
-                    hold = "".join(
-                        restraint_sentence(
+                    _parts = [
+                        _placed_hold(
                             ", ".join(merge_hardware_names(_hw_by_wearer[n])),
                             [n], _described, anchor=("" if _anchor_now else anchored),
                             rigid=bool(rigid) and rigid_hardware(
                                 " ".join(_hw_by_wearer[n])),
                             posed=bool(posed),
-                            part=held_part(merge_hardware_names(_hw_by_wearer[n])))
-                        for n in _own)
+                            part=held_part(merge_hardware_names(_hw_by_wearer[n])),
+                            where=_placed_on([n]))
+                        for n in _own]
+                    hold = "".join(h for h, _w in _parts)
+                    _place_words = sum(w for _h, w in _parts)
                 else:
-                    hold = restraint_sentence(
+                    hold, _place_words = _placed_hold(
                         _here_item if not _named_item else "",
                         _wearers, _described, anchor=("" if _anchor_now else anchored),
                         rigid=_here_rigid, posed=bool(posed),
-                        part=held_part(_here_items or ([_here_item] if _here_item else [])))
+                        part=held_part(_here_items or ([_here_item] if _here_item else [])),
+                        where=_placed_on(_described or list(_state.people)))
                 if _here_item and not _named_item:
                     named_shots.append(len(plan) + 1)
             else:
@@ -9572,6 +9720,8 @@ class H3LongVideos:
             _floor = RESTRAINT_FLOOR_WORDS if (hold or _pose or anchors) else None
             if fall:
                 _floor = (_floor or GUARD_FLOOR_WORDS) + FALL_FLOOR_WORDS
+            if hold and _place_words:
+                _floor = (_floor or GUARD_FLOOR_WORDS) + _place_words   # see _placed_hold
             _kept, _dropped = fit_guards(_guards, len(body.split()), floor=_floor)
             if _dropped:
                 crowded.append((len(plan) + 1, _dropped))

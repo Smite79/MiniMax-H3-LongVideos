@@ -1376,30 +1376,32 @@ def _prompts_sent(P, **kw):
 
 def test_the_cuffs_stay_in_the_picture():
     print("\n=== the hardware is named on every shot it is on ===")
+    # The item, then (now) where it is, then "stay": "The cuffs on the wrists stay".
+    held = lambda t: bool(re.search(r"The cuffs\b[^.;]*? stay\b", t))
     mem = "Mara: she, 22, grey dress.\nDan: he, 41."
     P = ("A bare room.\n\nMara backs away from Dan.\n\n"
          "Dan catches her and cuffs her wrists behind her back.\n\n"
          "Mara sits on the crate.\n\nMara looks at the door.")
     sh = [s for s in run_node(P, plan_only=True, character_memory=mem)[3].split("---")
           if s.strip()]
-    check("before it goes on, nothing is claimed", "The cuffs stay" not in sh[0], "")
+    check("before it goes on, nothing is claimed", not held(sh[0]), "")
     check("the applying shot says it in the beat", "cuffs" in sh[1].lower(), "")
-    check("...and is not told it a second time", "The cuffs stay" not in sh[1], "")
+    check("...and is not told it a second time", not held(sh[1]), "")
     for i in (2, 3):
         check(f"shot {i + 1} names the hardware", "cuffs" in sh[i].lower(), sh[i][-70:])
-        check(f"...as the object, not just a category", "The cuffs stay" in sh[i], "")
+        check(f"...as the object, not just a category", held(sh[i]), "")
     # A removal lets go of it, like every other latch here.
     P2 = ("A bare room.\n\nDan cuffs her wrists behind her back.\n\nMara sits.\n\n"
           "remove: cuffs\nDan takes the cuffs off.\n\nMara stands up.\n\nMara walks out.")
     sh2 = [s for s in run_node(P2, plan_only=True, character_memory=mem)[3].split("---")
            if s.strip()]
-    check("held while they are on", "The cuffs stay" in sh2[1], "")
+    check("held while they are on", held(sh2[1]), "")
     check("let go after the removal",
-          all("The cuffs stay" not in s for s in sh2[2:]), "")
+          all(not held(s) for s in sh2[2:]), "")
     # Nothing restrained anywhere: this must not fire on an ordinary scene.
     plain = run_node("A room.\n\nMara waits.\n\nMara walks to the window.",
                      plan_only=True, character_memory=mem)[3]
-    check("an unrestrained scene is untouched", "The cuffs stay" not in plain, "")
+    check("an unrestrained scene is untouched", not held(plain), "")
 
 
 def test_a_sheet_that_claims_hardware_too_early():
@@ -1845,7 +1847,7 @@ def test_a_length_goes_where_it_is_put():
     check("...and the cable is named on every shot after it goes on",
           all("cable" in sh for sh in shots[1:]), shots[-1][-160:])
     check("...both in one hold sentence",
-          "steel handcuffs and steel cable" in shots[-1], shots[-1][-200:])
+          bool(re.search(r"steel handcuffs\b[^.;]* and steel cable", shots[-1])), shots[-1][-200:])
     check("...and the legs are held up by the line to the neck",
           all("held there by the line running to the neck" in sh for sh in shots[1:]),
           shots[-1][-200:])
@@ -3280,16 +3282,16 @@ def test_a_garment_moved_is_not_a_garment_gone():
     check("...and are not scrubbed from the scene",
           all("shorts" in s.lower() for s in sh), "")
     check("the later shots say where they now sit",
-          all("On the body and" in s for s in sh[1:]), "")
+          all("where the beat left them" in s for s in sh[1:]), "")
     check("...and the staging shot is not told it twice",
-          "On the body and" not in sh[0], "")
+          "where the beat left them" not in sh[0], "")
     check("info names the shots", "MOVED rather than taken off" in info, "")
     # Put back up: the latch lets go, by name or by pronoun.
     for _put in ("Mara pulls her shorts back up.", "Mara pulls them back up."):
         back = run_node("A room.\n\nMara pulls down her shorts.\n\nMara waits.\n\n"
                         + _put + "\n\nMara walks out.",
                         plan_only=True, character_memory=mem)[3]
-        got = ["yes" if "On the body and" in s else "no"
+        got = ["yes" if "where the beat left them" in s else "no"
                for s in back.split("---") if s.strip()]
         check(f"restored by {_put[:28]!r}", got == ["no", "yes", "no", "no"], str(got))
     # A real removal still empties the wardrobe and says so.
@@ -3543,7 +3545,7 @@ def test_the_anchor_survives_a_close_shot():
     sh = [s for s in script.split("---") if s.strip()]
     # The staging shot has the author's own words and gets no second sentence about it.
     check("the staging shot is not argued with",
-          "the wrists" not in sh[0], "")
+          "holding the wrists" not in sh[0], "")
     check("the next shot is told where the arms are",
           "wrists together above the head" in sh[1], sh[1][-120:])
     check("...and what they are fastened to",
@@ -3643,9 +3645,9 @@ def test_nothing_tells_the_cast_to_hold_still():
     check("one voice is still asserted",
           "Only the person speaking" in S.ONE_VOICE and "closed" in S.ONE_VOICE)
     check("the moved garment is still on the body",
-          "On the body" in S.displaced_hold([("shorts", "pulled down")]))
+          "stay on, pulled down" in S.displaced_hold([("shorts", "pulled down")]))
     check("...and still where the beat left it",
-          "where the beat put them" in S.displaced_hold([("shorts", "pulled down")]))
+          "where the beat left them" in S.displaced_hold([("shorts", "pulled down")]))
     check("the layer underneath is still unchanged",
           "unchanged" in S.reveal_clause(["thong"]))
     check("the rest of the wardrobe is still bound",
@@ -3830,6 +3832,62 @@ def test_a_lowered_garment_is_not_removed():
     check("...and the shot neither removes the dress nor bares anything",
           "red dress comes off" not in s
           and not re.search(r"\b(?:genitals|bare|uncovered)\b", s), s[-240:])
+
+
+def test_restraints_and_lowered_clothes_hold_their_place():
+    """REPORTED together: duct tape over her mouth off by the next beat; a locked collar
+    gone; handcuffs behind her back turning up on her ankles; shorts pulled down to
+    show a thong coming back up -- and sometimes down with no thong to be seen.
+
+    Each was the text: tape pressed OVER a mouth was never tracked, so the next shot
+    said only "every restraint"; the hold named items and placed none of them; and a
+    lowered garment got a verbless line saying neither how far nor what it showed."""
+    print("\n=== restraints and lowered clothes keep their place ===")
+    ana = "Ana: she, 25, dark hair, a grey t-shirt, denim shorts, a black thong."
+    dan = "Dan: he, 35, a black jacket, jeans."
+
+    def later(beats, mem=ana + "\n" + dan):
+        return [" ".join(s.split()) for s in _shots_of(run_node(
+            "A bare room.\n\n" + "\n\n".join(beats), character_memory=mem, plan_only=True))]
+
+    for first in ("Dan presses a strip of duct tape over Ana's mouth.",
+                  "Dan slaps a piece of tape across her mouth.",
+                  "Dan tapes Ana's mouth shut with duct tape."):
+        sh = later([first, "Ana looks at the door.", "Ana sits down."])
+        check(f"the tape is named over her mouth on every later shot: {first}",
+              all(re.search(r"tape over (?:the|Ana's) mouth stays", s) for s in sh[1:]),
+              sh[-1][-260:])
+        check(f"...and on no other part: {first}",
+              not any(re.search(r"tape (?:on|round) (?:the|Ana's) (?:wrists|ankles)", s)
+                      for s in sh), sh[-1][-260:])
+    sh = later(["Dan locks a leather collar around Ana's neck.", "Ana stands by the wall.",
+                "Ana sits on the bed."])
+    check("the collar is held round her neck on every later shot",
+          all("leather collar round the neck stays" in s for s in sh[1:]), sh[-1][-200:])
+    sh = later(["Dan handcuffs Ana's wrists behind her back.", "Dan ties Ana's ankles with rope.",
+                "Ana lies down."])
+    check("the cuffs are on her wrists, the rope on her ankles",
+          re.search(r"handcuffs on the wrists", sh[-1])
+          and re.search(r"rope on the ankles", sh[-1])
+          and not re.search(r"handcuffs on the ankles|rope on the wrists", sh[-1]),
+          sh[-1][-300:])
+    sh = later(["Ana kneels.", "Ana looks up."],
+               mem="Ana: she, 25, a grey t-shirt, a leather collar locked on her neck, steel "
+                   "handcuffs on her wrists behind her back, duct tape over her mouth.")
+    check("items from the sheet are each held where they are",
+          all("leather collar round the neck" in s and "handcuffs on the wrists" in s
+              and "duct tape over the mouth" in s for s in sh), sh[-1][-300:])
+    sh = later(["Ana pulls her denim shorts down to her thighs.",
+                "Ana looks back over her shoulder.", "Ana stands still."], mem=ana)
+    check("the staging shot says the thong comes into view",
+          "black thong under the denim shorts comes into view" in sh[0], sh[0][-200:])
+    check("...and every later shot keeps the shorts down, and the thong on and in view",
+          all("denim shorts stay on, pulled down to the thighs" in s
+              and "black thong under them in view and still on" in s for s in sh[1:]),
+          sh[-1][-260:])
+    check("a thong the beat already shows is not said twice",
+          "comes into view" not in later(
+              ["Ana pulls her shorts down, showing her black thong.", "Ana waits."], mem=ana)[0])
 
 
 def test_only_the_speaker_has_a_voice():
@@ -5967,7 +6025,7 @@ def test_a_garment_keeps_its_description():
                  "McKenna pulls the shorts down.\n\n"
                  "McKenna looks at the window.", plan_only=True)[3]
     check("the displacement carries the sheet's full name",
-          "blue jeans shorts pulled down" in s)
+          "blue jeans shorts stay on, pulled down" in s)
     check("...and never a bare one beside it", "the shorts pulled" not in s)
     # Put back up, under a different name than it went down under.
     s2 = run_node(sheet + "McKenna stands.\n\n"
@@ -6072,7 +6130,7 @@ def test_hands_and_holds_follow_the_beat():
              "off.\n\nKate waits.", False, "a remove: line still works")):
         _s = run_node("A room.\n\n" + _beats, plan_only=True, character_memory=hw)[3]
         _last = [x for x in _s.split("---") if x.strip()][-1]
-        _on = bool(re.search(r"Every restraint[^.]*\.|The handcuffs stay[^.]*\.", _last))
+        _on = bool(re.search(r"Every restraint[^.]*\.|The handcuffs\b[^.;]*? stay[^.]*\.", _last))
         check(_lbl, _on == _held, "held=%s want=%s" % (_on, _held))
     # ...and the hardware leaves the SHEET, or the next shot reads it back out.
     _s = run_node("A room.\n\nKate sits with the handcuffs on.\n\n"
@@ -7687,7 +7745,7 @@ def test_how_a_garment_comes_off_is_read_right():
                                character_memory="Owen: he, 42, navy jacket over a white shirt, grey trousers.",
                                plan_only=True))
     check("an unzipped jacket stays on", "navy jacket" in _entry_in(shots[1], "Owen"))
-    check("...and the next shot keeps it open", "jacket open" in shots[1])
+    check("...and the next shot keeps it open", "navy jacket stays on, open" in shots[1])
     check("'unbuttons his shirt' opens the shirt, not the jacket over it",
           S.engine.displaced_garments("Owen unbuttons his shirt.",
                                       "Owen: he, 42, navy jacket over a white shirt.") == [("white shirt", "open")])
@@ -9141,6 +9199,7 @@ def main():
     test_a_fast_h3_is_sent_no_reference()
     test_a_street_is_not_told_it_is_a_room()
     test_a_lowered_garment_is_not_removed()
+    test_restraints_and_lowered_clothes_hold_their_place()
     test_a_line_is_locked_to_the_person_who_says_it()
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()

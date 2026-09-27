@@ -346,9 +346,16 @@ def test_chains_do_not_interfere():
     check("a chain running TO something is that thing's tether",
           kinds("Sam clips a chain to her collar.") == [("collar", "neck")],
           str(kinds("Sam clips a chain to her collar.")))
-    check("...while a material is kept",
-          ("tape", "wrists") in kinds("Dan gags her with duct tape."),
+    # ...and kept WHERE IT IS: "with duct tape" is what the gag is made of, so it sits
+    # on the gag's part. It used to take the table default and land on the wrists --
+    # a second restraint nobody put on. REPORTED as restraints on the wrong limb.
+    check("...while a material is kept, on the part it serves",
+          ("tape", "mouth") in kinds("Dan gags her with duct tape.")
+          and ("tape", "wrists") not in kinds("Dan gags her with duct tape."),
           str(kinds("Dan gags her with duct tape.")))
+    check("a part named before WITH is the item's part",
+          kinds("Dan ties her ankles with rope.") == [("rope", "ankles")],
+          str(kinds("Dan ties her ankles with rope.")))
     check("an anchor takes any determiner",
           E.anchor_in("Sam chains Kate's collar to one ring.") == "ring")
     check("...and a qualifier before it",

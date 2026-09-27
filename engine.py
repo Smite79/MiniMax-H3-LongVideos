@@ -170,6 +170,15 @@ APPLY_VERB = (
     r"taping|buckling|binding|shackling|"
     r"(?:puts?|putting|slips?|slipped|snaps?|snapped|clicks?|clicked|clamps?|"
     r"clamped)(?:\s+\S+){0,4}?\s+(?:on|onto|around|shut|closed)|"
+    # Tape is PRESSED, STUCK or SLAPPED on, and it goes OVER or ACROSS a mouth. None of
+    # that was an applying verb, so "presses a strip of duct tape over her mouth" put
+    # nothing on anybody as far as the state knew -- and with nothing tracked, the
+    # next shot said "every restraint stays fastened" and never named the tape. It came
+    # off by the next beat. REPORTED.
+    r"(?:puts?|putting|places?|placed|placing|presses|pressed|pressing|sticks?|stuck|"
+    r"sticking|slaps?|slapped|slapping|smooths?|smoothed|smoothing|plasters?|"
+    r"plastered|plastering)(?:\s+\S+){0,5}?\s+(?:over|across|on|onto)\s+"
+    r"(?:[\w'’]+\s+){0,2}?(?:mouth|lips|eyes|face|wrists?|ankles?|hands?)|"
     r"(?:tapes|cuffs|chains|straps|binds|ties|locks|shackles|clips|hooks|wraps)\s+"
     r"(?:\w+\s+){0,2}?(?:her|his|their|the)\s+(?:\w+\s+){0,2}?"
     r"(?:wrists?|ankles?|hands?|feet|legs?|arms?|neck|throat|waist|knees?|thumbs?)|"
@@ -461,7 +470,8 @@ def hardware_spans(text):
     for row in raw:
         if row[0] not in PART_VARIES:
             continue
-        _pt = _nearest_part(parts, row[3], _ats)
+        _pt = (_nearest_part(parts, row[3], _ats)
+               or _instrument_part(text, row[3], parts, [r for r in raw if r is not row]))
         if _pt:
             row[1] = _pt
         elif any(c != row[0] for c, _a in _ats) and _runs_to(text, row[3]):
@@ -617,6 +627,34 @@ def _nearest_part(parts, at, ats):
             break
         return name
     return ""
+
+
+_WITH_BEFORE = _rx(r"\b(?:with|using)\s+(?:(?:a|an|the|some|more|her|his|their|"
+                   r"(?:a\s+)?(?:strips?|lengths?|pieces?|coils?|roll|bits?)\s+of)\s+)*$")
+
+
+def _instrument_part(text, at, parts, rows):
+    """The part an item introduced by WITH belongs to, or "".
+
+    English puts the part FIRST there: "ties her ankles with rope", "tapes her mouth
+    shut with duct tape". _nearest_part looks only forward and found nothing, so the
+    rope took the hardware table's default -- the wrists -- and the tape became a
+    second restraint on the wrists beside the one on her mouth. REPORTED as
+    restraints turning up on the wrong limb.
+
+    The part named before it in the same sentence, with no other item between; failing
+    that, the part of the item it belongs to ("gags her with duct tape" -- the tape IS
+    the gag)."""
+    if not _WITH_BEFORE.search(text[:at]):
+        return ""
+    start = max([m.end() for m in re.finditer(r"[.;!?]", text[:at])], default=0)
+    earlier = [(p, q) for p, q in parts if start <= q < at]
+    for name, q in reversed(earlier):
+        if any(q < r[3] < at for r in rows):
+            break
+        return name
+    prior = [r for r in rows if start <= r[3] < at]
+    return prior[-1][1] if prior else ""
 
 
 def position_spans(text):
