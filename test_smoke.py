@@ -3890,6 +3890,113 @@ def test_restraints_and_lowered_clothes_hold_their_place():
               ["Ana pulls her shorts down, showing her black thong.", "Ana waits."], mem=ana)[0])
 
 
+def test_equipment_placement_posture_and_removals_hold():
+    """REPORTED together: with the camera following the action, bondage equipment and
+    where it holds somebody dropped out of the beats; removed clothing came back; and a
+    woman standing when she was tied was on the floor with her legs spread next beat."""
+    print("\n=== equipment keeps its place, she keeps her feet, clothes stay off ===")
+    mem = "Ana: she, 25, dark hair, a grey t-shirt, black jeans.\nDan: he, 35, a black jacket, jeans."
+
+    def shots(scene, beats, m=mem, **kw):
+        return [" ".join(x.split()) for x in _shots_of(run_node(
+            scene + "\n\n" + "\n\n".join(beats), character_memory=m, plan_only=True, **kw))]
+
+    sh = shots("A dungeon with a wooden cross against the wall.",
+               ["Ana stands in front of the cross.", "Dan straps Ana's wrists and ankles to the cross.",
+                "Dan walks to the table and picks up a crop.", "Ana strains against the straps."])
+    check("the straps, both limbs and the cross ride every later shot",
+          all("straps on the wrists and on the ankles, fast at the cross" in x for x in sh[2:]),
+          sh[-1][-260:])
+    check("...including the beat that names the straps itself -- not 'every restraint'",
+          "Every restraint" not in sh[3], sh[3][-200:])
+    sh = shots("A basement with a steel pole.",
+               ["Ana stands by the pole.", "Dan chains Ana's wrists to the pole above her head.",
+                "Dan walks out of the room.", "Ana pulls at the chains."])
+    check("coming back to her after the camera left, the chain is still on the pole",
+          "chain on the wrists, fast at the pole" in sh[3], sh[3][-220:])
+    sh = shots("A bedroom.", ["Ana sits on the chair.", "Dan straps Ana's ankles to the chair legs.",
+                              "Dan paces the room."])
+    check("ankle straps are on the ankles, fast at the chair -- not the wrists, not her legs",
+          "straps on the ankles, fast at the chair" in sh[2]
+          and "holding the wrists" not in sh[2] and "on the legs" not in sh[2], sh[2][-220:])
+    sh = shots("A bedroom with a four-poster bed.",
+               ["Ana stands by the bed.", "Dan ties Ana's wrists to the bedpost with silk scarves.",
+                "The camera follows Dan as he walks to the window.", "Ana watches Dan."])
+    check("silk scarves tied on are tracked, and held at the bedpost while the camera follows him",
+          all("Ana:" in x and "silk scarves on the wrists, fast at the bedpost" in x for x in sh[2:]),
+          sh[2][-240:])
+    for b in ("Ana wears a red silk scarf.", "Ana ties her hair back with a scarf.",
+              "Dan ties the bag with a belt."):
+        check(f"...while a scarf or belt that ties nobody is not a restraint: {b}",
+              not S.restraint_present(b), b)
+    sh = shots("A basement.", ["Ana stands by the wall.", "Dan cuffs Ana's wrists behind her back.",
+                               "Dan walks to the table.", "Ana looks at Dan."])
+    check("standing when restrained is said, feet on the floor, every later shot",
+          all("Ana is standing, upright on both feet" in x for x in sh[1:]), sh[-1][-200:])
+    check("...while standing unrestrained is still the unsaid default",
+          not any("is standing" in x for x in shots("A room.", ["Ana stands by the wall.",
+                                                               "Ana looks at the door."])))
+    wear = "Ana: she, 25, a denim jacket over a white tank top, black jeans, sneakers."
+    sh = shots("A bedroom.", ["Ana takes off her denim jacket.", "Ana sits down.", "Ana looks up."], m=wear)
+    check("the shot after a removal says what she DOES wear, never the garment",
+          "Ana wears only her white tank top, black jeans and sneakers now" in sh[1]
+          and "denim jacket" not in sh[1] and "denim jacket" not in sh[2], sh[1][-200:])
+    check("...once, not every shot after", "wears only" not in sh[2])
+    tagged = "Ana: <Picture 1>, she, 25, a denim jacket over a white tank top, black jeans, sneakers."
+    sh = shots("A bedroom.", ["Ana takes off her denim jacket.", "Ana sits down.", "Ana looks up."],
+               m=tagged, ref_image_1=torch.rand(1, H, W, 3))
+    check("...and on every shot a tagged picture rides, since it shows the full outfit",
+          all("Ana wears only her white tank top" in x and "denim jacket" not in x for x in sh[1:]),
+          sh[-1][-200:])
+    sh = shots("A bedroom.", ["Ana takes off her denim jacket.", "Ana sits down.",
+                              "Dan tosses her denim jacket onto the chair."], m=wear)
+    check("...and where the beat names what came off",
+          "Ana wears only her white tank top" in sh[2], sh[2][-200:])
+
+
+def test_metal_restraints_hold_like_the_rest():
+    """Asked: does the same hold for metal and steel restraints? It did not, in three
+    ways: "strains against THE manacles" re-read the noun as manacles going on and the
+    bare record replaced the iron manacles chained to the beam; "locks leg irons on her
+    ankles and steel cuffs on her wrists" lost the cuffs, whose clause had no verb of its
+    own; and "Dan walks away" dropped the chained woman -- and her collar -- as though
+    the camera had left with him."""
+    print("\n=== metal restraints keep their name, place and anchor ===")
+    mem = "Ana: she, 25, dark hair, a grey t-shirt, black jeans.\nDan: he, 35, a black jacket, jeans."
+
+    def last(beats):
+        return " ".join(_shots_of(run_node("A basement.\n\n" + "\n\n".join(beats),
+                                            character_memory=mem, plan_only=True))[-1].split())
+
+    for beats, want in (
+            (["Ana stands by the pole.", "Dan locks Ana's wrists to the steel pole with metal handcuffs.",
+              "The camera follows Dan to the table.", "Ana pulls against the handcuffs."],
+             "metal handcuffs on the wrists, fast at the pole"),
+            (["Ana stands in the middle of the room.",
+              "Dan locks steel shackles around Ana's ankles and chains them to the floor ring.",
+              "Dan walks to the door.", "Ana tugs at the shackles."],
+             "steel shackles on the ankles, fast at the floor ring"),
+            (["Ana stands under the beam.",
+              "Dan locks Ana's wrists in iron manacles chained to the ceiling beam.",
+              "Dan circles her.", "Ana strains against the manacles."],
+             "iron manacles on the wrists, fast at the ceiling beam"),
+            (["Ana stands in the cell.",
+              "Dan locks leg irons on Ana's ankles and steel cuffs on her wrists behind her back.",
+              "Dan leaves the cell.", "Ana shuffles in the leg irons."],
+             "leg irons on the ankles and steel cuffs on the wrists"),
+            (["Ana stands by the wall.",
+              "Dan padlocks a steel collar around Ana's neck and chains it to the wall.",
+              "Dan walks away."],
+             "steel collar round the neck, fast at the wall")):
+        s = last(beats)
+        check(f"held with its place and anchor: {want}", want in s, s[-260:])
+        check(f"...and she stays on her feet: {want[:30]}", "Ana is standing, upright on both feet" in s)
+    check("walking to the door after locking the cuffs fastens nothing to the door",
+          S.engine.anchor_in("Dan locks the cuffs on Ana and walks to the door.") == "")
+    check("putting the rope on the table puts it on nobody",
+          not S.engine.applies_hardware("Dan puts the rope on the table."))
+
+
 def test_only_the_speaker_has_a_voice():
     """REPORTED: other characters babbling in a beat where only one has a line.
 
@@ -6826,8 +6933,11 @@ def test_a_collar_chained_to_a_wall_stays_on():
     check("every shot after the first is tethered",
           all("at the wall" in s for s in shots[1:]),
           f"{[('at the wall' in s) for s in shots]}")
+    # The anchor now sits on the item it holds, beside the part: "the steel collar
+    # round the neck, fast at the wall".
     check("...and it is the NECK being held, not the wrists",
-          all("holding the neck fast at the wall" in s for s in shots[1:]),
+          all(re.search(r"round the neck, fast at the wall|holding the neck fast at the wall", s)
+              for s in shots[1:]),
           f"{[('holding the neck' in s) for s in shots]}")
     check("no shot claims the wrists", not any("the wrists" in s for s in shots))
     check("the hardware stays fastened in every later shot",
@@ -6943,7 +7053,10 @@ def test_two_restraints_put_on_together_both_survive():
     # "Ana looks at the door" must not relocate the camera into a door.
     check("a door does not move the shot",
           not any("in the door," in x for x in shots))
-    held = [x.split(" stay closed")[0].split(" stays closed")[0] for x in shots[1:]]
+    # The hold sentence alone: the beat may name the cuffs itself ("twists her wrists
+    # in the cuffs"), and the hold now names them too rather than blanking them.
+    held = [x.split(" stay closed")[0].split(" stays closed")[0].split(". ")[-1]
+            for x in shots[1:]]
     check("the cuffs are listed once", all(h.count("cuffs") <= 1 for h in held),
           f"{[h[-90:] for h in held]}")
 
@@ -9200,6 +9313,8 @@ def main():
     test_a_street_is_not_told_it_is_a_room()
     test_a_lowered_garment_is_not_removed()
     test_restraints_and_lowered_clothes_hold_their_place()
+    test_equipment_placement_posture_and_removals_hold()
+    test_metal_restraints_hold_like_the_rest()
     test_a_line_is_locked_to_the_person_who_says_it()
     test_her_look_does_not_land_on_him()
     test_a_look_survives_the_next_beat()

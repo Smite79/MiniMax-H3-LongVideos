@@ -4750,11 +4750,16 @@ def hardware_where(restraints):
         item, part = getattr(r, "item", ""), getattr(r, "part", "")
         if not item or not part:
             continue
-        at = (part, getattr(r, "position", "") or "")
+        at = (part, getattr(r, "anchor", "") or "")
         out.setdefault(item, [])
         if at not in out[item]:
             out[item].append(at)
     return out
+
+
+def anchors_placed(where):
+    """True when some item in `where` carries its own anchor -- see _where_of."""
+    return any(a for v in (where or {}).values() for _p, a in v)
 
 
 def _where_of(item, where, who=""):
@@ -4769,10 +4774,12 @@ def _where_of(item, where, who=""):
                    if k.split() and k.split()[-1].lower() == head), None)
     if not at:
         return ""
-    said = []
-    # The PART only: where the arms are is the pose sentence's to say, and it does --
-    # repeating "behind the back" here spent the words the shot's other guards needed.
-    for part, _position in at:
+    said, fast = [], []
+    # The PART, and what it is fastened TO -- but not where the arms are: that is the
+    # pose sentence's to say, and it does. The anchor is read per item from the state,
+    # so the straps on her ankles are "fast to the chair" -- where the one anchor clause
+    # for the whole hold said "holding the wrists fast at the chair" for ankle straps.
+    for part, anchor in at:
         if who:
             prep = "over" if part in ("mouth", "eyes", "head") else "on"
             s = f"{prep} {who}'s {part}"
@@ -4780,7 +4787,12 @@ def _where_of(item, where, who=""):
             s = _PART_AT.get(part, f"on the {part}")
         if s not in said:
             said.append(s)
-    return " and ".join(said)
+        if anchor and anchor not in fast:
+            fast.append(anchor)
+    out = " and ".join(said)
+    if fast:
+        out += ", fast at the " + " and the ".join(fast) + ","
+    return out
 
 
 def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=False,
@@ -4828,7 +4840,8 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
         verb = "stays"
     it, was = ("they", "were") if plural else ("it", "was")
     _soft_word = re.compile(r"\b(?:rope|ropes|cord|cords|twine|string|strap|straps|"
-                            r"tape|scarf|belt|stocking|stockings|zip\s*ties?|"
+                            r"tape|scarf|scarves|belt|stocking|stockings|tights|necktie|"
+                            r"neckties|ties|bandanas?|sheets?|zip\s*ties?|"
                             r"cable\s*ties?|laces?)\b", re.I)
     soft = bool(items) and all(_soft_word.search(i) for i in items)
     shut = "tied and holding as" if soft else "closed and fastened as"
@@ -5697,18 +5710,27 @@ def posture_cleared(beat, poses):
     return out
 
 
-def posture_hold(poses, described):
+def posture_hold(poses, described, upright=()):
     """One short sentence keeping people in the pose an earlier beat put them in.
 
     Only for people this shot DESCRIBES -- a pose belonging to somebody the text
     does not mention is a pose for nobody, and the model draws the person that
     sentence implies. Short on purpose: this is latched, so it lands in every shot
     after the one that stages it, and a long clause repeated is the guard bloat
-    this node was rebuilt to escape."""
+    this node was rebuilt to escape.
+
+    STANDING IS NOT SAID -- it is the default -- EXCEPT for somebody in restraints
+    (`upright`). There the shot describes hardware holding the body and the body
+    straining against it, and standing is not what that implies: a woman standing
+    when she was tied was on the floor with her legs spread by the next beat.
+    REPORTED. For her it is said, and said as feet on the floor."""
+    upright = set(upright or ())
     who = [(n, p) for n, p in (poses or {}).items()
-           if n in set(described or []) and p != "standing"]
+           if n in set(described or []) and (p != "standing" or n in upright)]
     if not who:
         return ""
+    if len(who) == 1 and who[0][1] == "standing":
+        return f" {who[0][0]} is standing, upright on both feet."
     if len(who) == 1:
         return f" {who[0][0]} is {who[0][1]}."
     _poses = {p for _n, p in who}
@@ -6759,6 +6781,46 @@ def under_displaced(garment, sheet, moved=()):
             if g != garment and engine.is_undergarment(g)
             and regs & set(engine.regions_of(g))
             and g.split()[-1].lower() not in moved_heads]
+
+
+def off_now_clause(name, line_now, gone_items, beat="", after_removal=False,
+                   pictured=False):
+    """Say what somebody is wearing now, where something could put a removed garment back.
+
+    The text already stops describing it, and that is not enough on its own: three
+    things show the model the garment again --
+      * a tagged picture of the person, taken in the full outfit, riding every shot;
+      * the shot after a removal carrying the last frame as a reference, which is
+        whatever state the removal reached;
+      * the beat itself naming it -- "tosses her jacket onto the chair".
+    REPORTED as clothing coming back once removed.
+
+    POSITIVE, and it never names what came off: naming a garment is what puts it on,
+    which is this file's standing rule (see the `revived` note). So it says what IS
+    worn -- "Ana wears only her white tank top, black jeans and sneakers now" -- read
+    from the entry as the shot will print it. Said only where one of the three is
+    true; "" otherwise, and "" when the entry lists nothing worn."""
+    if not name or not gone_items:
+        return ""
+    named = bool(beat) and any(
+        re.search(r"\b" + re.escape(str(i).split()[-1]) + r"\b", beat, re.I)
+        for i in gone_items if str(i).split())
+    if not (pictured or after_removal or named):
+        return ""
+    # The entry's own items, as written ("a white tank top"), not the reader's
+    # shortening of them ("top") -- the description is the continuity.
+    # Tags out: a picture is claimed where its entry names it, once -- a second
+    # <Picture N> here would be one more naming of it (see _PICTURE_TAG).
+    body = _PICTURE_TAG.sub("", (line_now or "").split(":", 1)[-1])
+    worn = [re.sub(r"^(?:a|an|the|some)\s+", "", piece.strip().rstrip("."), flags=re.I)
+            for piece in body.split(",")
+            if piece.strip() and engine.garment_words(piece)]
+    if not worn:
+        return ""
+    what = worn[0] if len(worn) == 1 else ", ".join(worn[:-1]) + " and " + worn[-1]
+    pron = {"she": "her", "he": "his", "they": "their"}.get(sheet_pronoun(line_now) or "", "their")
+    verb = "wear" if pron == "their" else "wears"
+    return f" {name} {verb} only {pron} {what} now."
 
 
 def displaced_hold(items, dest=None, beneath=None):
@@ -8382,6 +8444,8 @@ class H3LongVideos:
         plan = ShotPlan()
         gone, shown = [], []
         gone_by = {}
+        removed_in = {}             # 0-based shot -> what came off in it -- see off_now_clause
+        offnow_shots = []           # shots told a garment is off, over a picture or a mention
         _extras_seen = False        # the film has staged people the sheet does not name
         untracked_strip = []        # (shot, items) a group removal the sheet cannot hold
         inferred_sound = []         # shots given one derived from their action
@@ -8604,7 +8668,19 @@ class H3LongVideos:
                 _held_on = [n for n, _l in sheet_lines(sheet)
                             if n and n in (restrained_who or set())
                             and n in (_was or []) and n not in (active or [])]
-                if _held_on and not _leaves_room and not leaves_in(body, sheet, _was):
+                # "Walks away" is not "walks out": with the camera held he goes across the
+                # frame and she is still in it, chained where she was. Dropped, her entry
+                # and her hardware left the shot, and the next shot opened on a frame
+                # without them. REPORTED as equipment dropped when the camera follows the
+                # action. Only an exit -- out, leaves, through the door -- lets her go.
+                _walks_off = bool(
+                    re.search(r"\b(?:walks?|walked|steps?|stepped|moves?|moved|wanders?|"
+                              r"strolls?|turns?|turned|backs?|drifts?|paces?)\s+"
+                              r"(?:\w+\s+)?(?:away|off)\b", body or "", re.I)
+                    and not re.search(r"\b(?:out|outside|leaves?|left|exits?|door|doorway)\b",
+                                      body or "", re.I))
+                if (_held_on and not _leaves_room
+                        and (_walks_off or not leaves_in(body, sheet, _was))):
                     _keep = set(list(active or []) + _held_on)
                     active = [n for n, _l in sheet_lines(sheet) if n in _keep]
                     shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
@@ -8799,6 +8875,7 @@ class H3LongVideos:
                     f"beat does. Reword the beat if it should stay off")
             if toks:
                 stripped_shots.add(len(plan))
+                removed_in[len(plan)] = list(toks)
                 gone.extend(t for t in toks if t not in gone)
                 if extras_in(body):
                     untracked_strip.append((len(plan) + 1, list(toks)))
@@ -9181,7 +9258,8 @@ class H3LongVideos:
                         else posture_hold({n: p for n, p in poses.items()
                                            if n not in _pose_now},
                                           active if character_guard else
-                                          [n for n, _ in sheet_lines(_who_sheet) if n]))
+                                          [n for n, _ in sheet_lines(_who_sheet) if n],
+                                          upright=set(_hw_by_wearer) | set(restrained_who or ())))
             if _posture:
                 posture_shots.append(len(plan) + 1)
             poses.update(_pose_now)
@@ -9475,7 +9553,7 @@ class H3LongVideos:
                 # her; now that a fastened person stays in frame it is the ordinary
                 # case, so the sentence has to carry the attribution.
                 _own = [n for n in (_described or []) if _hw_by_wearer.get(n)]
-                _split = (len(_own) > 1 and not _named_item
+                _split = (len(_own) > 1
                           and len({tuple(merge_hardware_names(_hw_by_wearer[n]))
                                    for n in _own}) > 1)
 
@@ -9495,7 +9573,9 @@ class H3LongVideos:
                     _parts = [
                         _placed_hold(
                             ", ".join(merge_hardware_names(_hw_by_wearer[n])),
-                            [n], _described, anchor=("" if _anchor_now else anchored),
+                            [n], _described,
+                            anchor=("" if (_anchor_now or anchors_placed(_placed_on([n])))
+                                    else anchored),
                             rigid=bool(rigid) and rigid_hardware(
                                 " ".join(_hw_by_wearer[n])),
                             posed=bool(posed),
@@ -9506,12 +9586,20 @@ class H3LongVideos:
                     _place_words = sum(w for _h, w in _parts)
                 else:
                     hold, _place_words = _placed_hold(
-                        _here_item if not _named_item else "",
-                        _wearers, _described, anchor=("" if _anchor_now else anchored),
+                        # NAMED EVEN WHEN THE BEAT NAMES IT. "Ana strains against the
+                        # straps" blanked the item -- and with it where it is and what
+                        # it is fastened to -- to "every restraint". REPORTED as the
+                        # item and its placement dropped from the beats.
+                        _here_item,
+                        _wearers, _described,
+                        # Each item carries its own anchor where the state has one --
+                        # see _where_of -- and the one clause for the whole hold goes.
+                        anchor=("" if (_anchor_now or anchors_placed(
+                            _placed_on(_described or list(_state.people)))) else anchored),
                         rigid=_here_rigid, posed=bool(posed),
                         part=held_part(_here_items or ([_here_item] if _here_item else [])),
                         where=_placed_on(_described or list(_state.people)))
-                if _here_item and not _named_item:
+                if _here_item:
                     named_shots.append(len(plan) + 1)
             else:
                 hold = own_hold(hold, _wearers, _described)
@@ -9687,9 +9775,24 @@ class H3LongVideos:
                 _faces = dialogue_gaze(len(_described))
                 if _faces:
                     dialogue_gaze_shots.append(len(plan) + 1)
+            # What came off stays off, where a picture or the beat could put it back.
+            _offnow = ""
+            _prev_off = set(removed_in.get(len(plan) - 1, ()))
+            _now_lines = dict(sheet_lines(shot_scene or ""))
+            _orig_lines = dict(sheet_lines(sheet))
+            for _n in [n for n in (_described or []) if n in _now_lines]:
+                _items = [t for t in gone
+                          if _n in gone_by.get(t, ()) and t not in (toks or [])]
+                _offnow += off_now_clause(
+                    _n, _now_lines[_n], _items, beat=body,
+                    after_removal=any(_n in gone_by.get(t, ()) for t in _prev_off),
+                    pictured=bool(picture_tags(_orig_lines.get(_n, ""))))
+            if _offnow:
+                offnow_shots.append(len(plan) + 1)
             _guards = [
                 (1, "removal", tail),        # the beat's own action, completing
                 (1, "wearing", _wearing),    # ...and its mirror, a garment going on
+                (2, "offnow", _offnow),      # ...and what came off, still off
                 (2, "revealed", _revealed),  # what shows where it was
                 (2, "under", _under),         # ...and what is underneath, still on
                 (2, "bare", _bare),          # ...or that nothing does
@@ -9727,7 +9830,7 @@ class H3LongVideos:
                 crowded.append((len(plan) + 1, _dropped))
             for _gone in _dropped:
                 _tracker = {
-                    "wearing": wearing_shots, "fall": fall_shots,
+                    "wearing": wearing_shots, "fall": fall_shots, "offnow": offnow_shots,
                     "travel": travel_shots, "where": where_shots,
                     "pace": paced_shots, "device": device_shots,
                     "state": stated_shots, "posture": posture_shots,

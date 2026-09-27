@@ -102,7 +102,24 @@ PARTS = (
     (r"hands?", "hands"),
     (r"feet|foot", "feet"),
 )
-PART_VARIES = frozenset({"chain", "rope", "straps", "tape", "steel cable", "tether",
+# Things that are not restraints until somebody ties with them: "ties her wrists to
+# the bedpost WITH silk scarves". Read only as the instrument of a tying verb, so a
+# scarf somebody wears stays a garment. Unread, the scarves -- and the bedpost with
+# them -- were never tracked and dropped out of every later shot. REPORTED.
+SOFT_TIES = (
+    (r"scar(?:f|ves)", "scarves"), (r"stockings?|pantyhose|tights", "stockings"),
+    (r"belts?", "belt"), (r"neck\s?ties?|ties?", "ties"), (r"(?:bed\s?)?sheets?", "sheet"),
+    (r"bandann?as?", "bandana"), (r"(?:shoe)?laces?", "laces"),
+)
+_RESTRAINABLE = re.compile(r"\b(?:wrists?|ankles?|hands?|arms?|legs?|feet|foot|knees?|"
+                           r"thumbs?|elbows?|thighs?|neck|throat|mouth|eyes)\b", re.I)
+_SOFT_TIE = re.compile(
+    r"\b(?:with|using)\s+(?:(?:a|an|the|her|his|their|two|some|a\s+pair\s+of|pairs\s+of|"
+    r"silk|satin|leather|nylon|cotton|lace|black|red|white|long|torn|knotted)\s+){0,3}("
+    + "|".join(p for p, _c in SOFT_TIES) + r")\b", re.I)
+
+PART_VARIES = frozenset({"scarves", "stockings", "belt", "ties", "sheet", "bandana", "laces",
+                         "chain", "rope", "straps", "tape", "steel cable", "tether",
                          "steel belt", "cling film"})
 
 REGION_OF = (
@@ -151,7 +168,13 @@ ANCHORS = (r"walls?|floors?|grounds?|ceilings?|pillars?|columns?|posts?|rails?|"
            r"railings?|bars?|rings?|hooks?|pipes?|radiators?|beams?|girders?|"
            r"struts?|stakes?|eye\s?bolts?|brackets?|cages?|fences?|grates?|"
            r"grilles?|bed\s?frames?|bed\s?posts?|headboards?|bedsteads?|beds?|"
-           r"bunks?|benches?|chairs?|tables?|desks?|ladders?|anchors?|loops?")
+           r"bunks?|benches?|chairs?|tables?|desks?|ladders?|anchors?|loops?|"
+           # The furniture a scene is BUILT round. Missing, "straps her to the cross"
+           # fastened her to nothing, and every later shot dropped where she was held.
+           # REPORTED as bondage equipment and its placement dropped from the beats.
+           r"(?:st\.?\s+andrew'?s\s+)?crosse?s?|x-?frames?|frames?|poles?|racks?|"
+           r"stocks|pillor(?:y|ies)|sawhorses?|trees?|door\s?handles?|doors?|"
+           r"handles?|banisters?|bannisters?|stair\s?rails?|trellis(?:es)?")
 
 _DET = (r"(?<!\bthe\s)(?<!\ba\s)(?<!\ban\s)(?<!\bthese\s)(?<!\bthose\s)"
         r"(?<!\btwo\s)(?<!\bsome\s)(?<!\bmore\s)(?<!\bhis\s)(?<!\bher\s)"
@@ -163,13 +186,20 @@ APPLY_VERB = (
     r"buckled|fettered|"
     r"hog-?(?:ties|tie|tied|tying|cuffs|cuffed|chains|chained)|"
     r"truss(?:es|ing)|zip[-\s]?(?:ties?|tied|tying)|cable[-\s]?(?:ties?|tied|tying)|"
-    r"manacles|hobbl(?:es|ed|ing)|fetters|pinion(?:s|ed|ing)?|"
+    # A verb only where no determiner makes it the noun: "strains against THE manacles"
+    # was read as manacles going on, and the new bare record replaced the iron manacles
+    # chained to the beam -- anchor and all.
+    + _DET + r"manacles|hobbl(?:ed|ing)|" + _DET + r"hobbles|" + _DET + r"fetters|"
+    r"pinion(?:s|ed|ing)?|"
     r"restrain(?:s|ed|ing)|immobili[sz]e[sd]?|"
     r"handcuffing|cuffing|chaining|locking|fastening|securing|tethering|tying|"
     r"strapping|clipping|bolting|attaching|gagging|blindfolding|collaring|"
     r"taping|buckling|binding|shackling|"
     r"(?:puts?|putting|slips?|slipped|snaps?|snapped|clicks?|clicked|clamps?|"
-    r"clamped)(?:\s+\S+){0,4}?\s+(?:on|onto|around|shut|closed)|"
+    r"clamped)(?:\s+\S+){0,4}?\s+(?:on|onto|around|shut|closed)"
+    # ...but not onto furniture: "puts the rope on the table" restrains nobody.
+    r"(?!\s+(?:the|a|an)\s+(?:table|floor|bed|chair|shelf|counter|desk|bench|ground|"
+    r"dresser|nightstand|sofa|couch|stool|tray|side|top)\b)|"
     # Tape is PRESSED, STUCK or SLAPPED on, and it goes OVER or ACROSS a mouth. None of
     # that was an applying verb, so "presses a strip of duct tape over her mouth" put
     # nothing on anybody as far as the state knew -- and with nothing tracked, the
@@ -415,7 +445,17 @@ ANCHOR_DET = (r"(?:the|a|an|her|his|its|their|one|another|each|either|that|"
               r"this|both)\s+(?:(?:other|second|third|first|far|near|nearest|"
               r"opposite|left|right|upper|lower|top|bottom|same|nearby|steel|"
               r"iron|metal|heavy|small|large|wooden|old|thick)\s+){0,2}")
-_ANCHOR_AT = _rx(r"\bto\s+" + ANCHOR_DET + r"(" + ANCHORS + r")\b")
+# Two anchor nouns together are ONE anchor -- "the ceiling hook", "the wall ring" --
+# not the first of them: the hook came back as "the ceiling".
+_MOTION = _rx(r"\b(?:walks?|walked|walking|goes|went|runs?|ran|steps?|stepped|heads?|"
+               r"headed|moves?|moved|crosses|crossed|comes?|came|returns?|returned|"
+               r"turns?|turned|backs?|wanders?|strides?|strode|hurries|hurried|paces|"
+               r"paced|drifts?|leads?|led)\b")
+_FASTENS = _rx(r"\b(?:chains?|cuffs?|ties?|straps?|locks?|clips?|hooks?|fastens?|"
+               r"secures?|binds?|tethers?|attaches?|bolts?|padlocks?|shackles?|lashes?|"
+               r"tapes?|leashes?|anchors?)\b")
+_ANCHOR_AT = _rx(r"\bto\s+" + ANCHOR_DET + r"((?:(?:" + ANCHORS + r")\s+)?(?:" + ANCHORS
+                 + r"))\b")
 _APPLY = _rx(r"\b(?:" + APPLY_VERB + r")\b")
 _RELEASE = _rx(r"\b(?:" + RELEASE_VERB + r")\b")
 _PLACE_IN = _rx(r"\b(?:in|into|inside|through|down|along|across|to|onto|at)\s+"
@@ -465,6 +505,23 @@ def hardware_spans(text):
                 noun.lower() != canon and not canon.endswith("s")):
             written = f"{adj} {canon}".strip().lower()
         raw.append([canon, part, written, m.start()])
+    # Soft ties, as the instrument of a tying verb only -- see SOFT_TIES.
+    for m in _SOFT_TIE.finditer(text):
+        if not _APPLY.search(re.split(r"[.;!?]", text[:m.start()])[-1]):
+            continue
+        # ...and only on a LIMB, or to something: "ties her hair back with a scarf" and
+        # "ties the bag with a belt" restrain nobody.
+        _clause = (re.split(r"[.;!?]", text[:m.start()])[-1]
+                   + re.split(r"[.;!?]", text[m.start():])[0])
+        if not (_RESTRAINABLE.search(_clause) or anchor_spans(_clause)):
+            continue
+        if any(r[3] == m.start(1) for r in raw):
+            continue
+        noun = m.group(1)
+        canon = next(c for p, c in SOFT_TIES if re.fullmatch(p, noun, re.I))
+        lead = re.sub(r"^(?:with|using)\s+(?:(?:a|an|the|her|his|their|two|some)\s+"
+                      r"|(?:a\s+)?pairs?\s+of\s+)*", "", m.group(0), flags=re.I)
+        raw.append([canon, "wrists", re.sub(r"\s+", " ", lead).strip().lower(), m.start(1)])
     _ats = [(c, at) for c, _pt, _w, at in raw]
     _tether = []
     for row in raw:
@@ -588,10 +645,19 @@ def _bare_off(p, regions):
             p.bare.remove(r)
 
 
+_FURNITURE_BEFORE = _rx(r"\b(?:chair|table|bed|desk|bench|stool|sofa|couch|armchair|"
+                        r"frame|cross|rack)s?\s*$")
+
+
 def part_spans(text):
-    """Every body part named, as (name, at)."""
+    """Every body part named, as (name, at).
+
+    Not a piece of furniture's: "straps her ankles to the chair legs" named her
+    ankles and the CHAIR's legs, and the straps were recorded on both."""
     out = []
     for m in _PART_ONE.finditer(text or ""):
+        if _FURNITURE_BEFORE.search((text or "")[:m.start()]):
+            continue
         out.append((next(n for p, n in PARTS
                          if re.fullmatch(p, m.group(1), re.I)), m.start()))
     return out
@@ -629,8 +695,9 @@ def _nearest_part(parts, at, ats):
     return ""
 
 
-_WITH_BEFORE = _rx(r"\b(?:with|using)\s+(?:(?:a|an|the|some|more|her|his|their|"
-                   r"(?:a\s+)?(?:strips?|lengths?|pieces?|coils?|roll|bits?)\s+of)\s+)*$")
+_WITH_BEFORE = _rx(r"\b(?:with|using)\s+(?:(?:a|an|the|some|more|her|his|their|two|"
+                   r"silk|satin|leather|nylon|cotton|black|red|white|long|"
+                   r"(?:a\s+)?(?:strips?|lengths?|pieces?|coils?|roll|bits?|pairs?)\s+of)\s+)*$")
 
 
 def _instrument_part(text, at, parts, rows):
@@ -682,6 +749,12 @@ def anchor_spans(text):
     t, out = text or "", []
     for m in _ANCHOR_AT.finditer(t):
         clause = re.split(r"[.;!?]", t[:m.start()])[-1]
+        # ...and in ITS OWN part of the sentence: "locks the cuffs on her and walks to
+        # the door" fastens nothing to the door. A motion verb after the last "and" or
+        # comma, with no fastening verb beside it, is somebody going somewhere.
+        _sub = re.split(r"[,;]|\b(?:and|then|while)\b", clause)[-1]
+        if _MOTION.search(_sub) and not _FASTENS.search(_sub) and not _APPLY.search(_sub):
+            continue
         if _APPLY.search(clause) or re.search(
                 r"\b(?:chains?|ropes?|cords?|cables?|leash(?:es)?|straps?|"
                 r"tethers?|links?|lines?)\s+(?:\S+\s+){0,4}?"
@@ -729,6 +802,12 @@ def garments_in(text):
 
 
 _CLAUSE_BOUNDARY = re.compile(r"[,;.!?]|\b(?:and|while)\b", re.I)
+# From one applied item to the next with nothing but its object, a part and "and"
+# between -- no verb of its own, no sentence end. See SceneState.read.
+_SHARED_OBJECT = re.compile(
+    r"^[^.;!?]{0,80}?\band\s+(?:(?:a|an|the|some|two|her|his|their|pair\s+of|set\s+of|"
+    r"steel|metal|iron|leather|chrome|heavy|black|silver|rubber|nylon|padded|thick|"
+    r"thin|matching|locking)\s+)*$", re.I)   # no verb of its own: "and PUTS the rope" is not
 
 
 _ONLY_A_DETERMINER = re.compile(
@@ -1315,6 +1394,7 @@ class SceneState:
         releasing = bool(_RELEASE.search(beat))
 
         if applying or releasing:
+            _last = None            # (wearer, at) of the last item this beat applied
             for canon, part, written, at in spans:
                 clause, lo = _clause_at(beat, at, boundaries)
                 item_at = at - lo
@@ -1322,21 +1402,39 @@ class SceneState:
                                 if m.start() <= item_at), default=-1)
                 release_at = max((m.start() for m in _RELEASE.finditer(clause)
                                   if m.start() <= item_at), default=-1)
-                if apply_at < 0 and release_at < 0:
+                # ONE VERB, TWO OBJECTS: "locks leg irons on her ankles AND steel cuffs
+                # on her wrists". The second clause has no verb of its own, so it was
+                # skipped and the cuffs were never on her. An object joined by "and"
+                # straight after an applied one, with no verb between, shares it.
+                _shares = bool(apply_at < 0 and release_at < 0 and _last is not None
+                               and _SHARED_OBJECT.match(beat[_last[1]:at]))
+                if apply_at < 0 and release_at < 0 and not _shares:
                     continue
                 local_who = names_in(clause, cast)
-                wearer = _wearer(clause, local_who or who, subject, cast)
+                wearer = (_last[0] if (_shares and not local_who)
+                          else _wearer(clause, local_who or who, subject, cast))
                 p = self.person(wearer)
                 if release_at >= 0:
                     keys = [k for k in list(p.hardware) if k[0] == canon]
                     for key in keys:
                         changed["released"].append((wearer, p.hardware.pop(key)))
                     continue
-                p.hardware[(canon, part)] = Restraint(
-                    written or canon, part,
-                    _nearest(position_spans(beat), at, spans),
-                    _nearest(anchor_spans(beat), at, spans), shot)
+                # A MENTION NEVER STRIPS A RECORD. The same piece named again -- "checks
+                # the cuffs are locked" -- keeps the fuller name it went on under and
+                # what it is fastened to, unless this text gives new ones.
+                _old = p.hardware.get((canon, part))
+                _item = written or canon
+                _pos = _nearest(position_spans(beat), at, spans)
+                _anc = _nearest(anchor_spans(beat), at, spans)
+                if _old is not None:
+                    if _old.item and len(_old.item) > len(_item) \
+                            and _item.split()[-1] in _old.item:
+                        _item = _old.item
+                    _pos = _pos or _old.position
+                    _anc = _anc or _old.anchor
+                p.hardware[(canon, part)] = Restraint(_item, part, _pos, _anc, shot)
                 changed["applied"].append((wearer, p.hardware[(canon, part)]))
+                _last = (wearer, at)
         if releasing and not spans:
             held = [n for n, q in self.people.items() if q.restrained()]
             wearer = next((n for n in who if n in held),
