@@ -1982,12 +1982,22 @@ def held_part_of(items):
 
     A limb position describes the ARMS, so this answers "wrists" for anything
     that holds them and defers to the item otherwise -- a collar's position is
-    never a limb position, and the constructor already refuses to give it one."""
-    text = " ".join(items or [])
-    for pat, _n, part in HARDWARE:
-        if re.search(r"\b(?:" + pat + r")\b", text, re.I) and part not in ("wrists",):
-            return part
-    return "wrists"
+    never a limb position, and the constructor already refuses to give it one.
+
+    Each item answers for itself, and a limb wins over a neck: this used to return the
+    first part that was not the wrists, so steel handcuffs beside a leather collar came
+    out "the neck are already behind the back when the hardware closes"."""
+    parts = []
+    for it in items or []:
+        for piece in re.split(r",|\s+and\s+", str(it or "")):
+            for pat, _n, part in HARDWARE:
+                if re.search(r"\b(?:" + pat + r")\b", piece, re.I):
+                    parts.append(part)
+                    break
+    if not parts or "wrists" in parts:
+        return "wrists"
+    limbs = [p for p in parts if p in ("ankles", "arms")]
+    return limbs[0] if limbs else parts[0]
 
 
 def staged_applications(beats):

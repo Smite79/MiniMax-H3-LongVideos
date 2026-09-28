@@ -473,7 +473,15 @@ def test_an_unstated_frame_becomes_a_portrait():
     check("a whole-body action gets a frame",
           "whole body" in S.frame_hold("McKenna serves the ball hard across the net."))
     check("...and so does a move", "whole body" in S.frame_hold("McKenna walks to the bench."))
-    check("a face acting does not", S.frame_hold("McKenna smiles.") == "")
+    # Every shot with somebody in it, now -- a face acting included. Left to the prior
+    # it was a portrait, and the clothes and restraints below the face were out of the
+    # picture and redrawn from nothing. REPORTED, and asked for in so many words: both
+    # characters entirely in the shot, so nothing is missed.
+    check("a face acting is held whole too", "whole body" in S.frame_hold("McKenna smiles."))
+    check("...and an empty frame gets nothing", S.frame_hold("Rain on the glass.", "", 0) == "")
+    check("a held keyframe is told to KEEP them whole, never to widen",
+          "stays whole" in S.frame_hold("Dan and Ana stand.", "", 2, held=True)
+          and "room around" not in S.frame_hold("Dan and Ana stand.", "", 2, held=True))
     # The author's camera always wins -- a close-up included, since somebody asked for it.
     check("a close-up in the beat stands it down",
           S.frame_hold("Close-up on her face as she serves.") == "")
@@ -500,8 +508,11 @@ def test_an_unstated_frame_becomes_a_portrait():
     # Asking for "head to feet, with the room around it" as well is a wider view than
     # the take opens on, and the model cuts to get it -- REPORTED as sex scenes turning
     # into side-angle shots in a different location.
+    # So it is told they STAY whole -- a keeping, which the frame it opens on already
+    # is -- and never to widen onto the room.
     check("a shot opening on a keyframe is not told to reframe",
-          "head to feet" not in sh[1] and "one unbroken take" in sh[1], sh[1][-90:])
+          "with the room around" not in sh[1] and "stays in the frame, head to feet" in sh[1]
+          and "one unbroken take" in sh[1], sh[1][-90:])
     check("the reason is reported", "frame HOLDS" in out[2], "")
     check("a destination stops at a conjunction",
           S.moved_to("McKenna walks to the bench and picks up a towel.") == "")
@@ -1878,7 +1889,8 @@ def test_any_restraint_holds_from_shot_to_shot():
                                    "Mara looks at her.\n\nAna breathes.",
                                    character_memory=mem, plan_only=True))
         for i, sh in enumerate(shots, 1):
-            if not HOLD.search(sh) or "Both arms are" not in sh:
+            # "Both of Ana's arms" with Mara in the shot -- see pose_of.
+            if not HOLD.search(sh) or not re.search(r"Both (?:of Ana's )?arms are", sh):
                 bad.append(f"{hw} shot {i}")
     check(f"every kind of hardware holds on every shot ({len(HARDWARE)} kinds)",
           not bad, "; ".join(bad[:4]))
@@ -1952,7 +1964,8 @@ def test_a_restraint_survives_the_shot_that_undresses_it():
     for i, sh in enumerate(shots, 1):
         check(f"shot {i} keeps the hardware shut", "stays closed and fastened" in sh, sh[-160:])
         check(f"shot {i} says where the arms are held", "behind the body" in sh, sh[-160:])
-        check(f"shot {i} says where the legs are held", "Both legs are bent back" in sh, sh[-160:])
+        check(f"shot {i} says where the legs are held",
+              bool(re.search(r"Both (?:of Ana's )?legs are bent back", sh)), sh[-160:])
     check("the removal still happens on the shot that stages it",
           "away by the last frame" in shots[2], shots[2][-200:])
     check("...and what it uncovers is still said", "bare from the hip down" in shots[2].lower()
@@ -2453,7 +2466,11 @@ def test_the_limb_position_leads_the_shot():
          "Mara stands against the wall.\n\nMara turns to face the door.")
     sh = [" ".join(b.split("]", 1)[1].split()) for b in
           run_node(P, plan_only=True, character_memory=MEM)[3].split("[Shot ")[1:]]
-    POSE = "Both arms are behind the body, wrists together at the small of the back"
+    # The shared tail: with Dan in the shot the sentence is Mara's by name -- see
+    # pose_of -- and alone it is hers without one.
+    POSE = "arms are behind the body, wrists together at the small of the back"
+    check("with Dan beside her, the arms are named as Mara's",
+          "Both of Mara's arms are behind the body" in sh[0], sh[0][:200])
     for i, s in enumerate(sh, 1):
         check(f"shot {i} carries the position", POSE in s, s[:160])
         check(f"...and says it ONCE, not twice", s.count(POSE) == 1)
@@ -4904,9 +4921,16 @@ def test_back_after_a_shot_away():
         multi = run_node("\n\n".join(
             base + ["Nora comes back in and Victor hands her the spanner."]),
             anchor="A room.", character_memory=mem)[2]
-        check("a return into company is left alone", seen[1:] == [0, 1, 1, 1],
+        # A return INTO COMPANY was left alone, and the returner came back in whatever
+        # the model imagined -- REPORTED as clothes and restraints not looking the same
+        # when a character leaves the shot and comes back. Victor is in the keyframe,
+        # so only Nora -- the one who was away -- gets her picture back.
+        check("a return into company gets her picture back", seen[1:] == [0, 1, 1, 2],
               str(seen[1:]))
-        check("...and nothing is claimed for it", "recovered a face" not in multi)
+        check("...and it is hers, from where she was last seen",
+              "recovered a face for Nora on shot 4, from shot 2" in multi)
+        check("...and nobody in the keyframe is given a second copy",
+              "recovered a face for Victor" not in multi)
         # A tagged character already has their own reference travelling with them.
         seen.clear()
         tagged = run_node("\n\n".join(base + ["Nora comes back in and picks up the spanner."]),
@@ -4958,6 +4982,106 @@ def test_back_after_a_shot_away():
               "recovered a face" not in only_shared)
     finally:
         FakeCLIP.tokenize = orig
+
+
+def test_led_out_and_brought_back():
+    print("\n=== restrained and dressed, taken out and brought back ===")
+    # REPORTED: clothing does not look the same when it leaves and comes back into
+    # the shot, and bondage equipment disappears or changes.
+    sheet = "Ana: she, 25, dark hair\nDan: he, 35, beard"
+    for _b, _way, _want in (
+            ("Dan leads Ana out through the side door.", "out", ["Dan", "Ana"]),
+            ("Dan comes back and leads Ana out.", "out", ["Dan", "Ana"]),
+            ("Dan drags her outside.", "out", ["Dan", "Ana"]),
+            ("Dan takes out his phone.", "out", []),
+            ("Dan brings Ana back in and stands her by the wall.", "in", ["Dan", "Ana"]),
+            ("Dan walks Ana into the cell.", "in", ["Dan", "Ana"]),
+            ("Dan pulls Ana close.", "out", [])):
+        check(f"taken {_way}={_want}: {_b[:36]!r}",
+              S.taken_out(_b, sheet, ["Ana", "Dan"], _way) == _want,
+              str(S.taken_out(_b, sheet, ["Ana", "Dan"], _way)))
+    for _b, _want in (
+            ("Dan walks away from Ana and she stands alone by the crates.", "Ana"),
+            ("Dan leaves Ana alone in the cell.", "Ana"),
+            ("Dan crosses the room, leaving her alone at the wall.", "Ana"),
+            ("Dan and Ana are alone in the room.", ""),
+            ("Dan and Ana stand alone.", ""),
+            ("Ana is not alone.", ""),
+            ("Ana mutters to herself while Dan watches.", ""),
+            ("They sit alone together.", "")):
+        check(f"left alone={_want!r}: {_b[:36]!r}",
+              S.left_alone(_b, sheet, ["Ana", "Dan"]) == _want)
+
+    mem = ("Ana: she, 25, long dark hair, a red leather jacket over a white tank top, "
+           "blue ripped jeans, black boots.\nDan: he, 35, short brown hair, a black hoodie")
+    base = ["Ana stands by the crates.",
+            "Dan cuffs Ana's wrists behind her back and locks a steel collar around her neck."]
+    for _how in ("Dan walks away from Ana and she stands alone by the crates.",
+                 "Dan walks out of the room while Ana waits by the crates."):
+        clip = FakeCLIP()
+        res = run_node("A warehouse.\n\n" + "\n\n".join(
+            base + [_how, "Dan comes back and leads Ana out.", "Dan works alone at the table.",
+                    "Dan brings Ana back in and stands her next to him."]),
+            character_memory=mem, clip=clip)
+        shots = res[3].split("\n---\n")
+        pics = [len(items) for prompt, items in clip.seen if prompt.strip()]
+        check(f"...{_how[:30]!r}: she is not described while she is away",
+              "Ana:" not in shots[4], shots[4][:120])
+        check("...and brought back, her restraints are held",
+              "Ana:" in shots[5] and "cuffs" in shots[5] and "collar" in shots[5])
+        check("...with her own frame back, from when she was last alone",
+              "recovered a face for Ana on shot 6, from shot 3" in res[2]
+              and pics[5] == 2, str(pics))
+        check("...and Dan, in the keyframe, is not given a second copy",
+              "recovered a face for Dan" not in res[2])
+
+    # Cuffs beside a collar were "a closed ring locked round each NECK", and the arms
+    # "the neck are behind the back": the part came from whichever piece was found
+    # first. Each piece answers for itself now, and a limb wins over a neck.
+    check("the cuffs' part is the cuffs', not the collar's",
+          S.cuff_part(["steel handcuffs", "black leather collar"]) == "wrists")
+    check("...and read from where the state says they are",
+          S.cuff_part(["cuffs"], {"cuffs": [("ankles", "")]}) == "ankles")
+    check("...and irons are round the ankles", S.cuff_part(["leg irons"]) == "ankles")
+    check("...and a collar alone has no cuff part", S.cuff_part(["collar"]) == "")
+    for _items, _want in ((["steel handcuffs", "black leather collar"], "wrists"),
+                          (["black leather collar", "steel handcuffs"], "wrists"),
+                          (["leg irons", "collar"], "ankles"),
+                          (["collar"], "neck"),
+                          (["gag"], "mouth")):
+        check(f"held part of {_items} is {_want}",
+              S.engine.held_part_of(_items) == _want, S.engine.held_part_of(_items))
+    shots = _shots_of(run_node("A warehouse.\n\n" + "\n\n".join([
+        "Ana stands by the crates.",
+        "Dan cuffs Ana's wrists behind her back with steel handcuffs and locks a black "
+        "leather collar around her neck.",
+        "Dan walks away from Ana and she stands alone by the crates.",
+        "Dan walks back to Ana and grabs her arm."]),
+        character_memory=mem, plan_only=True, model=FakeFastH3()))
+    check("no shot puts the cuffs round the neck",
+          not any("round each neck" in s or "the neck are" in s for s in shots),
+          " | ".join(s[:80] for s in shots))
+    check("...each says a ring round each wrist",
+          all("a closed ring locked round each wrist" in s for s in shots[1:]))
+    check("with Dan beside her, the arms behind the back are Ana's by name",
+          all("Both of Ana's arms are behind the body" in s for s in shots[1:]),
+          shots[1][:200])
+    # Both of them entirely in the shot, every shot, on either model -- so the cuffs,
+    # the collar and the clothes are never cropped out to be redrawn later.
+    for _model in (FakeFastH3(), FakeModel()):
+        _sh = _shots_of(run_node("A warehouse.\n\n" + "\n\n".join([
+            "Dan cuffs Ana's wrists behind her back and locks a collar round her neck.",
+            "Ana glares at him.",
+            "The camera follows Dan to the table, where he pours a drink.",
+            "Dan says, \"Sit down.\""]), character_memory=mem, plan_only=True,
+            model=_model))
+        _nm = type(_model).__name__
+        check(f"{_nm}: every shot holds both of them whole, head to feet",
+              all("every body in it whole, head to feet" in s
+                  or "Every body in the shot stays whole in the frame, head to feet" in s
+                  for s in _sh), " | ".join(s[:120] for s in _sh))
+        check(f"{_nm}: ...said right after the beat, ahead of the sheet",
+              all(s.index("head to feet") < s.index("Ana: she") for s in _sh))
 
 
 def test_a_name_with_no_entry_end_to_end():
@@ -8327,8 +8451,11 @@ def test_an_intimate_scene_holds_its_frame_and_its_voices():
         "Mara climbs on top and rides Dan.\n\n"
         "Dan carries Mara to the shower.", character_memory=mem, plan_only=True))
     for i in (1, 2):
+        # Kept whole -- asked for: both characters entirely in the shot -- but never
+        # told to widen onto the room, which is the reframe this was reported for.
         check(f"a position change on a keyframe is not reframed wide: shot {i + 1}",
-              "head to feet" not in sh[i] and "with the room around" not in sh[i], sh[i][-120:])
+              "with the room around" not in sh[i]
+              and "Every body in the shot stays whole in the frame" in sh[i], sh[i][-120:])
         check(f"...and keeps the held camera: shot {i + 1}", "one unbroken take" in sh[i])
     check("a journey keeps its frame, the camera going with them",
           "head to feet" in sh[3], sh[3][-120:])
@@ -9332,6 +9459,7 @@ def main():
     test_dialogue_headroom()
     test_introducing_somebody_already_in_position()
     test_back_after_a_shot_away()
+    test_led_out_and_brought_back()
     test_a_name_with_no_entry_end_to_end()
     test_the_soundtrack_is_the_models_own()
     test_shot_one_is_the_only_unpinned_shot()

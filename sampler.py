@@ -555,7 +555,8 @@ def leaves_in(beat, sheet, present=()):
     A leaving the beat does not pin on anybody is the one person in the frame's, or
     nobody's: keeping somebody in the picture costs a reference, and taking out
     somebody who is still there costs a second copy of them."""
-    return _movers(_EXIT, beat, sheet, present, alone_is_it=True)
+    return list(dict.fromkeys(_movers(_EXIT, beat, sheet, present, alone_is_it=True)
+                              + taken_out(beat, sheet, present, "out")))
 
 
 _COMES_IN = re.compile(
@@ -579,7 +580,93 @@ _COMES_IN = re.compile(
 
 def comes_in(beat, sheet):
     """The people this beat stages ARRIVING in the frame -- see _COMES_IN."""
-    return _movers(_COMES_IN, beat, sheet, [n for n, _ in sheet_lines(sheet) if n])
+    _all = [n for n, _ in sheet_lines(sheet) if n]
+    return list(dict.fromkeys(_movers(_COMES_IN, beat, sheet, _all)
+                              + taken_out(beat, sheet, _all, "in")))
+
+
+_TAKES = (r"(?:leads?|led|leading|drags?|dragged|dragging|carries|carried|carrying|takes?|"
+          r"took|taking|pulls?|pulled|pulling|pushes|pushed|pushing|escorts?|escorted|"
+          r"escorting|march(?:es|ed|ing)?|frog-?march(?:es|ed|ing)?|guides?|guided|"
+          r"hauls?|hauled|walks?|walked|shoves?|shoved|brings?|brought|bringing|"
+          r"wheels?|wheeled|steers?|steered|herds?|herded)")
+_TAKEN_TO = {
+    "out": (r"(?:out\b(?!\s+of\s+(?:her|his|their)\s+\w+)|outside\b|out\s+of\s+the\s+\w+|"
+            r"through\s+the\s+(?:side\s+|back\s+|front\s+)?door(?:way)?\b)"),
+    "in": (r"(?:back\s+)?(?:in\b(?!\s+(?:the|a|an|his|her|their)\b)|inside\b|"
+           r"into\s+the\s+(?:room|cell|basement|warehouse|house|kitchen|bedroom|hall)\b)"),
+}
+
+
+def taken_out(beat, sheet, present=(), way="out"):
+    """Who a beat TAKES out (way="out") or brings in ("in") -- the one doing it and the
+    one it is done to. "Dan leads Ana out through the side door" moved nobody: the exit
+    reader knew only people leaving on their own feet, and being led, dragged or carried
+    out is how a restrained person leaves a scene. So she stayed described -- cuffs and
+    collar -- in the shots after she had gone, and, never having left, got no picture of
+    herself when she was brought back. REPORTED as restraints and clothing not looking
+    the same when a character leaves the shot and comes back."""
+    b = str(beat or "")
+    rows = [(n, ln) for n, ln in sheet_lines(sheet) if n]
+    out = []
+    for m in re.finditer(r"\b" + _TAKES + r"\s+(\S+)\s+(?:\w+\s+){0,2}?" + _TAKEN_TO[way],
+                         b, re.I):
+        # The doer is the nearest name before the verb in the same sentence: "Dan comes
+        # back AND leads Ana out" puts two verbs between him and the one that moves her.
+        _sentence = re.split(r"[.;!?]", b[:m.start()])[-1]
+        _before = [(mm.start(), n) for n, _l in rows
+                   for mm in re.finditer(r"\b" + re.escape(n) + r"\b", _sentence)]
+        n = max(_before)[1] if _before else ""
+        obj = m.group(1).strip(".,;").lower()
+        whom = next((o for o, _l in rows if o.lower() == re.sub(r"'s$", "", obj)), "")
+        if not whom and obj in ("her", "him", "them"):
+            group = {"her": "she", "him": "he", "them": "they"}[obj]
+            fits = [o for o, ol in rows if o != n and sheet_pronoun(ol) == group
+                    and (not present or o in present)]
+            whom = fits[0] if len(fits) == 1 else ""
+        if whom and whom != n:
+            out += ([n] if n else []) + [whom]
+    return list(dict.fromkeys(out))
+
+
+_LEFT_ALONE = re.compile(
+    r"(?<!\bnot\s)(?<!\bnever\s)(?<!\blonger\s)"
+    r"\b(?:alone|by\s+(?:her|him)self|on\s+(?:her|his)\s+own)\b", re.I)
+
+
+def left_alone(beat, sheet, in_frame):
+    """The one person a beat leaves ALONE in the frame, or "".
+
+    "Dan walks away from Ana and she stands alone by the crates" left both of them in
+    the last frame -- walking away is not walking out -- so there was never a frame of
+    her by herself, in her cuffs and her clothes, to bring back when she returned. The
+    person is the nearest one named before "alone", or the pronoun only one of them
+    answers to; "Dan and Ana are alone" is both of them, and is nobody's."""
+    b = str(beat or "")
+    if len(in_frame or ()) < 2:
+        return ""
+    m = _LEFT_ALONE.search(b)
+    if not m:
+        return ""
+    clause = re.split(r"[.;!?,]|\b(?:but|while|as|until)\b", b[:m.start()])[-1]
+    if re.search(r"\b(?:are|were|they|them|both|together|two|each)\b", clause, re.I):
+        return ""
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    marks = [(mm.start(), n) for n in in_frame
+             for mm in re.finditer(r"\b" + re.escape(n) + r"\b", clause)]
+    for mm in re.finditer(r"\b(she|he|her|him)\b", clause, re.I):
+        group = {"her": "she", "him": "he"}.get(mm.group(1).lower(), mm.group(1).lower())
+        fits = [n for n in in_frame if sheet_pronoun(rows.get(n, "")) == group]
+        if len(fits) == 1:
+            marks.append((mm.start(), fits[0]))
+    if not marks:
+        return ""
+    at, who = max(marks)
+    # "Dan and Ana stand alone" -- two people joined as the subject are both alone.
+    # ("...away from Ana and she stands alone" is a new clause, and hers.)
+    if re.fullmatch(r"\s*(?:the\s+)?\w+\s+and\s+", clause[:at], re.I):
+        return ""
+    return who
 
 
 _SHE_NOUNS = {"woman", "girl", "lady", "female", "mother", "wife", "sister", "daughter",
@@ -3749,7 +3836,31 @@ _ONE_OF = {"wrists": "wrist", "ankles": "ankle", "hands": "hand", "legs": "leg",
            "arms": "arm", "thumbs": "thumb", "toes": "toe"}
 
 
-def rigid_tail(item, part="wrists", plural=False):
+def cuff_part(items, where=None):
+    """The part the CUFFS among these items close round, or "" if none are cuffs.
+
+    Not the part of the hardware as a whole. held_part answers for the first thing it
+    recognises, and beside a collar that is the neck -- so steel handcuffs and a leather
+    collar were written as "a closed ring locked round each neck", and the arms as "the
+    neck are behind the back". REPORTED as bondage equipment not looking the same, or
+    not being where it was, from one shot to the next. The state's own record of where
+    each piece is fastened wins; the item's name is the fallback."""
+    pieces = [p.strip() for it in (items or [])
+              for p in re.split(r",|\s+and\s+", str(it or "")) if p.strip()]
+    cuffs = [p for p in pieces
+             if _CUFF_FORM.search(p) and not re.search(r"\bchain", p, re.I)]
+    for c in cuffs:
+        at = (where or {}).get(c)
+        if at is None and where:
+            head = c.split()[-1].lower()
+            at = next((v for k, v in where.items()
+                       if k.split() and k.split()[-1].lower() == head), None)
+        if at and at[0][0]:
+            return at[0][0]
+    return held_part(cuffs) if cuffs else ""
+
+
+def rigid_tail(item, part="wrists", plural=False, where=None):
     """The clause that says HOW a rigid restraint holds its shape.
 
     Cuffs get what cuffs are -- a closed ring round each limb, the pair held a fixed
@@ -3759,6 +3870,7 @@ def rigid_tail(item, part="wrists", plural=False):
     The distance is given as a hand's width because a length that is not stated is a
     length the model picks, and the one it picks for metal between two wrists is a
     chain's."""
+    part = cuff_part([item], where) or part
     one = _ONE_OF.get(str(part or "wrists").lower(), str(part or "wrist").rstrip("s"))
     if _CUFF_FORM.search(str(item or "")) and not re.search(r"\bchain", str(item or ""), re.I):
         return (f", a closed ring locked round each {one} and the two held a hand's "
@@ -4710,6 +4822,26 @@ def pose_clause(position, lying=False, legs="", facing=""):
     return "".join(f" {part}." for part in (said, legs_said) if part)
 
 
+def pose_of(pose, who, described):
+    """pose_clause's sentences said about WHOSE body, when somebody else is in the shot.
+
+    "Both arms are behind the body, wrists together at the small of the back" names
+    nobody; with the man who cuffed her beside her it is an instruction about whoever
+    is on screen, and he stands with his arms behind his back too -- the cuffs
+    wandering onto whichever body the model put the pose on. Same defect as own_body,
+    in the sentence that leads the shot."""
+    names = [n for n in (who or []) if n]
+    if not pose or not names or len(described or []) < 2 \
+            or all(n in names for n in described):
+        return pose
+    subject = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    out = re.sub(r"(?<![\w'])Both (arms|legs|ankles) are",
+                 lambda m: f"Both of {subject}'s {m.group(1)} are", pose)
+    out = re.sub(r"(?<![\w'])The whole length of the body",
+                 f"The whole length of {subject}'s body", out)
+    return re.sub(r"(?<![\w'])The body is", f"{subject}'s body is", out)
+
+
 def merge_hardware_names(items):
     """One name per piece of hardware, keeping the fullest wording of each.
 
@@ -4870,7 +5002,8 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
                     "full length, so the position it fixes is the position that keeps, "
                     "and the body strains against it while the fastenings hold")
     elif rigid:
-        out += rigid_tail(item, part or held_part([item] if item else []), plural)
+        out += rigid_tail(item, part or held_part([item] if item else []), plural,
+                          where=where)
     out += FORM_HOLD
     if who:
         out += OTHERS_UNCHANGED
@@ -5238,7 +5371,7 @@ def camera_hold(beat, anchor="", moving=False):
     return " The shot is one unbroken take from one position, angle and distance."
 
 
-def frame_hold(beat, anchor="", people=1, outdoor=False):
+def frame_hold(beat, anchor="", people=1, outdoor=False, held=False):
     """Say the frame holds a whole body, where nothing else says what the frame is.
 
     THE PORTRAIT IS WHAT AN UNSTATED FRAME BECOMES. This file already records the
@@ -5256,16 +5389,38 @@ def frame_hold(beat, anchor="", people=1, outdoor=False):
     the author has said nothing about the camera -- in the beat or in the anchor.
     Their framing always wins, a close-up included, because a close-up is a frame
     somebody asked for. Impersonal, like the other picture guards, and positively
-    phrased: it says what the frame holds, never what it is not."""
+    phrased: it says what the frame holds, never what it is not.
+
+    EVERY SHOT WITH SOMEBODY IN IT, not only the ones staging whole-body action.
+    A face acting, a line spoken, a person standing in cuffs -- each was left to the
+    prior, which crops to the face, and a cropped body is a wardrobe and a set of
+    restraints the model redraws from nothing when the frame widens again. REPORTED
+    as clothing and bondage equipment not looking the same, or disappearing, when a
+    character leaves the shot and comes back -- and asked for in so many words:
+    both characters entirely in the shot, so nothing is missed. `people` is how many
+    are described; 0 is an empty frame and gets nothing.
+
+    `held` is a shot that opens on the previous shot's last frame with the camera held
+    still. That frame already holds them whole -- every shot before it said so -- and
+    "with the room around them" asks the held camera for a WIDER view than the frame
+    it opens on, which the model settles by cutting to a side-on wide in a room drawn
+    fresh. So there it says the bodies STAY whole: a keeping, not a widening."""
     b = str(beat or "")
     if _FRAME_SIZE.search(b) or _FRAME_SIZE.search(str(anchor or "")):
         return ""
     if tight_framing(b) or tight_framing(str(anchor or "")):
         return ""
-    if not (_WHOLE_BODY.search(b) or _TRAVEL_VERB.search(b)):
+    if people is None:
+        people = 1
+    if int(people) < 1:
         return ""
+    if held:
+        if int(people) > 1:
+            return (" Every body in the shot stays whole in the frame, head to feet, "
+                    "for the whole take.")
+        return " The whole body stays in the frame, head to feet, for the whole take."
     place = "the surroundings" if outdoor else "the room"     # see outdoors()
-    if int(people or 1) > 1:
+    if int(people) > 1:
         return (f" The frame holds every body in it whole, head to feet, with {place} "
                 "around them.")
     return (f" The frame holds the whole body, head to feet, with {place} around it.")
@@ -8665,9 +8820,14 @@ class H3LongVideos:
                 # shuts the door" takes the camera with him, and being fastened is the
                 # reason she did not follow, not a reason the shot stayed with her.
                 # Not across a cut to another room either, for the same reason.
+                # ...and she has to still BE there: "Dan leads Ana out", then "Dan comes
+                # back alone" kept her -- cuffs, collar and all -- in a room she had been
+                # taken out of, because only her being in the last beat was checked, not
+                # her being in its last frame. The partner rule below always checked both.
                 _held_on = [n for n, _l in sheet_lines(sheet)
                             if n and n in (restrained_who or set())
-                            and n in (_was or []) and n not in (active or [])]
+                            and n in (_was or []) and n in _still_there
+                            and n not in (active or [])]
                 # "Walks away" is not "walks out": with the camera held he goes across the
                 # frame and she is still in it, chained where she was. Dropped, her entry
                 # and her hardware left the shot, and the next shot opened on a frame
@@ -9238,6 +9398,9 @@ class H3LongVideos:
                 _returns.append((len(plan) + 1, list(_back)))
             _gone = leaves_in(body, sheet, _shows)
             _in_frame = [n for n in _ends_with if n not in _gone]
+            _lone = left_alone(body, sheet, _in_frame)
+            if _lone:
+                _in_frame = [_lone]
             shot_frames[len(plan)] = (_shows, list(_in_frame))
             if here and here not in _described_rooms and here not in _undescribed:
                 _undescribed.append(here)
@@ -9404,8 +9567,14 @@ class H3LongVideos:
             _seal_led = False
             _pose_led = ""
             _hw_text = " ".join(worn_items or [])
+            try:
+                _worn_where = hardware_where([_r for _p in _state.people.values()
+                                              for _r in _p.hardware.values()])
+            except Exception:
+                _worn_where = None
             _rigid_tail = ("" if not rigid else
-                           cuff_rigid_sentence(held_part(worn_items))
+                           cuff_rigid_sentence(cuff_part(worn_items, _worn_where)
+                                               or held_part(worn_items))
                            if (_hw_text and _CUFF_FORM.search(_hw_text)
                                and not re.search(r"\bchain", _hw_text, re.I))
                            else CHAIN_RIGID_TAIL)
@@ -9521,8 +9690,12 @@ class H3LongVideos:
                 (first_frame is not None and not _first_is_plate) if _k == 0 else
                 (_k not in cut_shots and _k not in reentry_shots and _k not in _placed_shots
                  and not (restart_after_removal and (_k - 1) in stripped_shots)))
-            _frame = ("" if (_on_keyframe and _camera) else
-                      frame_hold(body, anchor, len(_described or []) or 1, outdoor=_outside))
+            # Everyone described, whole, on every shot -- see frame_hold. On a held
+            # keyframe it is the "stays whole" form, never the widening one.
+            _bodies = len(_described or []) or (1 if beat_puts_somebody_on_screen(body, sheet)
+                                                else 0)
+            _frame = frame_hold(body, anchor, _bodies, outdoor=_outside,
+                                held=bool(_on_keyframe and _camera))
             if _frame:
                 frame_shots.append(len(plan) + 1)
             _place_words = 0            # words the hold spends saying where -- see _placed_hold
@@ -9615,14 +9788,23 @@ class H3LongVideos:
             # together at the small of the back" -- her position, on him. Reported as
             # the restraint changing mid-scene, and worst where beats name one of two
             # people and lean on continuity for the other.
-            if (_pose or _seal or _facing) and body:
+            if _pose and restrained_who:
+                _pose = pose_of(_pose, [n for n in (_described or [])
+                                        if n in restrained_who], _described)
+            # THE FRAME LEADS TOO, for the reason the pose does: what the opening
+            # tokens say is what the frame settles on, and as guard 15 of 15 it was
+            # the first thing a crowded shot dropped -- a restrained, half-dressed body
+            # is exactly the crowded shot, and exactly the one that must not be cropped.
+            _frame_led = False
+            if (_pose or _seal or _facing or _frame) and body:
                 _at = line.find(body)
                 if _at >= 0:
                     _cut = _at + len(body)
-                    _lead = (_pose if _arms_pos else "") + _facing + _seal
+                    _lead = _frame + (_pose if _arms_pos else "") + _facing + _seal
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
                     _pose_led = _pose if _arms_pos else ""
                     _seal_led = bool(_seal)
+                    _frame_led = bool(_frame)
             _speaks = has_speech(body)
             _own = sound_described(body)
             if not _own and not _speaks and _BREATH_PREP.search(body):
@@ -9814,7 +9996,7 @@ class H3LongVideos:
                 (12, "language", _lang),   # ...and in which language
                 (3, "contact", _contact),
                 (15, "faces", _faces),
-                (15, "frame", _frame),
+                (15, "frame", "" if _frame_led else _frame),   # hoisted, see above
                 (13, "camera", _camera),
                 (6, "told", _told),          # a listener given an order to ignore
                 (13, "turn", turn),
@@ -10170,21 +10352,19 @@ class H3LongVideos:
                 f"below, because it is your text")
         if frame_shots:
             notes.append(
-                f"shot(s) {', '.join(str(n) for n in frame_shots)} stage something a "
-                f"portrait cannot contain and say nothing about the camera, so they are "
-                f"told what the frame HOLDS: the whole body, head to feet, with the room "
-                f"around it. An attribute a prompt does not state is not left to the model, "
-                f"it is left to the model's PRIOR -- and the prior for a named, described "
-                f"person is a portrait facing the lens. The sheet describes a face in every "
-                f"shot because clothing continuity needs it there, and the mouth guard "
-                f"describes a mouth in every silent shot because babble needs it, so the "
-                f"text leans towards a face and nothing in it said how much of the person to "
-                f"show. Reported as the camera fixated on one character staring into the "
-                f"lens, with no reference image in the run at all. Your camera always wins: "
-                f"write any framing in the beat or the anchor -- a close-up included, since "
-                f"a close-up is a frame somebody asked for -- and this stands down. It is "
-                f"ranked below everything your own words imply, so a crowded shot drops it "
-                f"first")
+                f"shot(s) {', '.join(str(n) for n in frame_shots)} are told what the "
+                f"frame HOLDS: every person described in them whole, head to feet -- right "
+                f"after your beat, where the frame is decided. A shot that opens on the "
+                f"last one's final frame with the camera held is told they STAY whole, not "
+                f"to widen onto the room, since widening a held take is how it cuts to a "
+                f"new angle in a new place. An attribute a prompt does not state is left to "
+                f"the model's PRIOR, and the prior for a named, described person is a "
+                f"portrait: cropped to the face, with the clothes and restraints below it "
+                f"out of the picture and redrawn from nothing when they come back into "
+                f"view. Reported as clothing and bondage equipment not looking the same, or "
+                f"disappearing, when a character leaves the shot and comes back. Your "
+                f"camera always wins: write any framing in the beat or the anchor -- a "
+                f"close-up, a medium shot, waist-up -- and this stands down for it")
         if open_moves:
             notes.append(
                 "shot(s) " + ", ".join(f"{n} (to the {w})" for n, w in open_moves[:6])
@@ -11307,7 +11487,10 @@ class H3LongVideos:
                  if _captured_gen.get(k) == _wardrobe_gen})
             if not refs_ok:
                 _who = ""
-            if _who and (_carry_rooms is not None or _demotes) and _who in _prev_people:
+            # Not for anybody the shot OPENS on: whether the last frame rides as the
+            # keyframe, as a carried reference or demoted, it is already a picture of
+            # them, and a second picture of one person is how a second one is drawn.
+            if _who and shot_handoff is not None and _who in _prev_people:
                 _who = ""               # the carried frame is already a picture of them
             if _who:
                 _extra = [_captured[_who]]
@@ -11526,6 +11709,28 @@ class H3LongVideos:
                         _captured_gen[_who] = _wardrobe_gen
             except Exception:
                 pass                       # a recovered frame is a nicety, not the render
+            # ...AND FROM THE LAST FRAME, whenever the shot ENDS with one person alone in
+            # it. A whole solo shot is rare in a scene with company, so most people never
+            # had a frame to come back with -- but "Dan walks out" leaves her alone by the
+            # last frame, and that frame is exactly how she looks now: her clothes, her
+            # restraints. On a shot that put hardware on, it shows the hardware ON, so it
+            # belongs to the wardrobe that starts after this shot. REPORTED as clothing and
+            # bondage equipment not looking the same when a character comes back.
+            try:
+                _alone = [n for n in _frame_cast(i, last=True) if n]
+                # Only somebody the shot's TEXT describes: where the camera went with
+                # somebody leaving she is not described, and whatever the last frame
+                # holds is not a picture of her to claim as one.
+                if (len(_alone) == 1 and _alone[0] in set(plan.shots[i].cast or [])
+                        and _wardrobe_normal and hand_src is not None
+                        and hand_src.shape[0]):
+                    _captured[_alone[0]] = hand_src[-1:].detach().clamp(0.0, 1.0).to(
+                        "cpu", copy=True)
+                    _captured_from[_alone[0]] = i + 1
+                    _captured_gen[_alone[0]] = _wardrobe_gen + (1 if _n in hardware_changed
+                                                                else 0)
+            except Exception:
+                pass
             if not _wardrobe_normal or _n in hardware_changed:
                 _wardrobe_gen += 1
             else:

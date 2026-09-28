@@ -35,14 +35,23 @@ def may_carry_frame(previous_cast, current_cast, tagged_names):
 
 
 def recoverable_subject(cast, tagged_names, returning_names, captured):
-    """Return the sole safe recovered subject, or an empty string."""
+    """Return the sole safe recovered subject, or an empty string.
+
+    The one person in the shot who is BACK, untagged, with a frame of them alone to
+    show. It used to need the whole shot to be theirs, so a return into company -- "Ana
+    walks back in and stands next to Dan", the ordinary way somebody comes back -- got
+    no picture at all, and her clothes and her restraints were redrawn from the words
+    alone. REPORTED as clothing and bondage equipment not looking the same when a
+    character leaves the shot and comes back. The picture is still a frame of HER ALONE
+    and still claimed as her; the others come in on the keyframe as they always did.
+    Two people coming back at once is still left alone -- two recovered pictures in one
+    shot is how the pairing goes wrong."""
     people = [name for name in (cast or ()) if name]
-    if len(people) != 1:
-        return ""
-    name = people[0]
-    return name if (name not in set(tagged_names or ())
-                    and name in set(returning_names or ())
-                    and captured.get(name) is not None) else ""
+    back = [name for name in people
+            if name not in set(tagged_names or ())
+            and name in set(returning_names or ())
+            and captured.get(name) is not None]
+    return back[0] if len(back) == 1 else ""
 
 
 KEYFRAME_SAFE_AUG = 0.99       # below this, a ref aug would soften the keyframe too
