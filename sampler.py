@@ -2368,6 +2368,15 @@ def picture_tags(text):
     return sorted({int(m.group(1)) for m in _PICTURE_TAG.finditer(text or "")})
 
 
+def untagged(line):
+    """A sheet line with its <Picture N> tags taken out and the punctuation mended."""
+    out = _PICTURE_TAG.sub("", str(line or ""))
+    out = re.sub(r":\s*,", ":", out)
+    out = re.sub(r",\s*(?=,)", "", out)
+    out = re.sub(r"\s+([,.])", r"\1", out)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
 def resolve_tags(text, ref_list):
     """(text with its tags renumbered, the images that shot carries, dropped slots).
 
@@ -2682,8 +2691,8 @@ def detail_report(per_shot):
                  f"decodes a shot, takes its LAST frame and re-encodes it as the next "
                  f"shot's keyframe, so the loss of one round trip is carried into the "
                  f"next and compounds. Break the chain to stop it accumulating: "
-                 f"restart_after_removal stops a shot opening on the previous frame, "
-                 f"at the cost of a cut there")
+                 f"turning keep_frame_after_removal off stops a shot opening on the "
+                 f"previous frame after a removal, at the cost of a cut there")
     elif drop <= -10.0:
         line += (f" -- UP {-drop:.0f}%. Read the contrast line before taking that as good "
                  f"news: expanding contrast raises this number too")
@@ -5426,6 +5435,23 @@ def frame_hold(beat, anchor="", people=1, outdoor=False, held=False):
     return (f" The frame holds the whole body, head to feet, with {place} around it.")
 
 
+def entrance_clause(names):
+    """Walk somebody the beat places into a frame that does not have them yet.
+
+    The shot opens on the previous shot's last frame, and they are not in it. Said
+    this way the frame stays the frame -- the camera, the room, the people already
+    there -- and the newcomer comes into it, rather than the shot being recomposed
+    around them. Positive, like every clause here: where they come from, and that the
+    rest stays where it is."""
+    names = [n for n in (names or []) if n]
+    if not names:
+        return ""
+    who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    verb = "comes" if len(names) == 1 else "come"
+    return (f" {who} {verb} into the frame from its edge as the shot begins, and "
+            f"everything already in the frame stays where it is.")
+
+
 def tight_framing(text):
     """Does this beat call for a frame close enough to lose the anchor point?"""
     return bool(_TIGHT_FRAME.search(text or ""))
@@ -8018,22 +8044,23 @@ class H3LongVideos:
                                "info reports every removal it reads, by shot. An explicit "
                                "'remove:' line still works and is added to whatever is "
                                "inferred."}),
-                "restart_after_removal": ("BOOLEAN", {"default": True,
-                    "tooltip": "After a shot that takes something off, the NEXT shot does "
-                               "not open on that shot's last frame.\n\n"
-                               "Every shot is anchored to the previous shot's last frame. If "
-                               "the model does not finish taking the garment off inside its "
-                               "own shot, that frame still shows it -- and a keyframe is a "
-                               "PICTURE, which outvotes any sentence. Inherit it once and every "
-                               "later shot inherits it too, with no wording able to undo it. "
-                               "This breaks that inheritance at the one boundary where the "
-                               "state changes.\n\n"
-                               "The frame still rides as a REFERENCE, so the room, the faces "
-                               "and the clothes carry across; only when nobody is left in it, or "
-                               "somebody in it also has a portrait riding the next shot, is "
-                               "nothing carried. The cost is a cut there, with that shot re-deriving its "
-                               "pose and framing. Turn it off if your removals do complete on "
-                               "screen and you would rather keep the continuity."}),
+                "keep_frame_after_removal": ("BOOLEAN", {"default": True,
+                    "tooltip": "After a shot that takes something off, the NEXT shot still "
+                               "opens on that shot's last frame -- the same camera, the same "
+                               "place, the same restraints, carried as a picture.\n\n"
+                               "Off, it restarts there instead: the frame rides only as a "
+                               "reference (regular H3) and the shot re-derives its framing, "
+                               "so the camera angle changes and whatever the text does not "
+                               "restate is re-imagined. That is insurance against a garment "
+                               "the model did not finish taking off being inherited through "
+                               "the keyframe -- and it cost a cut and the scene's memory at "
+                               "every removal. REPORTED as camera angles changing between "
+                               "beats and beats losing what was in the one before, so it is "
+                               "on by default now. (Renamed from restart_after_removal with "
+                               "its meaning flipped, so a saved workflow's old 'true' "
+                               "restores as 'keep the frame'.) FastH3 always keeps the "
+                               "frame: it cannot read a reference, so a restart there is a "
+                               "start from nothing."}),
                 "hold_restraints": ("BOOLEAN", {"default": True,
                     "tooltip": "Once a restraint is put on, keep it whole. From the shot "
                                "that applies it onward, every shot carries one sentence: "
@@ -8212,14 +8239,18 @@ class H3LongVideos:
             latent_upscale="off", latent_upscale_scale=2.0,
             upscale="off", upscale_model="none", upscale_target_short_edge=0,
             shot_length="from the beat", hold_restraints=True,
-            restart_after_removal=True, auto_remove=True, anchor="", character_memory="",
+            keep_frame_after_removal=True, auto_remove=True, anchor="", character_memory="",
             pace=1.0,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0,
-            hold_levels=0.8, graph=None,
+            hold_levels=0.8, graph=None, restart_after_removal=None,
             **_removed):
 
         self._frames = None
+        # The old input, by name (an API prompt), still means what it said.
+        restart_after_removal = (not keep_frame_after_removal
+                                 if restart_after_removal is None
+                                 else bool(restart_after_removal))
         prepared = self._prepare(
             model=model, clip=clip, vae=vae,
             audio_vae=audio_vae, prompt=prompt, resolution=resolution,
@@ -8300,6 +8331,10 @@ class H3LongVideos:
         notes.extend(_fixnotes)
         # FASTH3: a distill runs as it was distilled. See fast_h3.
         _fast = fast_h3(model)
+        # A restart carries the frame as a REFERENCE, which FastH3 cannot read -- so
+        # there it was a start from nothing: no room, no restraints, no clothes but
+        # what the text restates, and a new camera. Never on FastH3.
+        restart_after_removal = bool(restart_after_removal) and not _fast
         if _fast:
             _fast_said = []
             if float(shift_video) == 12.0:       # the node's default, i.e. untouched
@@ -8679,6 +8714,8 @@ class H3LongVideos:
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
         legs_held = ""              # where a beat or the sheet fastened the legs
+        limbs_freed = False         # the last piece on a limb came off -- see below
+        stayed_on = []              # (shot, who) kept described because still in frame
         exact_shots = []            # shots carrying an exact: line of the author's
         camera_shots = []           # shots told the camera holds still
         named_often = []            # (shot, name, times named, times this node named them)
@@ -8862,6 +8899,35 @@ class H3LongVideos:
                     shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
                                            if n in _keep)
                     partners_held.append((len(plan) + 1, list(_partners)))
+                # EVERYBODY STILL IN THE FRAME STAYS IN THE SHOT -- the two rules above,
+                # for everyone. The shot opens on the last frame, and whoever is in it is
+                # in the picture this shot starts from; leaving them out of the text told
+                # it "There is one person in the shot" over a frame holding two, and the
+                # model removed one to agree -- who came back from nowhere on the next
+                # beat that named them, while the other vanished in turn. REPORTED as
+                # beats losing what was in the beat before, and asked for in so many
+                # words: both characters entirely in the shot. Nobody is kept past an
+                # exit, a cut to another room, a beat that leaves somebody alone, or a
+                # framing the author set themselves.
+                _stays = [n for n, _l in sheet_lines(sheet)
+                          if n and n in (_was or []) and n in _still_there
+                          and n not in (active or [])]
+                if _stays and not _leaves_room and not (
+                        _FRAME_SIZE.search(body or "") or tight_framing(body or "")
+                        or _ALONE.search(engine.staged_text(body) or "")):
+                    _out_now = set(leaves_in(body, sheet, _was))
+                    _stays = [n for n in _stays if n not in _out_now]
+                    if _stays:
+                        _keep = set(list(active or []) + _stays)
+                        active = [n for n, _l in sheet_lines(sheet) if n in _keep]
+                        # Without their <Picture N>: the frame the shot opens on already
+                        # pictures them, and a second picture of one person is how a
+                        # second one is drawn. Their own tag rides the shots that NAME
+                        # them, as it always did.
+                        shot_sheet = "\n".join(
+                            (untagged(ln) if n in _stays else ln)
+                            for n, ln in sheet_lines(sheet) if n in _keep)
+                        stayed_on.append((len(plan) + 1, list(_stays)))
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
                     notes.append(f"shot {len(plan) + 1} describes only "
                                  f"{', '.join(active) or 'the scene'} -- the rest of the "
@@ -8907,14 +8973,14 @@ class H3LongVideos:
                     _placed_shots[len(plan)] = list(_new)
                     notes.append(
                         f"shot {len(plan) + 1} introduces {', '.join(_new)} in "
-                        f"position rather than arriving, so the previous shot's last "
-                        f"frame stops being this shot's FIRST frame -- that frame does "
-                        f"not have them in it, and a keyframe is a picture, so they "
-                        f"would have to appear out of nothing and travel to the spot "
-                        f"the beat describes. The frame is still carried, as a "
-                        f"reference, so the room comes with it. Write the entrance -- "
-                        f"'walks in', 'steps through' -- if you would rather they "
-                        f"arrive on screen and keep the frame as the anchor")
+                        f"position rather than arriving. The shot still opens on the "
+                        f"previous shot's last frame -- same camera, same room, everyone "
+                        f"and everything in it where they were -- and "
+                        f"{'they come' if len(_new) > 1 else _new[0] + ' comes'} into it "
+                        f"from the edge of the frame as it begins. It used to restart "
+                        f"there instead, which cost the camera angle and everything the "
+                        f"last frame remembered (on FastH3, all of it). Write the entrance "
+                        f"yourself -- 'walks in', 'steps through' -- to say how")
                 _back_cands = [n for n in active if n not in _was and n in _seen_before]
                 _seen_before.update(active)
             else:
@@ -8926,11 +8992,15 @@ class H3LongVideos:
             _fresh = (_is_cut
                       or (restart_after_removal and (len(plan) - 1) in stripped_shots
                           and _no_carry)
-                      or (len(plan) in _placed_shots and _no_carry)
                       or bool(_ALONE.search(engine.staged_text(body))))
             _kept = [] if _fresh else list(_in_frame)
+            # Kept in the last shot only because they were still in its frame is not
+            # the beat putting them there: "Dan walks in" while he sits in the frame is
+            # still a second Dan walking in, and still starts fresh.
+            _only_kept = {n for k, ws in stayed_on if k == len(plan) for n in ws}
             _again = [n for n in comes_in(body, sheet)
-                      if n in _kept and n not in _was] if (plan and not _is_travel) else []
+                      if n in _kept and (n not in _was or n in _only_kept)
+                      ] if (plan and not _is_travel) else []
             if _again:
                 reentry_shots[len(plan)] = _again
                 _kept = []
@@ -9326,10 +9396,48 @@ class H3LongVideos:
                         for (_a, _w), _items in _by_agent.items()))
             _was_restrained = restrained
             if hold_restraints:
-                if (names_any(RESTRAINT_HOLD_KEY, toks)
-                        or any(restraint_present(t) for t in toks)
-                        or (restraint_coming_off(body)
-                            and any(_RESTRAINT_WORD.match(str(t)) for t in toks))):
+                _clears = bool(names_any(RESTRAINT_HOLD_KEY, toks)
+                               or any(restraint_present(t) for t in toks)
+                               or (restraint_coming_off(body)
+                                   and any(_RESTRAINT_WORD.match(str(t)) for t in toks)))
+                # ONLY WHAT CAME OFF, OFF WHOEVER IT CAME OFF. A removal that looked like
+                # hardware cleared every restraint on everybody: "Dan removes his belt"
+                # uncuffed, uncollared and ungagged the woman beside him. REPORTED as
+                # restraints breaking and coming undone. The state knows who wears what;
+                # the named piece leaves its wearer, and the rest stays fastened.
+                if _clears and any(_q.hardware for _q in _state.people.values()):
+                    for _t in toks:
+                        _all = bool(re.fullmatch(r"(?:all\s+)?(?:the\s+)?(?:restraints?|"
+                                                 r"bindings?|bonds|hardware|everything)",
+                                                 str(_t).strip(), re.I))
+                        for _n in (_taken_from.get(_t) or list(_state.people)):
+                            _q = _state.people.get(_n)
+                            if _q is None:
+                                continue
+                            for _k in [k for k, r in _q.hardware.items()
+                                       if _all or names_any(r.item, [_t])
+                                       or names_any(_t, [k[0]])]:
+                                _ch.setdefault("released", []).append(
+                                    (_n, _q.hardware.pop(_k)))
+                                hardware_changed.add(len(plan) + 1)
+                    if any(_q.hardware for _q in _state.people.values()):
+                        _clears = False
+                        restrained_who = {n for n, _q in _state.people.items()
+                                          if _q.hardware}
+                        if sealed and names_any(sealed, toks):
+                            sealed = ""
+                if _clears:
+                    restrained = posed = rigid_latched = False
+                    anchored = ""
+                    sealed = ""
+                    worn_item = ""
+                    worn_items = []
+                    restrained_who = set()
+                elif (_ch.get("released") and restrained
+                      and not any(_q.hardware for _q in _state.people.values())):
+                    # A real release took the last piece off: the flag follows the state,
+                    # or the hold goes on saying "every restraint stays closed" over
+                    # hardware that is gone.
                     restrained = posed = rigid_latched = False
                     anchored = ""
                     sealed = ""
@@ -9530,10 +9638,30 @@ class H3LongVideos:
                 _free = (not any(n in poses for n in _watch)) if _watch else (not poses)
                 if _free and engine.posture_in(_scene_for_state) == "lying down":
                     _lying_now = True
-            _pose_pos = (_anchor_now or anchored
-                         or (limb_anchor(_scene_for_state) if restrained else ""))
-            _legs_pos = (_legs_now or legs_held
-                         or (legs_anchor(_scene_for_state) if restrained else ""))
+            # UNCUFFED IS UNCUFFED. Once the last piece on a limb comes off, the arms
+            # are not "behind the body, wrists together" any more -- that was read off
+            # the beat that cuffed them, and it outlived the cuffs. Held until a new
+            # piece goes on a limb.
+            _LIMB = ("wrists", "ankles", "arms", "hands", "legs", "elbows", "knees",
+                     "thighs", "feet")
+            _limb_now = any(r.part in _LIMB for _q in _state.people.values()
+                            for r in _q.hardware.values())
+            _limb_off = any(getattr(r, "part", "") in _LIMB
+                            for _n, r in (_ch.get("released") or []))
+            if _limb_off and not _limb_now:
+                limbs_freed = True
+            if any(getattr(r, "part", "") in _LIMB for _n, r in (_ch.get("applied") or [])):
+                limbs_freed = False
+            if limbs_freed:
+                anchored = legs_held = ""
+                posed = False
+                _anchor_now = _legs_now = ""
+            _pose_pos = ("" if limbs_freed else
+                         (_anchor_now or anchored
+                          or (limb_anchor(_scene_for_state) if restrained else "")))
+            _legs_pos = ("" if limbs_freed else
+                         (_legs_now or legs_held
+                          or (legs_anchor(_scene_for_state) if restrained else "")))
             _arms_pos = _pose_pos.split(", at the")[0].strip()
             if not _arms_pos and _legs_pos == "ankles to the wrists":
                 _arms_pos = "behind the back"
@@ -9688,7 +9816,7 @@ class H3LongVideos:
             _k = len(plan)
             _on_keyframe = bool(
                 (first_frame is not None and not _first_is_plate) if _k == 0 else
-                (_k not in cut_shots and _k not in reentry_shots and _k not in _placed_shots
+                (_k not in cut_shots and _k not in reentry_shots
                  and not (restart_after_removal and (_k - 1) in stripped_shots)))
             # Everyone described, whole, on every shot -- see frame_hold. On a held
             # keyframe it is the "stays whole" form, never the widening one.
@@ -9796,11 +9924,13 @@ class H3LongVideos:
             # the first thing a crowded shot dropped -- a restrained, half-dressed body
             # is exactly the crowded shot, and exactly the one that must not be cropped.
             _frame_led = False
-            if (_pose or _seal or _facing or _frame) and body:
+            _entering = entrance_clause(_placed_shots.get(len(plan)))
+            if (_pose or _seal or _facing or _frame or _entering) and body:
                 _at = line.find(body)
                 if _at >= 0:
                     _cut = _at + len(body)
-                    _lead = _frame + (_pose if _arms_pos else "") + _facing + _seal
+                    _lead = (_entering + _frame + (_pose if _arms_pos else "")
+                             + _facing + _seal)
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
                     _pose_led = _pose if _arms_pos else ""
                     _seal_led = bool(_seal)
@@ -10290,6 +10420,16 @@ class H3LongVideos:
                   "mentioning them. They are let go by a beat that takes somebody out "
                   "of the room, by a cut to another room, or by the hardware coming "
                   "off -- write them out and they go")
+        if stayed_on:
+            notes.append(
+                "kept in the shot because they are still in the frame it opens on -- "
+                + "; ".join(f"shot {n}: {_join_names(w)}" for n, w in stayed_on[:12])
+                + ". Each shot starts from the last one's final frame, so whoever is in "
+                  "it is in the picture; describing only the people a beat names told "
+                  "the shot there were fewer, and the model took the others out to "
+                  "agree. They stay described, whole and counted, until a beat takes "
+                  "them out -- an exit, being led out, a cut to another room, 'alone' -- "
+                  "or you frame the shot yourself (a close-up, a medium shot)")
         if partners_held:
             notes.append(
                 "kept in frame as a partner in a sex scene -- "
@@ -10526,10 +10666,10 @@ class H3LongVideos:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in restarted)} start FRESH rather "
                 f"than from the previous shot's last frame, because the shot before "
-                f"took something off -- that is restart_after_removal, and it is what "
+                f"took something off -- that is keep_frame_after_removal turned off, and it is what "
                 f"stops a garment being inherited back through the keyframe. It costs "
-                f"a visible cut at each of those points. Turn it off to keep the "
-                f"chain unbroken and accept the risk")
+                f"a visible cut at each of those points. Turn keep_frame_after_removal back "
+                f"on to keep the chain unbroken and accept the risk")
         if exposed_by_beat:
             notes.append(
                 "a beat NAMES something the wardrobe says is covered: "
@@ -11460,16 +11600,11 @@ class H3LongVideos:
             elif i == 0 and _first_is_plate and shot_handoff is not None:
                 _handoff_ref = True
                 _plate_on = i + 1
-            elif i in _placed_shots:
-                _was_here = _frame_cast(i - 1, last=True)
-                _here_now = plan.shots[i].cast
-                if refs_ok and _cond_module.may_carry_frame(_was_here, _here_now, _tagged_names):
-                    _handoff_ref = True
-                    _carried.append((i + 1, list(_was_here),
-                                     list(_placed_shots[i])))
-                else:
-                    shot_handoff = None
-                    fresh.append(i + 1)
+            # A person introduced in position no longer breaks the chain: the shot
+            # opens on the last frame and the text walks them into it (see
+            # entrance_clause). Restarting cost the camera angle and every state the
+            # last frame carried -- REPORTED as angles changing between beats and beats
+            # losing what was in the one before.
 
             _extra = []
             _evened_who = ""            # who the evening-up frame below pictures
@@ -11926,7 +12061,7 @@ class H3LongVideos:
                 f"portrait of their own riding the next shot. Continuing from a frame that "
                 f"may still show the garment is how "
                 f"it comes back, and a picture outvotes the text. That costs a cut there, "
-                f"with nothing carried. Turn restart_after_removal off to keep the "
+                f"with nothing carried. Turn keep_frame_after_removal on to keep the "
                 f"continuity instead")
         if _carried:
             notes.append(

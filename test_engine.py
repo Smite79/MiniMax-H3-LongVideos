@@ -666,6 +666,46 @@ def test_a_garment_comes_off_the_person_it_belongs_to():
           str(st3.person("Kate").removed))
 
 
+def test_only_a_real_release_takes_anything_off():
+    """REPORTED: restraints breaking and coming undone when nothing undid them.
+
+    A release word and a "her" anywhere in the beat took every piece off at once --
+    "releases her ARM", "unties her HAIR", "pulls off her SNEAKERS", "tries to pull
+    her hands free". And a real release of one piece looked for it on the person
+    doing the releasing, so "Dan removes her gag" left the gag on her."""
+    print("\n=== only a real release takes anything off ===")
+    cast, pron = ["Ana", "Dan"], {"Ana": "she", "Dan": "he"}
+    setup = ("Dan cuffs Ana's wrists behind her back with steel handcuffs and locks a "
+             "leather collar around her neck, then gags her with a ball gag.")
+
+    def left(beat):
+        st = E.SceneState()
+        st.read(setup, cast, 1, pronouns=pron)
+        st.read(beat, cast, 2, pronouns=pron)
+        return sorted(r.item for p in st.people.values() for r in p.hardware.values())
+
+    everything = left("Ana waits.")
+    for beat in ("Dan releases her arm.", "Dan unties her hair.", "Dan pulls off her sneakers.",
+                 "Ana tries to pull her hands free.", "Dan frees his hands and grabs her hips.",
+                 "Ana struggles to free herself.", "Ana tries to slip the cuffs off.",
+                 "Dan lets go of her.", "Dan takes her by the chin.", "Dan removes Ana's clothes.",
+                 "Dan unlocks the door.", "Dan removes his belt."):
+        check(f"nothing comes off: {beat!r}", left(beat) == everything, str(left(beat)))
+    for beat, gone in (("Dan removes her gag.", {"gag"}),
+                       ("Dan pulls the gag out of her mouth.", {"gag"}),
+                       ("Dan ungags her.", {"gag"}),
+                       ("Dan takes the collar off.", {"leather collar"}),
+                       ("Dan unlocks Ana's collar.", {"leather collar"}),
+                       ("Dan unlocks the cuffs.", {"cuffs", "steel handcuffs"}),
+                       ("Dan uncuffs Ana.", {"cuffs", "steel handcuffs"}),
+                       ("Dan unties her wrists.", {"cuffs", "steel handcuffs"}),
+                       ("Dan frees her hands.", {"cuffs", "steel handcuffs"})):
+        check(f"only that piece comes off: {beat!r}",
+              left(beat) == sorted(set(everything) - gone), str(left(beat)))
+    for beat in ("Dan releases her.", "Ana is released.", "Dan sets her free."):
+        check(f"all of it comes off: {beat!r}", left(beat) == [], str(left(beat)))
+
+
 def main():
     test_two_things_in_one_beat()
     test_a_neck_is_not_behind_a_back()
@@ -691,6 +731,7 @@ def main():
     test_each_clause_owns_its_change()
     test_descriptions_and_places_have_owners()
     test_a_garment_comes_off_the_person_it_belongs_to()
+    test_only_a_real_release_takes_anything_off()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

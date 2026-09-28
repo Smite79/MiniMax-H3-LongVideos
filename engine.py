@@ -1275,6 +1275,155 @@ class Restraint:
                 f"{self.position!r},{self.anchor!r})")
 
 
+# WHAT FREES SOMEBODY, AND WHAT ONLY LOOKS LIKE IT.
+_ATTEMPT = re.compile(
+    r"\b(?:try|tries|tried|trying|attempts?|attempted|attempting|struggles?|struggled|"
+    r"struggling|strains?|strained|straining|fights?|fought|fighting|tugs?|tugged|"
+    r"tugging|can't|cannot|can\s+not|couldn't|could\s+not|fails?|failed|failing|"
+    r"unable|begs?|begged|begging|pleads?|pleaded|pleading|wants?|wanted|wishes|"
+    r"hopes?|refuses?|refused|won't|doesn't|does\s+not|never|without|almost|nearly)\b",
+    re.I)
+_TAKE_AWAY = re.compile(
+    r"\b(?:takes?|took|taking|pulls?|pulled|pulling|slips?|slipped|slipping|lifts?|"
+    r"lifted|lifting|gets?|got|getting|eases?|eased|easing|peels?|peeled|peeling|rips?|"
+    r"ripped|ripping|tears?|tore|tearing|yanks?|yanked|yanking|unwinds?|unwound|"
+    r"unwraps?|unwrapped|cuts?|snips?|snipped|works?|worked|unhooks?|unhooked|"
+    r"unclasps?|unclasped|drags?|dragged|tugs?|tugged)\b", re.I)
+
+
+def _off_after(beat, at, canon):
+    """Is the item at `at` followed, inside its clause, by off / out / away / loose?"""
+    pat = next((p for p, n, _pt in HARDWARE if n == canon), None)
+    m = re.compile(r"\b(?:" + pat + r")\b", re.I).search(beat, at) if pat else None
+    end = m.end() if m else at
+    return bool(re.match(r"^[^,;.!?]{0,30}?\b(?:off|out|away|loose)\b", beat[end:], re.I))
+
+
+# One pair of handcuffs written two ways -- "cuffs her wrists" and "the steel
+# handcuffs" -- is one thing to take off.
+_SAME_THINGS = (frozenset(("cuffs", "handcuffs")),)
+
+
+def _same_thing(a, b):
+    return a == b or any(a in g and b in g for g in _SAME_THINGS)
+
+
+_FREE_VERB_ITEMS = (
+    (r"uncuff", ("cuffs", "handcuffs", "manacles", "ankle cuffs", "wrist irons")),
+    (r"ungag", ("gag",)),
+    (r"unchain", ("chain",)),
+    (r"unshackl", ("shackles", "leg irons", "ankle irons")),
+    (r"unstrap", ("straps",)),
+    (r"unblindfold", ("blindfold",)),
+    (r"unti|untying|unbind|unbound", ("rope", "tape", "straps", "zip ties", "scarves",
+                                     "stockings", "belt", "ties", "sheet", "bandana",
+                                     "laces", "cling film", "steel cable", "tether")),
+)
+_FREE_PART = {"wrist": "wrists", "wrists": "wrists", "hand": "wrists", "hands": "wrists",
+              "ankle": "ankles", "ankles": "ankles", "feet": "ankles", "foot": "ankles",
+              "leg": "ankles", "legs": "ankles", "neck": "neck", "throat": "neck",
+              "mouth": "mouth", "eyes": "eyes", "arms": "arms", "arm": "arms"}
+_FREE_VERBS = (r"unlocks?|unlocked|unlocking|unties?|untied|untying|unbinds?|unbound|"
+               r"unbinding|unchains?|unchained|unchaining|uncuffs?|uncuffed|uncuffing|"
+               r"unshackles?|unshackled|unstraps?|unstrapped|ungags?|ungagged|"
+               r"unblindfolds?|unblindfolded|releases?|released|releasing|frees|freed|"
+               r"freeing|to\s+free")
+
+
+def person_releases(beat, cast, pronouns=None, subject="", state=None):
+    """[(name, part or None, only these canons or None)] a beat frees a PERSON of.
+
+    The object has to be the person, and what follows it decides how much: nothing
+    (or "from ...") is all of it, a restrainable part is what is on that part, and
+    any other noun is not a restraint at all -- "releases her ARM" is a grip let go,
+    "unties her HAIR" is hair. A try is not a release, and neither is "free" as an
+    adjective: "pulls her hands free" is her straining, not him unlocking anything.
+    A verb that names its item frees only that item: "uncuffs" leaves the collar."""
+    b = str(beat or "")
+    people = [n for n in (cast or []) if n]
+    held = [n for n in people
+            if state is not None and n in state.people and state.people[n].hardware]
+    if not held:
+        return []
+    name_alt = "|".join(re.escape(n) for n in sorted(people, key=len, reverse=True))
+    obj = r"(her|him|them|his|their" + (r"|(?-i:" + name_alt + r")(?:['’]s)?" if name_alt else "") + r")"
+    out = []
+    pat = re.compile(r"\b(" + _FREE_VERBS + r")\s+" + obj + r"(?![\w'’])"
+                     r"(?:\s+(?:own\s+)?(\w+))?", re.I)
+    passive = re.compile(r"\b(she|he|they" + (r"|(?-i:" + name_alt + r")" if name_alt else "")
+                         + r")\s+(?:is|was|gets|got|has\s+been|is\s+being|finally\s+is)\s+"
+                         r"(?:\w+ly\s+)?(released|freed|untied|uncuffed|unchained|"
+                         r"unshackled|unstrapped|ungagged|unbound|set\s+free|cut\s+free|"
+                         r"cut\s+loose)\b", re.I)
+    sets_free = re.compile(r"\b(sets?|set|cuts?|cut)\s+" + obj + r"\s+(?:free|loose)\b", re.I)
+
+    def _who(word, possessive):
+        w = word.lower().rstrip("'’s") if word.lower().endswith(("'s", "’s")) else word.lower()
+        for n in people:
+            if word.startswith(n):
+                return n
+        group = {"her": "she", "him": "he", "them": "they", "his": "he",
+                 "their": "they", "she": "she", "he": "he", "they": "they"}.get(w)
+        if not group:
+            return ""
+        declared = any((pronouns or {}).get(n) == group for n in people)
+        if declared:
+            fits = [n for n in people if (pronouns or {}).get(n) == group]
+            if possessive and subject in fits:
+                return subject
+            others = [n for n in fits if n != subject]
+            return others[0] if len(others) == 1 else (fits[0] if len(fits) == 1 else "")
+        # Nobody declared a pronoun: the one person in hardware, for an object.
+        return held[0] if (len(held) == 1 and not possessive) else ""
+
+    def _only(verb):
+        v = verb.lower()
+        for stem, items in _FREE_VERB_ITEMS:
+            if re.match(stem, v):
+                return set(items)
+        return None
+
+    for m in pat.finditer(b):
+        clause_start = max(b.rfind(c, 0, m.start()) for c in ".;!?,") + 1
+        if _ATTEMPT.search(b[clause_start:m.start()]):
+            continue
+        verb, word, nxt = m.group(1), m.group(2), (m.group(3) or "")
+        possessive = word.lower() in ("his", "their") or word.endswith(("'s", "’s"))
+        part = None
+        if nxt and nxt.lower() not in ("from", "of", "and", "then", "so", "before",
+                                       "after", "as", "with", "at", "in", "to", "while"):
+            part = _FREE_PART.get(nxt.lower())
+            if part is None:
+                continue                    # her hair, her sneakers: not a restraint
+            # "releases her arm" / "her hand" is a grip let go.
+            if re.match(r"releas", verb, re.I) and nxt.lower() in ("arm", "arms", "hand", "hands"):
+                continue
+            possessive = True
+        elif word.lower() == "her" and not nxt:
+            possessive = False
+        elif word.lower() in ("his", "their"):
+            continue                        # "unlocks his" + nothing: not a person freed
+        who = _who(word, possessive)
+        if who and who in held:
+            out.append((who, part, _only(verb)))
+    for m in passive.finditer(b):
+        clause_start = max(b.rfind(c, 0, m.start()) for c in ".;!?,") + 1
+        if _ATTEMPT.search(b[clause_start:m.start()]):
+            continue
+        who = _who(m.group(1), False) if m.group(1).lower() in ("she", "he", "they") \
+            else next((n for n in people if m.group(1) == n), "")
+        if who and who in held:
+            out.append((who, None, _only(m.group(2))))
+    for m in sets_free.finditer(b):
+        clause_start = max(b.rfind(c, 0, m.start()) for c in ".;!?,") + 1
+        if _ATTEMPT.search(b[clause_start:m.start()]):
+            continue
+        who = _who(m.group(2), False)
+        if who and who in held:
+            out.append((who, None, None))
+    return out
+
+
 class Person:
     __slots__ = ("name", "hardware", "worn", "removed", "displaced",
                  "posture", "place", "bare")
@@ -1362,6 +1511,21 @@ class SceneState:
                 p.worn.append(g)
         return p
 
+    def _holders_of(self, canon, beat, at, named, subject, cast, pronouns):
+        """Who is wearing the `canon` a beat takes off -- the names in its clause that
+        hold one, else the possessive in front of it, else the only person in one."""
+        holders = [n for n, q in self.people.items()
+                   if any(_same_thing(k[0], canon) for k in q.hardware)]
+        if not holders:
+            return []
+        hit = [n for n in (named or []) if n in holders]
+        if hit:
+            return hit
+        owner = possessor_at(beat, at, list(cast or self.people), subject, pronouns)
+        if owner in holders:
+            return [owner]
+        return holders if len(holders) == 1 else []
+
     # -- reading a beat ----------------------------------------------------
     def read(self, beat, cast=(), shot=0, pronouns=None):
         """Update the state from one beat, and report what CHANGED.
@@ -1393,7 +1557,7 @@ class SceneState:
         applying = bool(spans) and bool(_APPLY.search(beat))
         releasing = bool(_RELEASE.search(beat))
 
-        if applying or releasing:
+        if spans:
             _last = None            # (wearer, at) of the last item this beat applied
             for canon, part, written, at in spans:
                 clause, lo = _clause_at(beat, at, boundaries)
@@ -1406,19 +1570,38 @@ class SceneState:
                 # on her wrists". The second clause has no verb of its own, so it was
                 # skipped and the cuffs were never on her. An object joined by "and"
                 # straight after an applied one, with no verb between, shares it.
+                # "Dan takes the collar off", "pulls the gag out of her mouth": the
+                # verb and its particle either side of the item. Only "takes off" in one
+                # piece was a release, so these left the collar and the gag on for good.
+                if release_at < 0 and _TAKE_AWAY.search(clause[:item_at]) \
+                        and _off_after(beat, at, canon):
+                    release_at = max(m.start() for m in _TAKE_AWAY.finditer(clause[:item_at]))
+                # A TRY IS NOT A RELEASE: "tries to slip the cuffs off" leaves them on.
+                if release_at >= 0 and _ATTEMPT.search(clause[:release_at]):
+                    release_at = -1
+                # The verb NEAREST the item is the one acting on it -- but not the item's
+                # own word: "unlocks Bea's HANDCUFFS" is a release, even though
+                # "handcuffs" is also a verb.
+                if release_at >= 0 and apply_at > release_at and apply_at != item_at:
+                    release_at = -1
                 _shares = bool(apply_at < 0 and release_at < 0 and _last is not None
                                and _SHARED_OBJECT.match(beat[_last[1]:at]))
                 if apply_at < 0 and release_at < 0 and not _shares:
                     continue
                 local_who = names_in(clause, cast)
+                if release_at >= 0:
+                    # OFF THE PERSON WEARING IT, not the one doing the taking: "Dan
+                    # removes her gag" looked for a gag on Dan, found none, and the gag
+                    # stayed on her. REPORTED as restraints that would not stay put.
+                    for _n in self._holders_of(canon, beat, at, local_who, subject,
+                                               cast, pronouns):
+                        _q = self.people[_n]
+                        for key in [k for k in list(_q.hardware) if _same_thing(k[0], canon)]:
+                            changed["released"].append((_n, _q.hardware.pop(key)))
+                    continue
                 wearer = (_last[0] if (_shares and not local_who)
                           else _wearer(clause, local_who or who, subject, cast))
                 p = self.person(wearer)
-                if release_at >= 0:
-                    keys = [k for k in list(p.hardware) if k[0] == canon]
-                    for key in keys:
-                        changed["released"].append((wearer, p.hardware.pop(key)))
-                    continue
                 # A MENTION NEVER STRIPS A RECORD. The same piece named again -- "checks
                 # the cuffs are locked" -- keeps the fuller name it went on under and
                 # what it is fastened to, unless this text gives new ones.
@@ -1435,16 +1618,25 @@ class SceneState:
                 p.hardware[(canon, part)] = Restraint(_item, part, _pos, _anc, shot)
                 changed["applied"].append((wearer, p.hardware[(canon, part)]))
                 _last = (wearer, at)
-        if releasing and not spans:
-            held = [n for n, q in self.people.items() if q.restrained()]
-            wearer = next((n for n in who if n in held),
-                          held[0] if len(held) == 1 else subject)
-            p = self.person(wearer)
-            if re.search(r"\b(?:them|it|her|him|everything|all\s+of\s+it)\b",
-                         beat, re.I):
-                # "the guard releases her" names no item, so all of it comes off.
-                while p.hardware:
-                    changed["released"].append((wearer, p.hardware.popitem()[1]))
+        # A PERSON FREED, rather than an item: "the guard releases her", "Dan unties
+        # Ana's wrists", "Ana is uncuffed". This used to be any release word and any
+        # "her" anywhere in the beat -- so "Dan releases her ARM", "unties her HAIR",
+        # "pulls off her SNEAKERS" and "Ana tries to pull her hands free" each took
+        # every restraint she had off at once. REPORTED as restraints breaking and
+        # coming undone when nothing in the script undid them. See person_releases.
+        for _n, _part, _only in person_releases(beat, cast, pronouns, subject, self):
+            _q = self.people.get(_n)
+            if _q is None:
+                continue
+            _keys = [k for k in list(_q.hardware)
+                     if (_part is None or k[1] == _part)
+                     and (_only is None or k[0] in _only)]
+            if not _keys and _only is not None:
+                # "Dan unties her" -- or her wrists -- when she is cuffed, not tied: the
+                # author freed her, or that part of her, whatever the verb suits.
+                _keys = [k for k in list(_q.hardware) if _part is None or k[1] == _part]
+            for key in _keys:
+                changed["released"].append((_n, _q.hardware.pop(key)))
 
         # What a partial strip keeps is named after "takes off", and is not coming off.
         _keeps = strips_to(beat)

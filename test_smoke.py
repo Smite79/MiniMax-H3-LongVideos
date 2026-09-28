@@ -736,8 +736,11 @@ def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
           run_node(P, plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
     check("two in the shot: the terror is hers and is named",
           "McKenna's face carries" in sh[0] and "The face carries" not in sh[0], sh[0][-120:])
-    check("one in the shot: nobody else it could be",
-          "The face carries it: the expression is delighted" in sh[1], sh[1][-120:])
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
+    check("Dan still in the frame: the feeling is hers by name",
+          "McKenna's face carries it: the expression is delighted" in sh[1], sh[1][-120:])
     check("two feelings, two faces", "Dan's face carries furious" in sh[2]
           and "McKenna's carries terrified" in sh[2], sh[2][-130:])
     check("a new predicate does not hand it to the other one",
@@ -1123,7 +1126,10 @@ def test_guard_and_layers_end_to_end():
     check("four beats, four shots", len(sh) == 4)
     check("Jon is absent from the shot he is not in", "Jon: 34" not in sh[0])
     check("...and present in the one he is", "Jon: 34" in sh[1])
-    check("...and alone once he leaves her behind", "Maya: 27" not in sh[3])
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
+    check("...and she stays in the shot he walks out of", "Maya: 27" in sh[3])
     check("Maya is kept where a pronoun refers to her", "Maya: 27" in sh[1])
     # The scarf is under the jacket, read from the script's own wording.
     check("the covered layer is not described", "grey wool scarf" not in sh[0])
@@ -1636,8 +1642,13 @@ def test_a_two_word_sheet_name_does_not_duplicate_her():
     mem = "Mistress Vale: she, 38, tall, dark hair, a black dress.\nAna: she, 24."
     got = _shots("A panelled study.\n\nThe Mistress stands at the window.\n\n"
                  "Ana kneels by the desk.", character_memory=mem)
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
     check("the sheet line is attributed, not global",
-          "tall, dark hair" not in got[1], " ".join(got[1].split())[:170])
+          got[1].count("tall, dark hair") == 1
+          and "Mistress Vale: she, 38, tall, dark hair" in got[1],
+          " ".join(got[1].split())[:170])
     check("...and she is described in her own shot",
           "tall, dark hair" in got[0], " ".join(got[0].split())[:170])
     # The old failure in one assertion: two descriptions of a woman in one shot.
@@ -1779,13 +1790,16 @@ def test_the_count_counts_who_the_text_names():
              "Ana's eyes and head are turned"),
             ("a bare region held past its owner's shot",
              "A room.\n\nAna takes off her jeans.\nremove: jeans\n\nBen walks in.",
-             "Ana's legs are bare")):
+             "Her legs are bare")):
         shots = _shots_of(run_node(script, character_memory=mem, plan_only=True))
         second = " ".join(shots[1].split())
         check(f"{label}: the clause still speaks", clause in second, second[:200])
         check(f"...and the count includes her",
               "There are two people in the shot" in second, second[:200])
-        check(f"...without describing her", "Ana:" not in second, second[:200])
+        # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+        # described until a beat takes them out. REPORTED as beats losing what was in the
+        # beat before; asked for as both characters entirely in the shot.
+        check(f"...and describes her, still in the frame", "Ana:" in second, second[:200])
 
     # A shot that names nobody extra counts what it describes, as before.
     plain = _shots_of(run_node("A kitchen.\n\nAna pours coffee.\n\nAna drinks it.",
@@ -1798,8 +1812,12 @@ def test_the_count_counts_who_the_text_names():
           "There are two people in the shot" in pair[0], pair[0][-120:])
     carried = _shots_of(run_node("A kitchen.\n\nAna and Ben sit at the table.\n\nBen drinks.",
                                  character_memory=mem, plan_only=True))
-    check("a carried person nothing says anything about is not counted",
-          "There is one person in the shot" in carried[1], carried[1][-160:])
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
+    check("a person still in the frame is described and counted",
+          "There are two people in the shot" in carried[1] and "Ana:" in carried[1],
+          carried[1][-160:])
 
 
 def test_a_length_goes_where_it_is_put():
@@ -1925,7 +1943,8 @@ def test_any_restraint_holds_from_shot_to_shot():
               all(HOLD.search(sh) for sh in shots[2:]), shots[-1][-140:])
         if legs:
             check(f"...and the legs are placed by {beat[:26]!r}",
-                  all("Both legs are" in sh for sh in shots[2:]), shots[-1][-140:])
+                  all(re.search(r"Both (?:of Ana's )?legs are", sh) for sh in shots[2:]),
+                  shots[-1][-140:])
 
     for beat, cast, want in (("Mara hogties her with a steel cable.", ["Ana", "Mara"], "Ana"),
                              ("Mara cuffs her to the bed frame.", ["Ana", "Mara"], "Ana"),
@@ -2081,15 +2100,18 @@ def test_an_untagged_reference_is_claimed_or_held():
     print("\n=== an untagged reference is claimed, or it is not sent ===")
     img = lambda: torch.rand(1, H, W, 3)
     mem = "Dan: he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
-    P = "A kitchen.\n\nDan and Crystal sit at the table.\n\nCrystal laughs.\n\nDan pours coffee."
+    # Crystal stays described until she walks out -- still in the frame -- so the
+    # solo shot is the one after she leaves.
+    P = ("A kitchen.\n\nDan and Crystal sit at the table.\n\nCrystal walks out of the "
+         "kitchen.\n\nDan pours coffee.")
 
     rows = _encoded_refs(P, character_memory=mem, ref_image_1=img())
     counts = [n for _p, n in rows]
     tags = [sorted({int(x) for x in re.findall(r"<Picture (\d+)>", p)}) for p, _n in rows]
-    check("the two-person shot is sent no reference at all", counts[0] == 0, str(counts))
-    check("...and the solo shots get it, claimed on the person they describe",
-          counts[1:] == [1, 1] and tags[1] == [1, 2] and tags[2] == [1, 2]
-          and all("<Picture 2> is the frame this shot opens on" in p for p, _ in rows[1:]),
+    check("the two-person shots are sent no reference at all", counts[:2] == [0, 0], str(counts))
+    check("...and the solo shot gets it, claimed on the person it describes",
+          counts[2] == 1 and tags[2] == [1, 2]
+          and "<Picture 2> is the frame this shot opens on" in rows[2][0],
           f"{counts} {tags}")
     check("...on that person's own sheet entry", "Dan: <Picture 1>," in rows[2][0], rows[2][0][:160])
     info = str(run_node(P, character_memory=mem, ref_image_1=img())[2])
@@ -2441,11 +2463,12 @@ def test_a_body_not_in_the_shot_gets_no_position():
     check("...and her cuffs still described", "cuffs" in sh[2], sh[2][:220])
     check("info says she was kept", "kept in frame by their hardware" in
           str(run_node(P, plan_only=True, character_memory=MEM)[2]))
-    # He LEAVES, and the camera goes with him: she is not in that shot, and her
-    # body must not be described on his.
-    check("the shot he walks out of does not name her", "Mara:" not in sh[3], sh[3][:200])
-    check("...and does NOT place her arms on him", POSE not in sh[3], sh[3][:220])
-    check("...and says nothing about her cuffs", "cuffs" not in sh[3], sh[3][:220])
+    # He LEAVES and she stays: the camera holds, she is still in its frame, so she is
+    # still described -- and her arms are hers by name, never his.
+    check("the shot he walks out of keeps her", "Mara:" in sh[3], sh[3][:200])
+    check("...with her arms placed as HERS", "Both of Mara's arms are behind the body" in sh[3],
+          sh[3][:220])
+    check("...and her cuffs still described", "cuffs" in sh[3], sh[3][:220])
 
 def test_the_limb_position_leads_the_shot():
     """Reported, and not fixed by saying it more: wrists cuffed in FRONT of the body
@@ -2503,8 +2526,10 @@ def test_the_pronoun_swap_never_touches_your_words():
     print("\n=== a repeated naming becomes a pronoun, in the node's words only ===")
     mem = "Kate: she, 30, blue coat, scarf.\nSam: he, 34, black shirt."
     beat = 'Kate takes off her scarf and says: "It is warm in here."'
-    P = ('A living room.\n\nKate and Sam sit on the sofa and she says: "Sit down."\n\n'
-         + beat + "\n\nKate walks him down the hallway to the tiled bathroom.")
+    # Sam stands by the door and stays in the frame; Kate sits, so her posture and her
+    # line each name her -- and the second naming is spent as a pronoun.
+    P = ('A living room.\n\nKate sits on the sofa and Sam stands by the door. She says: '
+         '"Sit down."\n\n' + beat + "\n\nKate walks down the hallway to the tiled bathroom.")
     out = run_node(P, plan_only=True, character_memory=mem)
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", out[3]) if x.strip()]
     two, info = sh[1], str(out[2])
@@ -2704,8 +2729,16 @@ def test_a_cut_carries_the_people_across():
     mem = "Maya: she, 30, green sweater, grey jeans.\nOwen: he, 34, blue shirt."
     P = ("A living room.\n\nMaya and Owen sit on the couch.\n\nMaya takes off her sweater.\n\n"
          "Owen laughs.")
-    rows = _encoded_refs(P, character_memory=mem)
-    info = run_node(P, character_memory=mem)[2]
+    # BY DEFAULT the shot after a removal keeps the last frame as its keyframe -- the
+    # restart cost the camera angle and the scene's memory at every removal (REPORTED).
+    kept = _encoded_refs(P, character_memory=mem)
+    check("by default the shot after a removal keeps its keyframe",
+          [n for _, n in kept] == [0, 0, 0]
+          and "start FRESH" not in str(run_node(P, character_memory=mem)[2]),
+          str([n for _, n in kept]))
+    # Turned off, the old restart: carried as a claimed reference.
+    rows = _encoded_refs(P, character_memory=mem, keep_frame_after_removal=False)
+    info = run_node(P, character_memory=mem, keep_frame_after_removal=False)[2]
     check("the shot after a removal carries the frame as a reference",
           [n for _, n in rows] == [0, 0, 1], str([n for _, n in rows]))
     check("...claimed as the room, with everyone still in it",
@@ -2759,10 +2792,12 @@ def test_somebody_still_in_the_frame_is_not_back():
     check("...and nothing is recovered", "recovered a face" not in info)
     shots = _shots("A kitchen.\n\nDan pours coffee.\n\nCrystal sits down opposite Dan.\n\n"
                    "Crystal laughs.", character_memory=mem)
-    check("the reaction shot counts the one person it describes",
-          "There is one person in the shot" in shots[2]
-          and "two people" not in shots[2], shots[2][-160:])
-    check("...and does not describe the other", "Dan:" not in shots[2], shots[2][:120])
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
+    check("the reaction shot counts both people the frame holds",
+          "There are two people in the shot" in shots[2], shots[2][-160:])
+    check("...and describes him too", "Dan:" in shots[2], shots[2][:160])
 
     # Control: a real exit, and the return gets its picture.
     refs, info, _ = pictures("A kitchen.\n\nDan pours coffee.\n\nCrystal sits down opposite Dan.\n\n"
@@ -2854,7 +2889,9 @@ def test_a_carried_room_is_not_a_second_picture_of_somebody():
         run_node(P, character_memory="Mistress: she, 38, a black dress.\nAna: she, 24.")
     finally:
         S.build_conditioning = _bc
-    check("with no portrait in play the room is still carried", any(sent2), str(sent2))
+    # Introduced in position, she now walks into the kept frame instead of the frame
+    # being recomposed around her -- see entrance_clause.
+    check("with no portrait in play the frame stays the keyframe", not any(sent2), str(sent2))
 
 
 def test_a_bare_region_is_said_on_every_shot():
@@ -2888,7 +2925,8 @@ def test_a_bare_region_is_said_on_every_shot():
                    "Kate turns towards him.", character_memory=mem)
     check("a beat naming only the other person still says it",
           "chest" in other[1], " ".join(other[1].split())[-140:])
-    check("...and says WHOSE chest it is", "Kate's chest" in other[1],
+    check("...and says WHOSE chest it is",
+          "Kate's chest" in other[1] or "Kate wears only her jeans now. Her chest" in other[1],
           " ".join(other[1].split())[-140:])
     check("...and names her when both are described",
           "Kate's chest" in other[2], " ".join(other[2].split())[-140:])
@@ -3798,10 +3836,11 @@ def test_a_street_is_not_told_it_is_a_room():
     walls, floor, furniture and light" -- an instruction to draw walls and furniture."""
     print("\n=== a street is not called a room ===")
     mem = "Mara: she, 30, a denim jacket, jeans.\nDan: he, 35, a grey hoodie, jeans."
-    street = _encoder_rows("A busy public street in the afternoon.\n\nMara waits at the "
-                           "corner.\n\nDan stands beside Mara at the corner.",
-                           character_memory=mem)
-    s2 = street[1][0]
+    # The carried frame, where one is carried: after a removal, with the frame not kept.
+    street = _encoder_rows("A busy public street in the afternoon.\n\nMara and Dan wait "
+                           "together.\n\nMara takes off her jacket.\n\nDan looks at Mara.",
+                           character_memory=mem, keep_frame_after_removal=False)
+    s2 = street[-1][0]
     check("the carried frame on a street is claimed as this PLACE, by its surroundings",
           "is this place a moment earlier: the same surroundings, ground and light" in s2,
           s2[-240:])
@@ -3812,11 +3851,12 @@ def test_a_street_is_not_told_it_is_a_room():
                                        character_memory=mem, plan_only=True))[0].split())
     check("the frame clause holds the surroundings, not a room",
           "with the surroundings around it" in walk, walk[-160:])
-    room = _encoder_rows("A kitchen.\n\nMara waits by the sink.\n\nDan stands beside Mara "
-                         "by the sink.", character_memory=mem)
+    room = _encoder_rows("A kitchen.\n\nMara and Dan wait together.\n\nMara takes off her "
+                         "jacket.\n\nDan looks at Mara.", character_memory=mem,
+                         keep_frame_after_removal=False)
     check("...while an interior keeps the walls and furniture that hold a room still",
           "is this room a moment earlier: the same walls, floor, furniture and light"
-          in room[1][0], room[1][0][-240:])
+          in room[-1][0], room[-1][0][-240:])
     check("outdoors() needs evidence and keeps a café on a street a room",
           S.outdoors("", "A public street at night.") and S.outdoors("park")
           and not S.outdoors("", "A café on a busy street.")
@@ -4812,50 +4852,59 @@ def test_dialogue_headroom():
 
 
 def test_introducing_somebody_already_in_position():
-    print("\n=== a character introduced in position starts fresh ===")
+    """A character introduced in position used to restart the chain -- the frame was
+    carried only as a reference (on FastH3, not at all) and the shot recomposed around
+    them. REPORTED as camera angles changing between beats and beats losing what was
+    in the beat before. The shot now keeps the last frame and they come into it."""
+    print("\n=== a character introduced in position walks into the kept frame ===")
     mem = "Nora: 34, she, red hair.\nDan: 41, he, dark hair, navy overalls"
     tail = "\n\nNora picks up the spanner."
 
-    def encodes(beat2):
+    def encodes(beat2, **kw):
         vae = FakeVAE()
         info = run_node("Nora sets a toolbox on the bench.\n\n" + beat2 + tail,
-                        anchor="A workshop.", character_memory=mem, vae=vae)[2]
+                        anchor="A workshop.", character_memory=mem, vae=vae, **kw)[2]
         return vae.encodes, info
 
     n_placed, info = encodes("Dan is already sitting on the crate, watching her.")
-    check("an in-position introduction still carries the frame",
-          "carries the previous frame as a REFERENCE" in info)
+    check("an in-position introduction keeps the keyframe",
+          "carries the previous frame as a REFERENCE" not in info
+          and "start FRESH" not in info)
     check("...and the run says so", "introduces Dan in position" in info)
-    check("...naming what the room brings", "the room, the light and Nora come" in info)
-    check("...and how to keep it as the anchor", "Write the entrance" in info)
+    check("...saying the shot still opens on the last frame",
+          "still opens on the previous shot's last frame" in info)
+    check("...and how to say the entrance yourself", "Write the entrance" in info)
     check("intentional room carry does not report a low-strength reference",
           "anchor would be noised" not in info)
-    _s2 = re.split(r"\[Shot ", run_node(
-        "Nora sets a toolbox on the bench.\n\nDan is already sitting on the crate, "
-        "watching her." + tail, anchor="A workshop.", character_memory=mem)[3])[2]
-    check("the carried frame is claimed as the room",
-          "is this room a moment earlier" in _s2, _s2[-260:])
-    check("...naming who was in it", "Nora is the person there" in _s2)
-    check("...and who is already in place", "Dan is in this room too" in _s2)
-    check("...without the claim that nobody new joins",
-          "joined by anybody new" not in _s2)
+    for _model in (FakeModel(), FakeFastH3()):
+        _s2 = re.split(r"\[Shot ", run_node(
+            "Nora sets a toolbox on the bench.\n\nDan is already sitting on the crate, "
+            "watching her." + tail, anchor="A workshop.", character_memory=mem,
+            model=_model)[3])[2]
+        _nm = type(_model).__name__
+        check(f"{_nm}: he comes into the frame, the rest of it kept",
+              "Dan comes into the frame from its edge as the shot begins, and everything "
+              "already in the frame stays where it is." in _s2, _s2[:260])
+        check(f"{_nm}: ...right after the beat",
+              _s2.index("Dan comes into the frame") < _s2.index("Dan: 41"), _s2[:260])
+        check(f"{_nm}: ...with no reference claim", "a moment earlier" not in _s2)
+        check(f"{_nm}: ...and Nora, still in the frame, still described",
+              "Nora: 34" in _s2, _s2[:260])
     _run3 = run_node(
         "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
         "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
         character_memory=mem + "\nAda: 29, she, short hair")
     _s3 = re.split(r"\[Shot ", _run3[3])[2]
-    check("somebody the beat does not name keeps the frame carried",
-          "carries the previous frame as a REFERENCE" in _run3[2])
-    check("...claimed with everyone in it", "Nora and Ada are the people there" in _s3,
-          _s3[-220:])
-    check("...and counted as the two it describes",
-          "There are two people in the shot" in _s3, _s3[-220:])
+    check("everyone already in the frame stays in it",
+          "Nora: 34" in _s3 and "Ada: 29" in _s3, _s3[:260])
+    check("...and the newcomer joins them",
+          "Dan: 41" in _s3 and "Dan comes into the frame" in _s3, _s3[:260])
     _info4 = run_node(
         "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
         "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
         character_memory=mem + "\nAda: <Picture 1>, 29, she, short hair",
         ref_image_1=torch.rand(1, H, W, 3))[2]
-    check("a portrait in the frame keeps the fresh start",
+    check("a portrait in the frame keeps the keyframe too",
           "carries the previous frame as a REFERENCE" not in _info4)
     # Arriving is what the chain is FOR: he walks in from the frame before.
     n_arrive, info2 = encodes("Dan walks in through the side door and looks at her.")
@@ -5082,6 +5131,66 @@ def test_led_out_and_brought_back():
                   for s in _sh), " | ".join(s[:120] for s in _sh))
         check(f"{_nm}: ...said right after the beat, ahead of the sheet",
               all(s.index("head to feet") < s.index("Ana: she") for s in _sh))
+
+
+def test_the_chain_is_never_broken_mid_scene():
+    """REPORTED: camera angles changing between beats, restraints coming undone, and
+    beats losing what was in the one before.
+
+    Three causes, all in this file. A shot after any removal restarted -- recomposed
+    around a reference on H3, and on FastH3 started from NOTHING. A character
+    introduced without an entrance did the same. And a beat naming one of two people
+    described only that one, counting "one person" over a frame holding two, so the
+    model took the other out."""
+    print("\n=== the chain is never broken mid-scene ===")
+    mem = ("Ana: she, 25, long dark hair, a white crop top, blue denim shorts.\n"
+           "Dan: he, 35, short brown hair, a black t-shirt, grey jeans, a leather belt.")
+    beats = ["Ana stands in the middle of the basement.",
+             "Dan grabs Ana by the arm.",
+             "Dan cuffs Ana's wrists behind her back with steel handcuffs.",
+             "Dan pulls Ana's crop top off over her head.",
+             "Ana struggles against the cuffs.",
+             "Dan removes his belt.",
+             "Ana glares at him."]
+    for _model in (FakeModel(), FakeFastH3()):
+        _nm = type(_model).__name__
+        seen = []
+        _bc = S.build_conditioning
+
+        def spy(clip, vae, avae, prompt, *a, **k):
+            seen.append((k.get("handoff") is not None, bool(k.get("handoff_as_ref")), prompt))
+            return _bc(clip, vae, avae, prompt, *a, **k)
+        S.build_conditioning = spy
+        try:
+            info = str(run_node("A basement.\n\n" + "\n\n".join(beats),
+                                character_memory=mem, model=_model)[2])
+        finally:
+            S.build_conditioning = _bc
+        check(f"{_nm}: every shot after the first opens on the last frame",
+              all(h and not r for h, r, _p in seen[1:]),
+              str([(h, r) for h, r, _p in seen]))
+        check(f"{_nm}: ...nothing starts fresh", "start FRESH" not in info)
+        check(f"{_nm}: both of them described on every shot once both are there",
+              all("Ana:" in p and "Dan:" in p for _h, _r, p in seen[1:]),
+              " | ".join(p[:90] for _h, _r, p in seen))
+        check(f"{_nm}: the cuffs hold on every shot after they go on -- his belt included",
+              all("handcuffs" in p and "stay closed" in p for _h, _r, p in seen[3:]),
+              seen[5][2][-300:])
+    # The old name still works when it is passed by name, and restarts on H3 only.
+    old = str(run_node("A basement.\n\n" + "\n\n".join(beats[:5]), character_memory=mem,
+                       restart_after_removal=True)[2])
+    check("restart_after_removal=True, by name, still restarts on H3",
+          "(something came off in the shot before)" in old or "start FRESH" in old,
+          old[-300:])
+    fast = str(run_node("A basement.\n\n" + "\n\n".join(beats[:5]), character_memory=mem,
+                        keep_frame_after_removal=False, model=FakeFastH3())[2])
+    check("...and never on FastH3, where a restart is a start from nothing",
+          "start FRESH" not in fast and "something came off in the shot before" not in fast)
+    check("the widget is the new name, on by default",
+          S.H3LongVideos.INPUT_TYPES()["optional"].get("keep_frame_after_removal", (0, {}))[1]
+          .get("default") is True
+          or S.H3LongVideos.INPUT_TYPES()["required"].get("keep_frame_after_removal", (0, {}))[1]
+          .get("default") is True)
 
 
 def test_a_name_with_no_entry_end_to_end():
@@ -6081,7 +6190,7 @@ def test_detail_trend():
     falling = S.detail_report([(0.09, .2), (0.08, .2), (0.07, .2), (0.06, .2)])
     check("a falling chain is called out", "DOWN 33%" in falling)
     check("...with the cause named", "re-encodes it as the next" in falling)
-    check("...and a way out", "restart_after_removal" in falling)
+    check("...and a way out", "keep_frame_after_removal" in falling)
     check("a flat chain is not alarming",
           "flat within" in S.detail_report([(0.09, .2), (0.089, .2), (0.091, .2)]))
     check("one shot claims no trend", S.detail_report([(0.09, .2)]) == "")
@@ -7812,7 +7921,10 @@ def test_the_opening_does_not_name_people_a_shot_leaves_out():
                                character_memory=memory, plan_only=True))
     check("two solo shots", len(shots) == 2)
     check("Owen's shot does not name Maya", "Maya" not in shots[0])
-    check("Maya's shot does not name Owen", "Owen" not in shots[1])
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
+    check("Maya's shot keeps Owen, still in the frame", "Owen:" in shots[1])
     check("...and both keep the station", all("train station" in sh for sh in shots))
     # A pronoun after a cut sentence goes with it.
     shots = _shots_of(run_node("Maya sits at her desk in an office. She types a report.\n\n"
@@ -7841,9 +7953,11 @@ def test_a_sheet_written_first_is_a_sheet():
                                "A park.\n\nMaya sits on a bench.\n\nOwen feeds the ducks.",
                                plan_only=True))
     check("the sheet is not a shot of its own", len(shots) == 2)
-    check("Owen's shot does not describe Maya", "Maya:" not in shots[1] and "Owen:" in shots[1])
-    check("...and counts the one person it describes",
-          "There is one person in the shot" in shots[1], shots[1][-160:])
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
+    check("Owen's shot keeps Maya, still on her bench", "Maya:" in shots[1] and "Owen:" in shots[1])
+    check("...and counts both", "There are two people in the shot" in shots[1], shots[1][-160:])
     check("the park is still the scene", all(sh.startswith("A park.") for sh in shots))
     # Control: a heading with a colon is not a person and stays the scene.
     shots = _shots_of(run_node("Interior: a kitchen at night.\n\nMaya: she, 38, green sweater.\n\n"
@@ -8027,11 +8141,12 @@ def test_a_pronoun_in_a_description_is_not_the_declared_one():
           S.sheet_pronoun("Maya: 38, a woman with red hair.") == "she"
           and S.sheet_pronoun("Owen: 42, a tall man, blue shirt.") == "he")
     check("...but a possessive is not the person", S.sheet_pronoun("Kit: 25, brother's jacket.") is None)
-    shots = _shots_of(run_node("A kitchen.\n\nMaya pours coffee.\n\nHe sits down.\n\nShe smiles.",
-                               character_memory="Maya: 38, a woman with red hair, green sweater.\n"
-                                                "Owen: 42, a tall man, blue shirt.", plan_only=True))
-    check("'He sits down' reaches the man the sheet calls a man", _described_in(shots[1], ["Maya", "Owen"]) == ["Owen"])
-    check("...and 'She smiles' the woman", _described_in(shots[2], ["Maya", "Owen"]) == ["Maya"])
+    # Each as a first beat: after one, whoever is still in the frame is described too.
+    _mem = "Maya: 38, a woman with red hair, green sweater.\nOwen: 42, a tall man, blue shirt."
+    he = _shots_of(run_node("A kitchen.\n\nHe sits down.", character_memory=_mem, plan_only=True))
+    she = _shots_of(run_node("A kitchen.\n\nShe smiles.", character_memory=_mem, plan_only=True))
+    check("'He sits down' reaches the man the sheet calls a man", _described_in(he[0], ["Maya", "Owen"]) == ["Owen"])
+    check("...and 'She smiles' the woman", _described_in(she[0], ["Maya", "Owen"]) == ["Maya"])
 
 
 def test_a_name_used_as_a_word_stages_nobody():
@@ -8042,7 +8157,7 @@ def test_a_name_used_as_a_word_stages_nobody():
     shots = _shots_of(run_node("A porch.\n\nMaya waits by the door. Will he come?\n\nWill opens the gate.",
                                character_memory=memory, plan_only=True))
     check("the waiting shot describes only Maya", _described_in(shots[0], ["Will", "Maya"]) == ["Maya"])
-    check("...and Will is there when he actually arrives", _described_in(shots[1], ["Will", "Maya"]) == ["Will"])
+    check("...and Will is there when he actually arrives", "Will" in _described_in(shots[1], ["Will", "Maya"]))
     shots = _shots_of(run_node("A doorway.\n\nOwen knocks. May I come in?",
                                character_memory="May: she, 30, blue dress.\nOwen: he, 42, blue shirt.", plan_only=True))
     check("'May I come in?' does not stage May", _described_in(shots[0], ["May", "Owen"]) == ["Owen"])
@@ -9268,7 +9383,11 @@ def test_a_scene_keeps_its_room_and_its_people():
     shots = _shots_of(run_node(
         room + "\n\nKate and Dan sit on the bed.\n\nKate reads a book.",
         character_memory=mem, plan_only=True))
-    check("a scene with no contact in it is unchanged", "Dan:" not in shots[1], shots[1][:160])
+    # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
+    # described until a beat takes them out. REPORTED as beats losing what was in the
+    # beat before; asked for as both characters entirely in the shot.
+    check("a scene with no contact keeps him too, still in the frame", "Dan:" in shots[1],
+          shots[1][:160])
 
 
 def test_the_anchor_and_the_body_agree():
@@ -9460,6 +9579,7 @@ def main():
     test_introducing_somebody_already_in_position()
     test_back_after_a_shot_away()
     test_led_out_and_brought_back()
+    test_the_chain_is_never_broken_mid_scene()
     test_a_name_with_no_entry_end_to_end()
     test_the_soundtrack_is_the_models_own()
     test_shot_one_is_the_only_unpinned_shot()
