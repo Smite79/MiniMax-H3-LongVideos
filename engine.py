@@ -431,6 +431,50 @@ def staged_text(text):
     return " ".join(s for s in re.split(r"(?<=[.!?])\s+", staged) if not s.rstrip().endswith("?"))
 
 
+# Where an order, a request or an intention stops: the end of its clause, or an "and"
+# / "then" that starts a new subject's action -- "tells her to kneel AND SHE KNEELS".
+_CLAUSE_TAIL = (r"(?:(?!\b(?:and|then|but|while|before|after|as|until)\s+"
+                r"(?:she|he|they|it|(?-i:[A-Z][\w'’-]*))\b|\bthen\b"
+                # "...and GRABS her arm": a verb of its own is the subject acting again.
+                r"|\band\s+(?!(?:his|this|is|was|has|as|us|yes|less|always|perhaps)\b)"
+                r"[a-z]+(?:s|ed)\b)[^,;.!?])*")
+# "is going to THE kitchen" is going there now; "is going to TIE her" is not yet.
+_TO_A_VERB = (r"to\s+(?!(?:the|a|an|her|his|their|my|your|our|its|this|that|these|those|"
+              r"bed|work|school|church|town|sleep)\b)")
+_NOT_YET = re.compile(
+    # "Dan tells Ana to take off her shorts" -- an order, reported.
+    r"\b(?:tells?|told|telling|orders?|ordered|ordering|asks?|asked|asking|commands?|"
+    r"commanded|instructs?|instructed|begs?|begged|begging|pleads?\s+with|pleaded\s+with|"
+    r"urges?|urged|warns?|warned|dares?|dared|invites?|invited|motions?\s+for|"
+    r"signals?\s+for|gestures?\s+for|beckons?\s+for|waits?\s+for|wants?|wanted|"
+    r"expects?|expected|needs?|needed|would\s+like|'d\s+like)\s+"
+    r"(?:(?!to\b)[\w'’-]+\s+){0,3}?(?:not\s+)?to\s+" + _CLAUSE_TAIL
+    # "Dan threatens to gag her", "is going to tie her up", "is about to", "plans to".
+    + r"|\b(?:threatens?|threatened|promises?|promised|plans?|planned|intends?|intended|"
+    r"offers?|offered|decides?|decided|prepares?|prepared|hopes?|hoped|means?|meant)\s+"
+    r"to\s+" + _CLAUSE_TAIL
+    + r"|\b(?:is|are|was|were|am|'s|'re)\s+(?:going|about|planning|preparing|getting\s+"
+    r"ready|ready|set)\s+" + _TO_A_VERB + _CLAUSE_TAIL
+    # "Dan will cuff her later", "she could run" -- not now.
+    + r"|\b(?:will|would|shall|could|should|might|may|must|won't|wouldn't|"
+    r"can't|cannot|couldn't|shouldn't)\s+" + _CLAUSE_TAIL, re.I)
+
+
+def acted_text(text):
+    """What a beat ACTS OUT, now, in this shot: staged_text, with the orders, requests
+    and intentions taken out as well.
+
+    Everything that decides what HAPPENS in a shot -- a restraint going on, a garment
+    coming off, somebody kneeling, leaving, arriving -- has to read this, not the beat.
+    Read off the whole beat, "Dan tells Ana to take off her shorts" took the shorts off
+    in the shot that only asks for it, and a line saying "I will gag you" put the gag
+    on in the shot where it is threatened -- a beat early each time. REPORTED as
+    actions happening before they are supposed to take place, and dialogue being used
+    as an action. The words still go to the model exactly as written; only this node's
+    reading of what they stage changes."""
+    return re.sub(r"\s{2,}", " ", _NOT_YET.sub(" ", staged_text(text))).strip()
+
+
 _HW_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
               + "|".join(p for p, _n, _pt in HARDWARE) + r")\b")
 _PART_ONE = _rx(r"\b(" + "|".join(p for p, _n in PARTS) + r")\b")

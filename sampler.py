@@ -2175,6 +2175,46 @@ _ORDERED = re.compile(
     r"holds|open|opens|close|closes)\b", re.I)
 
 
+_REMOTE = re.compile(r"\b(?:phone|phones|mobile|cell|radio|walkie|intercom|speaker|"
+                     r"voicemail|call|calls|calling|texts?|message|letter|note|screen|"
+                     r"video\s+call|through\s+the\s+(?:door|wall|window)|from\s+"
+                     r"(?:outside|another\s+room|upstairs|downstairs))\b", re.I)
+
+
+# A line that OPENS on a command is said to somebody: "Go to the kitchen.", "Get out.",
+# "Please don't cuff me."
+_COMMAND = re.compile(
+    r"^\s*(?:(?:please|now|just|okay|ok|come\s+on)[,!]?\s+)?(?:(?:don't|do\s+not|never)\s+)?"
+    r"(?:go|get|come|sit|stand|kneel|lie|lay|turn|take|put|give|open|close|look|stop|"
+    r"wait|stay|hold|move|strip|undress|spread|bend|crawl|walk|run|leave|keep|show|"
+    r"face|pull|push|drop|raise|lift|lower|shut|be|eat|drink|relax|breathe|listen|"
+    r"watch|follow|let|help|untie|release|touch|kiss|hurt|cuff|tie|gag|beg|say|tell|"
+    r"answer|hurry|calm|quiet|shush|hush|sleep|wake|climb|lean|step|roll|arch|smile|"
+    r"swallow|suck|open|obey|behave|remove|unbutton|unzip)\b", re.I)
+
+
+def addressed_in(beat, sheet):
+    """The one person a beat's dialogue is SPOKEN TO, or "".
+
+    Only a line that says "you" to somebody -- never a question, which is how absence
+    is written -- and only where exactly one person on the sheet is not speaking.
+    Nobody down a phone, a radio or through a door."""
+    b = str(beat or "")
+    said = [m.group(0) for m in _QUOTED.finditer(b)]
+    if not said or _REMOTE.search(b):
+        return ""
+    lines = [x for x in re.split(r"(?<=[.!?])\s+", " ".join(
+        re.sub(r"</?d>|[\"“”]", " ", x) for x in said)) if x.strip()]
+    if not any((re.search(r"\byou(?:r|rs|rself)?\b", x, re.I) or _COMMAND.match(x))
+               and not x.rstrip(" .\"”").endswith("?") for x in lines):
+        return ""
+    talking = set(speakers_in(b, sheet) or [])
+    if not talking:
+        return ""
+    others = [n for n, _l in sheet_lines(sheet) if n and n not in talking]
+    return others[0] if len(others) == 1 else ""
+
+
 def told_to_act(beat, speakers, described):
     """Who is being TOLD to do something in this beat's dialogue. [] when nobody.
 
@@ -2185,21 +2225,83 @@ def told_to_act(beat, speakers, described):
     if not b:
         return []
     said = " ".join(m.group(0) for m in _QUOTED.finditer(b))
-    if not said or not _ORDERED.search(said):
+    if not said:
+        return []
+    _lines = [x for x in re.split(r"(?<=[.!?])\s+", re.sub(r"</?d>|[\"“”]", " ", said))
+              if x.strip()]
+    if not (_ORDERED.search(said) or _ACTS_VERB.search(said)
+            or any(_COMMAND.match(x) for x in _lines)):
         return []
     talking = {n for n in (speakers or []) if n}
     return [n for n in (described or []) if n and n not in talking]
 
 
-def told_hold(listeners):
-    """Give the listener something to be doing while the line is said."""
+# Verbs a line can ask for that _ORDERED did not know: the ones scenes like these run on.
+_ACTS_VERB = re.compile(
+    r"\b(?:strip|undress|spread|bend|crawl|cuff|tie|gag|blindfold|kiss|touch|suck|lick|"
+    r"spank|grab|choke|kneel|beg|open|show|face|climb|arch|roll|lean|walk|run|leave|"
+    r"move|drop|lift|raise|lower|unbutton|unzip|remove)\b", re.I)
+
+
+def ordered_in(beat, described, acted, sheet=""):
+    """Who a beat only ORDERS, THREATENS or INTENDS something for -- and who does not
+    act in it. [] when nobody.
+
+    "Dan tells Ana to take off her shorts" asks; "Dan is going to tie her up" means to.
+    Neither does anything in this shot, and read by the model as a description of the
+    shot, both were performed in it -- a beat early. REPORTED as actions happening
+    before they are supposed to take place. Somebody the beat gives an action of their
+    own ("...and she kneels") is left to it."""
+    staged = engine.staged_text(beat)
+    found = list(engine._NOT_YET.finditer(staged))
+    if not found:
+        return []
+    # The one GIVING an order is doing the talking, not waiting on it: "Dan tells Ana
+    # to..." holds Ana, not Dan. The nearest name before the order verb.
+    _order = re.compile(r"^(?:tell|told|order|ask|command|instruct|beg|begg|plead|urg|"
+                        r"warn|dar|invit|motion|signal|gestur|beckon)", re.I)
+    givers = set()
+    for m in found:
+        if _order.match(m.group(0)):
+            _before = [(mm.start(), n) for n in (described or []) if n
+                       for mm in re.finditer(r"\b" + re.escape(n) + r"\b",
+                                             re.split(r"[.;!?]", staged[:m.start()])[-1])]
+            if _before:
+                givers.add(max(_before)[1])
+    return [n for n in (described or [])
+            if n and n not in givers and not acts_in(acted, n, sheet, described)]
+
+
+def acts_in(acted, name, sheet="", described=()):
+    """Does `name` -- or the pronoun only they answer to here -- DO something in the
+    acted text? A name followed by a verb of its own: "she kneels", "Dan, shaking, sits"."""
+    t = str(acted or "")
+    who = [re.escape(name)]
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    pron = sheet_pronoun(rows.get(name, ""))
+    if pron in ("she", "he") and sum(1 for n in (described or [])
+                                     if sheet_pronoun(rows.get(n, "")) == pron) == 1:
+        who.append(pron)
+    return bool(re.search(
+        r"\b(?:" + "|".join(who) + r")\b(?:\s*,[^,.;]*,)?\s*,?\s*(?:(?:and|then)\s+)?(?:\w+ly\s+)?"
+        r"(?!(?:is|was|and|or|but|then|to|as|in|on|at|with|by|of|for)\b)[a-z]+(?:s|es|ed)\b",
+        t, re.I))
+
+
+def told_hold(listeners, heard=True):
+    """Give the listener something to be doing while the line is said -- and keep what
+    the line asks for OUT of this shot: where they are and what they wear, to the last
+    frame. Positively, and without stillness: the face goes on working. `heard` is
+    False for a threat or an intention nobody voices: there is nothing to listen to."""
     who = [n for n in (listeners or []) if n]
     if not who:
         return ""
-    if len(who) == 1:
-        return f" {who[0]} listens, wearing what the sheet already lists."
-    said = ", ".join(who[:-1]) + " and " + who[-1]
-    return f" {said} listen, wearing what the sheet already lists."
+    one = len(who) == 1
+    said = who[0] if one else ", ".join(who[:-1]) + " and " + who[-1]
+    does = (("listens and reacts" if one else "listen and react") if heard
+            else ("reacts" if one else "react"))
+    return (f" What is yet to come happens in a later shot: {said} {does}, staying in "
+            f"place to the last frame, wearing what the sheet already lists.")
 
 
 # The tail both voice guards end on, defined once so they cannot drift apart.
@@ -8716,6 +8818,7 @@ class H3LongVideos:
         legs_held = ""              # where a beat or the sheet fastened the legs
         limbs_freed = False         # the last piece on a limb came off -- see below
         stayed_on = []              # (shot, who) kept described because still in frame
+        addressed_on = []           # (shot, who) described because a line is spoken to them
         exact_shots = []            # shots carrying an exact: line of the author's
         camera_shots = []           # shots told the camera holds still
         named_often = []            # (shot, name, times named, times this node named them)
@@ -8786,8 +8889,10 @@ class H3LongVideos:
         _first_is_plate = False
         guard_words = beat_words = total_words = sound_words = 0
         _state = engine.SceneState(place=engine.place_in(scene or ""))
+        # Dated by what a beat ACTS, not what it says: "I'll cuff you" in beat 2 does
+        # not put the sheet's cuffs on two beats before the cuffing.
         _staged_at = engine.staged_applications(
-            [extract_directives(b)[0] for b in beats])
+            [engine.acted_text(extract_directives(b)[0]) for b in beats])
         _sheet_hw = {c for c, _p, _w, _a in engine.hardware_spans(sheet or "")}
         _pron_of = {n: sheet_pronoun(ln) for n, ln in sheet_lines(sheet) if n}
         _static_wear = static_wardrobe(static, [n for n, _ in sheet_lines(sheet) if n])
@@ -8802,6 +8907,11 @@ class H3LongVideos:
             if _marked != body:
                 dialogue_marked.append(len(plan) + 1)
                 body = _marked
+            # WHAT THIS SHOT ACTS OUT -- the beat without its speech, its orders and its
+            # intentions. Every reading of what HAPPENS below takes this, never `body`:
+            # see engine.acted_text. `body` still goes to the model word for word, and
+            # still drives everything about the voice.
+            _acted = engine.acted_text(body)
             _later_for_state = {c for c, at in _staged_at.items()
                                 if at > len(plan) + 1}
             for _n, _line in sheet_lines(sheet):
@@ -8811,7 +8921,7 @@ class H3LongVideos:
                              if not names_any(g, [x for x in gone if x not in restored])]
                     _state.declare(_n, _line + "".join(f", {g}" for g in _wear),
                                    staged_later=_later_for_state)
-            _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
+            _ch = _state.read(_acted, cast=[n for n, _ in sheet_lines(sheet) if n],
                               shot=len(plan) + 1, pronouns=_pron_of)
             if _ch.get("applied") or _ch.get("released"):
                 hardware_changed.add(len(plan) + 1)
@@ -8819,10 +8929,10 @@ class H3LongVideos:
             # described only within one room, and read the cut before it was worked out
             # -- the previous beat's, so a cut let them through and the shot after it
             # did not.
-            _frm, _via, _to = travel_legs(body)
+            _frm, _via, _to = travel_legs(_acted)
             _is_travel = bool(travel_anchor(_frm, _via, _to, here, body))
             _room_before = here
-            _place_now = _to or _frm or place_named(body) or here
+            _place_now = _to or _frm or place_named(_acted) or here
             _opens_in = _frm or (_room_before if _is_travel else _place_now)
             _is_cut = bool(len(plan) and _opens_in and _room_before
                            and _opens_in != _room_before)
@@ -8832,7 +8942,7 @@ class H3LongVideos:
             _still_there = shot_frames.get(len(plan) - 1, ([], []))[1] if plan else []
             if _leaves_room:
                 _intimate = set()
-            _intimate -= set(leaves_in(body, sheet, _still_there))
+            _intimate -= set(leaves_in(_acted, sheet, _still_there))
             _back_cands = []
             _carried_on, _carried = [], []
             if character_guard:
@@ -8877,7 +8987,7 @@ class H3LongVideos:
                     and not re.search(r"\b(?:out|outside|leaves?|left|exits?|door|doorway)\b",
                                       body or "", re.I))
                 if (_held_on and not _leaves_room
-                        and (_walks_off or not leaves_in(body, sheet, _was))):
+                        and (_walks_off or not leaves_in(_acted, sheet, _was))):
                     _keep = set(list(active or []) + _held_on)
                     active = [n for n, _l in sheet_lines(sheet) if n in _keep]
                     shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
@@ -8893,7 +9003,7 @@ class H3LongVideos:
                              if n and n in _intimate and n in (_was or [])
                              and n in _still_there and n not in (active or [])]
                 if (_partners and any(n in _intimate for n in (active or []))
-                        and not _leaves_room and not leaves_in(body, sheet, _was)):
+                        and not _leaves_room and not leaves_in(_acted, sheet, _was)):
                     _keep = set(list(active or []) + _partners)
                     active = [n for n, _l in sheet_lines(sheet) if n in _keep]
                     shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
@@ -8915,7 +9025,7 @@ class H3LongVideos:
                 if _stays and not _leaves_room and not (
                         _FRAME_SIZE.search(body or "") or tight_framing(body or "")
                         or _ALONE.search(engine.staged_text(body) or "")):
-                    _out_now = set(leaves_in(body, sheet, _was))
+                    _out_now = set(leaves_in(_acted, sheet, _was))
                     _stays = [n for n in _stays if n not in _out_now]
                     if _stays:
                         _keep = set(list(active or []) + _stays)
@@ -8928,6 +9038,20 @@ class H3LongVideos:
                             (untagged(ln) if n in _stays else ln)
                             for n, ln in sheet_lines(sheet) if n in _keep)
                         stayed_on.append((len(plan) + 1, list(_stays)))
+                # THE PERSON SPOKEN TO IS THERE. "Dan says, 'Take off your shirt.'" names
+                # only Dan, so only Dan was described -- and on the next beat Ana, who
+                # was being spoken to all along, walked into the frame from its edge: an
+                # action nobody wrote. Only on her first appearance or while she is
+                # still in the frame, never a question ("where are you?" is absence),
+                # and never down a phone or through a door.
+                _spoken_to = addressed_in(body, sheet)
+                if (_spoken_to and _spoken_to not in (active or [])
+                        and (_spoken_to not in _seen_before or _spoken_to in _still_there)
+                        and not _leaves_room):
+                    _keep = set(list(active or []) + [_spoken_to])
+                    active = [n for n, _l in sheet_lines(sheet) if n in _keep]
+                    shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet) if n in _keep)
+                    addressed_on.append((len(plan) + 1, _spoken_to))
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
                     notes.append(f"shot {len(plan) + 1} describes only "
                                  f"{', '.join(active) or 'the scene'} -- the rest of the "
@@ -8946,7 +9070,7 @@ class H3LongVideos:
                 _new = [n for n in active if n not in _seen_before]
                 # A plate rides as a reference, which FastH3 cannot read; there the
                 # first_frame is what its model supports -- frame one.
-                if (_new and not arrives_in(body) and not plan and not _fast
+                if (_new and not arrives_in(_acted) and not plan and not _fast
                         and first_frame is not None
                         and all(_n in _portrait_of for _n in _new)):
                     _first_is_plate = True
@@ -8969,7 +9093,7 @@ class H3LongVideos:
                         f"with it as a reference. To pin frame one exactly instead, put "
                         f"the cast IN that frame and take their <Picture N> tags off the "
                         f"sheet, or write the entrance into beat 1")
-                if _new and not arrives_in(body) and plan:
+                if _new and not arrives_in(_acted) and plan:
                     _placed_shots[len(plan)] = list(_new)
                     notes.append(
                         f"shot {len(plan) + 1} introduces {', '.join(_new)} in "
@@ -8998,7 +9122,7 @@ class H3LongVideos:
             # the beat putting them there: "Dan walks in" while he sits in the frame is
             # still a second Dan walking in, and still starts fresh.
             _only_kept = {n for k, ws in stayed_on if k == len(plan) for n in ws}
-            _again = [n for n in comes_in(body, sheet)
+            _again = [n for n in comes_in(_acted, sheet)
                       if n in _kept and (n not in _was or n in _only_kept)
                       ] if (plan and not _is_travel) else []
             if _again:
@@ -9014,16 +9138,16 @@ class H3LongVideos:
             _gone_by_before = {t: set(w) for t, w in gone_by.items()}
             if auto_remove:
                 inferred = []
-                for t in infer_removals(body, scene):
+                for t in infer_removals(_acted, scene):
                     if t in toks:
                         continue
-                    _o = removal_owner(body, t, sheet)
+                    _o = removal_owner(_acted, t, sheet)
                     if _o:
                         _taken_from[t] = [_o]
                     if t in gone and not (_o and gone_by.get(t) and _o not in gone_by[t]):
                         continue
                     inferred.append(t)
-                if hold_restraints and restraint_coming_off(body):
+                if hold_restraints and restraint_coming_off(_acted):
                     for _n, _ln in sheet_lines(sheet if sheet_lines(sheet) else scene):
                         for _hw in restraint_words(_ln):
                             _named = re.search(r"\b" + re.escape(_hw) + r"\b",
@@ -9037,10 +9161,10 @@ class H3LongVideos:
                     toks = list(toks) + inferred
                     notes.append(f"shot {len(plan) + 1}: read '{', '.join(inferred)}' as "
                                  f"coming off, from the beat's own wording")
-            bare = auto_remove and strips_bare(body)
-            _down_to = engine.strips_to(body) if auto_remove and not bare else None
+            bare = auto_remove and strips_bare(_acted)
+            _down_to = engine.strips_to(_acted) if auto_remove and not bare else None
             if bare or _down_to is not None:
-                _strippers = strips_who(body, active if character_guard and active
+                _strippers = strips_who(_acted, active if character_guard and active
                                         else [n for n, _ in sheet_lines(shot_sheet) if n],
                                         shot_sheet)
                 # ...and what the anchor dresses them in, which is worn as much as the
@@ -9109,7 +9233,7 @@ class H3LongVideos:
                 gone.extend(t for t in toks if t not in gone)
                 if extras_in(body):
                     untracked_strip.append((len(plan) + 1, list(toks)))
-                _took = strippers_in(body, shot_sheet if shot_sheet else sheet)
+                _took = strippers_in(_acted, shot_sheet if shot_sheet else sheet)
                 for _t in toks:
                     _wears = [n for n, _wl in sheet_lines(sheet)
                               if n and (re.search(r"\b" + re.escape(_t) + r"\b",
@@ -9119,7 +9243,7 @@ class H3LongVideos:
                     # Whose it is, when the beat says -- "Dan takes off HER shirt" is
                     # hers, whoever else wears one -- before who is doing it.
                     _whose = [n for n in (_taken_from.get(_t)
-                                          or [removal_owner(body, _t, sheet)])
+                                          or [removal_owner(_acted, _t, sheet)])
                               if n in _wears]
                     _whose = _whose or [n for n in _took if n in _wears] or _wears
                     _taken_from[_t] = _whose
@@ -9132,7 +9256,7 @@ class H3LongVideos:
                                  + "; ".join(_retired))
                 notes.append(f"removed from the scene from shot {len(plan) + 1} on: "
                              + ", ".join(scene_name_for(t, scene) or t for t in toks))
-            maybe = missing_removals(body, scene, gone) if not auto_remove else []
+            maybe = missing_removals(_acted, scene, gone) if not auto_remove else []
             if maybe:
                 notes.append(f"shot {len(plan) + 1} reads as taking something off, but the "
                              f"scene still describes {', '.join(maybe)} and there is no "
@@ -9143,7 +9267,7 @@ class H3LongVideos:
                     if _g in restored or any(names_any(a, [_g]) for a in (adds or [])):
                         continue
                     _head = str(_g).lower().split()[-1]
-                    if not (names_any(body, [_head]) and beat_stages_wearing(body, _head)):
+                    if not (names_any(body, [_head]) and beat_stages_wearing(_acted, _head)):
                         continue
                     _name = scene_name_for(_head, sheet or scene) or _g
                     adds = list(adds or []) + [_name]
@@ -9166,7 +9290,7 @@ class H3LongVideos:
                           "re-cover, or the layer under it stays described for the "
                           "rest of the run")
                     _worn_now = [a for a in adds
-                                 if any(beat_stages_wearing(body, g) for g in _back)
+                                 if any(beat_stages_wearing(_acted, g) for g in _back)
                                  and any(names_any(a, [g]) for g in _back)]
                     if _worn_now:
                         _wearing = wearing_clause(_worn_now)
@@ -9201,9 +9325,9 @@ class H3LongVideos:
                              f"so {', '.join(toks)} stays described as worn HERE -- the "
                              f"text is the only thing saying it was on to start with. It "
                              f"is scrubbed from the next shot on")
-            _moved_now = {g for g, _h in displaced_garments(body, shot_sheet or sheet)}
-            _back_now = set(restored_garments(body, shot_sheet or sheet))
-            if puts_it_back(body) and len(displaced) == 1:
+            _moved_now = {g for g, _h in displaced_garments(_acted, shot_sheet or sheet)}
+            _back_now = set(restored_garments(_acted, shot_sheet or sheet))
+            if puts_it_back(_acted) and len(displaced) == 1:
                 _back_now |= set(displaced)
             _heads_back = {str(g).lower().split()[-1] for g in _back_now}
             _moved_now = {g for g in _moved_now
@@ -9236,8 +9360,8 @@ class H3LongVideos:
             # whatever happens to be latched -- checking `sealed` first meant a belt
             # the SHEET declared (never latched, because no beat applied it) got
             # latched by the beat taking it off, and then held for the rest of the run.
-            _seal_named = crotch_seal(body)
-            _seal_off = (seal_comes_off(body, _seal_named or sealed)
+            _seal_named = crotch_seal(_acted)
+            _seal_off = (seal_comes_off(_acted, _seal_named or sealed)
                          or (bool(sealed) and names_any(sealed, toks)))
             if _seal_off:
                 sealed = ""
@@ -9398,7 +9522,7 @@ class H3LongVideos:
             if hold_restraints:
                 _clears = bool(names_any(RESTRAINT_HOLD_KEY, toks)
                                or any(restraint_present(t) for t in toks)
-                               or (restraint_coming_off(body)
+                               or (restraint_coming_off(_acted)
                                    and any(_RESTRAINT_WORD.match(str(t)) for t in toks)))
                 # ONLY WHAT CAME OFF, OFF WHOEVER IT CAME OFF. A removal that looked like
                 # hardware cleared every restraint on everybody: "Dan removes his belt"
@@ -9444,19 +9568,19 @@ class H3LongVideos:
                     worn_item = ""
                     worn_items = []
                     restrained_who = set()
-                elif restraint_present(body) or restraint_present(_scene_for_state):
+                elif restraint_present(_acted) or restraint_present(_scene_for_state):
                     restrained = True
-                    if not _was_restrained or restraint_going_on(body):
-                        _staged_here = (engine.applies_hardware(body)
-                                        or restraint_going_on(body)
-                                        or (restraint_present(body)
+                    if not _was_restrained or restraint_going_on(_acted):
+                        _staged_here = (engine.applies_hardware(_acted)
+                                        or restraint_going_on(_acted)
+                                        or (restraint_present(_acted)
                                             and not restraint_present(_scene_for_state)))
-                        _w = (engine.wearer_of(body, [n for n, _ in sheet_lines(sheet) if n])
+                        _w = (engine.wearer_of(_acted, [n for n, _ in sheet_lines(sheet) if n])
                               if _staged_here else "")
                         _new = ({_w} if _w else
-                                set(restraint_wearers(sheet)) or restrained_by_beat(body, active))
+                                set(restraint_wearers(sheet)) or restrained_by_beat(_acted, active))
                         restrained_who |= (_new if _new else set(active))
-            _named_item = hardware_named(body) if restrained else ""
+            _named_item = hardware_named(_acted) if restrained else ""
             _eng_hw = [r for p in _state.people.values()
                        for r in p.hardware.values()]
             _hw_by_wearer = {}
@@ -9467,13 +9591,13 @@ class H3LongVideos:
             worn_item = ", ".join(worn_items)
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(_scene_before_now)
-                             and restraint_going_on(body))
-            if (not early_hardware and restraint_going_on(body)
+                             and restraint_going_on(_acted))
+            if (not early_hardware and restraint_going_on(_acted)
                     and restraint_present(_scene_for_state)):
                 early_hardware.append(len(plan) + 1)
-            if restrained and rigid_hardware(f"{body} {shot_scene}"):
+            if restrained and rigid_hardware(f"{_acted} {shot_scene}"):
                 rigid_latched = True
-            if rigid_latched and forced_pose(f"{body} {shot_scene}"):
+            if rigid_latched and forced_pose(f"{_acted} {shot_scene}"):
                 posed = True
             _have = plan_lengths([body], ceiling,
                                  shot_length == "from the beat", pace)[0][0] / H3_FPS
@@ -9485,7 +9609,7 @@ class H3LongVideos:
             if _travel:
                 travel_shots.append(len(plan) + 1)
             else:
-                _open_to = moved_to(body, active)
+                _open_to = moved_to(_acted, active)
                 _travel = move_clause(_open_to, body)
                 if _travel:
                     open_moves.append((len(plan) + 1, _open_to))
@@ -9504,9 +9628,9 @@ class H3LongVideos:
             _back = [n for n in _back_cands if n not in _kept]
             if _back:
                 _returns.append((len(plan) + 1, list(_back)))
-            _gone = leaves_in(body, sheet, _shows)
+            _gone = leaves_in(_acted, sheet, _shows)
             _in_frame = [n for n in _ends_with if n not in _gone]
-            _lone = left_alone(body, sheet, _in_frame)
+            _lone = left_alone(_acted, sheet, _in_frame)
             if _lone:
                 _in_frame = [_lone]
             shot_frames[len(plan)] = (_shows, list(_in_frame))
@@ -9520,9 +9644,9 @@ class H3LongVideos:
                         if (auto_sound and _where) else ambient_bed)
             if _where and auto_sound and (_room_now != _room or _bed_now != ambient_bed):
                 acoustic_shots.append((len(plan) + 1, here))
-            _pose_now = posture_in(body, active if character_guard and active
+            _pose_now = posture_in(_acted, active if character_guard and active
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
-            for _gone_pose in posture_cleared(body, poses):
+            for _gone_pose in posture_cleared(_acted, poses):
                 poses.pop(_gone_pose, None)
                 facing = ""          # up off the floor is no longer facing anywhere
             _posture = ("" if not hold_scene_state
@@ -9534,10 +9658,10 @@ class H3LongVideos:
             if _posture:
                 posture_shots.append(len(plan) + 1)
             poses.update(_pose_now)
-            _anchor_now = limb_anchor(body) if restrained else ""
+            _anchor_now = limb_anchor(_acted) if restrained else ""
             if _anchor_now:
                 anchored = _anchor_now
-            _legs_now = legs_anchor(body) if restrained else ""
+            _legs_now = legs_anchor(_acted) if restrained else ""
             if _legs_now:
                 legs_held = _legs_now
             # ANYTHING CLOSED OVER THE GROIN STAYS UNTIL A REMOVAL NAMES IT. Latched
@@ -9548,7 +9672,7 @@ class H3LongVideos:
             # names the belt, so the detector fires on the removal too and would
             # re-latch the thing that was just removed, one line after the clear
             # above wiped it. The removal wins: it is the author asking.
-            _sealed_now = "" if _seal_off else crotch_seal(body, worn_items)
+            _sealed_now = "" if _seal_off else crotch_seal(_acted, worn_items)
             if _sealed_now:
                 sealed = _sealed_now
             _holding = bool(restrained and anchored and not _anchor_now)
@@ -9556,9 +9680,9 @@ class H3LongVideos:
                 anchored_shots.append(len(plan) + 1)
             if _holding and (_anchor_tight or tight_framing(body)):
                 tight_shots.append(len(plan) + 1)
-            turn = TURN_HOLD if (turns_in(body, cast)
+            turn = TURN_HOLD if (turns_in(_acted, cast)
                                  and (gone or shown or restrained)) else ""
-            _falls = falls_in(body)
+            _falls = falls_in(_acted)
             fall = (FALL_HOLD if (restrained and _falls)
                     else FALL_HOLD_FREE if _falls else "")
             if fall:
@@ -9566,11 +9690,11 @@ class H3LongVideos:
             rigid = restrained and rigid_latched
             chain = (CHAIN_POSE_HOLD if (rigid and posed)
                      else CHAIN_HOLD if rigid else "")
-            _off_here = (restraint_coming_off(body)
+            _off_here = (restraint_coming_off(_acted)
                          or names_any(RESTRAINT_HOLD_KEY, toks)
                          or any(restraint_present(t) for t in toks))
-            anchors = ("" if (_off_here or hardware_handled(body))
-                       else anchor_clause(unanchored_hardware(body)))
+            anchors = ("" if (_off_here or hardware_handled(_acted))
+                       else anchor_clause(unanchored_hardware(_acted)))
             if anchors:
                 notes.append(f"shot {i_shot + 1} names hardware with no body part beside "
                              f"it, so the shot says where it sits: "
@@ -9592,7 +9716,7 @@ class H3LongVideos:
                 line = f"{_scene_sent} {body}".strip() if _scene_sent else body
             _pairs, _moves = [], []
             if hold_scene_state:
-                _moves = state_changes(body)
+                _moves = state_changes(_acted)
                 _acting = [_state_key(t) for t, _ in _moves]
                 _pairs = [(t, s) for t, s in stated_states(line)
                           if _state_key(t) not in state_acted and _state_key(t) not in _acting]
@@ -9602,7 +9726,7 @@ class H3LongVideos:
                 stated_shots.append(len(plan) + 1)
             if _turn:
                 turned_shots.append(len(plan) + 1)
-            if _pairs and exits_vehicle(body) and any(
+            if _pairs and exits_vehicle(_acted) and any(
                     _state_key(t) in ("door",) for t, _ in _pairs):
                 notes.append(
                     f"shot {len(plan) + 1} says somebody gets OUT of a vehicle and also "
@@ -9627,11 +9751,11 @@ class H3LongVideos:
             # down names it; every beat after it does not, and an unnamed facing is
             # one the prior picks -- which is how a woman laid face down came back
             # over onto her back in the following shot.
-            _face_now = lying_facing(body)
+            _face_now = lying_facing(_acted)
             if _face_now:
                 facing = _face_now
             _lying_now = any(_p == "lying down" for _p in poses.values())
-            if engine.posture_in(body):
+            if engine.posture_in(_acted):
                 beat_said_posture = True
             if not _lying_now and restrained and not beat_said_posture:
                 _watch = restrained_who or set()
@@ -9712,7 +9836,7 @@ class H3LongVideos:
             if _applying:
                 applied_shots.append(len(plan) + 1)
 
-            _staged_here = displaced_garments(body, shot_scene)
+            _staged_here = displaced_garments(_acted, shot_scene)
             if _staged_here:
                 staging_shots.add(len(plan) + 1)
             for _g, _how in _staged_here:
@@ -9722,15 +9846,15 @@ class H3LongVideos:
                     displaced.pop(_g, None)
                 else:
                     displaced[_g] = _how
-                    displaced_dest[_g] = displaced_to(body, _g)
+                    displaced_dest[_g] = displaced_to(_acted, _g)
             for _g in [g for g in displaced if names_any(g, toks)]:
                 displaced.pop(_g, None)
-            for _g in restored_garments(body, shot_scene):
+            for _g in restored_garments(_acted, shot_scene):
                 _head = str(_g).lower().split()[-1]
                 for _k in [k for k in displaced
                            if str(k).lower().split()[-1] == _head]:
                     displaced.pop(_k, None)
-            if len(displaced) == 1 and puts_it_back(body):
+            if len(displaced) == 1 and puts_it_back(_acted):
                 displaced.clear()
             _body_low = (body or "").lower()
             _moved = displaced_hold(
@@ -9759,23 +9883,23 @@ class H3LongVideos:
             elif extras_dismissed(body):
                 _extras_seen = False
 
-            _look_now = (look_target(body, shot_sheet, _described)
+            _look_now = (look_target(_acted, shot_sheet, _described)
                          if hold_gaze else "")
-            _lookers = (subjects_for(body, shot_sheet, _LOOK_VERB_SRC)
+            _lookers = (subjects_for(_acted, shot_sheet, _LOOK_VERB_SRC)
                         if hold_gaze else [])
             _look_is_person = bool(_look_now) and any(
                 _look_now == _n for _n, _ in sheet_lines(shot_sheet))
             if _look_now:
                 for _n in (_lookers or (_described or [])):
                     looking_at[_n] = (_look_now, _look_is_person)
-            elif (looks_somewhere(body) or arrives_in(body) or falls_in(body)
-                  or turns_in(body, cast) or _MOVES_OFF.search(body or "")):
+            elif (looks_somewhere(_acted) or arrives_in(_acted) or falls_in(_acted)
+                  or turns_in(_acted, cast) or _MOVES_OFF.search(_acted or "")):
                 _ends = (_lookers
-                         or subjects_for(body, shot_sheet, _MOVES_OFF_SRC))
+                         or subjects_for(_acted, shot_sheet, _MOVES_OFF_SRC))
                 for _n in (_ends or list(looking_at)):
                     looking_at.pop(_n, None)
-            _gone_now = (set(leaves_in(body, sheet, _shows))
-                         | set(subjects_for(body, shot_sheet, _MOVES_OFF_SRC)))
+            _gone_now = (set(leaves_in(_acted, sheet, _shows))
+                         | set(subjects_for(_acted, shot_sheet, _MOVES_OFF_SRC)))
             if _gone_now:
                 for _n, (_t, _is_person) in list(looking_at.items()):
                     if _is_person and _t in _gone_now:
@@ -9784,11 +9908,11 @@ class H3LongVideos:
                 looking_at.clear()
             _carried = [n for n in _was
                         if n not in set(_described or []) and looking_at.get(n)
-                        and n not in set(subjects_for(body, sheet, _MOVES_OFF_SRC))]
+                        and n not in set(subjects_for(_acted, sheet, _MOVES_OFF_SRC))]
             _gazers = [n for n in (_described or []) if looking_at.get(n)] + _carried
             _gaze = ""
             _faces = ""     # the eye-line inferred for a dialogue shot
-            _contact = (contact_hold(contact_pairs(body, _described))
+            _contact = (contact_hold(contact_pairs(_acted, _described))
                         if len(_described or []) > 2 else "")
             if _contact:
                 contact_shots.append(len(plan) + 1)
@@ -9811,7 +9935,7 @@ class H3LongVideos:
             # A light changing, a journey, or the author's own camera move changes the
             # picture's levels over the take on purpose. Anything else is the chain
             # cooking, and the render takes it back out. See shot_grade.
-            if _journey or light_changes(body) or _CAMERA_ASKED.search(body or ""):
+            if _journey or light_changes(_acted) or _CAMERA_ASKED.search(body or ""):
                 own_grade_shots.add(len(plan))
             _k = len(plan)
             _on_keyframe = bool(
@@ -9924,13 +10048,37 @@ class H3LongVideos:
             # the first thing a crowded shot dropped -- a restrained, half-dressed body
             # is exactly the crowded shot, and exactly the one that must not be cropped.
             _frame_led = False
+            _speaks = has_speech(body)
+            _in_shot = (_described if character_guard else
+                        [n for n, _ in sheet_lines(_who_sheet) if n])
+            _listeners = (told_to_act(body, speakers_in(body, _who_sheet), _in_shot)
+                          if _speaks else [])
+            _listeners += ordered_in(body, _in_shot, _acted, _who_sheet)
+            # ...and never over somebody the beat does give an action of their own.
+            # Not where the shot DOES something -- a removal or a fastening, written
+            # or directed: "asks Dan to take the belt off" with "remove: belt" is Dan
+            # taking it off, now, and the ask is how the author said so.
+            if toks or _applying:
+                _listeners = []
+            _told = told_hold([n for n in dict.fromkeys(_listeners)
+                               if not acts_in(_acted, n, _who_sheet, _in_shot)],
+                              heard=bool(_speaks or re.search(
+                                  r"\b(?:tells?|told|orders?|ordered|asks?|asked|commands?|"
+                                  r"instructs?|begs?|begged|pleads?|urges?|warns?|says?|said)\b",
+                                  body or "", re.I)))
+            if _told:
+                told_shots.append(len(plan) + 1)
             _entering = entrance_clause(_placed_shots.get(len(plan)))
-            if (_pose or _seal or _facing or _frame or _entering) and body:
+            _told_led = False
+            if (_pose or _seal or _facing or _frame or _entering or _told) and body:
                 _at = line.find(body)
                 if _at >= 0:
                     _cut = _at + len(body)
-                    _lead = (_entering + _frame + (_pose if _arms_pos else "")
+                    # What the line only ASKS for stays out of the shot: said right
+                    # after it, where it cannot be crowded out -- see told_hold.
+                    _lead = (_told + _entering + _frame + (_pose if _arms_pos else "")
                              + _facing + _seal)
+                    _told_led = bool(_told)
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
                     _pose_led = _pose if _arms_pos else ""
                     _seal_led = bool(_seal)
@@ -9976,7 +10124,7 @@ class H3LongVideos:
                 _open = set(_talkers) | set(_voicers)
                 _here_too = [n for n in _was
                              if n not in set(_described or [])
-                             and n not in set(subjects_for(body, sheet,
+                             and n not in set(subjects_for(_acted, sheet,
                                                            _MOVES_OFF_SRC))]
                 _silent = [n for n in list(_described or []) + _here_too
                            if n not in _open]
@@ -10010,12 +10158,6 @@ class H3LongVideos:
                      if (_speaks and not _voiced) else "")
             if _lang and _shot_lang not in _langs_used:
                 _langs_used.append(_shot_lang)
-            _told = told_hold(told_to_act(
-                body, speakers_in(body, _who_sheet),
-                _described if character_guard else
-                [n for n, _ in sheet_lines(_who_sheet) if n])) if _speaks else ""
-            if _told:
-                told_shots.append(len(plan) + 1)
             if _lang:
                 language_shots.append(len(plan) + 1)
             _said_words = len(engine.spoken_text(body).split())
@@ -10025,7 +10167,7 @@ class H3LongVideos:
             if _device:
                 device_shots.append(len(plan) + 1)
             heard = ([] if (not auto_sound or _own)
-                     else sounds_for(body, held=[_state_key(t) for t, _ in _pairs]))
+                     else sounds_for(_acted, held=[_state_key(t) for t, _ in _pairs]))
             # The beat's own vocal goes into the list whether or not the beat also reads
             # as a written sound. Only when it did was it put back, so "cries out" and
             # "grunts" were heard as the room alone: an exclusive list, true of nothing,
@@ -10128,7 +10270,7 @@ class H3LongVideos:
                 (15, "faces", _faces),
                 (15, "frame", "" if _frame_led else _frame),   # hoisted, see above
                 (13, "camera", _camera),
-                (6, "told", _told),          # a listener given an order to ignore
+                (6, "told", "" if _told_led else _told),   # hoisted, see above
                 (13, "turn", turn),
                 (14, "sound", _sound),
             ]
@@ -10182,7 +10324,7 @@ class H3LongVideos:
                             - len(f"{_scene_sent} {body}".split()) - len(_exact.split()))
             beat_words += len(body.split()) + len(_exact.split())
             total_words += len(shot_text.split())
-            _events = (list(sounds_for(body, held=[_state_key(t)
+            _events = (list(sounds_for(_acted, held=[_state_key(t)
                                                    for t, _ in _pairs]))
                        if auto_sound else [])
             plan.add(shot_text,

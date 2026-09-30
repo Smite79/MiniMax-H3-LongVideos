@@ -5193,6 +5193,58 @@ def test_the_chain_is_never_broken_mid_scene():
           .get("default") is True)
 
 
+def test_what_is_only_said_happens_later():
+    """REPORTED: actions happening before they are supposed to take place -- dialogue
+    being used as an action.
+
+    It was. Every reading of what a shot DOES took the whole beat: "Dan tells Ana to
+    take off her shorts" took them off in the shot that only asks, a line saying "I will
+    gag you" put the gag on, and a threatened cuffing brought the sound of cuffs."""
+    print("\n=== what is only said, ordered or intended happens later ===")
+    for t, want in (("Dan tells Ana to take off her shorts.", "Dan ."),
+                    ("Dan orders her to kneel and she kneels.", "Dan and she kneels."),
+                    ("Dan threatens to gag her and grabs her arm.", "Dan and grabs her arm."),
+                    ("Dan is going to tie her to the bed.", "Dan ."),
+                    ("Ana is going to the kitchen.", "Ana is going to the kitchen."),
+                    ('Dan says, "Sit down and I will gag you."', "Dan says,"),
+                    ("Ana kneels on the floor.", "Ana kneels on the floor.")):
+        check(f"acted: {t[:40]!r}", S.engine.acted_text(t) == want, S.engine.acted_text(t))
+
+    mem = ("Ana: she, 25, long dark hair, a white crop top, blue denim shorts.\n"
+           "Dan: he, 35, short brown hair, a black t-shirt, grey jeans.")
+
+    def shots(*beats):
+        return _shots_of(run_node("A bedroom.\n\nAna and Dan stand by the bed.\n\n"
+                                  + "\n\n".join(beats), character_memory=mem,
+                                  plan_only=True))[1:]
+    told, did = shots("Dan tells Ana to take off her shorts.", "Ana takes off her shorts.")
+    check("an order takes nothing off", "bare" not in told and "comes off" not in told,
+          told[-300:])
+    check("...the shot that does it does", "away by the last frame" in did, did[-300:])
+    check("...and the one it is asked of waits for it",
+          "What is yet to come happens in a later shot: Ana listens and reacts" in told,
+          told[:300])
+    said, gag = shots('Dan says, "Sit down and I will gag you."', "Ana sits on the bed and Dan gags her.")
+    check("a threat in a line fastens nothing", "closed and fastened" not in said
+          and "goes on during this shot" not in said and "cuffs knocking" not in said,
+          said[-300:])
+    check("...the shot that does it does", "goes on during this shot" in gag, gag[-300:])
+    both, = shots("Dan orders her to kneel and she kneels.")
+    check("an order carried out in the same beat is not held back",
+          "later shot" not in both, both[:260])
+    # The person a line is said to is there -- not walked in on the next beat.
+    first = _shots_of(run_node('A bedroom.\n\nDan says, "Take off your shirt."\n\n'
+                               "Ana takes off her crop top.", character_memory=mem,
+                               plan_only=True))
+    check("the one spoken to is in the shot", "Ana:" in first[0], first[0][:260])
+    check("...so nobody walks in on the next beat", "comes into the frame" not in first[1],
+          first[1][:260])
+    check("a question is not somebody spoken to",
+          S.addressed_in(S.mark_dialogue('Dan says, "Where are you?"'), mem) == "")
+    check("...nor a call", S.addressed_in(S.mark_dialogue(
+        'Dan says into the phone, "Come home now."'), mem) == "")
+
+
 def test_a_name_with_no_entry_end_to_end():
     print("\n=== a person the sheet never describes ===")
     P = "\n\n".join(["Maya walks in.", "Alex says hello to Maya.",
@@ -9580,6 +9632,7 @@ def main():
     test_back_after_a_shot_away()
     test_led_out_and_brought_back()
     test_the_chain_is_never_broken_mid_scene()
+    test_what_is_only_said_happens_later()
     test_a_name_with_no_entry_end_to_end()
     test_the_soundtrack_is_the_models_own()
     test_shot_one_is_the_only_unpinned_shot()
