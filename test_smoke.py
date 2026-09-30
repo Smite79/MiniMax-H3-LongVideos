@@ -4008,7 +4008,11 @@ def test_equipment_placement_posture_and_removals_hold():
     sh = shots("A bedroom.", ["Ana takes off her denim jacket.", "Ana sits down.",
                               "Dan tosses her denim jacket onto the chair."], m=wear)
     check("...and where the beat names what came off",
-          "Ana wears only her white tank top" in sh[2], sh[2][-200:])
+          re.search(r"(?:Ana|She) wears only her white tank top", sh[2]), sh[2][-200:])
+    # Named again, it is given somewhere to be that is not her body.
+    check("...which is said to stay off the body",
+          "Ana's denim jacket came off earlier and stays off the body, wherever the beat "
+          "puts it." in sh[2], sh[2][-260:])
 
 
 def test_metal_restraints_hold_like_the_rest():
@@ -5243,6 +5247,52 @@ def test_what_is_only_said_happens_later():
           S.addressed_in(S.mark_dialogue('Dan says, "Where are you?"'), mem) == "")
     check("...nor a call", S.addressed_in(S.mark_dialogue(
         'Dan says into the phone, "Come home now."'), mem) == "")
+
+
+def test_what_came_off_before_the_sex_scene_stays_off():
+    """REPORTED: in sex scenes clothing is restored to cover the genitals.
+
+    Three ways back on. "Climbs ON TOP of her" read as putting her top on -- the verb
+    and "on" beside a garment's head word -- and a crop top taken off went back on in
+    the middle of the scene. A full strip left a worn belt on the sheet of a naked man,
+    a waistband for the model to hang something from. And "Dan unzips Ana's dress and
+    it falls to the floor" read "Ana" as a garment coming off."""
+    print("\n=== what came off before the sex scene stays off ===")
+    for t, want in (("Dan climbs on top of Ana.", "Dan climbs on ### of Ana."),
+                    ("Ana puts her top back on.", "Ana puts her top back on."),
+                    ("Ana lies with her top half off the bed.",
+                     "Ana lies with her ### half off the bed.")):
+        check(f"masked: {t!r}", S.engine.garment_masked(t) == want, S.engine.garment_masked(t))
+    check("a worn belt is a belt worn", S.worn_belt("Dan: he, a leather belt") == "a leather belt")
+    check("...hardware is not", S.worn_belt("Kate: she, a steel belt locked on") == ""
+          and S.worn_belt("Kate: she, a chastity belt") == "")
+    check("a name is never a garment", "ana" not in S.infer_removals(
+        "Dan unzips Ana's dress and it falls to the floor.",
+        "Ana, in a red dress, stands.\nAna: she, 25.\nDan: he, 35."))
+
+    mem = ("Ana: she, 25, a white crop top over a black lace bra, blue denim shorts over a "
+           "black thong, white sneakers.\n"
+           "Dan: he, 35, a black t-shirt, grey jeans over black boxers, a leather belt.")
+    worn = re.compile(r"\b(?:crop top|bra|shorts|thong|t-shirt|jeans|boxers|belt)\b")
+    beats = ["Ana and Dan kiss on the bed.", "Dan strips Ana naked.", "Ana undresses Dan.",
+             "Dan climbs on top of Ana.", "Ana gets on top of Dan.", "Dan pulls her on top of him.",
+             "Ana climbs on top and rides him.", "Dan rolls on top of her.", "Ana moans."]
+    for _model in (FakeModel(), FakeFastH3()):
+        sh = _shots_of(run_node("A bedroom.\n\n" + "\n\n".join(beats), character_memory=mem,
+                                plan_only=True, model=_model))
+        _nm = type(_model).__name__
+        lines = [" ".join(re.findall(r"(?:Ana|Dan): [^.]*", x)) for x in sh[3:]]
+        check(f"{_nm}: no garment is back on the sheet in the sex scene",
+              not any(worn.search(l) for l in lines), " | ".join(lines))
+        check(f"{_nm}: ...and nothing is put back on",
+              not any("put on during this shot" in x for x in sh[3:]),
+              " | ".join(x[-200:] for x in sh[3:] if "put on during" in x))
+    named = _shots_of(run_node("A bedroom.\n\n" + "\n\n".join(
+        ["Ana and Dan kiss on the bed.", "Dan strips Ana naked.", "Dan pulls her thong aside."]),
+        character_memory=mem, plan_only=True))
+    check("a garment named after it came off is kept off the body",
+          "Ana's black thong came off earlier and stays off the body" in named[-1],
+          named[-1][-300:])
 
 
 def test_a_name_with_no_entry_end_to_end():
@@ -9633,6 +9683,7 @@ def main():
     test_led_out_and_brought_back()
     test_the_chain_is_never_broken_mid_scene()
     test_what_is_only_said_happens_later()
+    test_what_came_off_before_the_sex_scene_stays_off()
     test_a_name_with_no_entry_end_to_end()
     test_the_soundtrack_is_the_models_own()
     test_shot_one_is_the_only_unpinned_shot()

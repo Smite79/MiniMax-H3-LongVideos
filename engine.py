@@ -460,6 +460,32 @@ _NOT_YET = re.compile(
     r"can't|cannot|couldn't|shouldn't)\s+" + _CLAUSE_TAIL, re.I)
 
 
+# "top" that is not a garment: on top, top of, top half, the top drawer...
+_NOT_A_TOP = re.compile(
+    r"\b(?:on|onto|to|at|from|over|off|up)\s+(?:the\s+|its\s+)?(top)\b"
+    r"|\b(top)(?=\s+(?:of|half|drawer|shelf|step|stairs?|bunk|floor|lip|button|end|edge|"
+    r"corner|sheet|layer|speed|gear|priority|deck|bed|mattress)\b)"
+    r"|\b(tops|topped|topping)\b(?=\s+(?:up|off|out|it|him|her|them|the)\b)", re.I)
+
+
+def garment_masked(text):
+    """The text with words that only LOOK like garments blanked, position for position.
+
+    "Dan climbs on top of Ana" named "top" beside "climbs ... on", which is how putting
+    a garment on is written -- so a crop top taken off before the sex scene went back
+    on in the middle of it: "White crop top is off the body as the shot opens and fully
+    on by the last frame". REPORTED as clothing restored to cover the body in sex
+    scenes. Same length out as in, so offsets found in one hold in the other."""
+    t = str(text or "")
+    out = list(t)
+    for m in _NOT_A_TOP.finditer(t):
+        for g in (1, 2, 3):
+            if m.group(g):
+                for i in range(m.start(g), m.end(g)):
+                    out[i] = "#"
+    return "".join(out)
+
+
 def acted_text(text):
     """What a beat ACTS OUT, now, in this shot: staged_text, with the orders, requests
     and intentions taken out as well.
@@ -1596,7 +1622,7 @@ class SceneState:
                                                or [""]))
 
         spans = hardware_spans(beat)
-        garments = list(_GARMENT_ONE.finditer(beat))
+        garments = list(_GARMENT_ONE.finditer(garment_masked(beat)))
         boundaries = list(_CLAUSE_BOUNDARY.finditer(beat)) if spans or garments else []
         applying = bool(spans) and bool(_APPLY.search(beat))
         releasing = bool(_RELEASE.search(beat))

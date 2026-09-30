@@ -2215,6 +2215,23 @@ def addressed_in(beat, sheet):
     return others[0] if len(others) == 1 else ""
 
 
+_LOWER_OUTER = re.compile(r"\b(?:trousers|pants|jeans|slacks|chinos|shorts|skirt|kilt|"
+                          r"joggers|sweatpants|leggings|overalls|dungarees|cargos?)\b", re.I)
+
+
+def worn_belt(line):
+    """The belt this sheet line WEARS with its clothes -- "a leather belt" -- or "".
+    Hardware is not a belt worn: steel, locked, chastity, garter and suspender belts
+    are left to what they are."""
+    for m in re.finditer(r"(?:[\w-]+\s+){0,2}belts?\b", str(line or ""), re.I):
+        if re.search(r"chastity|steel|metal|iron|chrome|brass|lock|restraint|body|garter|"
+                     r"suspender|utility|tool|seat|conveyor|black\s+belt|karate", m.group(0),
+                     re.I):
+            continue
+        return m.group(0).strip()
+    return ""
+
+
 def told_to_act(beat, speakers, described):
     """Who is being TOLD to do something in this beat's dialogue. [] when nobody.
 
@@ -3547,9 +3564,10 @@ def beat_stages_wearing(beat, item):
     head = str(item or "").strip().lower()
     if not head:
         return False
+    _named = engine.garment_masked(b)       # "on top of her" is not a top -- see there
     for pat in (_PUTS_ON, _DRESSES):
         for m in pat.finditer(b):
-            window = b[max(0, m.start() - 60):min(len(b), m.end() + 60)]
+            window = _named[max(0, m.start() - 60):min(len(b), m.end() + 60)]
             if re.search(r"\b" + re.escape(head.split()[-1]) + r"\b", window, re.I):
                 return True
     return False
@@ -7239,6 +7257,19 @@ def infer_removals(beat, scene):
     if not beat or not scene:
         return []
     found = []
+    # A PERSON IS NOT A GARMENT. "Ana, in a red dress..." reads "Ana" as the head of a
+    # wardrobe entry, so "Dan unzips Ana's dress and it falls to the floor" took off
+    # "Ana" -- her own sheet line lost its name, and the shots after it said "Ana's she
+    # came off earlier". Names, pronouns, and any capitalised word inside a sentence.
+    _people = {n.lower() for n, _l in sheet_lines(scene) if n} | {
+        "she", "he", "her", "him", "his", "hers", "they", "them", "their", "it"}
+
+    def _a_person(word, at_text):
+        w = word.lower()
+        if w in _people or engine.singular_garment(w) in _people:
+            return True
+        return bool(word[:1].isupper() and not re.search(
+            r"(?:^|[.!?]\s+)[\"“]?$", at_text))
     for m in _REMOVAL_PROSE.finditer(beat):
         # Asked for is not done. See _in_a_request.
         if _in_a_request(beat, m.start()):
@@ -7264,9 +7295,12 @@ def infer_removals(beat, scene):
                     continue
                 _after = span[part.end():]
                 span = span[:part.start()]
-        for word in re.findall(r"\b[\w-]{3,}\b", span):
+        for _wm in re.finditer(r"\b[\w-]{3,}\b", span):
+            word = _wm.group(0)
             low = engine.singular_garment(word)
             if not low or low in found:
+                continue
+            if _a_person(word, beat[:m.end()] + span[:_wm.start()]):
                 continue
             if _lowered_not_off(word, span, _after):
                 continue
@@ -7308,6 +7342,8 @@ def infer_removals(beat, scene):
         word = m.group(1)
         low = engine.singular_garment(word)
         if not low or low in found or low in _NOT_A_GARMENT or _RESTRAINT_WORD.match(low):
+            continue
+        if _a_person(word, beat[:m.start(1)]):
             continue
         # "Her dress slips off her shoulders" -- lowered, not off. See _lowered_not_off.
         if (_lowered_not_off(word, "", beat[m.end():])
@@ -9220,6 +9256,22 @@ class H3LongVideos:
                         f"garment was recognised in the character sheet, so nothing was "
                         f"taken off and every later shot still describes the clothes. Add "
                         f"a 'remove:' line naming them")
+            # A BELT GOES WITH WHAT IT HOLDS UP. It is not on the garment list -- a steel
+            # or chastity belt is hardware -- so a full strip left "a leather belt" on the
+            # sheet of a naked man, every shot after, and a belt round the hips is a
+            # waistband the model has to hang something from. REPORTED as clothing
+            # restored over the genitals in sex scenes.
+            if toks or bare:
+                for _bn, _bl in sheet_lines(sheet):
+                    if not _bn or "belt" in toks or not worn_belt(_bl):
+                        continue
+                    _lower = [t for t in toks if _LOWER_OUTER.search(str(t))
+                              and re.search(r"\b" + re.escape(str(t)) + r"\b", _bl, re.I)
+                              and _bn in (_taken_from.get(t)
+                                          or [removal_owner(body, t, sheet)] or [_bn])]
+                    if (bare and (not _strippers or _bn in _strippers)) or _lower:
+                        toks = list(toks) + ["belt"]
+                        _taken_from["belt"] = [_bn]
             revived = [t for t in gone if names_any(body, [t]) and t not in toks]
             if revived:
                 notes.append(
@@ -9267,7 +9319,8 @@ class H3LongVideos:
                     if _g in restored or any(names_any(a, [_g]) for a in (adds or [])):
                         continue
                     _head = str(_g).lower().split()[-1]
-                    if not (names_any(body, [_head]) and beat_stages_wearing(_acted, _head)):
+                    if not (names_any(engine.garment_masked(body), [_head])
+                            and beat_stages_wearing(_acted, _head)):
                         continue
                     _name = scene_name_for(_head, sheet or scene) or _g
                     adds = list(adds or []) + [_name]
@@ -10243,8 +10296,26 @@ class H3LongVideos:
                     pictured=bool(picture_tags(_orig_lines.get(_n, ""))))
             if _offnow:
                 offnow_shots.append(len(plan) + 1)
+            # SOMETHING TAKEN OFF EARLIER, NAMED AGAIN. "Dan pulls her panties aside" after
+            # they came off names them, and a named garment is a drawn one -- on the body,
+            # where the prior puts it. Give it somewhere else to be. Not where this beat
+            # puts it back on, and not for a mention inside a line of dialogue.
+            _named_here = engine.garment_masked(_acted)
+            _off_again = [t for t in gone
+                          if t not in toks and t not in restored
+                          and not any(names_any(a, [t]) for a in (adds or []))
+                          and names_any(_named_here, [t])
+                          and set(gone_by.get(t) or ()) & set(_described or [])]
+            _revived = "".join(
+                f" {(_who[0] + chr(39) + 's ') if len(_who) == 1 else 'The '}"
+                f"{scene_name_for(_t, scene) or _t} came off earlier and "
+                f"{'stay' if plural_item(_t) else 'stays'} off the body, wherever the "
+                f"beat puts {'them' if plural_item(_t) else 'it'}."
+                for _t in _off_again[:2]
+                for _who in [[n for n in (_described or []) if n in (gone_by.get(_t) or ())]])
             _guards = [
                 (1, "removal", tail),        # the beat's own action, completing
+                (2, "revived", _revived),    # ...and what came off before, still off
                 (1, "wearing", _wearing),    # ...and its mirror, a garment going on
                 (2, "offnow", _offnow),      # ...and what came off, still off
                 (2, "revealed", _revealed),  # what shows where it was
