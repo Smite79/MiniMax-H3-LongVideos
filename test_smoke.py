@@ -1063,7 +1063,9 @@ def test_fall_keeps_the_hardware():
     blocks = [b for b in re.split(r"(?=\[Shot )", run_node(P, plan_only=True)[3])
               if b.strip()]
     check("three shots planned", len(blocks) == 3)
-    fall = S.FALL_HOLD.strip()
+    # Bound behind the back, so the fall says where the hands go -- see
+    # bound_fall_clause.
+    fall = "locked together behind the back for the whole fall and the landing"
     check("the applying shot is told both ends",
           S.RESTRAINT_GOING_ON.strip() in blocks[0], blocks[0][-90:])
     # Rigid while it goes on -- in the wording for what it IS. A pair of cuffs held
@@ -3385,7 +3387,8 @@ def test_an_unbound_fall_is_told_what_catches_it():
     bound = run_node("A room.\n\nMara is handcuffed behind her back.\n\n"
                      "Mara falls to the floor.", plan_only=True, character_memory=mem)[3]
     last = [s for s in bound.split("---") if s.strip()][-1]
-    check("a bound fall keeps the bound wording", "A bound body falls" in last, "")
+    check("a bound fall keeps the bound wording, with the hands placed",
+          "locked together behind the back for the whole fall" in last, last[-260:])
     check("...and not both at once", "The body falls as one piece" not in last, "")
     still = run_node("A room.\n\nMara walks to the window.\n\nMara drops the keys.",
                      plan_only=True, character_memory=mem)[3]
@@ -3912,7 +3915,8 @@ def test_restraints_and_lowered_clothes_hold_their_place():
                   "Dan tapes Ana's mouth shut with duct tape."):
         sh = later([first, "Ana looks at the door.", "Ana sits down."])
         check(f"the tape is named over her mouth on every later shot: {first}",
-              all(re.search(r"tape over (?:the|Ana's) mouth stays", s) for s in sh[1:]),
+              all(re.search(r"tape stays stuck flat across (?:the|her|Ana's) mouth", s)
+                  for s in sh[1:]),
               sh[-1][-260:])
         check(f"...and on no other part: {first}",
               not any(re.search(r"tape (?:on|round) (?:the|Ana's) (?:wrists|ankles)", s)
@@ -3933,7 +3937,8 @@ def test_restraints_and_lowered_clothes_hold_their_place():
                    "handcuffs on her wrists behind her back, duct tape over her mouth.")
     check("items from the sheet are each held where they are",
           all("leather collar round the neck" in s and "handcuffs on the wrists" in s
-              and "duct tape over the mouth" in s for s in sh), sh[-1][-300:])
+              and "duct tape stays stuck flat across the mouth" in s for s in sh),
+          sh[-1][-300:])
     sh = later(["Ana pulls her denim shorts down to her thighs.",
                 "Ana looks back over her shoulder.", "Ana stands still."], mem=ana)
     check("the staging shot says the thong comes into view",
@@ -7012,7 +7017,10 @@ def test_an_instruction_is_not_the_action():
     # The beat that actually does it.
     check("the next beat takes them off", "off during this shot" in sh[1])
     # ...and the pose it sets is held afterwards, for her only.
-    check("the pose is held after that", "McKenna is lying down" in sh[2])
+    check("the pose is held after that",
+          "McKenna stays lying flat on the change table" in sh[2], sh[2][:400])
+    check("...with nothing claimed to be done to her",
+          "done to" not in sh[2], sh[2][:400])
     check("...and the speaker is not lying down", "Dana is still lying" not in sh[2])
     idle = ("A public bathroom.\n\nMcKenna and Dana walk in. Dana says to McKenna: "
             '"Take off your shorts and lie down on the change table."\n\n'
@@ -8656,6 +8664,323 @@ def test_a_fall_keeps_its_landing_guard():
           "Mouths in the shot stay closed" in fell, fell[-200:])
 
 
+def test_a_gag_and_a_bound_fall_hold_through_the_beat():
+    """REPORTED: restraints breaking as characters break their falls with their
+    limbs; gags like duct tape disappearing once another action happens in a beat;
+    characters self-directing.
+
+    The fall: "trips and crashes onto the floor", "throws her onto the mattress" and
+    "tumbles down the steps" had no fall guard at all -- and the last was told "the
+    walk between them, every step in frame". Where there was a guard it never said
+    where the hands were, and sat at the end of the shot. The gag: a scream was
+    given to her mouth, a terrified face "played in the eyes and the mouth", and tape
+    pressed on after the cuffs was "fastened as it was put on" in the shot that put
+    it on -- "fast at the chair" she was dragged to."""
+    print("\n=== a gag and a bound fall hold through the beat ===")
+    mem = "Mara: she, 28, grey sweater, blue jeans.\nDan: he, 40, black jacket."
+    room = "A dim warehouse with a concrete floor.\n\n"
+    sh = _shots_of(run_node(
+        room + "Dan cuffs Mara's wrists behind her back.\n\n"
+        "Mara trips over a crate and crashes onto the floor.\n\n"
+        "Dan throws Mara onto the mattress.\n\n"
+        "Mara tumbles down the steps.\n\n"
+        "Dan trips over a crate and falls.",
+        character_memory=mem, plan_only=True))
+    hands = "locked together behind the back for the whole fall"
+    for i in (1, 2, 3):
+        check(f"shot {i + 1}: a bound fall places the hands for the whole of it",
+              hands in sh[i], sh[i][:300])
+        check(f"...in the opening tokens, before the sheet (shot {i + 1})",
+              0 <= sh[i].find(hands) < sh[i].find("Mara: she"), "")
+    check("a tumble down the steps is not a walk",
+          "every step in frame" not in sh[3] and "the fall between them" in sh[3],
+          sh[3][-300:])
+    check("his fall is not her bound fall", hands not in sh[4]
+          and "The body falls as one piece" in sh[4], sh[4][-300:])
+
+    sh = _shots_of(run_node(
+        room + "Dan cuffs Mara's wrists behind her back.\n\n"
+        "Dan presses a strip of duct tape over Mara's mouth, then drags her to the "
+        "chair.\n\nMara screams and struggles against the cuffs.\n\n"
+        "Dan ties her ankles with rope.\n\nMara is terrified and looks at the door.\n\n"
+        "Dan rips the tape off her mouth.\n\nMara screams.",
+        character_memory=mem, plan_only=True))
+    check("the shot that tapes her says it goes on then and stays",
+          "duct tape goes across" in sh[1] and "still in place at the last frame" in sh[1],
+          sh[1][:400])
+    check("...fastened to no chair", "fast at the chair" not in " ".join(sh), "")
+    check("...and the cuffs already on are not told they go on",
+          "hardware goes on during this shot" not in sh[1], "")
+    for i in (2, 3, 4):
+        check(f"shot {i + 1} holds the tape over her mouth, in the lead",
+              0 <= sh[i].find("tape stays stuck flat across") < sh[i].find("Mara: she"),
+              sh[i][:400])
+    check("a scream behind the tape is muffled",
+          "muffled screaming is Mara's" in sh[2] and "muffled, wordless" in sh[2]
+          and "The screaming is Mara's" not in sh[2], sh[2][-400:])
+    check("rope added later goes on in its own shot",
+          "rope goes on" in sh[3] and "during this shot" in sh[3], sh[3][-500:])
+    check("a face under the tape acts above it",
+          "eyes and the brow above the tape" in sh[4]
+          and "played in the eyes and the mouth" not in sh[4], sh[4][-300:])
+    check("once the tape is ripped off nothing holds it on",
+          "tape stays stuck" not in sh[6] and "muffled" not in sh[6], sh[6][-300:])
+
+
+def test_a_body_laid_down_stays_down_while_it_is_worked_on():
+    """REPORTED: "Dan wraps duct tape around her mouth" and "Dan handcuffs her wrists
+    behind her back" -- and she held herself up on her arms while he did it, when she
+    should have been lying flat on the bed.
+
+    "Pushes her down onto the bed" set no posture at all, so those shots said nothing
+    of how she lay; where one was set, later shots said only "Mara is lying down.",
+    late, with her arms unplaced -- and an unplaced arm is the one the prior props a
+    body up on."""
+    print("\n=== a body laid down stays down while it is worked on ===")
+    mem = "Mara: she, 28, grey sweater, blue jeans.\nDan: he, 40, black jacket."
+    for first in ("Dan pushes Mara down onto the bed.", "Mara lies on the bed.",
+                  "Dan throws her face down onto the bed."):
+        sh = _shots_of(run_node(
+            "A bedroom at night.\n\n" + first + "\n\n"
+            "Dan wraps duct tape around her mouth.\n\n"
+            "Dan handcuffs her wrists behind her back.",
+            character_memory=mem, plan_only=True))
+        for i in (1, 2):
+            at = sh[i].find("stays lying flat on the bed from the first frame to the last")
+            check(f"{first} -> shot {i + 1} holds her flat on the bed, in the lead",
+                  0 <= at < sh[i].find("Mara: she"), sh[i][:500])
+            check(f"...still while he works on her (shot {i + 1})",
+                  "still while it is done to her" in sh[i], "")
+        check(f"{first} -> her free arms are placed flat while he tapes her",
+              "both arms lying flat along it at her sides" in sh[1], sh[1][:500])
+        check(f"{first} -> ...and not while he puts them behind her back",
+              "both arms lying flat" not in sh[2], sh[2][:500])
+    check("dragging her TO the bed does not lay her on it",
+          not S.posture_in("Dan drags her to the bed.", ["Mara", "Dan"]))
+    check("...and being pushed onto a sofa is not lying on it",
+          not S.posture_in("Dan pushes her down onto the sofa.", ["Mara", "Dan"]))
+
+
+def test_hyperflow_runs_on_its_own_grid():
+    """ASKED FOR: sigma support for Hyperflow, Video Rebirth's 8-step H3 LoRA.
+
+    It is distilled onto a fixed grid, and the grid and both shifts are in the file's
+    own metadata, which comfy keeps on the model. Every shot has to sample on that
+    grid, shifted at 12 for video, on euler, with the shifts stamped where the DiT
+    reads them -- and a workflow whose metadata was hidden by a later LoRA still has
+    the file name to go on."""
+    print("\n=== Hyperflow runs on its own grid ===")
+    grid = [1.0, 0.931506, 0.839236, 0.703462, 0.5, 0.296538, 0.160764, 0.068494, 0.0]
+    meta = {"hyperflow": "true", "hyperflow_sigmas": str(grid),
+            "hyperflow_video_shift": "12.0", "hyperflow_audio_shift": "3.0",
+            "hyperflow_gate": "0.25", "hyperflow_version": "1.0"}
+
+    class HyperModel(FakeModel):
+        def __init__(self, md=None):
+            self.md, self.model_options = md, {}
+
+        def get_attachment(self, key):
+            return self.md if key == "lora_metadata" else None
+
+    seen = []
+    orig = S.sample_shot
+
+    def spy(model, cond, negative, latent, seed, steps, cfg, sampler_name, scheduler,
+            sigmas=None, *a, **k):
+        seen.append((None if sigmas is None else [float(x) for x in sigmas],
+                     sampler_name, steps,
+                     dict((getattr(model, "model_options", {}) or {})
+                          .get("transformer_options", {}))))
+        return fake_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
+                             cond, negative, latent)[0]
+    S.sample_shot = spy
+    try:
+        P = "A room.\n\nShe walks in.\n\nShe sits down."
+        out = run_node(P, model=HyperModel(meta))
+        want = [12 * x / (1 + 11 * x) for x in grid]
+        got = seen[0][0] or []
+        check("every shot samples on the grid, shifted at 12",
+              len(seen) == 2 and all(r[0] is not None and len(r[0]) == 9
+                                     and all(abs(a - b) < 1e-5 for a, b in zip(r[0], want))
+                                     for r in seen), str(got))
+        check("...on euler, eight steps", all(r[1] == "euler" and r[2] == 8 for r in seen),
+              str([(r[1], r[2]) for r in seen]))
+        check("...with 12/3 stamped where the DiT reads its shifts",
+              seen[0][3].get("minimax_h3_sigma_shift_video") == 12.0
+              and seen[0][3].get("minimax_h3_sigma_shift_audio") == 3.0, str(seen[0][3]))
+        check("...and it says so", "Hyperflow LoRA detected" in out[2]
+              and "endpoint conditioning" in out[2], out[2][:300])
+
+        seen.clear()
+        graph = {"7": {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "lora_name": "minimax_h3_hyperflow_8step_v1.0_comfyui_bf16.safetensors"}}}
+        out = run_node(P, model=HyperModel(None), graph=graph)
+        check("metadata hidden by a later LoRA: the file name still finds it",
+              seen and seen[0][0] is not None and len(seen[0][0]) == 9
+              and "the file name" in out[2], out[2][:200])
+
+        seen.clear()
+        out = run_node(P, model=HyperModel(None))
+        check("no Hyperflow, no change", all(r[0] is None for r in seen)
+              and "Hyperflow" not in out[2], "")
+
+        seen.clear()
+        out = run_node(P, model=HyperModel(meta), sigmas=torch.tensor(grid))
+        check("a wired schedule still drives the sampler",
+              all(r[0] == [float(x) for x in torch.tensor(grid)] for r in seen), "")
+        check("...and the unshifted grid wired by hand is called out",
+              "grid UNSHIFTED" in out[2], out[2][:300])
+    finally:
+        S.sample_shot = orig
+
+
+class _PatcherModel(FakeModel):
+    """Enough of a ModelPatcher for the schedule patch, the shift stamp, LoRA patches,
+    wrappers and a diffusion model to be read the way the node reads a real one."""
+
+    def __init__(self, md=None, fast=False, curve=False, te_patched=True):
+        import copy as _copy
+        self._copy = _copy
+        self.md, self.wrapper_keys = md, []
+        self.model_options = {"transformer_options": {}}
+        self.patches = ({"diffusion_model.time_embedder.proj_in.weight":
+                         [(1.0, None, 1.0, None, None)]} if te_patched else {})
+        attn = types.SimpleNamespace(to_gate_compress=object() if fast else None)
+        self.dm = types.SimpleNamespace(blocks=[types.SimpleNamespace(attn=attn)],
+                                        use_adaln_curves=curve,
+                                        time_embedder=None if curve else object())
+        self.model = types.SimpleNamespace(model_config=FakeModel.model.model_config,
+                                           diffusion_model=self.dm)
+
+    def clone(self):
+        c = self._copy.copy(self)
+        c.model_options = {"transformer_options":
+                           dict(self.model_options.get("transformer_options", {}))}
+        c.wrapper_keys = list(self.wrapper_keys)
+        return c
+
+    def get_attachment(self, key):
+        return self.md if key == "lora_metadata" else None
+
+    def get_model_object(self, name):
+        return self.dm if name == "diffusion_model" else FakeModel.get_model_object(self, name)
+
+    def add_wrapper_with_key(self, wrapper_type, key, fn):
+        self.wrapper_keys.append(key)
+
+
+def test_fast_h3_and_hyperflow_run_as_they_were_trained():
+    """ASKED FOR: full FastH3 and Hyperflow support.
+
+    THE STAMP. The node set the sampler's schedule (model_sampling) and never the
+    stamp the DiT reads its shifts from, which it falls back to 12/3 without. FastH3
+    sampled at 10/3 while the DiT timestepped -- and rescaled -- the audio for 12/3.
+    VSA: FastH3 is trained with it and ran dense unless a node was wired for it.
+    HYPERFLOW'S ENDPOINT: trained two-time, run one-time, and silently half-loaded on a
+    curve-form checkpoint that has no time embedder for its weights."""
+    print("\n=== FastH3 and Hyperflow run as they were trained ===")
+    import tempfile
+    from safetensors.torch import save_file
+    seen = []
+    orig_shot, orig_file = S.sample_shot, S.hyperflow_endpoint_file
+
+    def spy(model, cond, negative, latent, seed, steps, cfg, sampler_name, scheduler,
+            sigmas=None, *a, **k):
+        seen.append((model, sampler_name, None if sigmas is None else len(sigmas)))
+        return fake_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
+                             cond, negative, latent)[0]
+
+    calls = []
+    fake = types.ModuleType("comfy_extras.nodes_sparse_attention")
+
+    def _apply(model, **kw):
+        calls.append(kw)
+        m = model.clone()
+        m.model_options["transformer_options"]["patches_replace"] = {"dit": {"block": 1}}
+        return m
+    fake.apply_block_sparse_attention = _apply
+    fake.parse_block_list = lambda text: []
+    saved = {k: sys.modules.get(k) for k in ("comfy_extras", "comfy_extras.nodes_sparse_attention",
+                                             "comfy.patcher_extension")}
+    sys.modules["comfy_extras"] = types.ModuleType("comfy_extras")
+    sys.modules["comfy_extras.nodes_sparse_attention"] = fake
+    _pe = types.ModuleType("comfy.patcher_extension")
+    _pe.WrappersMP = types.SimpleNamespace(DIFFUSION_MODEL="diffusion_model")
+    sys.modules["comfy.patcher_extension"] = _pe
+    tmp = tempfile.mkdtemp()
+    ep = os.path.join(tmp, "hyperflow_endpoint_test.safetensors")
+    save_file({f"transformer.{m}.{l}.lora_{ab}.weight": torch.randn(4, 4) * 1e-3
+               for m in ("time_embedder", "endpoint_time_embedder")
+               for l in ("linear_1", "linear_2") for ab in "AB"},
+              ep, metadata={"hyperflow_gate": "0.25", "lora_alpha": "4", "lora_rank": "4"})
+    S.sample_shot = spy
+    conf = os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    P = "A room.\n\nShe walks in.\n\nShe sits down."
+    meta = {"hyperflow": "true", "hyperflow_sigmas": str(list(S.HYPERFLOW_SIGMAS)),
+            "hyperflow_video_shift": "12.0", "hyperflow_audio_shift": "3.0",
+            "hyperflow_gate": "0.25"}
+    try:
+        def stamp(m):
+            to = m.model_options["transformer_options"]
+            return (to.get("minimax_h3_sigma_shift_video"), to.get("minimax_h3_sigma_shift_audio"))
+        run_node(P, model=_PatcherModel())
+        check("a base model is sampled with its shifts stamped where the DiT reads them",
+              seen and all(stamp(m) == (12.0, 3.0) for m, _s, _n in seen),
+              str([stamp(m) for m, _s, _n in seen]))
+
+        seen.clear()
+        out = run_node(P, model=_PatcherModel(fast=True))
+        check("FastH3 samples at 10/3 AND the DiT reads 10/3",
+              seen and all(stamp(m) == (10.0, 3.0) for m, _s, _n in seen),
+              str([stamp(m) for m, _s, _n in seen]))
+        check("...with VSA on, as it was trained",
+              len(calls) == 1 and calls[0]["vsa"] and calls[0]["topk_ratio"] == 0.10
+              and calls[0]["start_percent"] == 0.20
+              and all(m.model_options["transformer_options"].get("patches_replace")
+                      for m, _s, _n in seen), str(calls))
+        check("...and says so", "VSA attention applied" in out[2], out[2][-300:])
+
+        calls.clear()
+        wired = _PatcherModel(fast=True)
+        wired.model_options["transformer_options"]["patches_replace"] = {"dit": {"mine": 1}}
+        run_node(P, model=wired)
+        check("a sparse-attention node already wired is left as wired", not calls, str(calls))
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:cudaMallocAsync"
+        out = run_node(P, model=_PatcherModel(fast=True))
+        check("...and under cudaMallocAsync it is not applied, and the note says why",
+              not calls and "--disable-cuda-malloc" in out[2], out[2][-300:])
+        os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+
+        seen.clear()
+        S.hyperflow_endpoint_file = lambda: ep
+        out = run_node(P, model=_PatcherModel(md=dict(meta)))
+        check("Hyperflow with its endpoint weights runs two-time",
+              seen and all(S.HYPERFLOW_WRAPPER_KEY in m.wrapper_keys for m, _s, _n in seen)
+              and "endpoint conditioning is ON" in out[2], out[2][:400])
+        check("...on euler, not the res_multistep it was handed, on the 9-point grid",
+              all(sn == "euler" and n == 9 for _m, sn, n in seen), str([(sn, n) for _m, sn, n in seen]))
+
+        seen.clear()
+        out = run_node(P, model=_PatcherModel(md=dict(meta), curve=True))
+        check("a curve-form checkpoint is called out, and gets no endpoint wrapper",
+              "CANNOT CARRY HYPERFLOW" in out[2]
+              and not any(m.wrapper_keys for m, _s, _n in seen), out[2][:400])
+
+        S.hyperflow_endpoint_file = lambda: ""
+        out = run_node(P, model=_PatcherModel(md=dict(meta)))
+        check("no endpoint weights: one-time, and where to put them",
+              "endpoint conditioning is OFF" in out[2] and "models/loras" in out[2], "")
+    finally:
+        S.sample_shot, S.hyperflow_endpoint_file = orig_shot, orig_file
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        if conf is not None:
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = conf
+
+
 def test_an_intimate_scene_holds_its_frame_and_its_voices():
     """REPORTED: in sex scenes moaning and sounds of pleasure came out as gibberish,
     and the scene kept turning into a side-angle shot in a different location."""
@@ -9803,6 +10128,10 @@ def main():
     test_a_restraint_stays_on_after_it_is_applied()
     test_the_budget_buys_as_many_guarantees_as_it_can()
     test_a_fall_keeps_its_landing_guard()
+    test_a_gag_and_a_bound_fall_hold_through_the_beat()
+    test_a_body_laid_down_stays_down_while_it_is_worked_on()
+    test_hyperflow_runs_on_its_own_grid()
+    test_fast_h3_and_hyperflow_run_as_they_were_trained()
     test_a_dropped_clause_is_not_reported_as_sent()
     test_a_promoted_clause_opens_in_upper_case()
     test_the_reports_say_what_happened()

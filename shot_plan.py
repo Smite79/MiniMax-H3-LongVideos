@@ -109,3 +109,5 @@ class PreparedVideo:
     own_grade_shots: object = None    # {0-based shots whose change of level over the take is the author's}
     refs_ok: bool = True              # False on a model that reads no reference rows (FastH3)
     outdoor_shots: object = None      # {0-based shots whose place is outside}
+    fast_h3: bool = False             # FastVideo's FastH3: VSA goes on at render
+    hyperflow: object = None          # Hyperflow's settings, with "two_time" when it can run

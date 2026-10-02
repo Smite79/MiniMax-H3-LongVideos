@@ -706,6 +706,54 @@ def test_only_a_real_release_takes_anything_off():
         check(f"all of it comes off: {beat!r}", left(beat) == [], str(left(beat)))
 
 
+def test_a_gag_is_one_piece_on_the_right_mouth():
+    """REPORTED: gags like duct tape disappearing after another action in a beat.
+
+    Four ways the state lost the gag or the rest with it: "presses duct tape over HER
+    mouth" put the tape on the man pressing it; "ties her wrists and tapes her mouth"
+    did the same from the second clause; "gags her with duct tape" recorded a gag AND
+    tape, so ripping the tape off left a gag; and "ungags her" over tape found no gag
+    and took the handcuffs off instead."""
+    print("\n=== a gag is one piece, on the right mouth ===")
+    pr = {"Mara": "she", "Dan": "he"}
+
+    def run(beats):
+        st = E.SceneState()
+        st.declare("Mara", "she")
+        st.declare("Dan", "he")
+        for i, b in enumerate(beats, 1):
+            st.read(b, cast=["Mara", "Dan"], shot=i, pronouns=pr)
+        return {n: sorted(q.hardware) for n, q in st.people.items()}
+
+    got = run(["Dan presses duct tape over her mouth."])
+    check("tape pressed over her mouth is on HER", got["Mara"] == [("tape", "mouth")]
+          and not got["Dan"], str(got))
+    got = run(["Dan ties her wrists with rope and tapes her mouth."])
+    check("...and from a second clause with no name in it",
+          got["Mara"] == [("rope", "wrists"), ("tape", "mouth")] and not got["Dan"], str(got))
+    got = run(["Mara tapes her own mouth."])
+    check("...while her OWN mouth is still hers", got["Mara"] == [("tape", "mouth")], str(got))
+    got = run(["Dan cuffs her wrists.", "Dan gags Mara with duct tape over her mouth."])
+    check("a gag made of tape is one piece",
+          got["Mara"] == [("cuffs", "wrists"), ("tape", "mouth")], str(got))
+    got = run(["Dan cuffs her wrists.", "Dan gags Mara with duct tape over her mouth.",
+               "Dan rips the tape off her mouth."])
+    check("...so ripping the tape off leaves no gag", got["Mara"] == [("cuffs", "wrists")],
+          str(got))
+    got = run(["Dan cuffs her wrists.", "Dan presses duct tape over her mouth.",
+               "Dan removes her gag."])
+    check("removing her gag takes the tape", got["Mara"] == [("cuffs", "wrists")], str(got))
+    got = run(["Dan cuffs her wrists.", "Dan presses duct tape over her mouth.",
+               "Dan ungags her."])
+    check("ungagging her leaves the cuffs on", got["Mara"] == [("cuffs", "wrists")], str(got))
+    st = E.SceneState()
+    st.read("Dan presses a strip of duct tape over Mara's mouth, then drags her to the "
+            "chair.", cast=["Mara", "Dan"], shot=1, pronouns=pr)
+    tape = st.person("Mara").hw("tape")
+    check("a gag is fastened to no furniture", tape is not None and tape.anchor == "",
+          repr(tape))
+
+
 def main():
     test_two_things_in_one_beat()
     test_a_neck_is_not_behind_a_back()
@@ -732,6 +780,7 @@ def main():
     test_descriptions_and_places_have_owners()
     test_a_garment_comes_off_the_person_it_belongs_to()
     test_only_a_real_release_takes_anything_off()
+    test_a_gag_is_one_piece_on_the_right_mouth()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

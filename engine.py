@@ -1231,6 +1231,12 @@ _POSTURE_OF = (
                             r"(?:gets?|got)\s+(?:up|to\s+(?:her|his|their)\s+feet)|"
                             r"rises?|rose|risen)\b", re.I)),
 )
+# ...down onto something a body lies on. Not a sofa or a chair: "pushes her down onto
+# the sofa" is as often a woman made to sit.
+_DOWN_ON = (r"(?:\s+(?:down|back|backwards|flat|hard|roughly|face[-\s]?(?:down|first|up)))*"
+            r"\s+(?:on|onto|across|into|to)\s+(?:the|a|an|her|his|their)\s+(?:\w+\s+)?"
+            r"(?:bed|mattress|floor|floorboards|ground|carpet|rug|cot|bunk|futon|tiles|"
+            r"concrete)\b")
 _NOT_A_BODY = re.compile(r"\b(?:it|chair|table|box|case|bag|door|house|room|"
                          r"building|tree|bottle|glass|book|light|lamp)\s+\w{0,8}?\s*"
                          r"(?:stands?|lies?|sits?)\b", re.I)
@@ -1243,6 +1249,19 @@ _POSTURE_OF = _POSTURE_OF + (
     ("lying down", _rx(r"\broll(?:s|ed|ing)?\s+(?:over\s+)?(?:on)?to\s+"
                        r"(?:her|his|their)\s+"
                        r"(?:side|back|front|stomach|belly)\b")),
+    # PUT DOWN, rather than lying down. "Dan pushes her down onto the bed" left no
+    # posture at all, so the shots after it -- the cuffing, the taping -- said
+    # nothing about how she lay, and the model sat her up on her arms. REPORTED as
+    # her supporting herself on her arms when she should be lying flat on the bed.
+    # The verb is the one at the match start, so sampler.posture_in hands the pose
+    # to its OBJECT, the way it already does for "lays her on the bed".
+    ("lying down", _rx(r"\b(?:push(?:es|ed)?|shov(?:e|es|ed)|throws?|threw|thrown|"
+                       r"pins?|pinned|forc(?:e|es|ed)|lowers?|lowered|tips?|tipped|"
+                       r"knocks?|knocked|flings?|flung|toss(?:es|ed)?|press(?:es|ed)?|"
+                       r"holds?|held|puts?|rolls?|rolled)\s+"
+                       r"(?:her|him|them|(?-i:[A-Z][\w-]+))" + _DOWN_ON)),
+    ("lying down", _rx(r"\b(?:falls?|fell|collapses?|collapsed|flops?|flopped|"
+                       r"tumbles?|tumbled)" + _DOWN_ON)),
 )
 
 
@@ -1327,7 +1346,11 @@ class Restraint:
         self.item = item
         self.part = part
         self.position = position if part in ("wrists", "arms") else ""
-        self.anchor = anchor
+        # ...and a gag or a blindfold is not fastened TO anything. "Presses tape over
+        # her mouth, then drags her to the chair" put the tape "fast at the chair", a
+        # sentence about a mouth taped to furniture that the model could not draw and
+        # resolved by drawing no tape. REPORTED as the gag vanishing after the drag.
+        self.anchor = anchor if part not in ("mouth", "eyes") else ""
         self.applied_in = applied_in
         self.rigid = bool(rigid) or _is_rigid(item)
 
@@ -1376,6 +1399,21 @@ _SAME_THINGS = (frozenset(("cuffs", "handcuffs")),)
 
 def _same_thing(a, b):
     return a == b or any(a in g and b in g for g in _SAME_THINGS)
+
+
+# A GAG IS WHATEVER IS OVER THE MOUTH. "Gags her with duct tape" is one strip of tape
+# written two ways, and it was recorded twice -- a gag AND tape -- so "rips the tape
+# off her mouth" took the tape and left a gag nobody had put on, held in every shot
+# after. The other way round, "removes her gag" found no gag over tape pressed on.
+_MOUTH_PIECES = frozenset(("gag", "tape"))
+
+
+def _same_piece(key, canon, part=None):
+    """Does taking off `canon` (named at `part`) take off the piece stored as `key`?"""
+    if _same_thing(key[0], canon):
+        return True
+    return (part == "mouth" and key[1] == "mouth"
+            and key[0] in _MOUTH_PIECES and canon in _MOUTH_PIECES)
 
 
 _FREE_VERB_ITEMS = (
@@ -1581,11 +1619,11 @@ class SceneState:
                 p.worn.append(g)
         return p
 
-    def _holders_of(self, canon, beat, at, named, subject, cast, pronouns):
+    def _holders_of(self, canon, beat, at, named, subject, cast, pronouns, part=None):
         """Who is wearing the `canon` a beat takes off -- the names in its clause that
         hold one, else the possessive in front of it, else the only person in one."""
         holders = [n for n, q in self.people.items()
-                   if any(_same_thing(k[0], canon) for k in q.hardware)]
+                   if any(_same_piece(k, canon, part) for k in q.hardware)]
         if not holders:
             return []
         hit = [n for n in (named or []) if n in holders]
@@ -1664,14 +1702,30 @@ class SceneState:
                     # removes her gag" looked for a gag on Dan, found none, and the gag
                     # stayed on her. REPORTED as restraints that would not stay put.
                     for _n in self._holders_of(canon, beat, at, local_who, subject,
-                                               cast, pronouns):
+                                               cast, pronouns, part):
                         _q = self.people[_n]
-                        for key in [k for k in list(_q.hardware) if _same_thing(k[0], canon)]:
+                        for key in [k for k in list(_q.hardware)
+                                    if _same_piece(k, canon, part)]:
                             changed["released"].append((_n, _q.hardware.pop(key)))
                     continue
                 wearer = (_last[0] if (_shares and not local_who)
-                          else _wearer(clause, local_who or who, subject, cast))
+                          else _wearer(clause, local_who or who, subject, cast,
+                                       context=beat))
                 p = self.person(wearer)
+                # ONE GAG, NOT TWO: the bare word "gag" beside the thing it is made of,
+                # in one beat, is that thing. The specific name wins either way round.
+                if part == "mouth" and canon in _MOUTH_PIECES:
+                    _twin = next((k for k, r in p.hardware.items()
+                                  if k[1] == "mouth" and k[0] in _MOUTH_PIECES
+                                  and k[0] != canon and r.applied_in == shot), None)
+                    if _twin is not None:
+                        if (written or canon) == "gag":
+                            _last = (wearer, at)
+                            continue            # the tape already says it
+                        if p.hardware[_twin].item == "gag":
+                            p.hardware.pop(_twin)
+                            changed["applied"] = [(w, r) for w, r in changed["applied"]
+                                                  if not (w == wearer and r.item == "gag")]
                 # A MENTION NEVER STRIPS A RECORD. The same piece named again -- "checks
                 # the cuffs are locked" -- keeps the fuller name it went on under and
                 # what it is fastened to, unless this text gives new ones.
@@ -1701,7 +1755,15 @@ class SceneState:
             _keys = [k for k in list(_q.hardware)
                      if (_part is None or k[1] == _part)
                      and (_only is None or k[0] in _only)]
-            if not _keys and _only is not None:
+            # A verb that names a FACE item frees that part of the face and nothing
+            # else. "Dan ungags her" over tape pressed on her mouth found no "gag",
+            # fell through to the line below, and took off the handcuffs as well.
+            # REPORTED as restraints coming undone when nothing undid them.
+            _face = {"gag": "mouth", "blindfold": "eyes"}
+            _face_part = next((_face[c] for c in (_only or ()) if c in _face), None)
+            if not _keys and _face_part:
+                _keys = [k for k in list(_q.hardware) if k[1] == _face_part]
+            elif not _keys and _only is not None:
                 # "Dan unties her" -- or her wrists -- when she is cuffed, not tied: the
                 # author freed her, or that part of her, whatever the verb suits.
                 _keys = [k for k in list(_q.hardware) if _part is None or k[1] == _part]
@@ -1954,10 +2016,17 @@ _APPLIED_TO_PRONOUN = re.compile(
     r"|\b(?:" + APPLY_VERB + r"|" + _HARDWARE_VERB + r")\b[^.;!?]{0,40}?"
     r"\b(?:" + "|".join(p for p, _n, _pt in HARDWARE) + r")\b"
     r"(?:\s+\S+){0,2}?\s+(?:on|onto|around|round|about|over|under|to|behind|"
-    r"between)\s+(?:her|him|them)\b", re.I)
+    r"between)\s+(?:her|him|them)\b"
+    # "Presses duct tape over HER mouth": APPLY_VERB swallows the whole phrase, part
+    # and all, so neither form above ever saw the "her" -- and the tape went on the
+    # man pressing it. REPORTED as the gag disappearing: it was never on her at all.
+    r"|\b(?:presses|pressed|pressing|sticks?|stuck|slaps?|slapped|smooths?|smoothed|"
+    r"plasters?|plastered|puts?|places?|placed|wraps?|wrapped|winds?|wound)\b"
+    r"[^.;!?]{0,60}?\b(?:over|across|on|onto|around|round)\s+(?:her|his|their)\s+"
+    r"(?:mouth|lips|eyes|face|wrists?|ankles?|hands?|neck|throat)\b", re.I)
 
 
-def _wearer(beat, who, fallback, cast=()):
+def _wearer(beat, who, fallback, cast=(), context=""):
     """Who the hardware goes ON. The agent is not the wearer.
 
     "The guard cuffs Ana" puts them on Ana; "Ana is cuffed by the guard" puts
@@ -1967,11 +2036,24 @@ def _wearer(beat, who, fallback, cast=()):
     own them."""
     if len(who) < 2:
         hit = _APPLIED_TO_PRONOUN.search(beat or "") if who else None
+        if hit and re.match(r"\s+own\b", (beat or "")[hit.end():]):
+            hit = None                      # "her OWN mouth" is the doer's
         if hit:
             name = re.search(r"\b" + re.escape(who[0]) + r"\b", beat or "")
             between = (beat or "")[name.end():hit.start()] if name else ""
-            if (name and name.start() < hit.start()
-                    and len(between.split()) <= 4 and not re.search(r"[,;:]", between)):
+            # ...or named in an EARLIER clause: "Dan ties her wrists and tapes her
+            # mouth" hands this "tapes her mouth", with no Dan in it to find, and the
+            # tape went on him. The object is still the other person -- when the name
+            # is the DOER over there, plainly, before the first fastening verb. Not
+            # "handcuffs ANA'S wrists and locks a collar around her neck": she is the
+            # one it is done to, and so is the "her".
+            _doer = False
+            if name is None and context:
+                _first = _APPLY_ANY.search(context)
+                _at = re.search(r"\b" + re.escape(who[0]) + r"\b(?!['’]s)", context)
+                _doer = bool(_first and _at and _at.start() < _first.start())
+            if _doer or (name and name.start() < hit.start()
+                        and len(between.split()) <= 4 and not re.search(r"[,;:]", between)):
                 others = [n for n in (cast or []) if n and n != who[0]]
                 if len(others) == 1:
                     return others[0]

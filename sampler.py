@@ -8,6 +8,8 @@ The node interface and prompt planning live here. Audio policy and synthesis,
 conditioning assembly, and tensor/runtime operations have separate owner modules.
 """
 
+import glob
+import json
 import math
 import os
 import re
@@ -2877,6 +2879,26 @@ def _direct_model_sampling(model, shift_video, shift_audio):
         raise RuntimeError("set_parameters takes no shift")
     ms.set_parameters(**kwargs)
     m.add_object_patch("model_sampling", ms)
+    # ...AND THE STAMP, which is where the DiT reads its shifts. model_sampling sets
+    # the sampler's schedule and the audio carry's scale; the DiT derives the audio
+    # timestep, and converts the carried audio velocity, from transformer_options --
+    # falling back to its own 12/3 when nothing is stamped. Patching one and not the
+    # other ran FastH3's 10/3 schedule through a DiT reading 12/3: every audio step
+    # timestepped and rescaled for a schedule that was not the one sampling. comfy's
+    # own MiniMaxH3SigmaShift writes both, and so does this now.
+    _write_h3_stamp(m, shift_video, shift_audio)
+    return m
+
+
+def _write_h3_stamp(m, shift_video, shift_audio):
+    """Write the H3 shifts into m's transformer_options, as MiniMaxH3SigmaShift does.
+    m must already be a clone: the dict is replaced, never edited in place."""
+    if not isinstance(getattr(m, "model_options", None), dict):
+        return m                    # a model that carries no options has nowhere to stamp
+    to = m.model_options["transformer_options"] = dict(
+        m.model_options.get("transformer_options", {}) or {})
+    to["minimax_h3_sigma_shift_video"] = float(shift_video)
+    to["minimax_h3_sigma_shift_audio"] = float(shift_audio)
     return m
 
 
@@ -3184,6 +3206,369 @@ def fast_h3(model):
         return getattr(blk.attn, "to_gate_compress", None) is not None
     except Exception:
         return False
+
+
+# VIDEO REBIRTH'S HYPERFLOW, an 8-step LoRA for H3 distilled onto a FIXED sigma grid.
+# The one LoRA that does say what schedule it wants: its safetensors metadata carries
+# the grid and both shifts (hyperflow_sigmas, hyperflow_video_shift/audio_shift), and
+# comfy keeps that metadata on the MODEL it hands this node. The grid is the base grid
+# -- symmetric about 0.5, as upstream's "manual sigmas" are -- and the video shift is
+# applied to it the way diffusers' flow scheduler applies its shift to manual sigmas.
+# Fed unshifted, half its steps would land in the last 8% of the noise.
+# These are v1.0's numbers, for a workflow whose metadata was lost behind a later LoRA.
+HYPERFLOW_SIGMAS = (1.0, 0.931506, 0.839236, 0.703462, 0.5, 0.296538, 0.160764,
+                    0.068494, 0.0)
+HYPERFLOW_SHIFT_VIDEO = 12.0
+HYPERFLOW_SHIFT_AUDIO = 3.0
+HYPERFLOW_SAMPLER = "euler"
+
+
+def _hyperflow_grid(value):
+    """A metadata sigma list, as floats, if it is a usable grid -- 1 down to 0."""
+    try:
+        grid = [float(x) for x in (json.loads(value) if isinstance(value, str) else value)]
+    except (TypeError, ValueError):
+        return None
+    if (len(grid) < 2 or abs(grid[0] - 1.0) > 1e-6 or abs(grid[-1]) > 1e-6
+            or any(b >= a for a, b in zip(grid, grid[1:]))):
+        return None
+    return tuple(grid)
+
+
+def hyperflow_lora(model, graph=None):
+    """{sigmas, shift_video, shift_audio, gate, source} if Hyperflow is on this model.
+
+    Read from the LoRA metadata comfy attaches to the model first -- that is the
+    file's own statement, numbers and all. comfy keeps only the LAST LoRA's metadata,
+    so a LoRA stacked after Hyperflow hides it; the workflow's LoRA file names are
+    the fallback there, with v1.0's numbers. None when neither says Hyperflow."""
+    meta = None
+    try:
+        get = getattr(model, "get_attachment", None)
+        meta = get("lora_metadata") if callable(get) else \
+            (getattr(model, "attachments", None) or {}).get("lora_metadata")
+    except Exception:
+        meta = None
+    if isinstance(meta, dict) and str(meta.get("hyperflow", "")).strip().lower() == "true":
+        grid = _hyperflow_grid(meta.get("hyperflow_sigmas")) or HYPERFLOW_SIGMAS
+
+        def _num(key, default):
+            try:
+                return float(meta.get(key, default))
+            except (TypeError, ValueError):
+                return default
+        return {"sigmas": grid,
+                "shift_video": _num("hyperflow_video_shift", HYPERFLOW_SHIFT_VIDEO),
+                "shift_audio": _num("hyperflow_audio_shift", HYPERFLOW_SHIFT_AUDIO),
+                "gate": _num("hyperflow_gate", 0.0),
+                "version": str(meta.get("hyperflow_version", "")),
+                "source": "the LoRA's own metadata"}
+    for node in (graph.values() if isinstance(graph, dict) else ()):
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        for key, value in (inputs.items() if isinstance(inputs, dict) else ()):
+            if ("lora_name" in str(key).lower() and isinstance(value, str)
+                    and "hyperflow" in value.lower()):
+                return {"sigmas": HYPERFLOW_SIGMAS, "shift_video": HYPERFLOW_SHIFT_VIDEO,
+                        "shift_audio": HYPERFLOW_SHIFT_AUDIO, "gate": 0.0, "version": "",
+                        "source": f"the file name {value}"}
+    return None
+
+
+def hyperflow_sigmas(grid, shift_video):
+    """The VIDEO sigmas a sampler runs on: the base grid through H3's flow shift.
+
+    The DiT takes a sampler sigma as the video sigma as it stands and derives the
+    audio one from it (comfy's time_shift_sigma), so this is the only shift applied
+    by hand -- the audio branch follows from the stamp. See stamp_h3_shift."""
+    s = float(shift_video)
+    return torch.tensor([s * x / (1.0 + (s - 1.0) * x) for x in grid], dtype=torch.float32)
+
+
+def stamp_h3_shift(model, shift_video, shift_audio):
+    """A clone carrying the shifts in transformer_options, as MiniMaxH3SigmaShift does.
+
+    The DiT reads its shifts from that stamp, not from model_sampling, and falls back
+    to its own 12/3 without one. A hand-built schedule has to be read back with the
+    shifts it was built with, so it says so rather than leaning on the default --
+    or on whatever an upstream patch stamped for a different schedule."""
+    try:
+        return _write_h3_stamp(model.clone(), shift_video, shift_audio)
+    except Exception:
+        return model
+
+
+# HYPERFLOW'S SECOND TIME. Upstream conditions every step on where it STARTS (t) and
+# where it LANDS (r = 1 - sigma_next), blended at a gate stored in the file:
+#     t_emb = emb_t(t) + gate * (emb_r(r) - emb_t(t))
+# emb_r is a second copy of the base time embedder with a LoRA of its own. comfy's H3
+# has one embedder and no idea of an endpoint, and the ComfyUI conversion of the LoRA
+# dropped emb_r's LoRA for that reason -- so it ran one-time, on a distill trained
+# two-time. The endpoint LoRA is read from the original release instead (only its
+# time-embedder tensors are needed, 28 MB of 2.8 GB) and blended in here.
+HYPERFLOW_ENDPOINT_KEY = "transformer.endpoint_time_embedder.linear_1.lora_A.weight"
+HYPERFLOW_WRAPPER_KEY = "h3_longvideos_hyperflow_two_time"
+_HYPERFLOW_TE_KEY = "diffusion_model.time_embedder.proj_in.weight"
+_HYPERFLOW_DELTAS = {}
+
+
+def _safetensors_keys(path):
+    """(keys, metadata) from a safetensors header, without reading any tensor."""
+    try:
+        with open(path, "rb") as f:
+            n = int.from_bytes(f.read(8), "little")
+            if not 0 < n < 64 << 20:
+                return set(), {}
+            h = json.loads(f.read(n))
+        return set(h) - {"__metadata__"}, (h.get("__metadata__") or {})
+    except Exception:
+        return set(), {}
+
+
+def hyperflow_endpoint_file():
+    """A file holding Hyperflow's endpoint time-embedder LoRA, or "".
+
+    The sidecar this node keeps beside itself first (hyperflow_endpoint_*.safetensors:
+    the time-embedder tensors of the original release), then any LoRA with
+    "hyperflow" in its name that has them -- the full original file in models/loras."""
+    cands = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "hyperflow_endpoint_*.safetensors")))
+    try:
+        import folder_paths
+        for name in folder_paths.get_filename_list("loras"):
+            if "hyperflow" in str(name).lower():
+                cands.append(folder_paths.get_full_path("loras", name))
+    except Exception:
+        pass
+    for p in cands:
+        if p and HYPERFLOW_ENDPOINT_KEY in _safetensors_keys(p)[0]:
+            return p
+    return ""
+
+
+def hyperflow_te_strength(model):
+    """The strength Hyperflow's time-embedder LoRA is on the model at, or None.
+
+    None is the case that matters: a curve-form checkpoint (adaln_t_table, no time
+    embedder) has nowhere for those weights to go, and comfy drops them with a log
+    line nobody reads."""
+    try:
+        entries = (getattr(model, "patches", None) or {}).get(_HYPERFLOW_TE_KEY) or []
+        return float(entries[0][0]) if entries else None
+    except Exception:
+        return None
+
+
+def hyperflow_endpoint_deltas(path, strength):
+    """(d_in, d_out), fp32: what turns the time embedder AS PATCHED -- base plus the
+    LoRA's time delta at `strength` -- into the endpoint embedder, base plus its own
+    delta at the same strength. Linear in the weights, so it is one difference each."""
+    key = (path, os.path.getmtime(path), float(strength))
+    if key in _HYPERFLOW_DELTAS:
+        return _HYPERFLOW_DELTAS[key]
+    from safetensors import safe_open
+    with safe_open(path, framework="pt") as f:
+        meta = f.metadata() or {}
+        try:
+            scale = float(meta.get("lora_alpha", 1)) / float(meta.get("lora_rank", 1))
+        except (TypeError, ValueError, ZeroDivisionError):
+            scale = 1.0
+
+        def delta(module, linear):
+            b = f.get_tensor(f"transformer.{module}.{linear}.lora_B.weight").float()
+            a = f.get_tensor(f"transformer.{module}.{linear}.lora_A.weight").float()
+            return b @ a
+        s = float(strength) * scale
+        out = (s * (delta("endpoint_time_embedder", "linear_1") - delta("time_embedder", "linear_1")),
+               s * (delta("endpoint_time_embedder", "linear_2") - delta("time_embedder", "linear_2")))
+    _HYPERFLOW_DELTAS.clear()
+    _HYPERFLOW_DELTAS[key] = out
+    return out
+
+
+def _tss(sigma, from_shift, to_shift):
+    """comfy's time_shift_sigma: a video sigma moved onto the audio schedule."""
+    base = sigma / (from_shift + sigma * (1.0 - from_shift))
+    return to_shift * base / (1.0 + (to_shift - 1.0) * base)
+
+
+def hyperflow_two_time_wrapper(gate, d_in, d_out):
+    """A DIFFUSION_MODEL wrapper blending Hyperflow's endpoint into the time embedding.
+
+    Per call: the step's endpoint is the next sigma down the schedule the sampler is
+    running (transformer_options["sample_sigmas"]); video and text rows land at
+    1 - sigma_next, audio rows at the same point on the audio schedule, and rows
+    pinned at their own time -- keyframes, references -- at that time (r = t). Where
+    video and audio share a time (the first step, sigma 1) they share a table row in
+    the DiT, and the video endpoint wins it. The embedder's forward is swapped only
+    for the length of the call and put back however it ends."""
+    on_device = {}
+
+    def _on(delta, like):
+        k = (id(delta), like.device, like.dtype)
+        if k not in on_device:
+            on_device.clear() if len(on_device) > 4 else None
+            on_device[k] = delta.to(device=like.device, dtype=like.dtype)
+        return on_device[k]
+
+    def wrapper(executor, x, timestep, context, transformer_options={}, *args, **kwargs):
+        dm = getattr(executor, "class_obj", None)
+        te = getattr(dm, "time_embedder", None)
+        ss = (transformer_options or {}).get("sample_sigmas")
+        if te is None or getattr(dm, "use_adaln_curves", False) or ss is None or not gate:
+            return executor(x, timestep, context, transformer_options, *args, **kwargs)
+        shift_v = float(transformer_options.get("minimax_h3_sigma_shift_video",
+                                                getattr(dm, "sigma_shift_video", 12.0)))
+        shift_a = float(transformer_options.get("minimax_h3_sigma_shift_audio",
+                                                getattr(dm, "sigma_shift_audio", 3.0)))
+        sigma = max(float(timestep.flatten()[0]) / 1000.0, 1e-6)    # as the DiT reads it
+        grid = [float(v) for v in torch.as_tensor(ss).flatten().tolist()]
+        nxt = max((v for v in grid if v < sigma - 1e-6), default=0.0)
+        t_v, t_a = 1.0 - sigma, 1.0 - _tss(sigma, shift_v, shift_a)
+        r_v, r_a = 1.0 - nxt, 1.0 - _tss(nxt, shift_v, shift_a)
+        had = te.__dict__.get("forward")
+        inner = te.forward
+
+        def endpoint(r):
+            def add(delta):
+                def hook(_mod, inp, out):
+                    return out + torch.nn.functional.linear(inp[0].to(out.dtype), _on(delta, out))
+                return hook
+            hooks = (te.proj_in.register_forward_hook(add(d_in)),
+                     te.proj_out.register_forward_hook(add(d_out)))
+            try:
+                return inner(r)
+            finally:
+                for h in hooks:
+                    h.remove()
+
+        def two_time(t):
+            e_t = inner(t)
+            tt = t.to(torch.float32)
+            r = torch.where((tt - t_a).abs() < 1e-5, torch.full_like(tt, r_a), tt)
+            r = torch.where((tt - t_v).abs() < 1e-5, torch.full_like(tt, r_v), r)
+            e_r = endpoint(r.to(t.dtype)).to(e_t.dtype)
+            return e_t + float(gate) * (e_r - e_t)
+
+        te.forward = two_time
+        try:
+            return executor(x, timestep, context, transformer_options, *args, **kwargs)
+        finally:
+            if had is not None:
+                te.forward = had
+            else:
+                te.__dict__.pop("forward", None)
+    return wrapper
+
+
+def _hyperflow_patched_elsewhere(model):
+    """True when something else -- the ComfyUI-HyperFlow pack's loader -- already put
+    a two-time patch on this model. Applying a second would blend the endpoint twice."""
+    try:
+        for table in (getattr(model, "wrappers", None) or {},
+                      getattr(model, "callbacks", None) or {}):
+            for keyed in table.values():
+                if any("hyperflow" in str(k).lower() and k != HYPERFLOW_WRAPPER_KEY
+                       for k in (keyed or {})):
+                    return True
+        if any("time_embedder" in str(k) or "hyperflow" in str(k).lower()
+               for k in (getattr(model, "object_patches", None) or {})):
+            return True
+        te = getattr(model.get_model_object("diffusion_model"), "time_embedder", None)
+        return bool(te is not None and "forward" in te.__dict__)
+    except Exception:
+        return False
+
+
+def hyperflow_two_time_plan(model, hyper):
+    """(ready, what to tell the reader). Ready means install_hyperflow_two_time will
+    run; otherwise the note says what is missing and what that costs."""
+    try:
+        dm = model.get_model_object("diffusion_model")
+    except Exception:
+        dm = None
+    if dm is not None and (getattr(dm, "use_adaln_curves", False)
+                           or getattr(dm, "time_embedder", "absent") is None):
+        return False, (
+            "THIS CHECKPOINT CANNOT CARRY HYPERFLOW'S TIME CONDITIONING: it is a pruned "
+            "curve-form build, with a precomputed adaln_t_table where the time embedder "
+            "was, so the LoRA's time-embedder weights have nowhere to load -- comfy drops "
+            "them -- and its endpoint conditioning has nothing to attach to. Every step "
+            "is timed by the BASE model's embedding under a LoRA distilled for its own. "
+            "Use a checkpoint with a time embedder (minimax_h3_fl2va_int8_convrot is one) "
+            "for Hyperflow")
+    if _hyperflow_patched_elsewhere(model):
+        return False, ("a two-time Hyperflow patch is already on the model upstream (the "
+                       "ComfyUI-HyperFlow pack's loader), so this node leaves it to that "
+                       "one rather than blending the endpoint in twice")
+    s = hyperflow_te_strength(model)
+    if s is None:
+        return False, ("Hyperflow's time-embedder LoRA is not on this model, so its "
+                       "endpoint conditioning cannot be added -- check that the LoRA "
+                       "loader's strength_model is not 0")
+    path = hyperflow_endpoint_file()
+    if not path:
+        return False, (
+            "Hyperflow's endpoint conditioning is OFF: this ComfyUI conversion of the "
+            "LoRA leaves out the endpoint time embedder, and no file holding it was "
+            "found. Put the original minimax_h3_hyperflow_8step_v1.0.safetensors "
+            "(videorebirth/hyperflow on Hugging Face) in models/loras -- it is only read "
+            "for its time-embedder tensors -- and every step will be conditioned on where "
+            "it lands as well as where it starts, as the LoRA was trained")
+    gate = float(hyper.get("gate") or 0.0) or float(
+        _safetensors_keys(path)[1].get("hyperflow_gate", 0.0) or 0.0)
+    if not gate:
+        return False, "Hyperflow's endpoint gate is 0 in its metadata, so there is nothing to blend"
+    hyper["gate"], hyper["endpoint_file"], hyper["te_strength"] = gate, path, s
+    return True, (f"Hyperflow's endpoint conditioning is ON: each step's time embedding "
+                  f"blends where it starts with where it lands at gate {gate:g}, as the "
+                  f"LoRA was trained -- endpoint weights from {os.path.basename(path)}")
+
+
+def install_hyperflow_two_time(model, hyper):
+    """A clone carrying the two-time wrapper. `hyper` must have passed the plan."""
+    d_in, d_out = hyperflow_endpoint_deltas(hyper["endpoint_file"], hyper["te_strength"])
+    import comfy.patcher_extension as _pe
+    m = model.clone()
+    m.add_wrapper_with_key(_pe.WrappersMP.DIFFUSION_MODEL,
+                           HYPERFLOW_WRAPPER_KEY,
+                           hyperflow_two_time_wrapper(hyper["gate"], d_in, d_out))
+    return m
+
+
+# FASTH3 IS VSA-TRAINED. ComfyUI's guide runs it through Model Sparse Attention set to
+# vsa, keep 10%, from 20% of the schedule; without it the coarse-branch gate layers the
+# distill learned sit unused and the attention is not the one it was trained with.
+FAST_H3_VSA_KEEP = 0.10
+FAST_H3_VSA_START = 0.20
+
+
+def apply_fast_h3_vsa(model):
+    """(model, note): VSA put on a FastH3 model, unless it cannot or need not be.
+
+    Never over the reader's own sparse-attention node, and never under the
+    cudaMallocAsync allocator -- that combination aborts the process (see
+    sparse_attention_allocator_abort), and here it would be the node's doing."""
+    if sparse_dit_patched(model) is not False:
+        return model, ""            # already patched upstream, or a model that cannot say
+    conf = str(os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "") or "")
+    if "cudamallocasync" in conf.lower():
+        return model, ("FastH3's VSA attention was NOT applied: torch is on the "
+                       "cudaMallocAsync allocator, and sparse attention under it aborts "
+                       "the ComfyUI process. Restart ComfyUI with --disable-cuda-malloc and "
+                       "the node applies it")
+    try:
+        from comfy_extras.nodes_sparse_attention import (apply_block_sparse_attention,
+                                                         parse_block_list)
+        m = apply_block_sparse_attention(
+            model, tau=1.3, topk_ratio=FAST_H3_VSA_KEEP, vsa=True,
+            start_percent=FAST_H3_VSA_START, end_percent=1.0, min_tokens=12288,
+            dense_blocks=parse_block_list(""), sink_conditioning="exact_kv_and_rows",
+            extra_tokens=0, verbose=False)
+    except Exception as e:
+        return model, (f"FastH3's VSA attention could not be applied ({type(e).__name__}: "
+                       f"{e}); it is running dense, which it was not trained on")
+    return m, (f"FastH3's VSA attention applied: keep {FAST_H3_VSA_KEEP * 100:g}%, from "
+               f"{FAST_H3_VSA_START * 100:g}% of the schedule, as it was trained")
 
 
 def sparse_dit_patched(model):
@@ -3599,6 +3984,74 @@ RESTRAINT_HOLD_KEY = " ".join(dict.fromkeys(
 MOUTH_HOLD = " Mouths in the shot stay closed, the expressions moving."
 
 
+# A GAGGED MOUTH IS NOT A MOUTH THE SHOT CAN USE.
+#
+# The tape was one item in the hardware sentence -- "The cuffs on the wrists and duct
+# tape over the mouth stay closed and fastened as they were put on, a closed ring locked
+# round each wrist" -- words written for cuffs, eight sentences down, while three other
+# clauses in the same shot handed her mouth a job: "the screaming is Mara's", "the
+# expression is terrified, played in the eyes and the mouth together", "the mouth set".
+# A mouth told to scream and to act cannot be under tape, so the model took the tape
+# off. REPORTED as gags like duct tape disappearing once another action happens.
+#
+# So the gag gets its own sentence, in the opening tokens beside the pose; a sound
+# from behind it is muffled; and a face that acts does it above it. Positively, like
+# everything here: where the tape IS, never where the mouth is not.
+def gag_hold(item, who="", new=False, muffled=False):
+    """One person's gag, held for the whole shot. "" when there is no item.
+
+    `new` is the shot that puts it on -- off at the first frame, and once on, on to
+    the last, through whatever else the beat does after it. `muffled` adds what a
+    voice behind it sounds like, for a shot that gives that person a sound or a line."""
+    item = str(item or "").strip()
+    if not item:
+        return ""
+    mouth = (f"{who} mouth" if who in ("her", "his", "their")
+             else f"{who}'s mouth" if who else "the mouth")
+    taped = bool(re.search(r"\btape\b", item, re.I))
+    held = (f"stuck flat across {mouth}, sealing the lips from cheek to cheek" if taped
+            else f"fastened in place over {mouth}")
+    if new:
+        out = (f" The {item} goes {'across' if taped else 'over'} {mouth} during this "
+               f"shot, and from the moment it is on it stays "
+               f"{'stuck flat over the lips' if taped else 'fastened in place'} through "
+               f"everything that happens after it, still in place at the last frame.")
+    else:
+        out = (f" The {item} stays {held} from the first frame to the last, in place "
+               f"through every movement in the shot.")
+    if muffled:
+        out += (f" Every sound from behind it comes out muffled, the lips held shut "
+                f"under the {item.split()[-1]}.")
+    return out
+
+
+def gagged_in(state, names):
+    """{name: the item over their mouth} for the people in `names` who are gagged."""
+    out = {}
+    for n in (names or []):
+        q = getattr(state, "people", {}).get(n)
+        if q is None:
+            continue
+        on_mouth = [r.item for r in q.hardware.values() if r.part == "mouth" and r.item]
+        if on_mouth:
+            out[n] = merge_hardware_names(on_mouth)[0]
+    return out
+
+
+def eyes_above(face, item):
+    """A face clause with its acting moved up to the eyes and brow, above a gag."""
+    if not face:
+        return face
+    head = (str(item or "").split() or ["gag"])[-1]
+    out = face.replace("played in the eyes and the mouth together.",
+                       f"played in the eyes and the brow above the {head}.")
+    out = out.replace("each played in the eyes and the mouth.",
+                      "each played in the eyes and the brow.")
+    return out.replace("the face shows the strain of it, the mouth set.",
+                       f"the face shows the strain of it in the eyes and the brow "
+                       f"above the {head}.")
+
+
 _MOUTH_WORKS = re.compile(
     r"\b(?:smil(?:e|es|ed|ing)|grin(?:s|ned|ning)?|smirk(?:s|ed|ing)?|"
     r"sneer(?:s|ed|ing)?|grimac(?:e|es|ed|ing)|pout(?:s|ed|ing)?|"
@@ -3930,6 +4383,40 @@ OTHERS_UNCHANGED = " Everyone else in the shot has on exactly what their own ent
 
 RESTRAINT_GOING_ON = (" The hardware goes on during this shot: it is open and off the "
                       "body at the first frame, and closed on it by the last.")
+
+
+def newly_on_clause(items, where=None, who="", posed=False):
+    """RESTRAINT_GOING_ON for a piece added to somebody ALREADY restrained -- the rope
+    on the ankles of a woman who has been cuffed for three shots. Said per piece and
+    where it goes, because the rest of what she wears is NOT going on now, and "the
+    hardware goes on during this shot" would take the cuffs off at the first frame.
+
+    Once on, on: the beat usually does something after it -- "ties her ankles, then
+    drags her to the chair" -- and the end of the shot is where it went missing."""
+    out = ""
+    for item in [str(i).strip() for i in (items or []) if str(i).strip()]:
+        plural = item.endswith("s") and not item.endswith("ss")
+        at, _sep, fast = _where_of(item, where, who).rstrip(",").partition(", fast at the ")
+        out += (f" The {item} {'go' if plural else 'goes'}"
+                + (f" {at}" if at else " on")
+                + " during this shot"
+                + (f", fastened to the {fast}" if fast else "")
+                + f": off the body at the first frame, and once "
+                  f"{'they are' if plural else 'it is'} on, "
+                  f"{'they stay' if plural else 'it stays'} fastened through everything "
+                  f"that happens after, still on at the last frame"
+                # ...and holding its shape from the moment it closes, in the words for
+                # what it IS -- see rigid_tail. A chain going on is still a chain, and
+                # one that forces a position is drawn to its length by the end.
+                + (f"; by the last frame {'they are' if plural else 'it is'} drawn to "
+                   f"{'their' if plural else 'its'} full length, so the position "
+                   f"{'they fix' if plural else 'it fixes'} is the position that keeps"
+                   if (posed and rigid_hardware(item) and not (
+                       _CUFF_FORM.search(item) and not re.search(r"\bchain", item, re.I)))
+                   else rigid_tail(item, "wrists", plural, where=where).rstrip(",")
+                   if rigid_hardware(item) else "")
+                + ".")
+    return out
 # WHERE THE HARDWARE CLOSES, not only where the limbs end up. RESTRAINT_GOING_ON
 # gives the hardware both of its ends -- open and off at the first frame, closed by
 # the last -- and this used to give the limbs only their last one. Between those two
@@ -4851,6 +5338,36 @@ def lying_facing(text):
     return ""
 
 
+# A BODY LEFT LYING STAYS DOWN, WITH ITS ARMS PLACED. "Mara is lying down." was the
+# only thing a later shot said about it -- one late, short sentence -- and nothing at
+# all about the arms. The prior for a person on a bed with somebody working over them
+# is up on the elbows or the hands, so while Dan cuffed her or taped her mouth she
+# pushed herself up off the mattress. REPORTED: she should be lying flat on the bed.
+# Said in the opening tokens, like the pose, with the arms placed whenever nothing
+# else places them -- an unplaced arm is the one the prior props her up on.
+_LYING_SURFACE = re.compile(
+    r"\b(?:on|onto|across|to|in)\s+(?:the|a|an|her|his|their)\s+((?:\w+\s+)?"
+    r"(?:bed|mattress|floor|floorboards|ground|carpet|rug|cot|bunk|futon|tiles|concrete|"
+    r"sofa|couch|bench|table))\b", re.I)
+
+
+def lying_stays(who="", poss="", surface="", arms_free=False, done_to=""):
+    """The sentence holding a lying body down for the whole shot.
+
+    `who` is the subject as it should be said ("" for the only body in the shot),
+    `poss` its possessive, `done_to` the object form when somebody else is working on
+    them this shot."""
+    subj = who or "The body"
+    poss = poss or ("its" if not who else "the")
+    out = (f" {subj} stays lying flat{f' on the {surface}' if surface else ''} from "
+           f"the first frame to the last, {poss} weight down on it the whole time")
+    if arms_free:
+        out += f", both arms lying flat along it at {poss} sides"
+    if done_to:
+        out += f", still while it is done to {done_to}"
+    return out + "."
+
+
 def facing_clause(facing):
     """The sentence for a facing, or "" for one that was never named."""
     said = LYING_FACING.get(str(facing or "").strip().lower(), "")
@@ -5279,11 +5796,71 @@ FALL_HOLD = (" A bound body falls as one piece: the fastened limbs stay fastened
 FALL_HOLD_FREE = (" The body falls as one piece: the arms stay with it and the shoulder, "
                   "hip or side takes the landing, the legs folding together under it.")
 
+# WHERE THE HANDS ARE, SAID FOR THE FALL ITSELF. FALL_HOLD says "the arms staying in
+# the hold" -- a hold the sentence never places -- and sat at the END of the shot with
+# the other guards, while the strongest prior in a falling body is a pair of hands
+# thrown out to catch it. REPORTED as bound characters breaking their falls with
+# their hands. The pose sentence placed the wrists, but as a standing fact; nothing
+# tied it to the fall, and the fall won. This names the position the pose already
+# holds, for the whole way down, and leads the shot beside the beat -- the same move
+# that fixed cuffs drawn in front.
+_FALL_ARMS = {
+    "behind the back": "locked together behind the back",
+    "in front of the body": "locked together and held in against the front of the body",
+    "at the waist": "locked together and held in at the waist",
+}
+_FALL_LEGS = {
+    "together": "The bound ankles stay together and both legs go down as one.",
+    "ankles to the wrists": "The ankles stay drawn up to the wrists and the whole body "
+                            "goes down as one.",
+}
+
+
+def bound_fall_clause(arms="", legs="", who=""):
+    """The fall guard for a restrained body, with WHERE its hands are. FALL_HOLD when
+    nothing says where. `who` names whose hands, for a shot with somebody else in it."""
+    held = _FALL_ARMS.get(str(arms or "").strip().lower(), "")
+    if not held:
+        return FALL_HOLD
+    whose = (who.capitalize() if who in ("her", "his", "their")
+             else f"{who}'s" if who else "The")
+    legs_said = _FALL_LEGS.get(str(legs or "").strip().lower(), "")
+    return (f" {whose} hands stay {held} for the whole fall and the landing, carried "
+            f"down with the body, so the shoulder, hip and side take the landing."
+            + (f" {legs_said}" if legs_said else ""))
+
+
+# Where a body comes down. A throw only counts when it puts somebody on one of these:
+# "throws her onto the mattress" is a fall, "pushes her into the room" is not. A PUSH
+# needs the floor itself -- "pushes her down onto the sofa" is somebody made to sit.
+_FLOOR_WORDS = (r"floor|floorboards|ground|carpet|rug|deck|dirt|mud|grass|lawn|gravel|"
+                r"sand|snow|ice|tiles?|concrete|pavement|asphalt|road|stairs|steps|earth")
+_FLOOR_LIKE = r"(?:" + _FLOOR_WORDS + r")"
+_LANDING = r"(?:" + _FLOOR_WORDS + r"|bed|mattress|sofa|couch|cot|bunk|futon)"
+_THROWN_ON = (r"(?:(?:her|him|them|herself|himself|themselves|(?-i:[A-Z][\w-]+))\s+)?"
+              r"(?:(?:down|back|backwards?|forwards?|hard|roughly|face[-\s]?(?:down|first))"
+              r"\s+)?(?:on|onto|to|into|across)\s+(?:the|a|an|her|his|their)\s+(?:\w+\s+)?")
+
 _FALL_CUE = re.compile(
     r"\b(?:falls?|fell|falling|drops?\s+to|dropped\s+to|collapse[sd]?|collapsing|"
     r"topple[sd]?|topples|tips?\s+over|tipped\s+over|keels?\s+over|goes\s+down|"
     r"went\s+down|slumps?|slumped|stumbles?|stumbled|overbalance[sd]?|"
-    r"loses?\s+(?:her|his|their)\s+balance|lost\s+(?:her|his|their)\s+balance|"
+    r"loses?\s+(?:her|his|their)\s+(?:balance|footing)|"
+    r"lost\s+(?:her|his|their)\s+(?:balance|footing)|"
+    # Falls that never say "fall". REPORTED as bound hands catching the body: every
+    # one of these went out with no fall guard at all.
+    r"trip(?:s|ped|ping)?\s+(?:over|on|up|and)|tumbl(?:e|es|ed|ing)|"
+    r"sprawl(?:s|ed|ing)?|pitch(?:es|ed|ing)?\s+(?:forwards?|backwards?|over|headlong)|"
+    r"(?:knees|legs)\s+(?:buckle|buckled|give\s+way|gave\s+way|give\s+out|gave\s+out)|"
+    r"crash(?:es|ed|ing)?\s+(?:down|(?:on|onto|to|into)\s+(?:the|a)\s+(?:\w+\s+)?"
+    + _LANDING + r")|"
+    r"lands?\s+(?:hard\s+)?(?:on|onto)\s+(?:(?:her|his|their)\s+(?:side|back|front|"
+    r"face|stomach|belly|shoulder|knees)|(?:the|a)\s+(?:\w+\s+)?" + _LANDING + r")|"
+    r"slam(?:s|med|ming)?\s+(?:down\s+)?(?:into|onto|on)\s+(?:the|a)\s+(?:\w+\s+)?"
+    + _LANDING + r"|"
+    r"(?:throw|throws|threw|thrown|hurl(?:s|ed)?|fling|flings|flung|toss(?:es|ed)?|"
+    r"knock(?:s|ed)?)\s+" + _THROWN_ON + _LANDING + r"|"
+    r"(?:shov(?:e|es|ed)|push(?:es|ed)?)\s+" + _THROWN_ON + _FLOOR_LIKE + r"|"
     r"(?:push|knock|shove|pull|drag|throw|thr[eo]w)(?:es|s|ed|n)?\s+"
     r"(?:(?:her|him|them|herself|himself|themselves|[A-Z][\w-]+)\s+"
     r"(?:over|down|to\s+the\s+(?:floor|ground))|to\s+the\s+(?:floor|ground))|"
@@ -5325,6 +5902,35 @@ def falls_in(text):
             return True
         return True
     return False
+
+
+def fallers_in(text, names, pronouns=None):
+    """Who goes down in this beat, as far as its own words say. An empty set where
+    they do not say -- a pronoun two people answer to, or nobody at all.
+
+    Read from the clause each fall sits in, so "Dan trips over the crate and falls"
+    is Dan, and the woman cuffed beside him is not told her hands stay locked "for
+    the whole fall" -- a fall she was never in, that the sentence would put her in."""
+    t, out = text or "", set()
+    by_word = {}
+    for n in (names or []):
+        p = (pronouns or {}).get(n)
+        for w in {"she": ("she", "her"), "he": ("he", "him")}.get(p, ()):
+            by_word.setdefault(w, []).append(n)
+    for m in _FALL_CUE.finditer(t):
+        head = t[:m.start()]
+        cut = max((c.end() for c in
+                   re.finditer(r"[.;!?]\s+|,\s*|\s+(?:and|but|then|so)\s+", head)),
+                  default=0)
+        stop = re.search(r"[.;!?,]|\s+(?:and|but|then|so)\s+", t[m.end():])
+        clause = t[cut:m.end() + (stop.start() if stop else len(t) - m.end())]
+        for n in (names or []):
+            if re.search(r"\b" + re.escape(n) + r"\b", clause):
+                out.add(n)
+        for w, who in by_word.items():
+            if len(who) == 1 and re.search(r"\b" + w + r"\b", clause, re.I):
+                out.add(who[0])
+    return out
 
 
 CHAIN_HOLD = (" Every restraint stays closed and fastened as it was put on, its links "
@@ -5907,8 +6513,11 @@ def posture_in(beat, cast):
         for at, pose in hits:
             span = part[prev:at]
             tail = part[at:]
+            # ...and "pins her TO the floor", "throws her ACROSS the bed", "pushes
+            # her FACE down onto it": the object, before what puts it down.
             obj = re.match(r"\w+\s+(?:the\s+)?([\w'-]+)\s+"
-                           r"(?:down|up|back|onto|into|on|in)\b", tail, re.I)
+                           r"(?:down|up|back|onto|into|on|in|to|across|flat|face|hard|"
+                           r"roughly)\b", tail, re.I)
             if obj and obj.group(1).lower() not in _POSE_DIRECTIONS:
                 word = obj.group(1)
                 named = [n for n in people
@@ -6360,6 +6969,12 @@ def move_clause(dest, beat=""):
             f"the last frame than at the first.")
 
 
+_WALKS_THERE = re.compile(
+    r"\b(?:walk(?:s|ed|ing)?|go(?:es|ing)?|went|run(?:s|ning)?|ran|(?<!the\s)steps?|"
+    r"stepped|heads?|headed|cross(?:es|ed)|climb(?:s|ed|ing)?|carr(?:y|ies|ied)|"
+    r"leads?|led|drags?|dragged|hurr(?:y|ies|ied)|strides?|strode|marche[sd])\b", re.I)
+
+
 def travel_anchor(frm, via, to, here="", beat=""):
     """Say where the shot starts, what it passes, and where it ends. "" if nowhere.
 
@@ -6374,6 +6989,13 @@ def travel_anchor(frm, via, to, here="", beat=""):
     facing = facing_phrase(beat)
     walk = ("the walk between them played out on screen, every step in frame"
             + (f",{facing}." if facing else "."))
+    # A FALL IS NOT A WALK. "Tumbles down the steps" arrives somewhere as surely as a
+    # walk does, and was told "the walk between them, every step in frame" -- a
+    # direction nobody wrote, and the body walked down the stairs it was meant to fall
+    # down. REPORTED as characters self-directing. The journey still holds -- the shot
+    # opens where the last one ended -- it just says what carries the body there.
+    if falls_in(beat) and not _WALKS_THERE.search(beat or ""):
+        walk = "the fall between them played out on screen, in frame."
     if via:
         return (f" The shot opens in the {start}, carries along the {via}, and "
                 f"arrives in the {to}, {walk}") if start else (
@@ -8113,7 +8735,9 @@ class H3LongVideos:
                     "Ignored at cfg 1.0, which is where H3 runs. Wired for completeness."}),
                 "sigmas": ("SIGMAS", {"tooltip":
                     "An external schedule (PDD Acc's Apply node). Drives the sampler directly; "
-                    "steps and scheduler are then only for the progress bar."}),
+                    "steps and scheduler are then only for the progress bar. Leave it "
+                    "unwired for a Hyperflow LoRA: the node reads the grid and shifts from "
+                    "the LoRA file and applies them itself."}),
                 "shift_video": ("FLOAT", {"default": 12.0, "min": 1.0, "max": 20.0, "step": 0.1}),
                 "shift_audio": ("FLOAT", {"default": 3.0, "min": 1.0, "max": 20.0, "step": 0.1,
                     "tooltip": "Keep video:audio near 4:1. H3 carries the audio latent on the "
@@ -8503,10 +9127,69 @@ class H3LongVideos:
                 "person still doubles, the tag is the cause -- for reference-driven "
                 "likeness render with a base or hybrid H3. No extra audio step is spliced "
                 "into the schedule either -- it changes "
-                "the step count the model was distilled for. Wire ComfyUI's Model Sparse "
-                "Attention node set to vsa (keep 10, from 0.20) in front of this node to "
-                "run it with the attention it was trained on"
+                "the step count the model was distilled for. It runs with the VSA "
+                "attention it was trained on (keep 10%, from 20% of the schedule): the "
+                "node applies ComfyUI's own at render time, unless a Model Sparse "
+                "Attention node is already wired in front of it"
                 + ("; " + "; ".join(_fast_said) if _fast_said else ""))
+        # HYPERFLOW: the grid it was distilled on, shifted as it was trained, with the
+        # shifts stamped where the DiT reads them. See hyperflow_lora.
+        _hyper = hyperflow_lora(model, graph)
+        if _hyper and _fast:
+            notes.append("a Hyperflow LoRA is on a FastH3 checkpoint. Both are 8-step "
+                         "distills of different models, and FastH3's schedule is the one "
+                         "kept; Hyperflow's grid is not applied. Use Hyperflow on a base H3")
+            _hyper = None
+        if _hyper:
+            _grid = _hyper["sigmas"]
+            _n = len(_grid) - 1
+            _hf_said = []
+            if sigmas is not None and len(sigmas):
+                _yours = [round(float(x), 4) for x in sigmas]
+                _raw = [round(float(x), 4) for x in _grid]
+                _hf_said.append(
+                    "your own `sigmas` input is wired, so it drives the sampler and "
+                    "Hyperflow's grid is not applied"
+                    + (" -- and what is wired is the grid UNSHIFTED, so the video runs "
+                       "most of its steps at the bottom of the noise. Unwire it and the "
+                       "node runs the grid shifted, as the LoRA was trained"
+                       if _yours == _raw else ""))
+            else:
+                if (float(shift_video), float(shift_audio)) not in (
+                        (12.0, 3.0), (_hyper["shift_video"], _hyper["shift_audio"])):
+                    _hf_said.append(f"your sigma shift {float(shift_video):g}/"
+                                    f"{float(shift_audio):g} is replaced by the "
+                                    f"{_hyper['shift_video']:g}/{_hyper['shift_audio']:g} "
+                                    f"it was distilled at")
+                shift_video = _hyper["shift_video"]
+                shift_audio = _hyper["shift_audio"]
+                sigmas = hyperflow_sigmas(_grid, shift_video)
+                model = stamp_h3_shift(model, shift_video, shift_audio)
+                if int(steps) != _n:
+                    _hf_said.append(f"steps is {_n}, the grid's own, not {int(steps)}")
+                steps = _n
+            notes.append(
+                f"Hyperflow LoRA detected (read from {_hyper['source']}). It is distilled "
+                f"onto a fixed {_n}-step grid, so every shot samples on that grid through "
+                f"the video shift {_hyper['shift_video']:g} -- "
+                + ", ".join(f"{float(x):.3f}" for x in hyperflow_sigmas(
+                    _grid, _hyper["shift_video"]))
+                + f" -- with the audio branch on shift {_hyper['shift_audio']:g}, both "
+                f"stamped into the model so the DiT derives the audio timesteps from "
+                f"the same numbers. scheduler only labels the progress bar now, and no "
+                f"extra audio step is spliced in: it would change the grid"
+                + ("; " + "; ".join(_hf_said) if _hf_said else ""))
+            # EULER, ALWAYS. Each grid step is one jump the LoRA learned to make, and its
+            # endpoint is the next grid point: a multistep sampler blends in the jump
+            # before it, and a two-stage one evaluates between grid points, where no
+            # step was ever distilled.
+            if sampler_name != HYPERFLOW_SAMPLER:
+                notes.append(f"sampler set to {HYPERFLOW_SAMPLER} for Hyperflow, from "
+                             f"{sampler_name}: each step is one jump to the next grid "
+                             f"point, and that is the only sampler that makes exactly those")
+                sampler_name = HYPERFLOW_SAMPLER
+            _hyper["two_time"], _tt_said = hyperflow_two_time_plan(model, _hyper)
+            notes.append(_tt_said)
         # WIDGETS THAT WERE NOT CHOICES. Each of these had one right answer that the
         # node could reach and the reader could not, so each was a question whose
         # wrong answer only ever made the render worse.
@@ -8583,12 +9266,13 @@ class H3LongVideos:
             notes.append(
                 f"the H3 schedule is ALSO SET UPSTREAM (video {_upstream[0]:g}"
                 + (f"/audio {_upstream[1]:g}" if _upstream[1] else "")
-                + f"), and this node applies its own {shift_video:g}/{shift_audio:g} as "
-                  f"well. Whichever patch lands last is the schedule that samples, which "
-                  f"is how it has always been -- this note is new, the behaviour is not. "
-                  f"Read from the stamp comfy's MiniMaxH3SigmaShift leaves in "
-                  f"transformer_options. Remove that node, or set it to the same numbers, "
-                  f"to leave no doubt about which schedule ran")
+                + f"), and this node applies its own {shift_video:g}/{shift_audio:g} over "
+                  f"it -- to the sampler's schedule AND to the stamp the DiT reads its "
+                  f"shifts from, so the two always agree and the node's numbers are the "
+                  f"ones that run. (They used to disagree: the sampler took the node's "
+                  f"shifts while the DiT kept the upstream ones.) Read from the stamp "
+                  f"comfy's MiniMaxH3SigmaShift leaves in transformer_options. Set "
+                  f"shift_video/shift_audio here rather than upstream")
         # SHIFT IS NOT THIS NODE'S TO CORRECT. What stood here solved shift_video
         # down from H3's 12 so the final step cleared less noise -- 4.66 at 8 steps,
         # 2.0 at 4 -- on the reasoning that a schedule leaving 0.63 for one evaluation
@@ -8801,6 +9485,8 @@ class H3LongVideos:
         told_shots = []           # shots whose line orders somebody about
         dialogue_marked = []      # shots whose quotes became <d>...</d>
         poses = {}                # name -> the posture a beat put them in
+        lying_on = {}             # name -> what they were laid on, where the beat said
+        lying_shots = []          # shots told a body stays lying flat
         facing = ""               # which way up a lying body is, until it gets up
         here = place_named(scene) or first_place(scene)
         _opening = extract_directives(beats[0])[0] if beats else ""
@@ -8828,6 +9514,7 @@ class H3LongVideos:
         scene_welded = []         # ...and shots where it could not be held
         looking_at = {}           # {name: target}, each held until it changes
         fall_shots = []           # shots told what takes the landing
+        gag_shots = []            # shots told the gag stays over the mouth
         device_shots = []         # shots whose line belongs to a machine
         applied_shots = []        # shots that put the hardware on
         early_hardware = []       # ...where the sheet already claimed it
@@ -8957,6 +9644,10 @@ class H3LongVideos:
                              if not names_any(g, [x for x in gone if x not in restored])]
                     _state.declare(_n, _line + "".join(f", {g}" for g in _wear),
                                    staged_later=_later_for_state)
+            # What was on BEFORE this beat, so a piece that goes on in it can be told
+            # from one that was already there. See _new_on below.
+            _hw_before = {(_n, _k) for _n, _q in _state.people.items()
+                          for _k in _q.hardware}
             _ch = _state.read(_acted, cast=[n for n, _ in sheet_lines(sheet) if n],
                               shot=len(plan) + 1, pronouns=_pron_of)
             if _ch.get("applied") or _ch.get("released"):
@@ -9645,6 +10336,28 @@ class H3LongVideos:
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(_scene_before_now)
                              and restraint_going_on(_acted))
+            # A SECOND PIECE GOING ON. _applying is the FIRST restraint of a run, so
+            # once the cuffs were on, the tape pressed over her mouth two beats later
+            # was told it "stays closed and fastened as it was put on" in the shot that
+            # puts it on: on at the first frame, before anybody reached for it. The
+            # model could not have it both ways, and the tape came and went. The state
+            # knows which pieces are new; those get both ends of the change.
+            # Not a piece the beat calls HERS: "chains her ankles to her collar" is a
+            # collar she already has, and telling the shot it goes on now would stage
+            # a collaring nobody wrote.
+            def _possessed(_item):
+                _head = re.escape(str(_item).split()[-1].rstrip("s"))
+                # One describing word at most -- "her steel collar" -- and never a body
+                # part or a preposition: "ties HER ankles WITH rope" is new rope.
+                return bool(re.search(
+                    r"\b(?:her|his|their|[A-Z][\w-]*['’]s)\s+"
+                    r"(?:(?!(?:with|using|by|and|to|from|in|on|over|across|round|around|"
+                    r"wrists?|ankles?|hands?|arms?|legs?|feet|neck|throat|mouth|lips|eyes|"
+                    r"face|head|waist|knees?)\b)\w+\s+)?" + _head + r"s?\b", _acted or ""))
+            _new_on = {(_n, _r.item) for _n, _q in _state.people.items()
+                       for _k, _r in _q.hardware.items()
+                       if (_n, _k) not in _hw_before and _r.item
+                       and not _possessed(_r.item)}
             if (not early_hardware and restraint_going_on(_acted)
                     and restraint_present(_scene_for_state)):
                 early_hardware.append(len(plan) + 1)
@@ -9701,7 +10414,9 @@ class H3LongVideos:
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
             for _gone_pose in posture_cleared(_acted, poses):
                 poses.pop(_gone_pose, None)
+                lying_on.pop(_gone_pose, None)
                 facing = ""          # up off the floor is no longer facing anywhere
+            _poses_held = {n: p for n, p in poses.items() if n not in _pose_now}
             _posture = ("" if not hold_scene_state
                         else posture_hold({n: p for n, p in poses.items()
                                            if n not in _pose_now},
@@ -9711,6 +10426,12 @@ class H3LongVideos:
             if _posture:
                 posture_shots.append(len(plan) + 1)
             poses.update(_pose_now)
+            for _n, _p in _pose_now.items():
+                _on = _LYING_SURFACE.search(engine.staged_text(_acted) or "")
+                if _p != "lying down":
+                    lying_on.pop(_n, None)
+                elif _on:
+                    lying_on[_n] = _on.group(1).lower()
             _anchor_now = limb_anchor(_acted) if restrained else ""
             if _anchor_now:
                 anchored = _anchor_now
@@ -9738,6 +10459,7 @@ class H3LongVideos:
             _falls = falls_in(_acted)
             fall = (FALL_HOLD if (restrained and _falls)
                     else FALL_HOLD_FREE if _falls else "")
+            _bound_fall = bool(restrained and _falls)   # placed with the pose, below
             if fall:
                 fall_shots.append(len(plan) + 1)
             rigid = restrained and rigid_latched
@@ -10008,6 +10730,34 @@ class H3LongVideos:
                             or not character_guard
                             or not (_described or [])
                             or bool(restrained_who & set(_described or [])))
+            # THE GAG, AND ANY PIECE GOING ON NOW, each in words of its own -- see
+            # gag_hold and newly_on_clause. Both leave the hardware sentence below,
+            # which says "closed and fastened as it was put on": true of cuffs, and of
+            # neither a strip of tape nor a rope going on in this very shot.
+            _gag_on = (gagged_in(_state, _described or list(_state.people))
+                       if (restrained and _wearer_here) else {})
+            _mouth_raw = {_r.item for _q in _state.people.values()
+                          for _r in _q.hardware.values() if _r.part == "mouth"}
+            _fresh = [i for _n, i in sorted(_new_on)
+                      if i not in _mouth_raw and (_n in (_described or []) or not _described)]
+            # PER PERSON: Kate's cuffs going on now are not Mara's, which have been on
+            # since shot 1 -- skipped by name, the second cuffing took the first
+            # woman's hold out of the shot.
+            _skip_by = {}
+            for _n, _i in _new_on:
+                if _i not in _mouth_raw:
+                    _skip_by.setdefault(_n, set()).add(_i)
+            for _n in _gag_on:
+                _skip_by.setdefault(_n, set()).update(
+                    _r.item for _r in _state.people[_n].hardware.values()
+                    if _r.part == "mouth")
+            _skip = set().union(*_skip_by.values()) if _skip_by else set()
+
+            def _shown(items, who=None):
+                _s = _skip if who is None else _skip_by.get(who, set())
+                return [i for i in (items or [])
+                        if not any(s == i or s in i or i in s for s in _s)]
+            _hw_shown = {_n: _shown(_v, _n) for _n, _v in _hw_by_wearer.items()}
             if not _wearer_here:
                 hold = ""
                 _pose = ""
@@ -10017,8 +10767,8 @@ class H3LongVideos:
                 absent_hold.append(len(plan) + 1)
             elif not _applying and restrained:
                 _here_items = merge_hardware_names(
-                    [i for n in (_described or []) for i in _hw_by_wearer.get(n, [])]
-                ) or worn_items
+                    [i for n in (_described or []) for i in _hw_shown.get(n, [])]
+                ) or _shown(worn_items)
                 _here_item = ", ".join(_here_items)
                 _here_rigid = bool(rigid) and (rigid_hardware(_here_item)
                                                if _here_item else True)
@@ -10030,10 +10780,13 @@ class H3LongVideos:
                 # It used to be rare, because a shot naming one person described only
                 # her; now that a fastened person stays in frame it is the ordinary
                 # case, so the sentence has to carry the attribution.
-                _own = [n for n in (_described or []) if _hw_by_wearer.get(n)]
-                _split = (len(_own) > 1
-                          and len({tuple(merge_hardware_names(_hw_by_wearer[n]))
-                                   for n in _own}) > 1)
+                _own = [n for n in (_described or []) if _hw_shown.get(n)]
+                # ...and whose, beside a piece going on somebody: "The cuffs stay
+                # closed" next to "the cuffs go on Kate's wrists" reads as hers.
+                _split = ((len(_own) > 1
+                           and len({tuple(merge_hardware_names(_hw_shown[n]))
+                                    for n in _own}) > 1)
+                          or bool(_fresh and _own and len(_described or []) >= 2))
 
                 def _placed_on(names):
                     return hardware_where([_r for _n in names
@@ -10050,18 +10803,20 @@ class H3LongVideos:
                 if _split:
                     _parts = [
                         _placed_hold(
-                            ", ".join(merge_hardware_names(_hw_by_wearer[n])),
+                            ", ".join(merge_hardware_names(_hw_shown[n])),
                             [n], _described,
                             anchor=("" if (_anchor_now or anchors_placed(_placed_on([n])))
                                     else anchored),
                             rigid=bool(rigid) and rigid_hardware(
-                                " ".join(_hw_by_wearer[n])),
+                                " ".join(_hw_shown[n])),
                             posed=bool(posed),
-                            part=held_part(merge_hardware_names(_hw_by_wearer[n])),
+                            part=held_part(merge_hardware_names(_hw_shown[n])),
                             where=_placed_on([n]))
                         for n in _own]
                     hold = "".join(h for h, _w in _parts)
                     _place_words = sum(w for _h, w in _parts)
+                elif not _here_items and _skip:
+                    hold = ""       # all of it is a gag or going on now -- said below
                 else:
                     hold, _place_words = _placed_hold(
                         # NAMED EVEN WHEN THE BEAT NAMES IT. "Ana strains against the
@@ -10079,6 +10834,15 @@ class H3LongVideos:
                         where=_placed_on(_described or list(_state.people)))
                 if _here_item:
                     named_shots.append(len(plan) + 1)
+                if _fresh:
+                    _fresh_who = [n for n in (_described or []) if n in
+                                  {_n for _n, i in _new_on if i in _fresh}]
+                    hold += newly_on_clause(
+                        _fresh, where=_placed_on(_described or list(_state.people)),
+                        posed=bool(posed),
+                        who=(_fresh_who[0] if len(_fresh_who) == 1
+                             and len(_described or []) >= 2 else ""))
+                    applied_shots.append(len(plan) + 1)
             else:
                 hold = own_hold(hold, _wearers, _described)
             # HOISTED HERE, BELOW THE GATE ABOVE, and that is the whole of the fix.
@@ -10096,6 +10860,106 @@ class H3LongVideos:
             if _pose and restrained_who:
                 _pose = pose_of(_pose, [n for n in (_described or [])
                                         if n in restrained_who], _described)
+            def _whose_in(_n):
+                """How a lead sentence says whose: nothing with one person in the
+                shot, a pronoun where only _n answers to it -- the pose sentence beside
+                it has already named them, and a third naming is how a second one is
+                drawn -- else the name."""
+                if len(_described or []) < 2:
+                    return ""
+                _rows = dict(sheet_lines(shot_sheet))
+                _mine = sheet_pronoun(_rows.get(_n, ""))
+                if _mine in ("she", "he") and not any(
+                        sheet_pronoun(_rows.get(_o, "")) == _mine
+                        for _o in _described if _o != _n):
+                    return {"she": "her", "he": "his"}[_mine]
+                return _n
+            # THE GAG LEADS, beside the pose and for the same reason: a mouth is the
+            # first thing a face is drawn with, and a late sentence does not outvote it.
+            _gag_talk = set(speakers_in(body, _who_sheet)) if has_speech(body) else set()
+            _gag_voc = ({_n for _n, _p in vocal_sources_in(body, shot_sheet)}
+                        if voice_in(body) else set())
+            _gag_loose = bool(voice_in(body) and not (_gag_talk | _gag_voc)
+                              and unpinned_vocal(body) and len(_gag_on) == 1)
+            _muffled = {_n for _n in _gag_on
+                        if _n in _gag_talk or _n in _gag_voc or _gag_loose}
+            _gag = "".join(
+                gag_hold(_it, who=_whose_in(_n),
+                         new=any(_w == _n and _i in _mouth_raw for _w, _i in _new_on),
+                         muffled=_n in _muffled)
+                for _n, _it in _gag_on.items())
+            if _gag:
+                gag_shots.append(len(plan) + 1)
+            for _n in sorted(_gag_on):
+                if _n in _gag_talk:
+                    notes.append(
+                        f"shot {len(plan) + 1} gives {_n} a spoken line while the "
+                        f"{_gag_on[_n]} covers {_n}'s mouth. A line is lip-synced, and "
+                        f"lips that move to words are lips with nothing over them -- "
+                        f"the shot is told the words come out muffled behind it, but a "
+                        f"model asked for both usually drops the gag. If it should "
+                        f"stay on, write the sound instead: '{_n} makes a muffled "
+                        f"sound behind the tape'")
+            # A BOUND BODY FALLING, with the hands placed for the fall itself, in the
+            # opening tokens. See bound_fall_clause.
+            _fall_led = False
+            _down = (fallers_in(_acted, _described, _pron_of)
+                     if _bound_fall else set())
+            if _bound_fall and (not _limb_now
+                                or (_down and not (_down & set(restrained_who or ())))):
+                # A gag or a collar binds no limb: her hands are free, and a sentence
+                # keeping "the arms in the hold" puts them in one nobody fastened. And
+                # when the one falling is somebody else, the bound body is not falling.
+                fall, _bound_fall = FALL_HOLD_FREE, False
+            if _bound_fall and _wearer_here:
+                _fallers = [n for n in (_described or []) if n in (restrained_who or ())]
+                fall = bound_fall_clause(
+                    _arms_pos, _legs_pos,
+                    who=(_whose_in(_fallers[0]) if len(_fallers) == 1 else ""))
+            # A BODY LEFT LYING, held down in the lead -- see lying_stays.
+            _down_lead, _lying_led = "", set()
+            _first_named = (engine.names_in(_acted, [n for n, _ in sheet_lines(sheet) if n])
+                            or [""])[0]
+            _rows_here = dict(sheet_lines(shot_sheet))
+            for _n in (_described or []):
+                if _poses_held.get(_n) != "lying down":
+                    continue
+                _q = _state.people.get(_n)
+                _limbs_held = bool(_q and any(_r.part in ("wrists", "arms", "hands")
+                                              for _r in _q.hardware.values()))
+                _arms_free = not (_limbs_held or (_arms_pos and _n in (restrained_who or ()))
+                                  or re.search(r"\b(?:arms?|hands?|elbows?|wrists?|"
+                                               r"fingers?)\b", _acted or "", re.I))
+                # Worked ON, not merely near: hardware going on her, or somebody else's
+                # hands on her body -- "Dana opens the bag and looks at McKenna" is not
+                # anything done to McKenna.
+                _worked_on = (any(_w == _n for _w, _i in _new_on)
+                              or any(_w == _n for _w, _r in (_ch.get("applied") or []))
+                              or bool(_first_named and _first_named != _n
+                                      and _COERCION.search(_acted or "")))
+                _pr = sheet_pronoun(_rows_here.get(_n, ""))
+                _subj = _whose_in(_n)       # "her"/"his", the name, or "" when alone
+                _who = ({"her": "She", "his": "He"}.get(_subj, _subj) if _subj else "")
+                _poss = (_subj if _subj in ("her", "his")
+                         else {"she": "her", "he": "his", "they": "their"}.get(_pr, ""))
+                _obj = ({"she": "her", "he": "him", "they": "them"}.get(_pr, "")
+                        if _subj else "the body")
+                _down_lead += lying_stays(_who, _poss, lying_on.get(_n, ""),
+                                          arms_free=bool(_arms_free),
+                                          done_to=(_obj or _n) if _worked_on else "")
+                _lying_led.add(_n)
+            if _down_lead:
+                lying_shots.append(len(plan) + 1)
+                # ...and not said a second time, late and short, by the posture hold.
+                _posture = ("" if not hold_scene_state
+                            else posture_hold({n: p for n, p in _poses_held.items()
+                                               if n not in _lying_led},
+                                              active if character_guard else
+                                              [n for n, _ in sheet_lines(_who_sheet) if n],
+                                              upright=set(_hw_by_wearer)
+                                              | set(restrained_who or ())))
+                if not _posture and (len(plan) + 1) in posture_shots:
+                    posture_shots.remove(len(plan) + 1)
             # THE FRAME LEADS TOO, for the reason the pose does: what the opening
             # tokens say is what the frame settles on, and as guard 15 of 15 it was
             # the first thing a crowded shot dropped -- a restrained, half-dressed body
@@ -10123,19 +10987,25 @@ class H3LongVideos:
                 told_shots.append(len(plan) + 1)
             _entering = entrance_clause(_placed_shots.get(len(plan)))
             _told_led = False
-            if (_pose or _seal or _facing or _frame or _entering or _told) and body:
+            _gag_led = _down_led = False
+            _fall_lead = fall if (_bound_fall and _wearer_here) else ""
+            if (_pose or _seal or _facing or _frame or _entering or _told or _gag
+                    or _fall_lead or _down_lead) and body:
                 _at = line.find(body)
                 if _at >= 0:
                     _cut = _at + len(body)
                     # What the line only ASKS for stays out of the shot: said right
                     # after it, where it cannot be crowded out -- see told_hold.
                     _lead = (_told + _entering + _frame + (_pose if _arms_pos else "")
-                             + _facing + _seal)
+                             + _fall_lead + _gag + _facing + _down_lead + _seal)
                     _told_led = bool(_told)
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
                     _pose_led = _pose if _arms_pos else ""
                     _seal_led = bool(_seal)
                     _frame_led = bool(_frame)
+                    _gag_led = bool(_gag)
+                    _down_led = bool(_down_lead)
+                    _fall_led = bool(_fall_lead)
             _speaks = has_speech(body)
             _own = sound_described(body)
             if not _own and not _speaks and _BREATH_PREP.search(body):
@@ -10157,6 +11027,14 @@ class H3LongVideos:
                 body,
                 [(n, ln) for n, ln in sheet_lines(shot_sheet) if n in set(_wearers)],
                 _described, _film_duress) if hold_gaze else "")
+            # A face under a gag acts ABOVE it. "Played in the eyes and the mouth" is
+            # a mouth the tape is over, and the face won.
+            if _duress and _gag_on:
+                _faces_of = ([_n for _n, _w in emotion_pairs(body, _described)]
+                             or list(_described or []) or list(_gag_on))
+                _gagged_face = next((_n for _n in _faces_of if _n in _gag_on), "")
+                if _gagged_face:
+                    _duress = eyes_above(_duress, _gag_on[_gagged_face])
             if _duress:
                 duress_shots.append(len(plan) + 1)
             _mouth_busy = bool(mouth_performs(body) or emotion_in(body))
@@ -10165,6 +11043,10 @@ class H3LongVideos:
                                     and not _voiced and not _mouth_busy) else ""
             _mouth_from_silence = bool(_mouth)
             _vocal_src = vocal_sources_in(body, shot_sheet) if _voiced else []
+            # A sound behind a gag is that sound MUFFLED: "the screaming is Mara's"
+            # opened the mouth the tape was over, and the tape went.
+            _vocal_src = [(_n, f"muffled {_p}" if _n in _muffled else _p)
+                          for _n, _p in _vocal_src]
             _voicers = [n for n, _ in _vocal_src]
             _vocal_word = _vocal_src[0][1] if _vocal_src else ""
             # A busy mouth no longer stands the voice guard down: whoever does NOT
@@ -10186,6 +11068,11 @@ class H3LongVideos:
                 _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent,
                                        pairs=_vocal_src,
                                        rest=MOUTH_SILENT_REST if _mouth_busy else None)
+                for _n in _muffled & set(_talkers):
+                    _mouth = _mouth.replace(
+                        f"nly {_n} speaks",
+                        f"nly {_n} speaks, muffled behind the "
+                        f"{_gag_on[_n].split()[-1]}")
                 if _mouth and _voicers:
                     vocal_shots.append(len(plan) + 1)
                 # With no sheet the node knows nobody by name, and "more than one
@@ -10240,13 +11127,17 @@ class H3LongVideos:
                 inferred_sound.append(len(plan) + 1)
             _own_unsaid = bool(_own) and not _vocals_here
             _sound = sound_clause(wordless(heard), only=not _speaks, written=_own_unsaid)
+            if _muffled:
+                # Heard through the gag. "Wordless screaming" is an open mouth.
+                _sound = _sound.replace("wordless ", "muffled, wordless ", 1)
             if hold_gaze and _gazers:
                 _g = _gazers[0]
                 _target, _is_person = looking_at[_g]
                 _elsewhere = " ".join([
                     hold, _posture, _pose, _travel, _where, _told, turn, _duress,
                     _mouth, _revealed, _under, _bare, _wearing, tail, _moved,
-                    anchors, _state_clause, _device, _sound, _pace, fall])
+                    anchors, _state_clause, _device, _sound, _pace, fall, _gag,
+                    _down_lead])
 
                 def _named_already(_n):
                     return bool(re.search(r"\b" + re.escape(_n) + r"\b", _elsewhere))
@@ -10322,7 +11213,9 @@ class H3LongVideos:
                 (2, "under", _under),         # ...and what is underneath, still on
                 (2, "bare", _bare),          # ...or that nothing does
                 (3, "hold", hold),           # hardware coming open is not a drift
-                (4, "fall", fall),           # a body going down needs a landing
+                (4, "fall", "" if _fall_led else fall),   # a landing; hoisted when bound
+                (3, "gag", "" if _gag_led else _gag),     # hoisted, see gag_hold
+                (3, "down", "" if _down_led else _down_lead),   # see lying_stays
                 (4, "travel", _travel),      # a journey needs both its ends
                 (4, "where", _where),        # ...and later shots need the new room
                 (5, "pace", _pace),          # ...and a short action needs the whole shot
@@ -10356,6 +11249,7 @@ class H3LongVideos:
             for _gone in _dropped:
                 _tracker = {
                     "wearing": wearing_shots, "fall": fall_shots, "offnow": offnow_shots,
+                    "gag": gag_shots, "down": lying_shots,
                     "travel": travel_shots, "where": where_shots,
                     "pace": paced_shots, "device": device_shots,
                     "state": stated_shots, "posture": posture_shots,
@@ -11548,6 +12442,9 @@ class H3LongVideos:
 
 
         _last_a = last_audio_sigma(steps, shift_audio, scheduler, shift_video)
+        if _hyper and sigmas is not None and len(sigmas) > 1:
+            # On Hyperflow's grid, not on a scheduler it never runs.
+            _last_a = audio_sigma_of(float(sigmas[-2]), shift_video, shift_audio)
         # A SCHEDULER CAN END THIS OUTRIGHT, and this note used to deny it.
         _alt_sched = scheduler_that_finishes_audio(steps, shift_audio, shift_video,
                                                    scheduler)
@@ -11666,6 +12563,7 @@ class H3LongVideos:
             shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
             reentry_shots=reentry_shots, own_grade_shots=own_grade_shots,
             refs_ok=not _fast, outdoor_shots=outdoor_shots,
+            fast_h3=bool(_fast), hyperflow=_hyper,
             upscale=upscale, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
         )
@@ -11745,6 +12643,19 @@ class H3LongVideos:
         if apply_model_sampling:
             model, ms_note = apply_h3_model_sampling(model, shift_video, shift_audio)
             notes.append(ms_note)
+        # After the schedule patch, both of these: VSA reads its start point off the
+        # model's own sigmas, and the endpoint wrapper reads the stamp.
+        if getattr(prepared, "fast_h3", False):
+            model, _vsa_note = apply_fast_h3_vsa(model)
+            if _vsa_note:
+                notes.append(_vsa_note)
+        _hf = getattr(prepared, "hyperflow", None)
+        if _hf and _hf.get("two_time"):
+            try:
+                model = install_hyperflow_two_time(model, _hf)
+            except Exception as e:
+                notes.append(f"Hyperflow's endpoint conditioning could not be installed "
+                             f"({type(e).__name__}: {e}), so it runs one-time")
         if negative is None:
             negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
 

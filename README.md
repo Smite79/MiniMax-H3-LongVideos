@@ -215,6 +215,35 @@ on better than an analysis of the sigma curve does.
 name, and when two stacked LoRAs disagree with each other — both read, neither acted
 on.
 
+Whatever shifts run, the node writes them both into the sampler's schedule **and** into
+the stamp the H3 DiT reads its shifts from (as ComfyUI's own `ModelSamplingMiniMaxH3`
+does). The DiT derives the audio timesteps and rescales the carried audio from that
+stamp, and falls back to 12/3 without one — so a schedule set any other way used to
+run the audio for a different schedule than the one sampling.
+
+### FastH3 and Hyperflow
+
+**FastH3** (FastVideo's 8-step distill, detected by its VSA gate layers) runs at
+10/3 and with the VSA attention it was trained on: the node applies ComfyUI's Model
+Sparse Attention as `vsa`, keep 10%, from 20% of the schedule — unless you already
+wired one, or torch is on the `cudaMallocAsync` allocator, where sparse attention
+aborts the process (restart with `--disable-cuda-malloc`).
+
+**Hyperflow** (Video Rebirth's 8-step LoRA) is the one LoRA that *does* state its
+schedule: its metadata carries the sigma grid and both shifts, and ComfyUI keeps that
+metadata on the model. The node samples every shot on that grid, shifted at 12 for
+video, audio at 3, on `euler`, with no extra audio step. Leave `sigmas` unwired. If a
+LoRA stacked after it hides the metadata, the LoRA's file name is enough.
+
+Hyperflow is trained **two-time**: each step is conditioned on where it starts and
+where it lands. The ComfyUI conversion of the LoRA drops the endpoint embedder that
+does the second half. The node adds it back from the original release's time-embedder
+tensors — a `hyperflow_endpoint_*.safetensors` beside the node, or the original
+`minimax_h3_hyperflow_8step_v1.0.safetensors` in `models/loras` — and `info` says
+whether it is on. It needs a checkpoint **with a time embedder**: pruned curve-form
+builds (an `adaln_t_table` in its place) cannot load Hyperflow's time weights at all,
+and `info` says so.
+
 ## Settings
 
 | setting | value |

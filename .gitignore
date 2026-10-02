@@ -1,3 +1,5 @@
 __pycache__/
 *.py[cod]
 
+# Hyperflow endpoint weights: derivative of MiniMax H3 weights, fetched locally, never committed
+hyperflow_endpoint_*.safetensors
