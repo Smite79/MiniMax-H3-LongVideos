@@ -4015,7 +4015,7 @@ def gag_hold(item, who="", new=False, muffled=False):
         out = (f" The {item} goes {'across' if taped else 'over'} {mouth} during this "
                f"shot, and from the moment it is on it stays "
                f"{'stuck flat over the lips' if taped else 'fastened in place'} through "
-               f"everything that happens after it, still in place at the last frame.")
+               f"everything that happens after it, and in place at the last frame.")
     else:
         out = (f" The {item} stays {held} from the first frame to the last, in place "
                f"through every movement in the shot.")
@@ -4404,7 +4404,7 @@ def newly_on_clause(items, where=None, who="", posed=False):
                 + f": off the body at the first frame, and once "
                   f"{'they are' if plural else 'it is'} on, "
                   f"{'they stay' if plural else 'it stays'} fastened through everything "
-                  f"that happens after, still on at the last frame"
+                  f"that happens after, and on at the last frame"
                 # ...and holding its shape from the moment it closes, in the words for
                 # what it IS -- see rigid_tail. A chain going on is still a chain, and
                 # one that forces a position is drawn to its length by the end.
@@ -4522,8 +4522,10 @@ _APPLY_PHRASE = re.compile(
     r"(?:on|onto|around|behind|together|shut|closed)\b"
     # Tape goes on by being pressed, stuck or slapped OVER something -- the engine's
     # APPLY_VERB, mirrored here in the -s forms.
-    r"|\b(?:puts|places|presses|sticks|slaps|smooths|plasters)\s+(?:[\w,'’]+\s+){0,5}?"
-    r"(?:over|across)\s+(?:[\w'’]+\s+){0,2}?(?:mouth|lips|eyes|face)\b"
+    r"|\b(?:puts|places|presses|sticks|slaps|smooths|plasters|applies)\s+"
+    r"(?:[\w,'’]+\s+){0,5}?"
+    r"(?:over|across|to)\s+(?:[\w'’]+\s+){0,2}?(?:mouth|lips|eyes|face)\b"
+    r"|\bcovers\s+(?:her|his|their|the|[\w'’]+['’]s)\s+(?:mouth|lips|eyes|face)\s+with\b"
     r"|\b(?:loops?|wraps?|winds?|coils?|threads?|passes|runs|cinch(?:es)?|knots?|"
     r"laces?|hitch(?:es)?|slings?)\s+(?:[\w,']+\s+){0,5}?"
     r"(?:around|round|through|under|over|behind|between)\b", re.I)
@@ -4594,6 +4596,11 @@ _UNDO_NOW = re.compile(
     r"unclips?|unclipped|unfastens?|unfastened|unshackles?|unshackled|"
     r"ungags?|ungagged|releases?|released|frees?|freed|cuts?\s+(?:off|away|free)|"
     r"slips?\s+off|takes?\s+off|pulls?\s+off|lifts?\s+(?:off|away))\b"
+    # ...but not "pulls off A STRIP OF duct tape": that is tape being got ready, and it
+    # took her handcuffs off -- the sheet's only restraint, matched to the "it" the
+    # tape went on as. REPORTED as cuffs breaking the beat the tape went on.
+    r"(?!\s+(?:a|an|another|some|one|two|the)\s+(?:\w+\s+)?"
+    r"(?:strip|piece|length|bit|section|square|tear)s?\s+of\b)"
     r"[^.;!?]{0,40}?"
     r"\b(?:cuffs?|handcuffs?|chains?|ropes?|cords?|ties|straps?|tape|gags?|"
     r"collars?|shackles?|clamps?|clips?|restraints?|belt|them|it)\b", re.I)
@@ -5125,7 +5132,12 @@ def crotch_seal(text, items=()):
     from it says the author's word -- duct tape stays duct tape -- and falls back to
     the generic where the naming is elsewhere in the sentence."""
     t = str(text or "")
-    if not (_CROTCH_NAMED.search(t)
+    # ...or any wording the engine reads as fastened there, with hardware named --
+    # several common ones named only one half, sealed nothing, and the piece was gone
+    # by the next beat. Never a wording that takes it OFF.
+    _named_seal = bool(engine.groin_sealed(t) and hardware_named(t)
+                       and not _GROIN_OFF.search(t))
+    if not (_CROTCH_NAMED.search(t) or _named_seal
             or (_BETWEEN_LEGS.search(t) and _ROUND_WAIST.search(t))):
         return ""
     named = hardware_named(t) or ""
@@ -5156,14 +5168,43 @@ _SEAL_COMES_OFF = re.compile(
     r"\b(?:off|away|free|loose|open)\b", re.I)
 
 
+_GROIN_OFF = re.compile(
+    r"\bfrom\s+between\s+(?:her|his|their|[\w’']+['’]s)\s+(?:legs|thighs)\b"
+    r"|\b(?:off|from)\s+(?:her|his|their|the|[\w’']+['’]s)\s+"
+    r"(?:crotch|groin|vagina|pussy|vulva|labia|hips|waist)\b", re.I)
+_TAKES_FROM = re.compile(
+    r"\b(?:cuts?|cutting|peels?|peeling|peeled|pulls?|pulling|pulled|rips?|ripping|"
+    r"ripped|tears?|tearing|tore|strips?|takes?|taking|took|removes?|removed|removing|"
+    r"unwraps?|unwrapped|unwinds?|unwound|slices?|sliced|snips?|snipped)\b", re.I)
+# Off ANOTHER part: "rips the tape off her mouth" is the gag, not the seal.
+_OTHER_PART_OFF = re.compile(
+    r"\b(?:off|from|on|over|around|round)\s+(?:her|his|their|the|[\w’']+['’]s)\s+"
+    r"(?:mouth|lips|face|eyes|head|wrists?|ankles?|hands?|arms?|neck|throat|knees?|feet)\b",
+    re.I)
+# A strip torn off the roll, which is tape being got ready.
+_STRIP_OFF_ROLL = re.compile(
+    r"\b(?:tears?|tore|rips?|ripped|pulls?|pulled|cuts?|takes?|took|peels?|peeled)\s+off\s+"
+    r"(?:a|an|another|some|one|two|the)\s+(?:\w+\s+)?"
+    r"(?:strip|piece|length|bit|section|square|tear)s?\s+of\b", re.I)
+
+
 def seal_comes_off(beat, item):
-    """Does this beat take that sealed hardware off? Both halves, in one sentence."""
+    """Does this beat take that sealed hardware off? Both halves, in one sentence.
+
+    NOT where the sentence takes a piece off ANOTHER part: tape taken off her mouth is
+    not this tape, and used to take it too. Not a strip torn off the roll, either,
+    which is the piece being made."""
     b, it = str(beat or ""), str(item or "").strip()
     if not b or not it:
         return False
     head = it.split()[-1]          # "duct tape" is cut as "the tape" as often as not
     for sentence in re.split(r"(?<=[.!?])\s+", b):
-        if not _SEAL_COMES_OFF.search(sentence):
+        sentence = _STRIP_OFF_ROLL.sub(" ", sentence)
+        _from_groin = bool(_GROIN_OFF.search(sentence) and _TAKES_FROM.search(sentence))
+        if not (_SEAL_COMES_OFF.search(sentence) or _from_groin):
+            continue
+        if (_OTHER_PART_OFF.search(sentence) and not _from_groin
+                and not engine.groin_sealed(sentence)):
             continue
         if (re.search(r"\b" + re.escape(it) + r"\b", sentence, re.I)
                 or re.search(r"\b" + re.escape(head) + r"\b", sentence, re.I)
@@ -5172,6 +5213,10 @@ def seal_comes_off(beat, item):
     return False
 
 
+SEALED_ON = (" The {item} goes around the waist and between the legs during this shot, "
+             "covering the groin completely, and from the moment it is on it lies flat "
+             "against the skin there, sealing it, through everything that happens after it "
+             "and in place at the last frame.")
 SEALED_HOLD = (" The {item} runs around the waist and passes between the legs, "
                "covering the groin completely and lying flat against the skin there, "
                "and it stays exactly so for the whole shot.")
@@ -5364,7 +5409,8 @@ def lying_stays(who="", poss="", surface="", arms_free=False, done_to=""):
     if arms_free:
         out += f", both arms lying flat along it at {poss} sides"
     if done_to:
-        out += f", still while it is done to {done_to}"
+        # Not "still": this node never orders stillness, which freezes the take.
+        out += f", staying down while it is done to {done_to}"
     return out + "."
 
 
@@ -5511,7 +5557,8 @@ def merge_hardware_names(items):
 
 _PART_AT = {"neck": "round the neck", "throat": "round the throat", "mouth": "over the mouth",
             "eyes": "over the eyes", "head": "over the head", "waist": "round the waist",
-            "body": "round the body", "chest": "round the chest"}
+            "body": "round the body", "chest": "round the chest",
+            "groin": "between the legs, over the groin"}
 
 
 def hardware_where(restraints):
@@ -9540,6 +9587,7 @@ class H3LongVideos:
         frame_shots = []            # shots told what the frame holds
         legs_held = ""              # where a beat or the sheet fastened the legs
         limbs_freed = False         # the last piece on a limb came off -- see below
+        arms_freed = legs_freed = False   # ...counted per pair of limbs
         stayed_on = []              # (shot, who) kept described because still in frame
         addressed_on = []           # (shot, who) described because a line is spoken to them
         exact_shots = []            # shots carrying an exact: line of the author's
@@ -9677,6 +9725,23 @@ class H3LongVideos:
                 _staged_now = engine.staged_text(body)
                 if _SEXUAL_STAGING.search(_staged_now) or _INTIMATE.search(_staged_now):
                     _intimate |= set(active) | set(_still_there)
+                # THE PERSON THE HARDWARE GOES ON IS IN THE SHOT. "Dan handcuffs her
+                # wrists behind her back" names Dan alone, and with no pronoun on the
+                # sheet "her" named nobody here -- so the shot described one person, the
+                # cuffs had no body to be on, and the next beat's tape went on a woman
+                # the text had never placed in cuffs. REPORTED as the handcuffs breaking
+                # when the duct tape goes on. The state knows whose they are.
+                _worked_on = [n for n, _l in sheet_lines(sheet)
+                              if n and n not in (active or [])
+                              and any(_w == n for _w, _r in
+                                      list(_ch.get("applied") or [])
+                                      + list(_ch.get("released") or []))]
+                if _worked_on and not _leaves_room:
+                    _keep = set(list(active or []) + _worked_on)
+                    active = [n for n, _l in sheet_lines(sheet) if n in _keep]
+                    shot_sheet = "\n".join(ln for n, ln in sheet_lines(sheet)
+                                           if n in _keep)
+                    held_over.append((len(plan) + 1, list(_worked_on)))
                 # A PERSON IN HARDWARE STAYS IN THE SHOT.
                 #
                 # sheet_for_beat keeps whoever the beat names and drops the rest, and
@@ -9879,7 +9944,10 @@ class H3LongVideos:
                         for _hw in restraint_words(_ln):
                             _named = re.search(r"\b" + re.escape(_hw) + r"\b",
                                                body or "", re.I)
+                            # "...and slaps IT over her mouth" is the tape going on, not
+                            # the cuffs coming off: not where this beat puts anything on.
                             _pron = (len(restraint_words(_ln)) == 1
+                                     and not _ch.get("applied")
                                      and re.search(r"\b(?:them|it)\b", body or "", re.I))
                             if (_named or _pron) and _hw not in toks \
                                     and _hw not in gone and _hw not in inferred:
@@ -10104,9 +10172,11 @@ class H3LongVideos:
             # whatever happens to be latched -- checking `sealed` first meant a belt
             # the SHEET declared (never latched, because no beat applied it) got
             # latched by the beat taking it off, and then held for the rest of the run.
+            _sealed_before = sealed
             _seal_named = crotch_seal(_acted)
             _seal_off = (seal_comes_off(_acted, _seal_named or sealed)
-                         or (bool(sealed) and names_any(sealed, toks)))
+                         or (bool(sealed) and names_any(sealed, toks)
+                             and not _OTHER_PART_OFF.search(_acted or "")))
             if _seal_off:
                 sealed = ""
             elif _seal_named:
@@ -10292,7 +10362,8 @@ class H3LongVideos:
                         _clears = False
                         restrained_who = {n for n, _q in _state.people.items()
                                           if _q.hardware}
-                        if sealed and names_any(sealed, toks):
+                        if (sealed and names_any(sealed, toks)
+                                and not _OTHER_PART_OFF.search(_acted or "")):
                             sealed = ""
                 if _clears:
                     restrained = posed = rigid_latched = False
@@ -10305,10 +10376,10 @@ class H3LongVideos:
                       and not any(_q.hardware for _q in _state.people.values())):
                     # A real release took the last piece off: the flag follows the state,
                     # or the hold goes on saying "every restraint stays closed" over
-                    # hardware that is gone.
+                    # hardware that is gone. NOT the seal: it comes off by its own
+                    # removal, and unlocking her cuffs used to take it with them.
                     restrained = posed = rigid_latched = False
                     anchored = ""
-                    sealed = ""
                     worn_item = ""
                     worn_items = []
                     restrained_who = set()
@@ -10319,11 +10390,26 @@ class H3LongVideos:
                                         or restraint_going_on(_acted)
                                         or (restraint_present(_acted)
                                             and not restraint_present(_scene_for_state)))
+                        # WHO IT WENT ON is what the state recorded, read clause by clause.
+                        # wearer_of reads the whole beat at once and gives up past four
+                        # words, so "Dan pulls off a strip of duct tape and slaps it over
+                        # her mouth" made DAN the restrained one -- and every shot after
+                        # held his arms behind his back and left hers free. REPORTED as
+                        # the cuffs breaking the beat the tape went on.
+                        _put_on = {_n for _n, _r in (_ch.get("applied") or []) if _n}
                         _w = (engine.wearer_of(_acted, [n for n, _ in sheet_lines(sheet) if n])
-                              if _staged_here else "")
-                        _new = ({_w} if _w else
-                                set(restraint_wearers(sheet)) or restrained_by_beat(_acted, active))
+                              if (_staged_here and not _put_on) else "")
+                        _new = (_put_on or ({_w} if _w else set())
+                                or set(restraint_wearers(sheet))
+                                or restrained_by_beat(_acted, active))
                         restrained_who |= (_new if _new else set(active))
+            # ...and from then on, whoever the state says is in hardware IS the set. It
+            # only ever grew before, so one wrong guess -- the man doing the taping --
+            # stayed "restrained" for the rest of the run, and the arms the pose placed
+            # were his.
+            _state_held = {n for n, _q in _state.people.items() if _q.hardware}
+            if restrained and _state_held:
+                restrained_who = set(_state_held)
             _named_item = hardware_named(_acted) if restrained else ""
             _eng_hw = [r for p in _state.people.values()
                        for r in p.hardware.values()]
@@ -10545,20 +10631,39 @@ class H3LongVideos:
                      "thighs", "feet")
             _limb_now = any(r.part in _LIMB for _q in _state.people.values()
                             for r in _q.hardware.values())
-            _limb_off = any(getattr(r, "part", "") in _LIMB
-                            for _n, r in (_ch.get("released") or []))
-            if _limb_off and not _limb_now:
-                limbs_freed = True
-            if any(getattr(r, "part", "") in _LIMB for _n, r in (_ch.get("applied") or [])):
-                limbs_freed = False
-            if limbs_freed:
-                anchored = legs_held = ""
+            # ...PER PAIR OF LIMBS. Counted over every limb at once, uncuffing her wrists
+            # while her ankles stayed roped freed nothing, and every shot after went on
+            # holding her uncuffed arms "behind the body, wrists together". The arms go
+            # when nothing holds an arm, the legs when nothing holds a leg.
+            _ARM_PARTS = ("wrists", "arms", "hands", "elbows")
+            _LEG_PARTS = ("ankles", "legs", "knees", "thighs", "feet")
+
+            def _held_on(parts):
+                return any(r.part in parts for _q in _state.people.values()
+                           for r in _q.hardware.values())
+
+            def _changed(key, parts):
+                return any(getattr(r, "part", "") in parts for _n, r in (_ch.get(key) or []))
+            if _changed("released", _ARM_PARTS) and not _held_on(_ARM_PARTS):
+                arms_freed = True
+            if _changed("applied", _ARM_PARTS):
+                arms_freed = False
+            if _changed("released", _LEG_PARTS) and not _held_on(_LEG_PARTS):
+                legs_freed = True
+            if _changed("applied", _LEG_PARTS):
+                legs_freed = False
+            limbs_freed = arms_freed and legs_freed
+            if arms_freed:
+                anchored = ""
                 posed = False
-                _anchor_now = _legs_now = ""
-            _pose_pos = ("" if limbs_freed else
+                _anchor_now = ""
+            if legs_freed:
+                legs_held = ""
+                _legs_now = ""
+            _pose_pos = ("" if arms_freed else
                          (_anchor_now or anchored
                           or (limb_anchor(_scene_for_state) if restrained else "")))
-            _legs_pos = ("" if limbs_freed else
+            _legs_pos = ("" if legs_freed else
                          (_legs_now or legs_held
                           or (legs_anchor(_scene_for_state) if restrained else "")))
             _arms_pos = _pose_pos.split(", at the")[0].strip()
@@ -10751,6 +10856,15 @@ class H3LongVideos:
                 _skip_by.setdefault(_n, set()).update(
                     _r.item for _r in _state.people[_n].hardware.values()
                     if _r.part == "mouth")
+            # ...and the sealed piece, which SEALED_HOLD says in full.
+            _groin_raw = {_r.item for _q in _state.people.values()
+                          for _r in _q.hardware.values() if _r.part == "groin"}
+            if sealed and _groin_raw:
+                _fresh = [i for i in _fresh if i not in _groin_raw]
+                for _n, _q in _state.people.items():
+                    _g = {_r.item for _r in _q.hardware.values() if _r.part == "groin"}
+                    if _g:
+                        _skip_by.setdefault(_n, set()).update(_g)
             _skip = set().union(*_skip_by.values()) if _skip_by else set()
 
             def _shown(items, who=None):
@@ -10987,6 +11101,21 @@ class H3LongVideos:
                 told_shots.append(len(plan) + 1)
             _entering = entrance_clause(_placed_shots.get(len(plan)))
             _told_led = False
+            # THE SEAL, said on the right body and at the right time. The shot that puts
+            # it on is told both ends -- off at the first frame, on and staying on once
+            # it is on -- like any other piece going on; the old sentence said it was
+            # there all shot, before anybody had wrapped it.
+            if sealed and _seal:
+                _sealers = [n for n in (_described or []) if n in _state.people
+                            and any(_r.part == "groin"
+                                    for _r in _state.people[n].hardware.values())] \
+                    or [n for n in (_described or []) if n in (restrained_who or ())]
+                _sw = _whose_in(_sealers[0]) if len(_sealers) == 1 else ""
+                _sp = _sw if _sw in ("her", "his") else (f"{_sw}'s" if _sw else "the")
+                _seal = (SEALED_ON if not _sealed_before else SEALED_HOLD).format(item=sealed)
+                if _sp != "the":
+                    for _w in ("waist", "legs", "groin"):
+                        _seal = _seal.replace(f" the {_w}", f" {_sp} {_w}")
             _gag_led = _down_led = False
             _fall_lead = fall if (_bound_fall and _wearer_here) else ""
             if (_pose or _seal or _facing or _frame or _entering or _told or _gag
@@ -10996,11 +11125,14 @@ class H3LongVideos:
                     _cut = _at + len(body)
                     # What the line only ASKS for stays out of the shot: said right
                     # after it, where it cannot be crowded out -- see told_hold.
-                    _lead = (_told + _entering + _frame + (_pose if _arms_pos else "")
+                    # The legs lead as the arms do: bound ankles with free hands are
+                    # still a pose, and late in the shot it was the one that gave.
+                    _lead = (_told + _entering + _frame
+                             + (_pose if (_arms_pos or _legs_pos) else "")
                              + _fall_lead + _gag + _facing + _down_lead + _seal)
                     _told_led = bool(_told)
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
-                    _pose_led = _pose if _arms_pos else ""
+                    _pose_led = _pose if (_arms_pos or _legs_pos) else ""
                     _seal_led = bool(_seal)
                     _frame_led = bool(_frame)
                     _gag_led = bool(_gag)

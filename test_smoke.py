@@ -2350,8 +2350,10 @@ def test_hardware_closed_over_the_groin_stays_closed():
         "Mara walks out to the hallway.", plan_only=True,
         character_memory="Mara: she, 26, dark hair.")[3].split("[Shot ")[1:]]
     check("a chastity belt seals too", all(SEAL in s for s in belt), belt[-1][:150])
+    # The shot that locks it on says both ends of that; every shot after it, that it stays.
     check("...under the author's own word for it",
-          all("chastity belt runs around the waist" in s for s in belt), belt[0][:170])
+          "chastity belt goes around the waist" in belt[0]
+          and all("chastity belt runs around the waist" in s for s in belt[1:]), belt[0][:170])
     chain = [" ".join(b.split("]", 1)[1].split()) for b in run_node(
         "A cell.\n\nDan runs a chain around Mara's waist and between her legs.\n\n"
         "Mara stands still.\n\nDan unlocks the chain.\n\nMara stretches.",
@@ -8706,7 +8708,7 @@ def test_a_gag_and_a_bound_fall_hold_through_the_beat():
         "Dan rips the tape off her mouth.\n\nMara screams.",
         character_memory=mem, plan_only=True))
     check("the shot that tapes her says it goes on then and stays",
-          "duct tape goes across" in sh[1] and "still in place at the last frame" in sh[1],
+          "duct tape goes across" in sh[1] and "in place at the last frame" in sh[1],
           sh[1][:400])
     check("...fastened to no chair", "fast at the chair" not in " ".join(sh), "")
     check("...and the cuffs already on are not told they go on",
@@ -8750,7 +8752,7 @@ def test_a_body_laid_down_stays_down_while_it_is_worked_on():
             check(f"{first} -> shot {i + 1} holds her flat on the bed, in the lead",
                   0 <= at < sh[i].find("Mara: she"), sh[i][:500])
             check(f"...still while he works on her (shot {i + 1})",
-                  "still while it is done to her" in sh[i], "")
+                  "staying down while it is done to her" in sh[i], "")
         check(f"{first} -> her free arms are placed flat while he tapes her",
               "both arms lying flat along it at her sides" in sh[1], sh[1][:500])
         check(f"{first} -> ...and not while he puts them behind her back",
@@ -8979,6 +8981,198 @@ def test_fast_h3_and_hyperflow_run_as_they_were_trained():
                 sys.modules[k] = v
         if conf is not None:
             os.environ["PYTORCH_CUDA_ALLOC_CONF"] = conf
+
+
+def test_the_cuffs_hold_when_the_tape_goes_on():
+    """REPORTED, twice: wrists handcuffed behind her back break free in the next beat,
+    the one where duct tape goes over her mouth.
+
+    Four ways it happened, swept across sheets and wordings:
+      - a sheet with no pronouns: "Dan handcuffs her wrists" named Dan alone, so the
+        shot described only him and the cuffs had no body to be on;
+      - "Dan pulls off a strip of duct tape and slaps it over her mouth" read as
+        something coming OFF, and the "it" as the sheet's handcuffs;
+      - the man doing the taping recorded as the one restrained, so the arms held
+        behind a back were his;
+      - "applies ... to", "covers her mouth with", and tape named in one clause and
+        put on as "it" in the next were never read as tape going on at all."""
+    print("\n=== the cuffs hold when the tape goes on ===")
+    sheets = {"pronouns": "Mara: she, 28, grey sweater, blue jeans.\nDan: he, 40, black jacket.",
+              "no pronouns": "Mara: 28, grey sweater, blue jeans.\nDan: 40, black jacket.",
+              "cuffs on the sheet": "Mara: she, 28, grey sweater, handcuffs.\nDan: he, 40."}
+    cuffs = ("Dan handcuffs her wrists behind her back.",
+             "Dan pulls her arms behind her back and handcuffs her wrists.",
+             "Dan locks the cuffs on her wrists behind her back.")
+    tapes = ("Dan wraps duct tape around her mouth.",
+             "Dan applies duct tape to her mouth.",
+             "Dan covers her mouth with duct tape.",
+             "Dan tears off a strip of duct tape and presses it over her mouth.",
+             "Dan pulls off a strip of duct tape and slaps it over her mouth.")
+    broken = []
+    for (sk, mem), cuff, tape in itertools.product(sheets.items(), cuffs, tapes):
+        P = ("A bedroom at night.\n\n" + cuff + "\n\n" + tape
+             + "\n\nDan pushes her down onto the bed.\n\nMara struggles.")
+        sh = [x.lower() for x in _shots_of(run_node(P, plan_only=True, character_memory=mem))]
+        for i in range(1, len(sh)):
+            why = [w for w, bad in (
+                ("cuffs not held", not re.search(r"(?:hand)?cuffs[^.]*stay", sh[i])),
+                ("arms not placed", "behind the body" not in sh[i]),
+                ("cuffs put on again", bool(re.search(r"(?:hand)?cuffs (?:go|goes) on|"
+                                                       r"hardware goes on during", sh[i]))),
+                ("his arms placed, not hers", "dan's arms" in sh[i] or "dan's hands" in sh[i]),
+                ("tape gone", i >= 2 and "tape" not in sh[i])) if bad]
+            if why:
+                broken.append(f"[{sk}] {cuff} / {tape} -> shot {i + 1}: {', '.join(why)}")
+    check("cuffs, arms and tape hold in every shot, every wording, every sheet",
+          not broken, "; ".join(broken[:4]) + (f" (+{len(broken) - 4})" if len(broken) > 4 else ""))
+
+
+def _held_in(shot, word):
+    """Is `word` named in a sentence of `shot` that keeps it on?"""
+    return any(re.search(r"\b" + re.escape(word), sent) and re.search(
+        r"\b(?:stays?|holds?|keeps?|still)\b|from the first frame to the last", sent)
+        for sent in re.split(r"(?<=[.;])\s+", shot))
+
+
+def test_no_kind_of_restraint_breaks():
+    """REPORTED: "make sure that all types of bondage equipment don't break.
+    Handcuffs, chains, collars, etc."
+
+    Every piece the engine knows, put on in a beat of its own, with a second piece
+    after it and ordinary action after that; five pieces at once under beats that
+    only LOOK like a removal, and the real removals, which take off one piece and
+    no other; and pieces the sheet lists from the start. Each later shot must keep
+    each piece -- named, in a sentence that holds it -- on her, not on him."""
+    print("\n=== no kind of restraint breaks ===")
+    mem = "Mara: she, 28, grey sweater, blue jeans, sneakers.\nDan: he, 40, black jacket, belt."
+    gear = (
+        ("Dan handcuffs her wrists behind her back.", "handcuffs", "wrists"),
+        ("Dan locks steel manacles on her wrists.", "manacles", "wrists"),
+        ("Dan zip ties her wrists together.", "zip ties", "wrists"),
+        ("Dan ties her wrists together with rope.", "rope", "wrists"),
+        ("Dan straps her wrists together with leather straps.", "straps", "wrists"),
+        ("Dan chains her wrists together.", "chain", "wrists"),
+        ("Dan wraps steel cable around her wrists.", "cable", "wrists"),
+        ("Dan ties her wrists with a silk scarf.", "scarf", "wrists"),
+        ("Dan locks leg irons on her ankles.", "leg irons", "ankles"),
+        ("Dan shackles her ankles.", "shackles", "ankles"),
+        ("Dan locks a spreader bar between her ankles.", "spreader bar", "ankles"),
+        ("Dan locks a steel collar around her neck.", "collar", "neck"),
+        ("Dan buckles a leather collar around her neck and clips a leash to it.", "leash", "neck"),
+        ("Dan buckles a ball gag in her mouth.", "gag", "mouth"),
+        ("Dan ties a blindfold over her eyes.", "blindfold", "eyes"),
+        ("Dan straps a leather harness around her body.", "harness", "body"),
+        ("Dan straps her into a straitjacket.", "straitjacket", "arms"),
+        ("Dan locks a chastity belt on her.", "chastity belt", "hips"))
+    second = (("Dan presses duct tape over her mouth.", "tape", "mouth"),
+              ("Dan ties her ankles together with rope.", "rope", "ankles"),
+              ("Dan handcuffs her wrists behind her back.", "handcuffs", "wrists"))
+    after = "\n\nDan pushes her down onto the bed.\n\nMara struggles.\n\nMara rolls onto her side."
+    on_him = re.compile(r"(?:on|over|round) dan's|dan's (?:arms|hands|wrists|ankles|neck|mouth|eyes)")
+    broken = []
+    for a in gear:
+        b = next(g for g in second if g[2] != a[2] and g[1] != a[1])
+        sh = [x.lower() for x in _shots_of(run_node(
+            "A bedroom at night.\n\n" + a[0] + "\n\n" + b[0] + after,
+            plan_only=True, character_memory=mem))]
+        for i in range(1, len(sh)):
+            for (_beat, word, _part), since in ((a, 1), (b, 2)):
+                if i >= since and not _held_in(sh[i], word):
+                    broken.append(f"{a[0]} -> shot {i + 1}: {word} not held")
+            if on_him.search(sh[i]):
+                broken.append(f"{a[0]} -> shot {i + 1}: on Dan")
+    check("every piece holds in every later shot, on her", not broken,
+          "; ".join(broken[:4]) + (f" (+{len(broken) - 4})" if len(broken) > 4 else ""))
+
+    setup = ("Dan handcuffs her wrists behind her back.\n\nDan locks a leather collar "
+             "around her neck.\n\nDan presses duct tape over her mouth.\n\nDan ties her "
+             "ankles together with rope.\n\nDan ties a blindfold over her eyes.")
+    pieces = ("handcuffs", "collar", "tape", "rope", "blindfold")
+    beats = (("Dan takes off his belt and drops it on the floor.", None),
+             ("Dan unlocks the door and steps out.", None),
+             ("Dan opens the drawer and takes out a key.", None),
+             ("Dan releases her arm and steps back.", None),
+             ("Dan checks that the cuffs are locked.", None),
+             ("Mara tries to slip her wrists out of the cuffs.", None),
+             ("Dan pulls her up by the collar.", None),
+             ("Dan pulls off her shoes.", None),
+             ("Dan lifts her and carries her to the bed.", None),
+             ("Dan takes off the blindfold.", "blindfold"),
+             ("Dan rips the tape off her mouth.", "tape"),
+             ("Dan unties the rope around her ankles.", "rope"),
+             ("Dan unbuckles her collar.", "collar"),
+             ("Dan unlocks her handcuffs.", "handcuffs"))
+    broken = []
+    for beat, gone in beats:
+        sh = [x.lower() for x in _shots_of(run_node(
+            "A bedroom at night.\n\n" + setup + "\n\n" + beat + "\n\nMara lies still.",
+            plan_only=True, character_memory=mem))]
+        for i in (5, 6):
+            for w in pieces:
+                if w == gone and i == 6 and _held_in(sh[i], w):
+                    broken.append(f"{beat} -> shot {i + 1}: {w} held after it came off")
+                elif w != gone and not _held_in(sh[i], w):
+                    broken.append(f"{beat} -> shot {i + 1}: {w} not held")
+        if gone == "handcuffs" and "behind the body" in sh[6]:
+            broken.append(f"{beat} -> her free arms still held behind her")
+    check("a beat that only looks like a removal takes nothing off, a real one takes "
+          "off only its own piece", not broken,
+          "; ".join(broken[:4]) + (f" (+{len(broken) - 4})" if len(broken) > 4 else ""))
+
+    broken = []
+    for entry, words in (
+            ("steel handcuffs on her wrists behind her back, a leather collar, a ball gag",
+             ("handcuffs", "collar", "gag")),
+            ("wrists zip tied behind her back, ankles tied with rope", ("zip ties", "rope")),
+            ("ankles chained together, wrists strapped behind her back", ("chain", "straps")),
+            ("shackles on her ankles, a choker collar, a leash", ("shackles", "collar", "leash"))):
+        for pron in ("she, ", ""):
+            sh = [x.lower() for x in _shots_of(run_node(
+                "A bedroom at night.\n\nDan walks in and looks at her.\n\n"
+                "Dan pushes her down onto the bed.\n\nMara struggles.",
+                plan_only=True,
+                character_memory=f"Mara: {pron}28, grey sweater, {entry}.\nDan: 40, a coat."))]
+            broken += [f"{entry} -> shot {i + 1}: {w} not held"
+                       for i, x in enumerate(sh) for w in words if not _held_in(x, w)]
+    check("pieces on the sheet hold from the first shot", not broken, "; ".join(broken[:4]))
+
+
+def test_a_sealed_piece_stays_through_everything_else():
+    """REPORTED: a sealed piece of tape disappearing in the next beat.
+
+    Several wordings sealed nothing; the state filed the tape on the wrong part; and
+    taking tape off another part, or unlocking another piece, took it off too."""
+    print("\n=== a sealed piece stays through everything else ===")
+    seals = ("Dan wraps duct tape around her hips and between her legs.",
+             "Dan tears off a strip of duct tape and wraps it around her hips and between her "
+             "legs.",
+             "Dan tapes her groin shut with duct tape.",
+             "Dan seals her groin with duct tape.",
+             "Dan presses strips of duct tape over her groin.",
+             "Dan wraps duct tape around her waist and down through her groin.")
+    after = ("Dan presses duct tape over her mouth.", "Dan handcuffs her wrists behind her back.",
+             "Dan rips the tape off her mouth.", "Dan unlocks her handcuffs.",
+             "Dan tears off a strip of duct tape and wraps it around her ankles.")
+    sealed = re.compile(r"between (?:the|her|mara's) legs[^.]*groin")
+    broken = []
+    for pron in ("she, ", ""):
+        mem = f"Mara: {pron}28, long dark hair.\nDan: {'he, ' if pron else ''}40, black jacket."
+        for seal in seals:
+            sh = [x.lower() for x in _shots_of(run_node(
+                "A bedroom at night.\n\n" + seal + "\n\n" + "\n\n".join(after)
+                + "\n\nDan peels the duct tape from between her legs.\n\nMara sits up.",
+                plan_only=True, character_memory=mem))]
+            off = 1 + len(after)
+            broken += [f"{seal} -> shot {i + 1}: seal gone" for i in range(off)
+                       if not sealed.search(sh[i])]
+            broken += [f"{seal} -> shot {i + 1}: seal held after it came off"
+                       for i in range(off + 1, len(sh)) if sealed.search(sh[i])]
+            broken += [f"{seal} -> shot {i + 1}: on the wrong part or body"
+                       for i, x in enumerate(sh)
+                       if re.search(r"tape (?:on|round|over) (?:the|her) (?:wrists|legs|thighs|"
+                                    r"waist)|dan's (?:legs|groin|waist)", x)]
+    check("sealed from the beat that puts it on until the beat that takes it off",
+          not broken, "; ".join(broken[:4]) + (f" (+{len(broken) - 4})" if len(broken) > 4 else ""))
 
 
 def test_an_intimate_scene_holds_its_frame_and_its_voices():
@@ -10132,6 +10326,9 @@ def main():
     test_a_body_laid_down_stays_down_while_it_is_worked_on()
     test_hyperflow_runs_on_its_own_grid()
     test_fast_h3_and_hyperflow_run_as_they_were_trained()
+    test_the_cuffs_hold_when_the_tape_goes_on()
+    test_no_kind_of_restraint_breaks()
+    test_a_sealed_piece_stays_through_everything_else()
     test_a_dropped_clause_is_not_reported_as_sent()
     test_a_promoted_clause_opens_in_upper_case()
     test_the_reports_say_what_happened()

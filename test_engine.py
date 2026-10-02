@@ -754,6 +754,42 @@ def test_a_gag_is_one_piece_on_the_right_mouth():
           repr(tape))
 
 
+def test_every_piece_goes_on_the_right_body():
+    """REPORTED: "make sure that all types of bondage equipment don't break."
+
+    Each of these put a piece on the wrong body, on the wrong part, or on nobody --
+    and a piece the state does not hold is one no later shot keeps on."""
+    print("\n=== every piece goes on the right body ===")
+    pr = {"Mara": "she", "Dan": "he"}
+
+    def on(beats, pronouns=pr):
+        st = E.SceneState()
+        st.declare("Mara", "x")
+        st.declare("Dan", "y")
+        for i, b in enumerate(beats, 1):
+            st.read(b, cast=["Mara", "Dan"], shot=i, pronouns=pronouns)
+        return {n: sorted(q.hardware) for n, q in st.people.items()}
+
+    got = on(["Dan buckles a leather collar around her neck and clips a leash to it."])
+    check("a leash clipped to her collar is on her",
+          got["Mara"] == [("collar", "neck"), ("leash", "neck")] and not got["Dan"], str(got))
+    for prons in (pr, {}):
+        got = on(["Dan buckles a ball gag in her mouth."], prons)
+        check(f"a gag buckled IN her mouth is hers ({'pronouns' if prons else 'none'})",
+              got["Mara"] == [("gag", "mouth")] and not got["Dan"], str(got))
+    for text, want in (("wrists zip tied behind her back", ("zip ties", "wrists")),
+                       ("her ankles zip-tied together", ("zip ties", "ankles")),
+                       ("ankles chained together", ("chain", "ankles")),
+                       ("wrists strapped to the chair", ("straps", "wrists")),
+                       ("ankles roped together", ("rope", "ankles"))):
+        check(f"a participle is a piece, on its own part: {text}",
+              want in [(c, p) for c, p, _w, _a in E.hardware_spans(text)],
+              str(E.hardware_spans(text)))
+    check("...but chained TO something is what it is fastened to",
+          [c for c, _p, _w, _a in E.hardware_spans(
+              "a steel collar around her neck, chained to the wall")] == ["collar"])
+
+
 def main():
     test_two_things_in_one_beat()
     test_a_neck_is_not_behind_a_back()
@@ -781,6 +817,7 @@ def main():
     test_a_garment_comes_off_the_person_it_belongs_to()
     test_only_a_real_release_takes_anything_off()
     test_a_gag_is_one_piece_on_the_right_mouth()
+    test_every_piece_goes_on_the_right_body()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))
