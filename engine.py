@@ -1325,8 +1325,6 @@ _POSTURE_OF = _POSTURE_OF + (
                        r"knocks?|knocked|flings?|flung|toss(?:es|ed)?|press(?:es|ed)?|"
                        r"holds?|held|puts?|rolls?|rolled)\s+"
                        r"(?:her|him|them|(?-i:[A-Z][\w-]+))" + _DOWN_ON)),
-    ("lying down", _rx(r"\b(?:falls?|fell|collapses?|collapsed|flops?|flopped|"
-                       r"tumbles?|tumbled)" + _DOWN_ON)),
 )
 
 

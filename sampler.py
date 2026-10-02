@@ -5396,21 +5396,20 @@ _LYING_SURFACE = re.compile(
     r"sofa|couch|bench|table))\b", re.I)
 
 
-def lying_stays(who="", poss="", surface="", arms_free=False, done_to=""):
-    """The sentence holding a lying body down for the whole shot.
+def lying_stays(who="", poss="", surface="", arms_free=False):
+    """The sentence keeping a RESTRAINED lying body lying for the whole shot.
 
-    `who` is the subject as it should be said ("" for the only body in the shot),
-    `poss` its possessive, `done_to` the object form when somebody else is working on
-    them this shot."""
+    Short and plain on purpose. It said "her weight down on it the whole time ...
+    while it is done to her", which a video model reads as intimate staging -- REPORTED
+    as every scene drifting that way -- and it fired for anybody lying down at all, a
+    woman in bed with a fever included. It is for the body being restrained, which is
+    what it was asked for, and says only that she stays down."""
     subj = who or "The body"
     poss = poss or ("its" if not who else "the")
-    out = (f" {subj} stays lying flat{f' on the {surface}' if surface else ''} from "
-           f"the first frame to the last, {poss} weight down on it the whole time")
+    out = (f" {subj} stays lying flat{f' on the {surface}' if surface else ''} "
+           f"through the whole shot")
     if arms_free:
-        out += f", both arms lying flat along it at {poss} sides"
-    if done_to:
-        # Not "still": this node never orders stillness, which freezes the take.
-        out += f", staying down while it is done to {done_to}"
+        out += f", {poss} arms resting at {poss} sides"
     return out + "."
 
 
@@ -11032,11 +11031,14 @@ class H3LongVideos:
                     who=(_whose_in(_fallers[0]) if len(_fallers) == 1 else ""))
             # A BODY LEFT LYING, held down in the lead -- see lying_stays.
             _down_lead, _lying_led = "", set()
-            _first_named = (engine.names_in(_acted, [n for n, _ in sheet_lines(sheet) if n])
-                            or [""])[0]
             _rows_here = dict(sheet_lines(shot_sheet))
             for _n in (_described or []):
                 if _poses_held.get(_n) != "lying down":
+                    continue
+                # ONLY A RESTRAINED BODY: anybody else lying down keeps the plain
+                # posture hold ("Mara is lying down."), as before.
+                _going_on_her = any(_w == _n for _w, _i in _new_on)
+                if _n not in (restrained_who or ()) and not _going_on_her:
                     continue
                 _q = _state.people.get(_n)
                 _limbs_held = bool(_q and any(_r.part in ("wrists", "arms", "hands")
@@ -11044,23 +11046,15 @@ class H3LongVideos:
                 _arms_free = not (_limbs_held or (_arms_pos and _n in (restrained_who or ()))
                                   or re.search(r"\b(?:arms?|hands?|elbows?|wrists?|"
                                                r"fingers?)\b", _acted or "", re.I))
-                # Worked ON, not merely near: hardware going on her, or somebody else's
-                # hands on her body -- "Dana opens the bag and looks at McKenna" is not
-                # anything done to McKenna.
-                _worked_on = (any(_w == _n for _w, _i in _new_on)
-                              or any(_w == _n for _w, _r in (_ch.get("applied") or []))
-                              or bool(_first_named and _first_named != _n
-                                      and _COERCION.search(_acted or "")))
                 _pr = sheet_pronoun(_rows_here.get(_n, ""))
                 _subj = _whose_in(_n)       # "her"/"his", the name, or "" when alone
                 _who = ({"her": "She", "his": "He"}.get(_subj, _subj) if _subj else "")
                 _poss = (_subj if _subj in ("her", "his")
                          else {"she": "her", "he": "his", "they": "their"}.get(_pr, ""))
-                _obj = ({"she": "her", "he": "him", "they": "them"}.get(_pr, "")
-                        if _subj else "the body")
+                # The arms only where a restraint is going on her with them still free:
+                # the shot she was reported pushing herself up on them.
                 _down_lead += lying_stays(_who, _poss, lying_on.get(_n, ""),
-                                          arms_free=bool(_arms_free),
-                                          done_to=(_obj or _n) if _worked_on else "")
+                                          arms_free=bool(_arms_free and _going_on_her))
                 _lying_led.add(_n)
             if _down_lead:
                 lying_shots.append(len(plan) + 1)

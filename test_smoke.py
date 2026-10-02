@@ -7019,10 +7019,7 @@ def test_an_instruction_is_not_the_action():
     # The beat that actually does it.
     check("the next beat takes them off", "off during this shot" in sh[1])
     # ...and the pose it sets is held afterwards, for her only.
-    check("the pose is held after that",
-          "McKenna stays lying flat on the change table" in sh[2], sh[2][:400])
-    check("...with nothing claimed to be done to her",
-          "done to" not in sh[2], sh[2][:400])
+    check("the pose is held after that", "McKenna is lying down" in sh[2])
     check("...and the speaker is not lying down", "Dana is still lying" not in sh[2])
     idle = ("A public bathroom.\n\nMcKenna and Dana walk in. Dana says to McKenna: "
             '"Take off your shorts and lie down on the change table."\n\n'
@@ -8748,15 +8745,13 @@ def test_a_body_laid_down_stays_down_while_it_is_worked_on():
             "Dan handcuffs her wrists behind her back.",
             character_memory=mem, plan_only=True))
         for i in (1, 2):
-            at = sh[i].find("stays lying flat on the bed from the first frame to the last")
+            at = sh[i].find("stays lying flat on the bed through the whole shot")
             check(f"{first} -> shot {i + 1} holds her flat on the bed, in the lead",
                   0 <= at < sh[i].find("Mara: she"), sh[i][:500])
-            check(f"...still while he works on her (shot {i + 1})",
-                  "staying down while it is done to her" in sh[i], "")
-        check(f"{first} -> her free arms are placed flat while he tapes her",
-              "both arms lying flat along it at her sides" in sh[1], sh[1][:500])
+        check(f"{first} -> her free arms rest at her sides while he tapes her",
+              "her arms resting at her sides" in sh[1], sh[1][:500])
         check(f"{first} -> ...and not while he puts them behind her back",
-              "both arms lying flat" not in sh[2], sh[2][:500])
+              "arms resting at her sides" not in sh[2], sh[2][:500])
     check("dragging her TO the bed does not lay her on it",
           not S.posture_in("Dan drags her to the bed.", ["Mara", "Dan"]))
     check("...and being pushed onto a sofa is not lying on it",
@@ -9173,6 +9168,45 @@ def test_a_sealed_piece_stays_through_everything_else():
                                     r"waist)|dan's (?:legs|groin|waist)", x)]
     check("sealed from the beat that puts it on until the beat that takes it off",
           not broken, "; ".join(broken[:4]) + (f" (+{len(broken) - 4})" if len(broken) > 4 else ""))
+
+
+def test_lying_down_is_not_staged_as_anything_else():
+    """REPORTED: every scene drifting into intimate staging, prompt adherence gone.
+
+    The sentence that holds a restrained body down said "her weight down on it the
+    whole time ... staying down while it is done to her", and it fired for ANYBODY
+    lying down: a woman in bed with a fever got it every shot, and a fall to the
+    ground laid the man who pushed her flat on it while he chased her. It is for a
+    restrained body only, in plain words; everybody else keeps "X is lying down."."""
+    print("\n=== lying down is not staged as anything else ===")
+    mem = "Mara: she, 28, grey sweater, blue jeans.\nDan: he, 40, black jacket."
+    every = []
+    sick = _shots_of(run_node(
+        "A bedroom in the afternoon.\n\nMara lies on the bed with a fever.\n\n"
+        "Dan puts a cold cloth on her forehead.\n\nDan sits beside her and reads aloud.",
+        plan_only=True, character_memory=mem))
+    every += sick
+    check("somebody unrestrained in bed keeps the plain posture hold",
+          all("Mara is lying down" in s and "stays lying flat" not in s for s in sick[1:]),
+          sick[1][:400])
+    fight = _shots_of(run_node(
+        "A parking garage.\n\nDan shoves Mara and she falls to the ground.\n\n"
+        "Mara gets up and runs.\n\nDan chases her between the cars.",
+        plan_only=True, character_memory=mem))
+    every += fight
+    check("a fall lays nobody down for the shots after it, least of all the pusher",
+          all("lying" not in s for s in fight[1:]), fight[1][:400])
+    bound = _shots_of(run_node(
+        "A motel room at night.\n\nDan pushes Mara down onto the bed.\n\n"
+        "Dan handcuffs her wrists behind her back.\n\nDan searches her bag.",
+        plan_only=True, character_memory=mem))
+    every += bound
+    check("a restrained body is still held down on the bed",
+          all("She stays lying flat on the bed through the whole shot." in s
+              for s in bound[1:]), bound[2][:400])
+    check("...and nothing anywhere stages anything being done to her body",
+          not any(re.search(r"done to (?:her|him|them)|weight down on it", s) for s in every),
+          "")
 
 
 def test_an_intimate_scene_holds_its_frame_and_its_voices():
@@ -10324,6 +10358,7 @@ def main():
     test_a_fall_keeps_its_landing_guard()
     test_a_gag_and_a_bound_fall_hold_through_the_beat()
     test_a_body_laid_down_stays_down_while_it_is_worked_on()
+    test_lying_down_is_not_staged_as_anything_else()
     test_hyperflow_runs_on_its_own_grid()
     test_fast_h3_and_hyperflow_run_as_they_were_trained()
     test_the_cuffs_hold_when_the_tape_goes_on()
