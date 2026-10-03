@@ -479,9 +479,15 @@ def test_an_unstated_frame_becomes_a_portrait():
     # characters entirely in the shot, so nothing is missed.
     check("a face acting is held whole too", "whole body" in S.frame_hold("McKenna smiles."))
     check("...and an empty frame gets nothing", S.frame_hold("Rain on the glass.", "", 0) == "")
-    check("a held keyframe is told to KEEP them whole, never to widen",
-          "stays whole" in S.frame_hold("Dan and Ana stand.", "", 2, held=True)
-          and "room around" not in S.frame_hold("Dan and Ana stand.", "", 2, held=True))
+    # A held keyframe already holds them whole -- the shot that composed it said so --
+    # and the camera hold keeps it. It is never told to widen, and no longer told
+    # anything: "stays whole ... for the whole take" was a framing sentence on every
+    # shot, crowding the beat.
+    check("a held keyframe is never told to widen, nor told to keep",
+          S.frame_hold("Dan and Ana stand.", "", 2, held=True) == "")
+    check("an author's camera move stands it down",
+          S.frame_hold("The camera follows McKenna to the bench.") == ""
+          and S.frame_hold("McKenna serves.", "Slow push in throughout.") == "")
     # The author's camera always wins -- a close-up included, since somebody asked for it.
     check("a close-up in the beat stands it down",
           S.frame_hold("Close-up on her face as she serves.") == "")
@@ -508,10 +514,10 @@ def test_an_unstated_frame_becomes_a_portrait():
     # Asking for "head to feet, with the room around it" as well is a wider view than
     # the take opens on, and the model cuts to get it -- REPORTED as sex scenes turning
     # into side-angle shots in a different location.
-    # So it is told they STAY whole -- a keeping, which the frame it opens on already
-    # is -- and never to widen onto the room.
+    # So it is never told to widen onto the room; the frame it opens on, and the camera
+    # hold, keep them whole.
     check("a shot opening on a keyframe is not told to reframe",
-          "with the room around" not in sh[1] and "stays in the frame, head to feet" in sh[1]
+          "with the room around" not in sh[1] and "head to feet" not in sh[1]
           and "one unbroken take" in sh[1], sh[1][-90:])
     check("the reason is reported", "frame HOLDS" in out[2], "")
     check("a destination stops at a conjunction",
@@ -619,8 +625,15 @@ def test_the_face_plays_the_feeling_the_author_named():
           and S.emotion_in("McKenna is terrified and shaking.") == "terrified")
     check("...and nothing is invented where none is named",
           S.emotion_in("McKenna walks to the door.") == "")
-    check("the clause names the mouth, which the guard would have held shut",
-          "mouth" in S.mood_face("delighted") and "delighted" in S.mood_face("delighted"))
+    # The author's word, on its owner, and no more: "played in the eyes and the mouth"
+    # asked for a performance on top of it.
+    check("the clause carries the author's word and no performance of its own",
+          "delighted" in S.mood_face("delighted", "Mia")
+          and "played in" not in S.mood_face("delighted", "Mia"))
+    check("...and reads no feeling out of a line or a negation",
+          S.emotion_in('Mia says: "I am so happy."') == ""
+          and S.emotion_in("Mia is not angry.") == ""
+          and S.emotion_in("Mia walks out without panic.") == "")
     check("no feeling, no clause", S.mood_face("") == "")
 
     HAPPY = ("A sunny kitchen.\n\nMia and Tess laugh over breakfast.\n\n"
@@ -649,8 +662,9 @@ def test_the_face_plays_the_feeling_the_author_named():
           "expression is terrified" in ds[1] and "the mouth set" not in ds[1], ds[1][-130:])
     check("...and again where she is desperate",
           "expression is desperate" in ds[2] and "the mouth set" not in ds[2], ds[2][-130:])
-    check("a duress shot that names no feeling keeps the film's mood",
-          "The mood is grim" in ds[0], ds[0][-130:])
+    # No mood line: a film's tone is the anchor's. The held face is still said.
+    check("a duress shot that names no feeling gets the held face, and no mood line",
+          "shows the strain" in ds[0] and "The mood is grim" not in ds[0], ds[0][-130:])
     _sheet = "Dan: he, 40.\nMcKenna: she, 22."
     check("a new predicate after `and` credits only its own subject",
           [n for n, _ in S.vocal_sources_in("Dan holds the door and McKenna sobs.", _sheet)]
@@ -718,14 +732,16 @@ def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
           == "McKenna")
     check("a feeling pinned on nobody has no owner",
           S.emotion_owner("The room is terrified.", cast, "terrified") == "")
-    check("a named clause names them", "McKenna's face carries" in S.mood_face("terrified", "McKenna"))
-    check("a solo clause stays impersonal", S.mood_face("terrified").startswith(" The face"))
+    check("a named clause names them",
+          S.mood_face("terrified", "McKenna") == " McKenna's expression is terrified.")
+    check("a clause with no owner stays impersonal",
+          S.mood_face("terrified").startswith(" The expression"))
     pairs = S.emotion_pairs("Dan is furious and McKenna is terrified.", cast)
     check("both feelings are pinned", pairs == [("Dan", "furious"), ("McKenna", "terrified")],
           str(pairs))
-    check("...and said in one sentence",
-          "Dan's face carries furious" in S.mood_faces(pairs)
-          and "McKenna's carries terrified" in S.mood_faces(pairs))
+    check("...and each said on its own face",
+          "Dan's expression is furious" in S.mood_faces(pairs)
+          and "McKenna's expression is terrified" in S.mood_faces(pairs))
     check("no pairs, nothing said", S.mood_faces([]) == "")
 
     mem = "McKenna: she, 22, long blonde hair, a grey vest.\nDan: he, 40, a work coat."
@@ -735,16 +751,18 @@ def test_a_feeling_belongs_to_the_face_the_beat_pins_it_on():
     sh = [" ".join(x.split()) for x in
           run_node(P, plan_only=True, character_memory=mem)[3].split("---") if x.strip()]
     check("two in the shot: the terror is hers and is named",
-          "McKenna's face carries" in sh[0] and "The face carries" not in sh[0], sh[0][-120:])
+          "McKenna's expression is terrified" in sh[0] and "The expression" not in sh[0],
+          sh[0][-120:])
     # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
     # described until a beat takes them out. REPORTED as beats losing what was in the
     # beat before; asked for as both characters entirely in the shot.
     check("Dan still in the frame: the feeling is hers by name",
-          "McKenna's face carries it: the expression is delighted" in sh[1], sh[1][-120:])
-    check("two feelings, two faces", "Dan's face carries furious" in sh[2]
-          and "McKenna's carries terrified" in sh[2], sh[2][-130:])
+          "McKenna's expression is delighted" in sh[1], sh[1][-120:])
+    check("two feelings, two faces", "Dan's expression is furious" in sh[2]
+          and "McKenna's expression is terrified" in sh[2], sh[2][-130:])
     check("a new predicate does not hand it to the other one",
-          "McKenna's face carries" in sh[3] and "Dan's face" not in sh[3], sh[3][-120:])
+          "McKenna's expression is terrified" in sh[3] and "Dan's expression" not in sh[3],
+          sh[3][-120:])
     # The frame clause counts bodies too: "the whole body" of two people is one body.
     check("the frame clause is plural with two in the shot",
           "every body in it whole" in S.frame_hold("McKenna serves the ball.", "", 2))
@@ -945,9 +963,11 @@ def test_references_and_silence():
           and "A room. He walks in." in clip2b.seen[1][0], clip2b.seen[1][0])
     clip4 = FakeCLIP()
     run_node("A room.\n\nShe walks in and says: \"Now.\"", clip=clip4)
+    # A speaking shot gets the room and nothing inferred: footsteps beside a line
+    # were an action competing with the voice.
     check("a shot with a line is not told that is all there is",
           "It sounds like" in clip4.seen[1][0]
-          and "footsteps" in clip4.seen[1][0]
+          and "footsteps" not in clip4.seen[1][0]
           and "the only sound" not in clip4.seen[1][0]
           and "She walks in and says:" in clip4.seen[1][0]
           and "Now." in clip4.seen[1][0], clip4.seen[1][0])
@@ -1786,16 +1806,19 @@ def test_the_count_counts_who_the_text_names():
     them is what the shot's own words NAME."""
     print("\n=== the body count counts the people the text names ===")
     mem = "Ana: she, 30, a grey t-shirt, blue jeans.\nBen: he, 35, a black coat."
-    for label, script, clause in (
-            ("a look held past its owner's shot",
+    # A look is said on its own shot only now; a bare region is a state, and goes on
+    # being said. Either way she is counted while the frame holds her.
+    for label, script, clause, held in (
+            ("a look staged the shot before",
              "A workshop.\n\nAna looks at the window.\n\nBen walks in and puts a box down.",
-             "Ana's eyes and head are turned"),
+             "Ana's eyes and head are turned", False),
             ("a bare region held past its owner's shot",
              "A room.\n\nAna takes off her jeans.\nremove: jeans\n\nBen walks in.",
-             "Her legs are bare")):
+             "Her legs are bare", True)):
         shots = _shots_of(run_node(script, character_memory=mem, plan_only=True))
         second = " ".join(shots[1].split())
-        check(f"{label}: the clause still speaks", clause in second, second[:200])
+        check(f"{label}: the clause {'still speaks' if held else 'is not carried'}",
+              (clause in second) == held, second[:200])
         check(f"...and the count includes her",
               "There are two people in the shot" in second, second[:200])
         # STILL IN THE FRAME, STILL IN THE SHOT: whoever the last frame holds stays
@@ -3027,8 +3050,11 @@ def test_the_audit_findings_stay_fixed():
     # 9. The gaze target was stated once and dropped, while every other state latches.
     got = sh("A room.\n\nMara watches the TV.\n\nMara sits still.\n\nMara walks out.",
              character_memory="Mara: she, 22.")
-    check("the look is held while she stays put",
-          "turned to the TV" in got[1], got[1][-70:])
+    # ...said on the shot that writes it, and not carried into the next.
+    check("the look is said on its own shot",
+          "turned to the TV" in got[0], got[0][-70:])
+    check("...and not held into a beat that does not write it",
+          "turned to the TV" not in got[1], got[1][-70:])
     check("...and let go when she leaves", "eyes and the head" not in got[2], "")
 
 
@@ -3087,7 +3113,10 @@ def test_a_television_keeps_its_own_voice():
     info, script = run_node(P, plan_only=True, character_memory=mem)[2:4]
     sh = [s for s in script.split("---") if s.strip()]
     check("the voice is given back to the set", "the TV's" in sh[0], sh[0][-90:])
-    check("...and the mouths are held closed", "Mouths in the shot" in sh[0], "")
+    # Closed by the machine's own clause ("their own mouths closed"), and not said a
+    # second time by the mouth guard.
+    check("...and the mouths are held closed, once",
+          "their own mouths closed" in sh[0] and "Mouths in the shot" not in sh[0], "")
     solo = run_node('A living room.\n\nMara sits on the sofa. '
                     'The TV says: "Storms tonight."',
                     plan_only=True, character_memory=mem)[2]
@@ -3663,7 +3692,11 @@ def test_a_grin_is_not_a_closed_mouth():
         check(f"no stillness ordered: {_c[:34]!r}",
               not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", _c, re.I), _c)
         check("...and the mouth is still shut", "clos" in _c)
-    check("the face is given something to do", "expressions moving" in S.MOUTH_HOLD)
+    # The face is the beat's: "the expressions moving" was the node directing one.
+    check("the face is left to the beat",
+          not any("expressions moving" in _c for _c in (
+              S.MOUTH_HOLD, S.ONE_VOICE, S.ONE_VOICE_BUSY, S.MOUTH_HOLD_REST,
+              S.MOUTH_SILENT_REST)))
 
 
 def test_nothing_tells_the_cast_to_hold_still():
@@ -3691,10 +3724,15 @@ def test_nothing_tells_the_cast_to_hold_still():
                 and not re.search(r"\(\?|\\b|\|", _v)):
             check(f"no stillness ordered by {_n}", not STILL.search(_v), _v)
 
-    check("the listener is still given something to do",
-          "listens" in S.told_hold(["Mara"]))
-    check("...and is still held to the sheet's wardrobe",
-          "sheet already lists" in S.told_hold(["Mara"]))
+    # The listener is held where she is, and -- for clothes -- in what she wears; no
+    # reaction is directed for her.
+    check("the one an order is about is still held where she is",
+          "Mara stays where she is" in S.told_hold(["Mara"], pronouns={"Mara": "she"}))
+    check("...and still held to her entry's wardrobe for a removal",
+          "wearing what her entry lists" in S.told_hold(
+              ["Mara"], pronouns={"Mara": "she"}, wearing={"Mara"}))
+    check("...and given no reaction to perform",
+          not re.search(r"\blisten|\breact", S.told_hold(["Mara", "Dan"])))
     check("the latched pose is still named",
           "lying down" in S.posture_hold({"Mara": "lying down"}, ["Mara"]))
     check("the machine still owns the voice", "TV's" in S.device_voice_clause(_tv))
@@ -3725,8 +3763,12 @@ def test_a_face_under_duress_is_not_a_portrait():
         return run_node("A van interior, night.\n\n" + beat, plan_only=True,
                         character_memory=mem, **kw)[3]
 
-    check("a restrained shot says what the face is doing",
-          "shows the strain" in face("McKenna lies against the wheel arch."), "")
+    # ONLY WHAT THE BEAT WROTE: a held person the beat gives a struggle gets the face;
+    # one it only places does not -- the state alone used to put it on every shot.
+    check("a restrained shot says what the face is doing when the beat struggles",
+          "shows the strain" in face("McKenna pulls at the cuffs."), "")
+    check("...and nothing when the beat only places her",
+          "shows the strain" not in face("McKenna lies against the wheel arch."), "")
     # A beat with UNAMBIGUOUS duress in it does too, with no sheet hardware at all.
     check("...and so does a beat staging unambiguous duress",
           "shows the strain" in face("Kate is bound and gagged on the floor.",
@@ -3734,9 +3776,11 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("...while one ambiguous beat alone does not",
           "shows the strain" not in face("Kate struggles and twists away.",
                                          mem=PLAIN), "")
-    check("...unless the anchor says what the film is",
-          "shows the strain" in face("Kate struggles and twists away.", mem=PLAIN,
-                                     anchor="Handheld. A tense, grim abduction."), "")
+    # The anchor sets the film's tone in its own words; it no longer puts a strained
+    # face on somebody nobody holds.
+    check("...and the anchor's tone does not put one on a free body",
+          "shows the strain" not in face("Kate struggles and twists away.", mem=PLAIN,
+                                         anchor="Handheld. A tense, grim abduction."), "")
     check("an ordinary scene is left alone",
           "shows the strain" not in face("Kate makes the coffee.", mem=PLAIN), "")
     check("...and so is an ordinary beat about a calm person",
@@ -3745,10 +3789,10 @@ def test_a_face_under_duress_is_not_a_portrait():
           "shows the strain" not in face("McKenna sits on the bed.",
                                          mem="McKenna: she, 26, a leather collar."), "")
     check("...but cuffs do",
-          "shows the strain" in face("McKenna sits on the bed.",
+          "shows the strain" in face("McKenna strains against them.",
                                      mem="McKenna: she, 26, cuffs on her wrists."), "")
     check("...and so does rope",
-          "shows the strain" in face("McKenna sits on the bed.",
+          "shows the strain" in face("McKenna strains against them.",
                                      mem="McKenna: she, 26, rope around her wrists."), "")
     check("a written smile is not argued with",
           "shows the strain" not in face("McKenna smiles at him."), "")
@@ -3756,9 +3800,10 @@ def test_a_face_under_duress_is_not_a_portrait():
     two = run_node("A van interior, night.\n\nMcKenna pulls at the cuffs while Dan "
                    "watches.", plan_only=True,
                    character_memory=MEM + "\nDan: he, 40, a work coat.")[3]
-    check("two in the shot, and the clause still names nobody",
-          "the face shows the strain" in two and "McKenna's face" not in two,
-          two[-200:])
+    # NAMED now: impersonal, the strain landed on whichever face the model chose.
+    check("two in the shot, and the clause is on the one held",
+          re.search(r"(?:McKenna's|Her) face shows the strain", two)
+          and not re.search(r"(?:Dan's|His) face", two), two[-200:])
 
     info = run_node("A van interior, night.\n\nMcKenna lies against the wheel arch.",
                     plan_only=True, character_memory=MEM, auto_sound=False)[2]
@@ -3767,7 +3812,7 @@ def test_a_face_under_duress_is_not_a_portrait():
     check("info names the shots it spoke for",
           "left to the model's prior" in info, info[:200])
 
-    cl = S.DURESS_FACE
+    cl = S.strain_face(["McKenna"])
     check("the clause is positively phrased",
           not re.search(r"\bno\b|\bnot\b|\bnever\b|\bun\w+ing\b", cl, re.I), cl)
     check("...and orders no stillness",
@@ -4091,8 +4136,11 @@ def test_only_the_speaker_has_a_voice():
                  'Dan grins while Mara says: "Stay."',
                  'Mara, angry, says to Dan: "Get out."'):
         s = last(beat, character_memory=mem)
+        # "Mara, angry, ..." now names her feeling on her face first, so the guard
+        # may say her by pronoun -- the one "she" in the shot.
         check(f"a busy mouth keeps the guard, as silent: {beat}",
-              "Only Mara speaks; every other mouth in the shot is silent" in s, s[-160:])
+              re.search(r"Only (?:Mara|she) speaks; every other mouth in the shot is silent",
+                        s), s[-160:])
     s = last('A man and a woman sit on the bed. The woman says: "Stay."')
     check("with no character sheet the line is still one voice",
           "Only the person speaking has their mouth moving" in s, s[-160:])
@@ -4176,15 +4224,19 @@ def test_her_look_does_not_land_on_him():
     check("...and the shot she is not in never claims it impersonally",
           "The eyes and the head are turned to the lane" not in sh[2], sh[2][-160:])
 
+    # Said on the beat that writes it, attributed with two in the shot -- and never
+    # carried into the next beat, where it was a gaze nobody wrote.
     P2 = ("A lane, night.\n\n"
-          "McKenna looks at the treeline.\n\n"
+          "Dan checks the wheel while McKenna looks at the treeline.\n\n"
           "Dan checks the wheel while McKenna waits.")
     sh2 = [" ".join(x.split()) for x in
            re.split(r"(?=\[Shot )", run_node(P2, plan_only=True,
                                              character_memory=MEM)[3]) if x.strip()]
-    check("the held look is attributed once two people are in the shot",
-          ("McKenna's eyes and head are turned to the treeline" in sh2[1]
-           or "Her eyes and head are turned to the treeline" in sh2[1]), sh2[1][-200:])
+    check("the look is attributed once two people are in the shot",
+          ("McKenna's eyes and head are turned to the treeline" in sh2[0]
+           or "Her eyes and head are turned to the treeline" in sh2[0]), sh2[0][-200:])
+    check("...and not carried into the next beat",
+          "turned to the treeline" not in sh2[1], sh2[1][-200:])
 
     # The clause itself, both ways.
     check("impersonal with nobody named",
@@ -4242,15 +4294,19 @@ def test_a_grim_film_is_grim_in_every_shot():
           re.split(r"(?=\[Shot )", run_node(P, plan_only=True, character_memory=MEM,
                                             anchor="Handheld, tight interior.")[3])
           if x.strip()]
+    # NO MOOD LINE. "The mood is grim." went on every shot of a film the node judged
+    # bleak; the tone is the anchor's to set. What survives is the held face.
     for _i in (1, 2, 3, 4):
-        check(f"shot {_i + 1} carries the film's mood",
-              "The mood is grim" in sh[_i], sh[_i][-140:])
+        check(f"shot {_i + 1} carries no mood line",
+              "The mood is grim" not in sh[_i], sh[_i][-140:])
     check("the shot with the restrained person still gets her face",
           "shows the strain" in sh[1], sh[1][-140:])
     # She is cuffed in the back of the van and nobody leaves, so the persistence
-    # rule keeps her in his shots -- and a shot with her in it gets her face.
-    check("...and the captor's shot carries her face too, because she is in it",
-          "The mood is grim" in sh[3] and "shows the strain" in sh[3], sh[3][-140:])
+    # rule keeps her in his shots -- but his beat gives her no struggle, so no face is
+    # said for her, and never one for him.
+    check("...and the captor's shot puts no strained face on anybody",
+          "shows the strain" not in sh[3]
+          and not re.search(r"(?:Dan's|His) face", sh[3]), sh[3][-140:])
 
     PLAIN = "Kate: she, 30, a grey coat.\nSam: he, 33."
     Q = ("A kitchen, morning.\n\nKate makes the coffee.\n\n"
@@ -4287,12 +4343,10 @@ def test_a_grim_film_is_grim_in_every_shot():
     check("...and an ordinary film is not", not S.film_stages_duress(
         ["Kate makes the coffee.", "Sam reads the paper."], PLAIN))
 
-    check("the mood clause is positively phrased",
-          not re.search(r"\bno\b|\bnot\b|\bnever\b", S.DURESS_MOOD, re.I), S.DURESS_MOOD)
-    check("...and orders no stillness",
-          not re.search(r"\bstill\b|\bmotionless\b|\bfrozen\b", S.DURESS_MOOD, re.I))
-    check("the mood clause rides with the face it belongs to",
-          "mood is grim" in run_node(P, plan_only=True, character_memory=MEM)[3])
+    check("there is no mood clause to send", not hasattr(S, "DURESS_MOOD"))
+    check("...and a grim anchor adds none",
+          "mood is grim" not in run_node(P, plan_only=True, character_memory=MEM,
+                                         anchor="Handheld. A grim abduction.")[3])
 
 
 def test_a_look_survives_the_next_beat():
@@ -4322,13 +4376,14 @@ def test_a_look_survives_the_next_beat():
 
     for _second in ("Dan opens the driver's door.",
                     "Dan lifts the case into the back."):
-        _, c = two(_second)
-        # Named while she was only carried, pronoun now that she is described --
-        # she is fastened, so the persistence rule keeps her in the shot. The fact
-        # carried is the same fact.
-        check(f"her look is carried past {_second[:22]!r}",
-              ("McKenna's eyes and head are turned to the van" in c
-               or "Her eyes and head are turned to the van" in c), c[-200:])
+        a, c = two(_second)
+        # SAID ON ITS OWN SHOT, NOT CARRIED: a look held into beats that never wrote it
+        # was a gaze the author did not ask for. REPORTED as characters doing things
+        # the beat never wrote.
+        check(f"her look is said on its own shot",
+              "turned to the van" in a, a[-200:])
+        check(f"...and not carried past {_second[:22]!r}",
+              "turned to the van" not in c, c[-200:])
     sh = [" ".join(x.split()) for x in
           re.split(r"(?=\[Shot )",
                    run_node("A lane at night.\n\nMcKenna looks at the van.\n\n"
@@ -4462,10 +4517,13 @@ def test_a_kidnapping_reads_as_one_without_being_declared():
                             character_memory=MEM,
                             anchor="Handheld, night. A grim abduction.")[3])
           if x.strip()]
-    check("the coercion beat gets the face, not just the tone",
-          "shows the strain" in sh[1], sh[1][-170:])
-    check("...and the beat without her still carries the film's mood",
-          "The mood is grim" in sh[2], sh[2][-170:])
+    # The beats still read as an abduction (above); the face is said only for somebody
+    # held, and the tone is the anchor's -- no mood line, no strained face on a body
+    # nobody holds.
+    check("the coercion beat with nobody held gets no strained face",
+          "shows the strain" not in sh[1], sh[1][-170:])
+    check("...and the beat without her carries no mood line",
+          "The mood is grim" not in sh[2], sh[2][-170:])
 
     for _b in ("Kate grabs a coffee and leaves.",
                "Kate drags the case to the door.",
@@ -4803,11 +4861,17 @@ def test_a_modified_state_is_not_read_as_an_act():
     s = run_node(P, plan_only=True)[3]
     check("the held doors are not also heard swinging",
           "already closed" in s and "a door on its hinges" not in s, "")
-    check("...while the shot still has its other sound", "an engine outside" in s, "")
-    # The shot that stages the opening keeps the sound of one.
+    # A speaking shot is heard as its room, and a van only mentioned starts no engine.
+    check("...while the shot still has its room",
+          "open air" in s and "an engine outside" not in s, "")
+    # The beat that stages the opening keeps the sound of one -- off a speaking shot,
+    # which gets its room and nothing inferred.
+    check("a staged opening still sounds like one",
+          "a door on its hinges" in S.sounds_for("Mara opens the van doors."), "")
     s = run_node('Daylight. A yard.\n\nMara opens the van doors. Mara says: "Here."',
                  plan_only=True)[3]
-    check("a staged opening still sounds like one", "a door on its hinges" in s, "")
+    check("...and beside a line the room is what is heard",
+          "a door on its hinges" not in s and "open air" in s, "")
 
 
 def test_a_staged_change_gets_both_ends():
@@ -4893,11 +4957,13 @@ def test_introducing_somebody_already_in_position():
             "watching her." + tail, anchor="A workshop.", character_memory=mem,
             model=_model)[3])[2]
         _nm = type(_model).__name__
-        check(f"{_nm}: he comes into the frame, the rest of it kept",
-              "Dan comes into the frame from its edge as the shot begins, and everything "
-              "already in the frame stays where it is." in _s2, _s2[:260])
-        check(f"{_nm}: ...right after the beat",
-              _s2.index("Dan comes into the frame") < _s2.index("Dan: 41"), _s2[:260])
+        # "Already sitting on the crate" is somebody already there: no entrance is
+        # walked in for him -- an entrance nobody wrote -- and nobody else in the
+        # frame is told to stay where they are.
+        check(f"{_nm}: already there, he is not walked in",
+              "comes into the frame" not in _s2 and "stays where it is" not in _s2,
+              _s2[:260])
+        check(f"{_nm}: ...and he is described", "Dan: 41" in _s2, _s2[:260])
         check(f"{_nm}: ...with no reference claim", "a moment earlier" not in _s2)
         check(f"{_nm}: ...and Nora, still in the frame, still described",
               "Nora: 34" in _s2, _s2[:260])
@@ -4908,8 +4974,16 @@ def test_introducing_somebody_already_in_position():
     _s3 = re.split(r"\[Shot ", _run3[3])[2]
     check("everyone already in the frame stays in it",
           "Nora: 34" in _s3 and "Ada: 29" in _s3, _s3[:260])
-    check("...and the newcomer joins them",
-          "Dan: 41" in _s3 and "Dan comes into the frame" in _s3, _s3[:260])
+    check("...and the newcomer joins them, already there, not walked in",
+          "Dan: 41" in _s3 and "comes into the frame" not in _s3, _s3[:260])
+    # A newcomer the beat does NOT write as already there still has a way into the
+    # frame it opens on -- and nobody else is told to stay where they are.
+    _s5 = re.split(r"\[Shot ", run_node(
+        "Nora sets a toolbox on the bench.\n\nDan picks up a wrench." + tail,
+        anchor="A workshop.", character_memory=mem)[3])[2]
+    check("a newcomer not already there still comes into the frame",
+          "Dan comes into the frame from its edge as the shot begins." in _s5
+          and "stays where it is" not in _s5, _s5[:260])
     _info4 = run_node(
         "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
         "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
@@ -5136,12 +5210,16 @@ def test_led_out_and_brought_back():
             "Dan says, \"Sit down.\""]), character_memory=mem, plan_only=True,
             model=_model))
         _nm = type(_model).__name__
-        check(f"{_nm}: every shot holds both of them whole, head to feet",
-              all("every body in it whole, head to feet" in s
-                  or "Every body in the shot stays whole in the frame, head to feet" in s
-                  for s in _sh), " | ".join(s[:120] for s in _sh))
-        check(f"{_nm}: ...said right after the beat, ahead of the sheet",
-              all(s.index("head to feet") < s.index("Ana: she") for s in _sh))
+        # The shot that composes the frame holds them whole; every shot after it opens
+        # on that frame with the camera held, which keeps them whole without being
+        # told again -- and the author's own camera move frames its own shot.
+        check(f"{_nm}: the composing shot holds both of them whole, head to feet",
+              "every body in it whole, head to feet" in _sh[0], _sh[0][-200:])
+        check(f"{_nm}: ...and the shots opening on it keep the held camera instead",
+              all("head to feet" not in s and "one unbroken take" in s
+                  for s in (_sh[1], _sh[3])), " | ".join(s[-120:] for s in _sh))
+        check(f"{_nm}: ...and the author's camera move gets no frame of ours",
+              "head to feet" not in _sh[2], _sh[2][-160:])
 
 
 def test_the_chain_is_never_broken_mid_scene():
@@ -5232,9 +5310,11 @@ def test_what_is_only_said_happens_later():
     check("an order takes nothing off", "bare" not in told and "comes off" not in told,
           told[-300:])
     check("...the shot that does it does", "away by the last frame" in did, did[-300:])
+    # Held where she is and in what she wears -- the order's guarantee -- with no
+    # reaction directed for her.
     check("...and the one it is asked of waits for it",
-          "What is yet to come happens in a later shot: Ana listens and reacts" in told,
-          told[:300])
+          "Ana stays where she is, wearing what her entry lists." in told
+          and "listens and reacts" not in told, told[:300])
     said, gag = shots('Dan says, "Sit down and I will gag you."', "Ana sits on the bed and Dan gags her.")
     check("a threat in a line fastens nothing", "closed and fastened" not in said
           and "goes on during this shot" not in said and "cuffs knocking" not in said,
@@ -5242,7 +5322,7 @@ def test_what_is_only_said_happens_later():
     check("...the shot that does it does", "goes on during this shot" in gag, gag[-300:])
     both, = shots("Dan orders her to kneel and she kneels.")
     check("an order carried out in the same beat is not held back",
-          "later shot" not in both, both[:260])
+          "stays where" not in both and "later shot" not in both, both[:260])
     # The person a line is said to is there -- not walked in on the next beat.
     first = _shots_of(run_node('A bedroom.\n\nDan says, "Take off your shirt."\n\n'
                                "Ana takes off her crop top.", character_memory=mem,
@@ -5828,9 +5908,10 @@ def test_auto_sound_end_to_end():
     imgs, audio, info, script = run_node(P, plan_only=True,
                                          mouths_shut_when_no_line=False)[:4]
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
-    # Shot 1 speaks, so its branch is open anyway and the action's sound is added.
-    check("walking is heard on the shot that speaks", "footsteps" in sh[0])
-    check("...and the scissors", "blades through fabric" in sh[0])
+    # Shot 1 speaks: its branch is open anyway, and it gets the room only -- an
+    # inferred footstep or blade beside a line is an action competing with the voice.
+    check("the shot that speaks gets no inferred footsteps", "footsteps" not in sh[0])
+    check("...nor the scissors", "blades through fabric" not in sh[0])
     check("...in the open form, because it has a line", "It sounds like" in sh[0])
     check("a beat staging nothing audible gets nothing", "sounds like" not in sh[2])
     # What you wrote wins: a beat describing its own sound is left alone AND stays open.
@@ -5855,7 +5936,8 @@ def test_room_tone_under_every_shot():
     sh = [" ".join(x.split()) for x in re.split(r"(?=\[Shot )", script) if x.strip()]
     check("a shot that speaks carries the room too",
           "hard walls giving the sound back" in sh[0])
-    check("the acting shot still gets its events", "footsteps" in sh[0])
+    check("the speaking shot gets the room, and no inferred events",
+          "footsteps" not in sh[0])
     check("info names the acoustic", "room tone read from the scene" in info)
     check("the speaking shot carries the bed", "low hum off the strip light" in sh[0])
     check("the wordless shot is left silent",
@@ -6980,10 +7062,12 @@ def test_pacing_reaches_the_thin_shots():
     """END TO END: the pacing clause lands on shots that outlast their beat, and
     on no others."""
     print("\n=== pacing reaches the thin shots ===")
+    # Only an action that finishes is spread across the shot: a wait or a look has no
+    # end point, and asking it to finish on the last frame invented one.
     mem = "Kate: she, 30, coat."
-    P = ("A room.\n\nKate waits.\n\n"
+    P = ("A room.\n\nKate sits down.\n\n"
          "Kate walks in, drops her bag, takes off her coat, hangs it up and "
-         "crosses the room.\n\nKate looks at the window.")
+         "crosses the room.\n\nKate opens the window.\n\nKate waits.")
     out = run_node(P, plan_only=True, character_memory=mem,
                    shot_length="fixed", shot_seconds=10.0)
     info, script = out[2], out[3]
@@ -6991,6 +7075,7 @@ def test_pacing_reaches_the_thin_shots():
              if "even pace across the whole shot" in b]
     check("the thin shots are paced", paced == [1, 3], str(paced))
     check("...and the full one is not", 2 not in paced)
+    check("...nor a thin beat with no end point", 4 not in paced)
     check("info names them", "stage less than their length" in info)
     fitted = run_node(P, plan_only=True, character_memory=mem)[3]
     check("sizing from the beat needs no pacing",
@@ -7027,13 +7112,16 @@ def test_an_instruction_is_not_the_action():
     idle_sh = [x for x in re.split(r"(?=\[Shot )",
                                    run_node(idle, plan_only=True,
                                             character_memory=mem)[3]) if x.strip()]
-    check("the listener is given something to do",
-          "McKenna listens" in sh[0])
-    _tail = sh[0].split("McKenna listens")
+    # Held where she is and in what she wears until the beat that does it -- no
+    # reaction directed for her.
+    check("the listener is held where she is, in what she wears",
+          "McKenna stays where she is, wearing what her entry lists" in sh[0]
+          and "McKenna listens" not in sh[0], sh[0][-300:])
+    _tail = sh[0].split("McKenna stays where")
     check("...and is named once, not twice",
           len(_tail) > 1 and _tail[1].split(".")[0].count("McKenna") == 0)
     check("...and a line with no order in it adds nothing",
-          "listens, still" not in run_node(
+          "stays where" not in run_node(
               'A room.\n\nDana says: "Hello there."', plan_only=True,
               character_memory=mem)[3])
     check("a spoken instruction latches nobody",
@@ -8663,6 +8751,116 @@ def test_a_fall_keeps_its_landing_guard():
           "Mouths in the shot stay closed" in fell, fell[-200:])
 
 
+def test_staging_is_not_carried_or_invented():
+    """REPORTED: prompt adherence is poor and characters self-direct -- they do things
+    the beat never wrote. Staging the node carried or invented: the opening paragraph's
+    action in every shot, a framing sentence on a shot of a clock, an entrance for
+    somebody the scene already has in the room, a kneel held through a sprint, "lies to
+    Dan" read as lying down, and "night falls" given a landing."""
+    print("\n=== staging is the beat's, not carried over or invented ===")
+    mem = "Mara: she, 28, grey sweater, black jeans."
+    # The opening paragraph's action and event are the opening shot's.
+    sh = _shots_of(run_node(
+        "A small living room at night, rain on the window. Mara sits on the sofa reading "
+        "a paperback. A dog barks somewhere outside.\n\nMara turns a page.\n\n"
+        "Mara sets the book down.\n\nMara stands and walks to the window.",
+        character_memory=mem, plan_only=True))
+    check("shot 1 has the opening paragraph whole",
+          "reading a paperback" in sh[0] and "dog barks" in sh[0], sh[0][:200])
+    for i in (1, 2):
+        check(f"shot {i + 1} does not repeat the opening action or event",
+              "reading a paperback" not in sh[i] and "dog barks" not in sh[i], sh[i][:200])
+        check(f"...and keeps the place, the time and the weather: shot {i + 1}",
+              sh[i].startswith("A small living room at night, rain on the window."),
+              sh[i][:120])
+    # ...but a sentence that dresses somebody always stays, for the removal scrub.
+    dressed = _shots_of(run_node(
+        "A bedroom. Mara sits on the bed in a red silk robe.\n\nMara yawns.\n\n"
+        "Mara stretches.", character_memory="Mara: she, 28.", plan_only=True))
+    check("a sentence naming a garment rides every shot",
+          all("red silk robe" in x for x in dressed), dressed[-1][:200])
+    check("the unit: an action sentence is staging, a garment sentence is not",
+          S.scene_staging("Mara sits on the sofa. A dog barks. Mara wears a red robe.",
+                          mem).keys() == {"mara sits on the sofa", "a dog barks"},
+          str(S.scene_staging("Mara sits on the sofa. A dog barks. Mara wears a red robe.",
+                              mem)))
+    # A shot of the clock frames nobody -- and describes nobody where the frame is
+    # composed afresh. Opening on a last frame that still holds Mara, it keeps her
+    # described: the held keyframe shows her.
+    clock = _shots_of(run_node("A kitchen at dawn.\n\nMara pours coffee into a mug.\n\n"
+                               "The clock on the wall ticks past six.\n\nMara drinks.",
+                               character_memory=mem, plan_only=True))
+    check("no framing sentence on a scenery beat", "head to feet" not in clock[1]
+          and "in the frame" not in clock[1], clock[1])
+    check("...the held frame's person still described", "Mara:" in clock[1]
+          and "one person in the shot" in clock[1], clock[1])
+    check("...and the people are there when the beat has them",
+          "Mara:" in clock[2] and "one person in the shot" in clock[2], clock[2][:200])
+    fresh = _shots_of(run_node("A kitchen at dawn.\n\nThe clock on the wall ticks past six."
+                               "\n\nMara pours coffee into a mug.",
+                               character_memory=mem, plan_only=True))
+    check("...no sheet line and no body count on a fresh scenery shot",
+          "Mara:" not in fresh[0] and "person in the shot" not in fresh[0], fresh[0])
+    check("the unit: no frame for an empty frame or an author's camera move",
+          S.frame_hold("The camera pans across the empty room.", "", 1) == "")
+    # Somebody the opening paragraph already has in the room is not walked in.
+    office = _shots_of(run_node(
+        "An office at night. Mara sits at her desk. Dan stands by the window.\n\n"
+        "Mara types on her laptop.\n\nDan looks up from his phone.",
+        character_memory="Mara: she, 28, grey sweater.\nDan: he, 35, navy suit.",
+        plan_only=True))
+    check("no entrance for somebody the scene already places",
+          "comes into the frame" not in office[1], office[1][:220])
+    check("...his place in the scene rides the shot that first shows him",
+          "Dan stands by the window." in office[1] and "Dan:" in office[1], office[1][:220])
+    for _b, _want in (("Dan looks up from his phone.", True),
+                      ("Dan is already sitting on the crate.", True),
+                      ("Dan sits at the bar, watching.", True),
+                      ("Dan crosses to the desk.", False),
+                      ("Dan picks up a wrench.", False)):
+        check(f"already in position={_want}: {_b[:30]!r}",
+              S.already_in_position(_b, "Dan") == _want)
+    # A kneel is not held through a sprint, or a phone check, of her own.
+    run = _shots_of(run_node("A park in the morning.\n\nMara kneels to tie her shoe.\n\n"
+                             "Mara sprints down the path.\n\nMara checks her phone.",
+                             character_memory=mem, plan_only=True))
+    check("no carried posture while she sprints", "kneeling" not in run[1], run[1][-200:])
+    check("...nor once she checks her phone", "kneeling" not in run[2], run[2][-200:])
+    sat = _shots_of(run_node("A kitchen.\n\nMara sits at the table.\n\nMara smiles.",
+                             character_memory=mem, plan_only=True))
+    check("...while a face acting keeps the seat", "Mara is sitting." in sat[1],
+          sat[1][-200:])
+    # A lie told is not a body lying down.
+    two = "Mara: she, 28, grey sweater.\nDan: he, 35, navy suit."
+    lie = _shots_of(run_node("A kitchen at night.\n\nMara lies to Dan about the money.\n\n"
+                             "Dan shakes his head.", character_memory=two, plan_only=True))
+    check("no 'lying down' from 'lies to'", "lying down" not in lie[1], lie[1][-200:])
+    check("the unit: lies to, lies about, a lie",
+          S.posture_in("Mara lies to Dan.", ["Mara", "Dan"]) == {}
+          and S.posture_in("Mara lies about it.", ["Mara"]) == {}
+          and S.posture_in("Mara tells a lie.", ["Mara"]) == {}
+          and S.posture_in("Mara lies on the bed.", ["Mara"]) == {"Mara": "lying down"})
+    # Night falls; a body does not.
+    for _t in ("Night falls over the town.", "Silence falls.", "Mara falls asleep.",
+               "Mara falls silent.", "Mara stumbles over her words.",
+               "Her voice drops to a whisper.", "Her hair falls over her face.",
+               "Mara sprawls on the sofa."):
+        check(f"not a fall: {_t[:30]!r}", not S.falls_in(_t))
+    for _t in ("Mara falls to the floor.", "The blow sends him sprawling.",
+               "Mara gasps, then collapses."):
+        check(f"still a fall: {_t[:30]!r}", S.falls_in(_t))
+    night = _shots_of(run_node("A quiet street.\n\nNight falls over the town.\n\n"
+                               "Mara falls asleep on the bench.", character_memory=mem,
+                               plan_only=True))
+    check("'night falls' gets no landing", "takes the landing" not in night[0], night[0])
+    check("...and nor does falling asleep", "takes the landing" not in night[1], night[1])
+    # One unnamed person is somebody the count must not forbid.
+    check("one waiter is an extra", S.extras_in("A waiter brings Mara the bill."))
+    check("...as is an old man", S.extras_in("An old man feeds the pigeons."))
+    check("...but not a mother only talked about",
+          not S.extras_in("Mara talks about her mother."))
+
+
 def test_a_gag_and_a_bound_fall_hold_through_the_beat():
     """REPORTED: restraints breaking as characters break their falls with their
     limbs; gags like duct tape disappearing once another action happens in a beat;
@@ -8744,14 +8942,17 @@ def test_a_body_laid_down_stays_down_while_it_is_worked_on():
             "Dan wraps duct tape around her mouth.\n\n"
             "Dan handcuffs her wrists behind her back.",
             character_memory=mem, plan_only=True))
+        # Held in the guard list, behind the beat's own words: in the lead it sat
+        # straight after the beat on every later shot, which is a pose the beat never
+        # asked for. It is said on these shots because she is being worked on.
         for i in (1, 2):
             at = sh[i].find("stays lying flat on the bed through the whole shot")
-            check(f"{first} -> shot {i + 1} holds her flat on the bed, in the lead",
-                  0 <= at < sh[i].find("Mara: she"), sh[i][:500])
-        check(f"{first} -> her free arms rest at her sides while he tapes her",
-              "her arms resting at her sides" in sh[1], sh[1][:500])
-        check(f"{first} -> ...and not while he puts them behind her back",
-              "arms resting at her sides" not in sh[2], sh[2][:500])
+            check(f"{first} -> shot {i + 1} holds her flat on the bed while she is worked on",
+                  0 <= sh[i].find("Mara: she") < at, sh[i][:500])
+        # Her arms are the beat's to place: the hold says only that she stays down.
+        check(f"{first} -> no arm placement the beat never wrote",
+              "arms resting at her sides" not in sh[1]
+              and "arms resting at her sides" not in sh[2], sh[1][:500])
     check("dragging her TO the bed does not lay her on it",
           not S.posture_in("Dan drags her to the bed.", ["Mara", "Dan"]))
     check("...and being pushed onto a sofa is not lying on it",
@@ -9201,12 +9402,181 @@ def test_lying_down_is_not_staged_as_anything_else():
         "Dan handcuffs her wrists behind her back.\n\nDan searches her bag.",
         plan_only=True, character_memory=mem))
     every += bound
-    check("a restrained body is still held down on the bed",
-          all("She stays lying flat on the bed through the whole shot." in s
-              for s in bound[1:]), bound[2][:400])
+    # Held flat while the cuffs go on her; on a shot that does nothing to her ("Dan
+    # searches her bag") the plain posture hold keeps her lying, without pinning her.
+    check("a restrained body is still held down on the bed while it is cuffed",
+          "She stays lying flat on the bed through the whole shot." in bound[1],
+          bound[1][:400])
+    check("...and kept lying, plainly, on a shot that does nothing to her",
+          "Mara is lying down" in bound[2] and "stays lying flat" not in bound[2],
+          bound[2][:400])
     check("...and nothing anywhere stages anything being done to her body",
           not any(re.search(r"done to (?:her|him|them)|weight down on it", s) for s in every),
           "")
+
+
+def test_a_restraint_already_on_is_not_put_on_again():
+    """REPORTED: prompt adherence -- a restraint the beat says is ALREADY on ("Jade sits
+    tied to a chair", "her wrists cuffed to the headboard") was told it goes on during
+    the shot, off the body at the first frame, with nobody there to fasten it.
+
+    A first mention is not a fastening. The tense decides, as it does for the first
+    restraint of a run; a piece named as worn beside one going on stays held."""
+    print("\n=== a restraint already on is held, not put on ===")
+    two = "Mara: she, 28, grey sweater.\nDan: he, 40, black jacket."
+    bare = "Mara: 28, grey sweater.\nDan: 40, black jacket."
+    going = re.compile(r"\b(?:go|goes) (?:on|across|over)\b[^.]*during this shot|"
+                       r"hardware goes on during this shot")
+    for beat, item in (("Mara sits tied to a chair with rope around her wrists.", "rope"),
+                       ("Mara lies on the bed, her wrists cuffed to the headboard.", "cuffs"),
+                       ("Mara kneels on the concrete, her wrists cuffed behind her back.",
+                        "cuffs"),
+                       ("Mara is handcuffed to the radiator.", "handcuffs"),
+                       ("Mara sits on the floor, hands zip-tied.", "zip ties"),
+                       ("Mara sits on the bench in handcuffs.", "handcuffs")):
+        for mem in (two, bare):
+            sh = _shots_of(run_node("A small room.\n\n" + beat + "\n\nMara looks up.",
+                                    character_memory=mem, plan_only=True))
+            check(f"held, not put on: {beat} [{'pron' if mem == two else 'no pron'}]",
+                  not going.search(sh[0]) and re.search(
+                      re.escape(item) + r"[^.]*\bstays?\b", sh[0]), sh[0][-400:])
+            check(f"...and held on the next shot: {beat}",
+                  re.search(re.escape(item) + r"[^.]*\bstays?\b", sh[1])
+                  and not going.search(sh[1]), sh[1][-400:])
+    check("worn in passing is not the verb",
+          not S.restraint_going_on("Mara sits on the bench in handcuffs.")
+          and not S.restraint_going_on("Mara gets up with rope around her wrists."))
+    check("...while putting her INTO them still is",
+          S.restraint_going_on("Dan puts her in handcuffs.")
+          and S.staged_on_now("Dan puts her in handcuffs.", "handcuffs"))
+    check("a piece named as worn is not the one going on",
+          not S.staged_on_now("Dan ties her ankles while Mara sits with tape over her "
+                              "mouth.", "duct tape")
+          and S.staged_on_now("Dan ties her ankles while Mara sits with tape over her "
+                              "mouth.", "rope"))
+    # ...and what IS put on still gets both ends.
+    sh = _shots_of(run_node("A small room.\n\nMara lies on the bed, her wrists cuffed to "
+                            "the headboard.\n\nDan ties her ankles with rope.",
+                            character_memory=two, plan_only=True))
+    check("a piece the beat does put on is still put on",
+          re.search(r"rope goes on[^.]*during this shot", sh[1]), sh[1][-500:])
+    check("...beside the cuffs, held", re.search(r"cuffs[^.]*\bstay\b", sh[1])
+          and not re.search(r"cuffs (?:go|goes) on", sh[1]), sh[1][-500:])
+    sh = _shots_of(run_node("A small room.\n\nDan handcuffs her wrists behind her back.",
+                            character_memory=two, plan_only=True))
+    check("a cuffing is still a cuffing", going.search(sh[0]), sh[0][-400:])
+
+
+def test_a_restraint_already_on_is_on_the_person_described():
+    """REPORTED: the restraint lands on the wrong person, and that person is pulled into
+    the shot. "Jade sits tied to a chair with rope around her wrists" read as Jade tying
+    somebody's wrists, so the rope went on the only other person on the sheet -- named,
+    added to the frame, and told the rope goes on him."""
+    print("\n=== a restraint already on is on the person described ===")
+    for mem, other in (("Jade: she, 31, black tank top.\nRook: he, 40, suit.", "Rook"),
+                       ("Jade: 31, black tank top.\nRook: 40, suit.", "Rook"),
+                       ("Jade: she, 31, black tank top.\nAnna: she, 30, red coat.", "Anna")):
+        st = S.engine.SceneState()
+        cast = [n for n, _ in S.sheet_lines(mem) if n]
+        for n, ln in S.sheet_lines(mem):
+            if n:
+                st.declare(n, ln)
+        ch = st.read("Jade sits tied to a chair with rope around her wrists.", cast=cast,
+                     shot=1, pronouns={n: S.sheet_pronoun(ln) for n, ln in S.sheet_lines(mem)
+                                       if n})
+        check(f"the state puts the rope on Jade, not {other}",
+              [w for w, _r in ch["applied"]] == ["Jade"], str(ch["applied"]))
+        sh = _shots_of(run_node(
+            "A warehouse office.\n\nJade sits tied to a chair with rope around her wrists."
+            "\n\nJade looks at the door.", character_memory=mem, plan_only=True))
+        check(f"...and {other} is not pulled into the shot",
+              f"{other}:" not in sh[0] and "There is one person" in sh[0], sh[0][-400:])
+        check(f"...nor given the rope", not re.search(
+            re.escape(other) + r"['’]s (?:wrists|ankles)", " ".join(sh)), sh[0][-400:])
+        check("...which is held on Jade on the next shot",
+              re.search(r"rope[^.]*\bstays\b", sh[1]) and f"{other}:" not in sh[1],
+              sh[1][-400:])
+    for beat in ("Mara is cuffed to the radiator while Dan watches.",
+                 "Mara sits cuffed to the radiator while Dan reads."):
+        st = S.engine.SceneState()
+        for n in ("Mara", "Dan"):
+            st.declare(n, f"{n}: 30, shirt")
+        ch = st.read(beat, cast=["Mara", "Dan"], shot=1,
+                     pronouns={"Mara": "she", "Dan": "he"})
+        check(f"named before the participle, she wears it: {beat}",
+              [w for w, _r in ch["applied"]] == ["Mara"], str(ch["applied"]))
+    for beat in ("Dan ties rope around her wrists.", "Dan tied the rope around her wrists.",
+                 "Dan has tied rope around her wrists.", "Dan is tying rope around her wrists."):
+        st = S.engine.SceneState()
+        for n in ("Mara", "Dan"):
+            st.declare(n, f"{n}: 30, shirt")
+        ch = st.read(beat, cast=["Mara", "Dan"], shot=1,
+                     pronouns={"Mara": "she", "Dan": "he"})
+        check(f"...while the one doing it is not: {beat}",
+              [w for w, _r in ch["applied"]] == ["Mara"], str(ch["applied"]))
+
+
+def test_the_node_directs_only_what_the_beat_wrote():
+    """REPORTED: prompt adherence is poor -- characters do things the beat never wrote.
+
+    Measured, the beat was about 6% of a shot prompt, and node clauses directed
+    reactions, gazes, expressions and struggles of their own, often carried over from
+    earlier beats. The node states what IS -- wardrobe, restraints, who is present,
+    the place -- and directs behaviour only where the current beat wrote it."""
+    print("\n=== the node directs only what the beat wrote ===")
+    mem = "Mara: she, 28, grey sweater, jeans.\nDan: he, 40, black jacket."
+    P = ("A basement.\n\n"
+         "Dan tells Mara to take off her sweater.\n\n"
+         "Mara looks at the door.\n\n"
+         "Dan chains her wrists and forces her down into a kneel.\n\n"
+         "Dan checks his phone.\n\n"
+         'Dan says, "Stay there."\n\n'
+         'Dan says into the phone, "She is here."')
+    sh = _shots_of(run_node(P, character_memory=mem, plan_only=True))
+    every = " ".join(sh)
+    check("no reaction is directed for the one told",
+          "listens and reacts" not in every and "What is yet to come" not in every,
+          sh[0][-300:])
+    check("...who is held where she is, in what she wears",
+          "Mara stays where she is, wearing what her entry lists." in sh[0], sh[0][-300:])
+    check("no face is asked to move by the mouth guards",
+          "expressions moving" not in every, "")
+    check("the look is said on the shot that writes it",
+          "turned to the door" in sh[1], sh[1][-200:])
+    check("...and carried into no later shot",
+          not any("turned to the door" in x for x in sh[2:]), "")
+    check("no mood line anywhere", "The mood is grim" not in every, "")
+    check("no struggle is directed against the hardware",
+          "strains against it" not in every, "")
+    # A line to somebody chained and kneeling: the hold is what IS, and no gaze is
+    # staged on top of it. A line between two free people still faces them.
+    check("a line to a held person stages no gaze", "face each other" not in sh[4],
+          sh[4][-300:])
+    free = _shots_of(run_node("A kitchen.\n\nMara and Dan stand at the counter.\n\n"
+                              'Dan says, "Stay there."', character_memory=mem,
+                              plan_only=True))
+    check("a face-to-face line faces them to each other",
+          "face each other" in free[1], free[1][-300:])
+    check("...and a phone call does not", "face each other" not in sh[5], sh[5][-300:])
+    # The mood line is gone even for a film the anchor calls grim, and with nobody
+    # held the strained face is not put on anybody.
+    calm = _shots_of(run_node("A kitchen.\n\nDan pours coffee.\n\nMara reads.",
+                              character_memory=mem, plan_only=True,
+                              anchor="Handheld. A grim, tense film."))
+    check("a grim anchor puts no mood line and no strain on a free body",
+          not any("The mood is grim" in x or "shows the strain" in x for x in calm), "")
+    for beat in ('Mara says to herself, "Breathe."', 'Mara calls through the door, "Dan?"',
+                 'Mara says at the TV, "Liar."'):
+        out = _shots_of(run_node("A flat.\n\nMara and Dan sit on the sofa.\n\n" + beat,
+                                 character_memory=mem, plan_only=True))
+        check(f"no inferred eye-line: {beat[:30]!r}", "face each other" not in out[-1],
+              out[-1][-200:])
+    for beat in ("Dan could tie her up.", "Dan wants to leave.",
+                 "Dan tells Mara to explain herself."):
+        out = _shots_of(run_node("A flat.\n\nMara and Dan sit on the sofa.\n\n" + beat,
+                                 character_memory=mem, plan_only=True))
+        check(f"no hold for a modal, a want or a speech order: {beat[:28]!r}",
+              "stays where" not in out[-1], out[-1][-200:])
 
 
 def test_an_intimate_scene_holds_its_frame_and_its_voices():
@@ -9224,8 +9594,8 @@ def test_an_intimate_scene_holds_its_frame_and_its_voices():
         # Kept whole -- asked for: both characters entirely in the shot -- but never
         # told to widen onto the room, which is the reframe this was reported for.
         check(f"a position change on a keyframe is not reframed wide: shot {i + 1}",
-              "with the room around" not in sh[i]
-              and "Every body in the shot stays whole in the frame" in sh[i], sh[i][-120:])
+              "with the room around" not in sh[i] and "head to feet" not in sh[i],
+              sh[i][-120:])
         check(f"...and keeps the held camera: shot {i + 1}", "one unbroken take" in sh[i])
     check("a journey keeps its frame, the camera going with them",
           "head to feet" in sh[3], sh[3][-120:])
@@ -9253,7 +9623,9 @@ def test_an_intimate_scene_holds_its_frame_and_its_voices():
     check("...and neither mouth is closed on its own sound", "every other mouth" not in s)
     s, c = _sound("Dan grunts as he thrusts, and she moans.")
     check("a pronoun's vocal closes nobody's mouth", "every other mouth" not in s, s[-200:])
-    check("the effort sound is wordless too", "wordless" in S.EFFORT_BREATH)
+    # Effort is breath, not a voice: no vocal the beat did not name.
+    check("the effort sound names no vocal",
+          not re.search(r"moan|gasp|groan|whimper|scream", S.EFFORT_BREATH))
     check("wordless() folds the vocals into one phrase and keeps the order",
           S.wordless(["moaning", "breathing", "grunting", "a bed frame working"])
           == ["wordless moaning and grunting", "breathing", "a bed frame working"])
@@ -9558,8 +9930,11 @@ def test_a_beat_that_moves_a_garment_keeps_the_cast():
         character_memory=mem, plan_only=True))
     check("the person the frame carries is still counted",
           "two people" in shots[2], shots[2][:170])
-    check("...and her latched look survives the beat",
-          "Ana's eyes and head are turned to the window" in shots[2], shots[2][:200])
+    # The look is no longer carried; what this guards is the cast -- no names made
+    # out of the letters of a garment's state.
+    check("...and no look is carried, by her or by a letter",
+          "eyes and head are turned" not in shots[2]
+          and not re.search(r"\b[a-z]['’]s\b", shots[2]), shots[2][:200])
     check("...and the garment still moves", "pulled down" in shots[3], shots[3][-140:])
 
 
@@ -10139,6 +10514,301 @@ def test_one_seed_is_one_noise_field_at_any_length():
             S.comfy.sample.prepare_noise = had
 
 
+def test_a_restraint_put_on_in_any_wording_goes_on():
+    """REPORTED: "Dan grabs her wrists, binding them with rope" read the rope as already
+    worn -- the restrained person dropped out of her own shot on a sheet with no
+    pronouns, and the cuffing shot said the cuffs were on from the first frame. Any
+    piece the state records as applied goes on, unless the beat names it as worn."""
+    print("\n=== a restraint put on in any wording goes on ===")
+    bare = "Mara: 28, grey sweater, blue jeans.\nDan: 40, black jacket."
+    two = "Mara: she, 28, grey sweater, blue jeans.\nDan: he, 40, black jacket."
+    for beat in ("Dan grabs her wrists, binding them with rope.",
+                 "Dan attaches her wrists to the headboard with handcuffs.",
+                 "Dan forces her down, cuffing her wrists with steel handcuffs.",
+                 "Dan holds her down, taping her mouth with duct tape.",
+                 "Dan bolts her ankles to the floor with shackles."):
+        sh = _shots_of(run_node("A bedroom at night.\n\n" + beat + "\n\nMara struggles.",
+                                character_memory=bare, plan_only=True))
+        check(f"the restrained person is in her shot: {beat[:40]!r}",
+              "Mara:" in sh[0], sh[0][:300])
+    going = re.compile(r"\b(?:go|goes) (?:on|over|across|in)\b[^.]*during this shot")
+    for beat in ("Dan attaches her wrists to the headboard with handcuffs.",
+                 "Dan ratchets the cuffs onto her wrists.",
+                 "Dan latches the cuffs around her wrists.",
+                 "Dan closes the shackles around her ankles.",
+                 "Dan cuffed her to the radiator."):
+        for mem in (two, bare):
+            sh = _shots_of(run_node("A bedroom at night.\n\nMara stands by the window.\n\n"
+                                    + beat + "\n\nMara struggles.", character_memory=mem,
+                                    plan_only=True))
+            check(f"the applying shot puts it on: {beat[:40]!r}",
+                  going.search(sh[1]) and "as they were put on" not in sh[1]
+                  and "Mara:" in sh[1], sh[1][-400:])
+    for beat, item in (("Mara sits tied to a chair with rope around her wrists.", "rope"),
+                       ("Mara lies on the bed, her wrists cuffed to the headboard.", "cuffs"),
+                       ("Mara is handcuffed to the radiator.", "handcuffs"),
+                       ("Mara sits on the bench in handcuffs.", "handcuffs"),
+                       ("Mara, cuffed, falls to the floor.", "cuffs"),
+                       ("Mara pulls at her cuffed wrists.", "cuffs")):
+        check(f"already on is held, not put on: {beat[:40]!r}",
+              not S.staged_on_now(beat, item))
+    for beat, item in (("Dan handcuffed Mara to the radiator.", "handcuffs"),
+                       ("Dan gagged her.", "gag"), ("Mara is cuffed by Dan.", "cuffs"),
+                       ("Mara gets cuffed to the bed.", "cuffs"),
+                       ("Dan has her wrists tied in seconds.", "rope"),
+                       ("Mara, already cuffed, watches Dan tie her ankles.", "rope")):
+        check(f"...and the act is an act: {beat[:40]!r}", S.staged_on_now(beat, item))
+
+
+def test_a_strained_face_only_where_the_beat_writes_it():
+    """REPORTED: the strained face went on every shot a held person was in, on the
+    captor wherever the state put hardware on him, on a speaker as "the mouth set",
+    and "above the tape" on a second face with no tape. A face is said for a feeling, a
+    struggle or the binding going on, once per person."""
+    print("\n=== a strained face only where the beat writes it ===")
+    four = ("Mara: she, 28, grey sweater.\nAna: she, 25, red dress.\n"
+            "Dan: he, 40, black jacket.\nLeo: he, 35, blue shirt.")
+    sh = _shots_of(run_node(
+        "A warehouse at night.\n\nDan handcuffs Mara's wrists behind her back.\n\n"
+        "Leo ties Ana's ankles together with rope.\n\nDan presses duct tape over Ana's "
+        "mouth.\n\nRain streaks down the high windows.\n\nMara and Ana struggle.",
+        character_memory=four, plan_only=True))
+    check("the binding shot gives her the face", "Mara's face shows the strain" in sh[0],
+          sh[0][-300:])
+    check("no face is said on a shot of the rain", "shows the strain" not in sh[3],
+          sh[3][-300:])
+    check("the tape's eyes and brow are the gagged face's alone",
+          "Ana's face shows the strain in the eyes and the brow above the tape" in sh[4]
+          and "Mara's face shows the strain, the mouth set" in sh[4]
+          and "Mara's and Ana's" not in sh[4], sh[4][-400:])
+    check("the one doing the binding is not given it",
+          not re.search(r"(?:Dan's|Leo's|His) face", " ".join(sh)), "")
+    two = "Mara: she, 28, grey sweater.\nDan: he, 40, black jacket."
+    sh = _shots_of(run_node(
+        "A bedroom.\n\nMara stands by the window.\n\nDan cuffs Mara's wrists behind her "
+        'back.\n\nMara says, "Let me go."\n\nDan watches her.', character_memory=two,
+        plan_only=True))
+    check("a speaker's mouth is not set", "mouth set" not in sh[2], sh[2][-300:])
+    check("a held body the beat only watches gets none", "shows the strain" not in sh[3],
+          sh[3][-300:])
+    check("the unit: one sentence per face",
+          S.strain_face(["Mara", "Ana"]).count(".") == 2)
+
+
+def test_each_wearer_keeps_their_own_pose():
+    """REPORTED: one latched arm position was said of every restrained person -- Ana,
+    cuffed in front, had her arms behind her like Mara, and Mara's free ankles were tied
+    together like Ana's."""
+    print("\n=== each wearer keeps their own pose ===")
+    mem = "Mara: she, 28, grey sweater.\nAna: she, 25, red dress.\nDan: he, 40, black jacket."
+    sh = _shots_of(run_node(
+        "A cellar.\n\nDan handcuffs Mara's wrists behind her back.\n\nDan handcuffs Ana's "
+        "wrists in front of her.\n\nDan ties Ana's ankles together with rope.\n\n"
+        "Mara and Ana sit on the floor.", character_memory=mem, plan_only=True))
+    for i in (1, 2, 3):
+        check(f"shot {i + 1}: each body's own arms",
+              "Both of Mara's arms are behind the body" in sh[i]
+              and "Both of Ana's arms are in front of the body" in sh[i]
+              and "Mara and Ana's" not in sh[i], sh[i][:500])
+    check("...and only the tied ankles are said tied",
+          "Both of Ana's ankles are together" in sh[3]
+          and "Mara's ankles" not in sh[3], sh[3][:500])
+
+
+def test_a_described_body_falls_as_a_body():
+    """REPORTED: "Mara, cuffed, falls" lost the bound-fall hold because the subject sat
+    behind a comma-bounded description, and "falls flat on her back", "falls through
+    the ice" were read as idioms. "Drops to one knee" is a kneel, not a fall."""
+    print("\n=== a described body falls as a body ===")
+    for b in ("Mara, bound, falls sideways.", "Mara, cuffed, falls to the floor.",
+              "Mara, her wrists tied behind her, falls forward onto the bed.",
+              "Mara, tied to the chair, topples over.", "Mara falls flat on her back.",
+              "Mara falls through the ice.", "Mara falls under the table.",
+              "Mara falls away from Dan."):
+        check(f"a fall: {b!r}", S.falls_in(b))
+    for b in ("The joke falls flat.", "The deal falls through.", "Mara falls under his spell.",
+              "Dex drops to one knee, exhausted.", "Mara drops to her knees.",
+              "The lamp, knocked, falls."):
+        check(f"no body going down: {b!r}", not S.falls_in(b))
+    check("down on one knee is kneeling",
+          S.posture_in("Dex drops to one knee, exhausted.", ["Dex"]) == {"Dex": "kneeling"})
+
+
+def test_a_role_noun_that_is_no_extra_keeps_the_count():
+    """REPORTED: "passenger seat", "guard rail", "baby monitor", "her husband Dan" and
+    "Mara, a nurse" each took the two-person count off a two-person shot."""
+    print("\n=== a role noun that is no extra keeps the count ===")
+    for b in ("Dan drives. Mara sits in the passenger seat.",
+              "Dan opens the driver door and gets in beside Mara.",
+              "Mara checks the baby monitor, then kisses Dan.",
+              "Dan leans on the guard rail beside Mara.",
+              "Her husband Dan kisses Mara.", "Mara, a nurse, checks Dan's pulse.",
+              "Mara talks to her mother on the phone.",
+              "Mara looks at Dan like a stranger."):
+        check(f"two people counted: {b!r}",
+              "two people in the shot" in S.cast_hold(["Mara", "Dan"], b))
+    for b in ("A waiter brings the bill.", "Mara holds the baby."):
+        check(f"...while a person beyond the sheet stands it down: {b!r}",
+              S.cast_hold(["Mara", "Dan"], b) == "")
+
+
+def test_an_intended_act_holds_the_person_it_is_done_to():
+    """REPORTED: "Dan is going to take off her sweater" held Dan in place and in his
+    entry, not her, and beside "Dan comes into the frame" it asked for both."""
+    print("\n=== an intended act holds the person it is done to ===")
+    mem = "Mara: she, 28, grey sweater, jeans.\nDan: he, 40, black jacket."
+    for b in ("Dan is going to take off her sweater.", "Dan threatens to strip her.",
+              "Dan plans to tie her up.", "Dan threatens to take her jeans off."):
+        got = S.deferred_holds(b, ["Mara", "Dan"], S.engine.acted_text(b), mem)
+        check(f"held: Mara, for {b!r}", [n for n, _k in got] == ["Mara"], str(got))
+    check("...and the one who means to undress herself is held",
+          [n for n, _k in S.deferred_holds("Mara is going to undress.", ["Mara", "Dan"],
+                                           "Mara is going to undress.", mem)] == ["Mara"])
+    sh = _shots_of(run_node("A bedroom.\n\nMara sits on the bed.\n\nDan is going to take "
+                            "off her sweater.", character_memory=mem, plan_only=True))
+    check("no stay and entrance for one person in one shot",
+          not ("Dan stays" in sh[1] and "Dan comes into the frame" in sh[1]), sh[1][:400])
+
+
+def test_a_body_laid_down_by_the_opening_is_tracked():
+    """REPORTED: anyone with no recorded pose counted as lying, so the opening "Mara
+    lies on the bed reading a paperback" was stamped after she got up; and kept, it
+    kept the reading too."""
+    print("\n=== a body laid down by the opening is tracked ===")
+    mem = "Mara: she, 28, grey sweater."
+    sh = _shots_of(run_node(
+        "A small bedroom at night. Mara lies on the bed reading a paperback. A dog barks "
+        "somewhere outside.\n\nMara turns her head toward the door.\n\nThe phone on the "
+        "nightstand buzzes twice.\n\nMara sighs.\n\nMara gets up and walks to the window."
+        "\n\nThe wind rattles the glass.", character_memory=mem, plan_only=True))
+    check("lying, kept as the posture and the place only",
+          "Mara is lying on the bed." in sh[1] and "reading a paperback" not in sh[1],
+          sh[1][:200])
+    check("...and gone once she is up",
+          not any("lying" in x or "reading a paperback" in x for x in sh[3:]), sh[-1][:200])
+
+
+def test_contact_reaches_a_body_part_and_any_adverb():
+    """REPORTED: contact with a body part ("kisses Mara's neck") or with an adverb off
+    the list ("kisses Mara hungrily") stopped pairing the two people."""
+    print("\n=== contact reaches a body part and any adverb ===")
+    names = ["Mara", "Dan", "Eli"]
+    for b in ("Dan kisses Mara's neck.", "Dan strokes Mara's hair.", "Dan holds Mara's hand.",
+              "Dan caresses Mara's cheek while Eli watches.",
+              "Dan kisses the back of Mara's neck.", "Dan kisses Mara hungrily.",
+              "Dan embraces Mara warmly.", "Dan grabs Mara roughly."):
+        check(f"paired: {b!r}", S.contact_pairs(b, names) == [("Dan", "Mara")],
+              str(S.contact_pairs(b, names)))
+    for b in ("Dan takes Mara's coat.", "Dan pulls the chair out for Mara."):
+        check(f"...not a thing handled: {b!r}", S.contact_pairs(b, names) == [])
+
+
+def test_a_shouted_line_has_its_speaker():
+    """REPORTED: "Dan shouts, ..." got no "Only Dan speaks", no language line, and
+    nothing held the listener's mouth."""
+    print("\n=== a shouted line has its speaker ===")
+    mem = "Mara: she, 28, grey sweater.\nDan: he, 40, black jacket."
+    for b in ('Dan shouts, "Stop keeping score!"', 'Dan yells, "Get out!"'):
+        sh = _shots_of(run_node("A kitchen.\n\nMara and Dan stand at the counter.\n\n" + b,
+                                character_memory=mem, plan_only=True))
+        check(f"credited and held: {b!r}",
+              "Only Dan speaks; every other mouth in the shot stays closed." in sh[1]
+              and "The language is English." in sh[1], sh[1][-400:])
+
+
+def test_a_body_moved_by_somebody_else_leaves_its_posture():
+    """REPORTED: Lark stayed "kneeling" while pulled to her feet, walked to the car and
+    put in it."""
+    print("\n=== a body moved by somebody else leaves its posture ===")
+    mem = "Lark: she, 30, grey hoodie, handcuffs on her wrists.\nHobb: he, 45, police uniform."
+    sh = _shots_of(run_node(
+        "A roadside at night.\n\nLark kneels on the gravel.\n\nHobb pulls Lark to her feet."
+        "\n\nHobb walks Lark to the patrol car.\n\nHobb opens the back door.\n\nLark ducks "
+        "into the back seat.", character_memory=mem, plan_only=True))
+    check("no kneel after she is pulled up", not any("kneeling" in x for x in sh[1:]),
+          " | ".join(x[-200:] for x in sh[1:]))
+    sh = _shots_of(run_node("A roadside at night.\n\nLark kneels on the gravel.\n\nHobb hauls "
+                            "Lark up.\n\nHobb watches her.", character_memory=mem,
+                            plan_only=True))
+    check("...or hauled up", not any("kneeling" in x for x in sh[1:]), sh[-1][-200:])
+
+
+def test_a_piece_taken_off_is_not_placed():
+    """REPORTED: "Casimir unties the blindfold" was told "a blindfold covers the eyes";
+    and an ordinary belt was placed as hardware."""
+    print("\n=== a piece taken off is not placed ===")
+    for b in ("Casimir unties the blindfold.", "Dan removes the blindfold.",
+              "Dan takes off Yusra's blindfold.", "The radio on Bertrand's belt crackles.",
+              "Bertrand tightens his belt."):
+        check(f"nothing placed: {b!r}", S.unanchored_hardware(b) == [])
+    check("an unowned belt outside any restraint scene is clothing",
+          S.unanchored_hardware("Jon holds up a belt.", gear=False) == [])
+
+
+def test_the_smaller_readers_say_only_what_is():
+    """The smaller REPORTED readings, one check each."""
+    print("\n=== the smaller readers say only what is ===")
+    mem = "Mara: she, 28, grey sweater.\nDan: he, 40, black jacket."
+    for b in ("Mara sips her tea.", "Mara eats a strawberry.", "Mara blows out the candles.",
+              "Mara catches her breath."):
+        sh = _shots_of(run_node("A kitchen.\n\n" + b, character_memory=mem, plan_only=True))
+        check(f"no closed mouths over a mouth in use: {b!r}",
+              "Mouths in the shot stay closed" not in sh[0], sh[0][-200:])
+    sc = "A car park. The trunk of the car is open.\nCalla: she, 30, grey hoodie.\nDrago: he, 40."
+    check("a person lifted is no garment raised",
+          S.displaced_garments("Drago lifts Calla into the trunk.", sc) == [])
+    check("...while a garment raised still is",
+          S.displaced_garments("Calla lifts her hoodie up.", sc) == [("grey hoodie", "pulled up")])
+    check("one name, one verb",
+          " Zoe wears only their purple sweater now." == S.off_now_clause(
+              "Zoe", "Zoe: 30, purple sweater.", ["coat"], after_removal=True))
+    sh = _shots_of(run_node("A cellar.\n\nDan tapes Mara's mouth with duct tape.\n\nMara "
+                            "thrashes and screams. Dan watches from the door.",
+                            character_memory=mem, plan_only=True))
+    check("a gagged vocal written second is muffled and hers",
+          "The muffled screaming is Mara's" in sh[1], sh[1][-400:])
+    sh = _shots_of(run_node(
+        "Clara and Oliver are in a dark living room lit by a television.\n\nClara pours two "
+        "glasses of wine.\n\nOliver laughs at the screen.\n\nThe oven clicks off.\n\nThe "
+        'smart speaker says, "Timer finished."',
+        character_memory="Clara: she, 30, blue cardigan.\nOliver: he, 32, grey t-shirt.",
+        plan_only=True))
+    check("a machine's line in a room the scene fills is the machine's",
+          "The voice in this shot is the speaker's" in sh[-1], sh[-1][:300])
+    sh = _shots_of(run_node("A small kitchen. Mara waits for Dan to come home.\n\nMara pours a "
+                            "coffee.\n\nDan picks up a mug.", character_memory=mem,
+                            plan_only=True))
+    check("somebody the opening only mentions walks in",
+          "Dan comes into the frame" in sh[1], sh[1][:300])
+    sh = _shots_of(run_node("A cellar.\n\nRain drums on the small window.\n\nMara pulls at the "
+                            "cuffs.", character_memory="Mara: she, 28, grey sweater, steel "
+                            "handcuffs on her wrists.", plan_only=True))
+    check("a described body is framed whole on a scenery beat", "head to feet" in sh[0],
+          sh[0][-300:])
+    for p in ("A motel room at night. The wind howls outside.",
+              "A garage. A fluorescent tube buzzes overhead.",
+              "A bedroom. She lives alone here. Her phone lies on the nightstand."):
+        st = S.scene_staging(p, mem)
+        check(f"weather, fixtures and things stay: {p[:30]!r}",
+              not any(k.startswith(("the wind", "a fluorescent", "her phone")) for k in st),
+              str(st))
+    for b in ("Mara has tears in her eyes.", "Mara seems tired.", "Mara wears a coat.",
+              "Mara always smiles.", "Mara needs a moment."):
+        check(f"a state is no action of her own: {b!r}",
+              not S.own_action(b, "Mara", mem, ["Mara"]))
+    for b, want in (("Mara raises her left hand.", False), ("Mara looks left.", False),
+                    ("Mara opens her eyes.", False), ("Mara crosses the room.", True),
+                    ("Dan carries her to the bed.", True)):
+        check(f"an errand finished is {want}: {b!r}", bool(S._COMPLETIVE.search(b)) == want)
+    for b, want in (("Mara twirls her hair.", False), ("Dan spins the bottle.", False),
+                    ("Mara turns around the corner.", False), ("Mara spins around.", True)):
+        check(f"a body turned round is {want}: {b!r}", S.rotates_in(b) == want)
+    check("a tracking camera moves", S.camera_moves("The camera is tracking Mara."))
+    check("...and a still one does not", not S.camera_moves("The camera is still."))
+    check("the lying hold places no arms",
+          "arms" not in S.lying_stays("She", "cot"))
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -10357,8 +11027,12 @@ def main():
     test_the_budget_buys_as_many_guarantees_as_it_can()
     test_a_fall_keeps_its_landing_guard()
     test_a_gag_and_a_bound_fall_hold_through_the_beat()
+    test_staging_is_not_carried_or_invented()
     test_a_body_laid_down_stays_down_while_it_is_worked_on()
     test_lying_down_is_not_staged_as_anything_else()
+    test_a_restraint_already_on_is_not_put_on_again()
+    test_a_restraint_already_on_is_on_the_person_described()
+    test_the_node_directs_only_what_the_beat_wrote()
     test_hyperflow_runs_on_its_own_grid()
     test_fast_h3_and_hyperflow_run_as_they_were_trained()
     test_the_cuffs_hold_when_the_tape_goes_on()
@@ -10391,6 +11065,18 @@ def main():
     test_a_scene_keeps_its_room_and_its_people()
     test_the_anchor_and_the_body_agree()
     test_one_seed_is_one_noise_field_at_any_length()
+    test_a_restraint_put_on_in_any_wording_goes_on()
+    test_a_strained_face_only_where_the_beat_writes_it()
+    test_each_wearer_keeps_their_own_pose()
+    test_a_described_body_falls_as_a_body()
+    test_a_role_noun_that_is_no_extra_keeps_the_count()
+    test_an_intended_act_holds_the_person_it_is_done_to()
+    test_a_body_laid_down_by_the_opening_is_tracked()
+    test_contact_reaches_a_body_part_and_any_adverb()
+    test_a_shouted_line_has_its_speaker()
+    test_a_body_moved_by_somebody_else_leaves_its_posture()
+    test_a_piece_taken_off_is_not_placed()
+    test_the_smaller_readers_say_only_what_is()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

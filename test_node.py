@@ -1428,9 +1428,15 @@ def test_a_short_action_gets_the_whole_shot():
     check("...and says when, not how fast",
           "even pace" in S.pace_clause(3.0, 10.0)
           and "slowly" not in S.pace_clause(3.0, 10.0))
-    check("...naming both ends",
-          "first frame" in S.pace_clause(3.0, 10.0)
-          and "last" in S.pace_clause(3.0, 10.0))
+    # Shorter now: the end it finishes on is the timing anchor.
+    check("...naming where it ends",
+          "last frame" in S.pace_clause(3.0, 10.0))
+    # ...and only for an action that finishes: not a posture, an ongoing activity or
+    # a line, where "finishing on the last frame" invented an action to finish.
+    check("an action with an end point is paced",
+          S.pace_clause(3.0, 10.0, beat="Kate walks to the door."))
+    for _b in ("Kate sits on the bed.", "Kate reads.", 'Kate says: "Go."'):
+        check(f"...and {_b!r} is not", S.pace_clause(3.0, 10.0, beat=_b) == "")
     check("a shot that fits its beat is left alone", S.pace_clause(8.0, 10.0) == "")
     check("...and a small gap too", S.pace_clause(3.0, 5.0) == "")
     check("...and an equal one", S.pace_clause(3.0, 3.0) == "")
@@ -3424,8 +3430,12 @@ def test_an_exit_and_a_shut_door_disagree():
 
 def test_a_held_thing_is_not_also_heard_moving():
     print("\n=== the shot is not told to hold a door and to sound like one swinging ===")
-    b = "Mara and Dom stand behind a van with closed rear doors."
-    check("a door mention alone is heard swinging",
+    # A mention is not a sound: only a verb on the door swings it (and only a verb
+    # on the van starts it).
+    check("a door mention alone is not heard swinging",
+          S.sounds_for("Mara and Dom stand behind a van with closed rear doors.") == [])
+    b = "Dom starts the van and Mara opens the rear doors."
+    check("a door the beat works is heard swinging",
           "a door on its hinges" in S.sounds_for(b))
     check("...but not while the shot is holding it shut",
           "a door on its hinges" not in S.sounds_for(b, held=["door"]))
@@ -3633,8 +3643,10 @@ def test_chain_is_rigid():
     check("...that the position keeps", "the position that keeps" in S.CHAIN_POSE_HOLD)
     check("...and carries the restraint guarantee too",
           "stays closed and fastened as it was put on" in S.CHAIN_POSE_HOLD)
-    check("...while leaving the body free to act",
-          "strains against it" in S.CHAIN_POSE_HOLD)
+    # The position keeps; what the body does in it is the beat's. "Strains against it"
+    # read as a direction to fight the chain on every later shot.
+    check("...while directing no struggle",
+          "strains against it" not in S.CHAIN_POSE_HOLD)
     check("...and telling it to hold still nowhere",
           not re.search(r"\bstill\b|\bmotionless\b|\bdoes not move\b|\bbefore it stops\b",
                         S.CHAIN_POSE_HOLD, re.I))
@@ -3687,7 +3699,16 @@ def test_turning_around():
     check("the clause covers what is worn", "all that is on it" in S.TURN_HOLD)
     check("...and what is fastened", "stays fastened and closed" in S.TURN_HOLD)
     check("...from every side", "front, side and behind" in S.TURN_HOLD)
-    check("...as the view comes round", "as the view comes round" in S.TURN_HOLD)
+    # No camera orbit asked for, and said only where a whole body turns.
+    check("...asking for no view to come round", "view comes round" not in S.TURN_HOLD)
+    for _t in ("She turned around.", "Kate rolls onto her side.", "Dan rolls her over.",
+               "She turns her back to him.", "Kate spins.", "He turns away.",
+               "Seen from behind.", "The camera moves round to show her back."):
+        check(f"a whole body turning: {_t[:32]!r}", S.rotates_in(_t))
+    for _t in ("Kate turns the page.", "Dan turns the key.", "She turns off the light.",
+               "Kate turns her head.", "Kate turns to face him.",
+               "Dan lifts her onto the table."):
+        check(f"not a whole body turning: {_t[:32]!r}", not S.rotates_in(_t))
     check("...naming no garment and no person",
           not re.search(r"\b(?:she|he|her|his|coat|top|shirt|jacket)\b",
                         S.TURN_HOLD, re.I))
@@ -4222,10 +4243,13 @@ def test_a_bound_body_lying_down_has_something_under_it():
 
 def test_a_body_under_effort_has_a_voice():
     print("\n=== effort makes a sound, and it is a voice ===")
+    # Effort is heard as BREATH: "gasps and moans of effort" were vocals the beat never
+    # named, and a vocal is a mouth the model opens.
     for _b in ("McKenna thrashes on the bed.", "She writhes and arches under him.",
                "He shudders and grips the sheet.", "She strains against him."):
-        check(f"voiced: {_b[:34]!r}",
-              any("moans of effort" in s for s in S.sounds_for(_b)))
+        check(f"heard as breath: {_b[:34]!r}",
+              S.EFFORT_BREATH in S.sounds_for(_b)
+              and not any(re.search(r"moan|gasp", s) for s in S.sounds_for(_b)))
     check("a beat naming the sound is left alone", S.sounds_for("She moans.") == [])
     check("...but it does count as asking for audio", S.sound_described("She moans."))
     check("two named vocals, still nothing added", S.sounds_for("She moans and sobs.") == [])
@@ -4236,12 +4260,11 @@ def test_a_body_under_effort_has_a_voice():
         _got = S.sounds_for(_b)
         check(f"named vocal survives a mixed list: {_want}", _want in _got)
         check(f"...and retires the inferred effort phrase: {_want}",
-              not any("moans of effort" in _s for _s in _got))
-    check("no vocal named, effort phrase still there",
-          any("moans of effort" in _s for _s in S.sounds_for("She thrashes in her restraints.")))
+              S.EFFORT_BREATH not in _got)
+    check("no vocal named, effort breath still there",
+          S.EFFORT_BREATH in S.sounds_for("She thrashes in her restraints."))
     _dup = S.sounds_for("She wakes up and thrashes in her restraints.")
-    check("no duplicate breathing in one clause",
-          not ("breathing" in _dup and any("moans of effort" in _s for _s in _dup)))
+    check("no duplicate breathing in one clause", _dup.count("breathing") <= 1)
     for _w in ("gasps", "whimpers", "groans", "pants", "sobs"):
         check(f"{_w} is heard as a sound the author wrote", S.sound_described(f"She {_w}."))
     check("effort opens the branch", S.exertion_in("She writhes on the bed."))

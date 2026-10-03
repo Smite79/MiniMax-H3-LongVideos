@@ -790,6 +790,232 @@ def test_every_piece_goes_on_the_right_body():
               "a steel collar around her neck, chained to the wall")] == ["collar"])
 
 
+_SHEETS = {"pronouns": ({"Mara": "she, 28, grey sweater.", "Dan": "he, 40, black jacket."},
+                        {"Mara": "she", "Dan": "he"}),
+           "no pronouns": ({"Mara": "28, grey sweater.", "Dan": "40, black jacket."},
+                           {"Mara": "", "Dan": ""}),
+           "no sheet": ({}, {})}
+
+
+def _beats(beats, sheet="pronouns"):
+    """Run beats the way the node does -- the sheet declared before every beat -- and
+    return (last beat's change, {name: sorted hardware keys})."""
+    entries, pron = _SHEETS[sheet]
+    st = E.SceneState()
+    ch = {}
+    for i, b in enumerate(beats, 1):
+        for n, d in entries.items():
+            st.declare(n, d)
+        ch = st.read(E.acted_text(b), cast=list(entries), shot=i, pronouns=pron)
+    return ch, {n: sorted(q.hardware) for n, q in st.people.items() if q.hardware}
+
+
+def test_a_cut_or_an_escape_is_a_release():
+    """REPORTED: removal wordings ignored, and "Dan cuts the zip ties" put the zip ties
+    on Dan. A cut is always a release, so is an escape, and a bare "unties her ankles"
+    with no pronoun on the sheet -- or no sheet at all -- frees the one person held."""
+    print("\n=== a cut or an escape is a release ===")
+    cases = (
+        ("Dan zip ties her wrists behind her back.",
+         ("Dan cuts the zip ties.", "Dan cuts her wrists free.", "Dan slices the zip tie.",
+          "Dan snips the zip tie.", "Dan cuts through the zip ties with a knife.")),
+        ("Dan handcuffs her wrists behind her back.",
+         ("Mara slips out of the handcuffs.", "Dan unlocks her wrists.", "Dan uncuffs her.")),
+        ("Dan ties a blindfold over her eyes.",
+         ("Dan slides the blindfold off her eyes.", "Dan unties the blindfold.",
+          "Dan removes the blindfold.", "Dan pulls the blindfold off her eyes.",
+          "Dan takes off Mara's blindfold.")),
+        ("Dan buckles a ball gag in her mouth.", ("Dan takes out the gag.", "Dan ungags her.")),
+        ("Dan ties her ankles together with rope.",
+         ("Dan unties her ankles.", "Dan cuts the rope.",
+          "Dan loosens the rope and pulls it off.")),
+        ("Dan chains her ankle to the radiator.",
+         ("Dan unchains her from the radiator.", "Dan unchains her.")),
+    )
+    for sheet in _SHEETS:
+        for on, offs in cases:
+            for off in offs:
+                ch, left = _beats([on, "Mara struggles.", off], sheet)
+                check(f"off ({sheet}): {off!r}", not left and not ch["applied"],
+                      f"{left} applied={[(w, r.item) for w, r in ch['applied']]}")
+    for sheet in ("pronouns", "no pronouns"):
+        for beat in ("Dan cuts the bread.", "Mara slips out of the room.",
+                     "Dan takes out the handcuffs.", "Dan frees his hand from her hair."):
+            _ch, left = _beats(["Dan handcuffs her wrists.", beat], sheet)
+            check(f"still on ({sheet}): {beat!r}", left == {"Mara": [("handcuffs", "wrists")]},
+                  str(left))
+    _ch, left = _beats(["Dan gags her.", "Dan pulls out a strip of tape."])
+    check("a strip pulled off the roll frees nobody", left == {"Mara": [("gag", "mouth")]},
+          str(left))
+    _ch, left = _beats(["Dan cuts the tape and presses it over her mouth."])
+    check("tape cut to length and pressed on is on her",
+          left == {"Mara": [("tape", "mouth")]}, str(left))
+
+
+def test_a_release_then_a_refastening_in_one_beat():
+    """REPORTED: "unlocks the handcuffs, then cuffs her wrists in front of her" read as
+    one event. Both happen, in the order written."""
+    print("\n=== a release then a refastening, in one beat ===")
+    for setup, beat, want in (
+            ("Dan zip ties her wrists behind her back.",
+             "Dan cuts the zip ties and ties her wrists with rope.", [("rope", "wrists")]),
+            ("Dan handcuffs her wrists behind her back.",
+             "Dan unlocks the handcuffs, then cuffs her wrists in front of her.",
+             [("cuffs", "wrists")]),
+            ("Dan cuffs her wrists.",
+             "Dan unlocks the cuffs and cuffs her wrists behind her back.",
+             [("cuffs", "wrists")]),
+            ("Dan ties her ankles with rope.",
+             "Dan cuts the rope and ties her ankles to the chair with fresh rope.",
+             [("rope", "ankles")]),
+            ("Dan handcuffs her wrists.",
+             "Dan unlocks the handcuffs and locks them to the bed frame.",
+             [("handcuffs", "wrists")])):
+        ch, left = _beats([setup, beat])
+        check(f"off, then on again: {beat!r}",
+              left.get("Mara") == want and ch["released"] and ch["applied"]
+              and "Dan" not in left, f"{left} {ch['released']} {ch['applied']}")
+    ch, _left = _beats(["Dan ties her ankles with rope.",
+                        "Dan cuts the rope and ties her ankles to the chair with fresh rope."])
+    check("...and the new rope is fastened where its own clause says",
+          [r.anchor for _w, r in ch["applied"]] == ["chair"], str(ch["applied"]))
+    ch, _left = _beats(["Dan handcuffs her wrists.",
+                        "Dan unlocks the handcuffs and locks them to the bed frame."])
+    check("...and the pair locked again by pronoun is fast where it was locked",
+          [r.anchor for _w, r in ch["applied"]] == ["bed frame"], str(ch["applied"]))
+    _ch, left = _beats(["Dan ties her wrists with rope, then cuts the rope."])
+    check("on, then off again: nothing left", not left, str(left))
+
+
+def test_a_piece_taken_off_stays_off():
+    """REPORTED: a removed blindfold still held. The sheet is read before every beat, and
+    a piece it lists came back on after a beat took it off. And a piece the state never
+    held -- worn, not put on -- still has its removal said."""
+    print("\n=== a piece taken off stays off ===")
+    sheet = {"Yusra": "she, 28, emerald dress, a silk blindfold over her eyes.",
+             "Casimir": "he, 30, black tuxedo."}
+    pron = {"Yusra": "she", "Casimir": "he"}
+    st = E.SceneState()
+    held = []
+    for i, b in enumerate(["Yusra sits at the table.", "Casimir unties the blindfold.",
+                           "Yusra gasps at the view.",
+                           "Casimir ties the blindfold over her eyes again.", "Yusra waits."], 1):
+        for n, d in sheet.items():
+            st.declare(n, d)
+        st.read(b, cast=list(sheet), shot=i, pronouns=pron)
+        held.append(bool(st.person("Yusra").hardware))
+    check("off from the beat that unties it, back on when a beat ties it again",
+          held == [True, False, False, True, True], str(held))
+    st = E.SceneState()
+    st.read("Casimir leads Yusra in, a silk blindfold over her eyes.", list(sheet), 1, pron)
+    ch = st.read("Casimir unties the blindfold.", list(sheet), 2, pron)
+    check("untying a piece the state never held still says it came off",
+          [r.item for _w, r in ch["released"]] == ["blindfold"], str(ch["released"]))
+
+
+def test_every_gag_wording_covers_the_mouth():
+    """REPORTED: gag wordings not read as gags, so nothing held the mouth and the scream
+    went out unmuffled. Longer strips, lips, seals, things stuffed in, muzzles."""
+    print("\n=== every gag wording covers the mouth ===")
+    for sheet in ("pronouns", "no pronouns"):
+        for beat in ("Dan presses a fresh strip of duct tape over her mouth.",
+                     "Dan slaps a long strip of duct tape over her mouth.",
+                     "Dan presses another strip of duct tape over her mouth.",
+                     "Dan presses a strip of silver duct tape over her mouth.",
+                     "Dan sticks a strip of black tape across her lips.",
+                     "Dan places a strip of duct tape over Mara's lips.",
+                     "Dan seals her lips with duct tape.",
+                     "Dan stuffs a cloth into her mouth.", "Dan stuffs a rag into her mouth.",
+                     "Dan pushes a ball gag into her mouth.",
+                     "Dan pushes a ball gag into her mouth and buckles it behind her head.",
+                     "Dan muzzles her.", "Dan muzzles her with a leather muzzle.",
+                     "Dan ducttapes her mouth.", "Dan ties a bandana over her mouth."):
+            _ch, left = _beats(["Mara sits on the bed.", beat], sheet)
+            check(f"over her mouth ({sheet}): {beat!r}",
+                  any(k[1] == "mouth" for k in left.get("Mara", []))
+                  and "Dan" not in left and all(k[1] == "mouth" for k in left["Mara"]),
+                  str(left))
+    _ch, left = _beats(["Dan stuffs a cloth in her mouth and tapes over it."])
+    check("tape over the cloth is on the same mouth",
+          left == {"Mara": [("gag", "mouth"), ("tape", "mouth")]}, str(left))
+    _ch, left = _beats(["Dan stuffs a rag into her mouth.", "Dan pulls the rag out of her mouth."])
+    check("...and a rag pulled out comes off", not left, str(left))
+    check("a muzzle keeps its own name",
+          [w for _c, _p, w, _a in E.hardware_spans("Dan muzzles her with a leather muzzle.")]
+          == ["leather muzzle"])
+    check("a scarf gag is named for the scarf",
+          [w for _c, _p, w, _a in E.hardware_spans("Dan gags her with a scarf.")]
+          == ["scarf gag"])
+    for beat in ("Mara holds a towel to her mouth.", "Dan presses a cloth over her mouth.",
+                 "Mara pulls her scarf up over her mouth.", "Mara is gagging on the smell.",
+                 "The muzzle of the gun touches her temple.", "Dan muzzles the dog.",
+                 "Mara wipes her mouth with a napkin."):
+        _ch, left = _beats([beat])
+        check(f"no gag: {beat!r}", not left, str(left))
+
+
+def test_a_named_object_is_not_a_state():
+    """REPORTED: a past-tense verb after a comma read as a state, so "Dan, after a long
+    pause, cuffed Mara to the radiator" put the cuffs on Dan."""
+    print("\n=== a named object is not a state ===")
+    for beat, want in (("Dan, after a long pause, cuffed Mara to the radiator.", "Mara"),
+                       ("Dan sat down, gagged Mara with a scarf.", "Mara"),
+                       ("Dan kneels, handcuffed Mara to the radiator.", "Mara"),
+                       ("Dan knelt beside the bed, handcuffed Mara to the frame.", "Mara"),
+                       ("Dan crouched, taped over Mara's mouth.", "Mara"),
+                       ("Dan stands guard, Mara cuffed to the radiator.", "Mara"),
+                       ("Mara sits, cuffed to the radiator while Dan watches.", "Mara"),
+                       ("Mara sits cuffed to the radiator while Dan watches.", "Mara"),
+                       ("Mara kneels on the concrete, her wrists cuffed behind her back "
+                        "while Dan watches.", "Mara")):
+        got = E.wearer_of(beat, ["Mara", "Dan"])
+        check(f"{want}: {beat!r}", got == want, got)
+
+
+def test_lying_to_a_side_is_lying_down():
+    """REPORTED: the lie-telling exclusions caught "lies to the side", "lies to his left"
+    and "lies again on the floor", and the lying hold went with them."""
+    print("\n=== lying to a side is lying down ===")
+    rx = [r for n, r in E._POSTURE_OF if n == "lying down"][0]
+    for text in ("Mara lies to the side.", "Mara lies to one side.", "Mara lies to his left.",
+                 "Mara lies to her right.", "Mara lies again on the floor.",
+                 "Mara lies to the left of Dan.", "Mara lies on the bed."):
+        check(f"lying down: {text!r}", bool(rx.search(text)))
+    for text in ("Mara lies to Dan.", "Mara lies to her mother.", "Mara lies to the police.",
+                 "Mara lies to him.", "Mara lies again.", "Mara lies again, then sleeps.",
+                 "Mara lies about the money.", "Mara is lying to him.", "white lies"):
+        check(f"not lying down: {text!r}", not rx.search(text))
+
+
+def test_the_applying_beat_records_the_piece():
+    """REPORTED: the shot that puts a piece on said it was already on. The sampler reads
+    the engine's applied record, so each of these must record the piece going on, on her."""
+    print("\n=== the applying beat records the piece ===")
+    for sheet in ("pronouns", "no pronouns"):
+        for beat in ("Dan grabs her wrists, binding them with rope.",
+                     "Dan attaches her wrists to the headboard with handcuffs.",
+                     "Dan ratchets the cuffs onto her wrists.",
+                     "Dan latches the cuffs onto her wrists.",
+                     "Dan closes the shackles around her ankles.",
+                     "Dan closes the handcuffs on her wrists.",
+                     "Dan fixes a collar around her neck.",
+                     "Dan cuffed her.", "Dan cuffed her to the radiator.",
+                     "Dan chained her ankles.", "Dan is cuffing her wrists.",
+                     "Dan gets the rope around her wrists.",
+                     "Dan pulls the rope tight around her wrists.",
+                     "Dan threads the chain through her cuffs.",
+                     "Dan forces her wrists into handcuffs.", "Dan wraps her in chains.",
+                     "Dan puts her in a straitjacket.",
+                     "Dan, with handcuffs in hand, grabs her wrists and cuffs them."):
+            ch, _left = _beats(["Mara stands by the window.", beat], sheet)
+            got = [(w, r.item) for w, r in ch["applied"]]
+            check(f"applied on her ({sheet}): {beat!r}",
+                  bool(got) and all(w == "Mara" for w, _i in got), str(got))
+    ch, _left = _beats(["Dan, with handcuffs in hand, grabs her wrists and cuffs them."])
+    check("...under the fuller name the beat gives it",
+          [r.item for _w, r in ch["applied"]] == ["handcuffs"], str(ch["applied"]))
+
+
 def main():
     test_two_things_in_one_beat()
     test_a_neck_is_not_behind_a_back()
@@ -818,6 +1044,13 @@ def main():
     test_only_a_real_release_takes_anything_off()
     test_a_gag_is_one_piece_on_the_right_mouth()
     test_every_piece_goes_on_the_right_body()
+    test_a_cut_or_an_escape_is_a_release()
+    test_a_release_then_a_refastening_in_one_beat()
+    test_a_piece_taken_off_stays_off()
+    test_every_gag_wording_covers_the_mouth()
+    test_a_named_object_is_not_a_state()
+    test_lying_to_a_side_is_lying_down()
+    test_the_applying_beat_records_the_piece()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

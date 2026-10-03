@@ -1439,6 +1439,124 @@ def static_for_shot(static, sheet, shot_sheet):
     return "\n".join(out)
 
 
+# WHAT THE OPENING PARAGRAPH DOES, AS OPPOSED TO WHAT IT IS. The paragraph is stamped
+# into every shot, so "Mara sits on the sofa reading a paperback. A dog barks
+# somewhere outside." sat her back down with the book and set the dog off again in
+# every later shot, whatever that shot's beat had her doing. REPORTED as characters
+# doing things the beat never wrote, and the beat losing its share of the prompt. The
+# place, the time, the light, the weather and the furniture are what the scene IS and
+# stay; a sentence that stages an action or a posture for somebody on the sheet, or an
+# event, is the opening shot's and is withheld after it. A sentence that names a
+# garment or a restraint always stays -- the removal scrub and static_wardrobe read
+# them, and what somebody wears is what IS.
+_SCENE_EVENT = re.compile(
+    r"\b(?:barks?|barking|rings?|ringing|buzz(?:es|ing)?|knocks?|knocking|slams?|"
+    r"slamming|bangs?|banging|crash(?:es|ing)?|shatters?|explodes?|honks?|beeps?|"
+    r"chimes?|howls?|screech(?:es|ing)?|pulls?\s+up|bursts?\s+open|swings?\s+open|"
+    r"creaks?\s+open|flies\s+open)\b", re.I)
+# ...but weather, light and the fixtures of a room are what the scene IS, sounding or
+# not: "The wind howls outside", "A fluorescent tube buzzes overhead" were withheld
+# after shot 1 as if they were events. REPORTED.
+_SCENE_FIXTURE = re.compile(
+    r"^\s*(?:the|a|an|some|distant|far-off)?\s*(?:\w+\s+){0,2}?"
+    r"(?:wind|winds|rain|thunder|lightning|storm|snow|hail|sleet|sea|waves|surf|river|"
+    r"stream|light|lights|tube|lamp|lamps|bulb|bulbs|neon|sign|signs|fridge|"
+    r"refrigerator|radiator|pipes?|clock|fan|heater|generator|air\s+conditioner|"
+    r"traffic|crickets|cicadas|insects|frogs|birds|surf|fire|fireplace|candles?|"
+    r"jukebox|radio|television|tv|bells?)\b", re.I)
+_SCENE_PRONOUN_ACTS = re.compile(
+    r"^\s*(?:she|he|they)\s+(?:\w+ly\s+)?(?!(?:is|was|are|were|has|had|have)\b)"
+    r"(?-i:[a-z]+(?:s|es|ed))\b", re.I)
+
+
+def _scene_key(sentence):
+    """One spelling of a sentence for matching it across terminate_lines and spacing."""
+    return " ".join(str(sentence or "").split()).rstrip(".!?;, ").lower()
+
+
+def scene_staging(first_para, sheet):
+    """{sentence key: (what stays of it, names in it)} for the opening paragraph's
+    sentences that stage something -- see _SCENE_EVENT above. What stays is the
+    sentence's setting ("On the sofa.") or "" when it names none."""
+    cast = [n for n, _ in sheet_lines(sheet or "") if n]
+    out, staged_last = {}, False
+    for line in str(first_para or "").split("\n"):
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            s = sentence.strip()
+            if not s:
+                continue
+            if engine.garments_in(s) or engine.hardware_spans(s) or restraint_words(s):
+                staged_last = False
+                continue
+            who = [n for n in cast
+                   if re.search(r"(?<![\w'’-])" + re.escape(n) + r"(?![\w'’-])", s)]
+            acts = (any(acts_in(s, n, sheet) for n in who)
+                    or bool(posture_in(s, who)) if who else False)
+            if not who and _SCENE_PRONOUN_ACTS.match(s):
+                acts = True
+                who = []
+            # A subject pronoun carries the staging on; "Her phone lies on the
+            # nightstand" is a thing, not her. REPORTED.
+            if not (acts or (not who and _SCENE_EVENT.search(s)
+                             and not _SCENE_FIXTURE.match(s))
+                    or (staged_last and re.match(r"\s*(?:she|he|they)\b", s, re.I))):
+                staged_last = False
+                continue
+            staged_last = True
+            setting = _setting_of(s)
+            if setting:
+                # The place, cut where the action resumes: "On the sofa reading a
+                # paperback" is still her reading.
+                setting = re.split(r",|\s+(?:and|while|as|then)\s+|\s+\w+ing\b",
+                                   setting.rstrip("."), maxsplit=1)[0].strip()
+                setting = (setting + ".") if len(setting.split()) >= 2 else ""
+            out[_scene_key(s)] = (setting, who, engine.posture_in(s))
+    return out
+
+
+def withhold_staging(text, staged, keep=(), lying=()):
+    """`text` without the opening paragraph's staging sentences -- see scene_staging --
+    each one replaced by its setting where it has one. A sentence about somebody in
+    `keep` stays: the shot that first shows them is where the paragraph put them, and a
+    body in hardware is held as it was placed. So does a body the paragraph laid down,
+    for as long as no beat has got them up (`lying`): lying there is what IS."""
+    if not staged or not str(text or "").strip():
+        return text
+    keep = set(keep or ())
+    lying = set(lying or ())
+    out = []
+    for line in str(text).split("\n"):
+        kept, said = [], set()
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            if not sentence:
+                continue
+            hit = staged.get(_scene_key(sentence))
+            if hit is None or (keep and set(hit[1]) & keep):
+                kept.append(sentence)
+                said.add(_scene_key(sentence))
+                continue
+            # ...the posture and the place only: "Mara lies on the bed reading a
+            # paperback" is "Mara is lying on the bed." The reading was shot 1's.
+            if hit[2] == "lying down" and hit[1] and set(hit[1]) <= lying:
+                _who = hit[1]
+                _subj = (_who[0] if len(_who) == 1
+                         else ", ".join(_who[:-1]) + " and " + _who[-1])
+                _place = str(hit[0] or "").rstrip(". ")
+                _place = (_place[:1].lower() + _place[1:]) if _place else "down"
+                kept.append(f"{_subj} {'is' if len(_who) == 1 else 'are'} lying {_place}.")
+                said.add(_scene_key(sentence))
+                if hit[0]:
+                    said.add(_scene_key(hit[0]))
+                continue
+            setting = hit[0]
+            if setting and _scene_key(setting) not in said:
+                kept.append(setting)
+                said.add(_scene_key(setting))
+        if kept:
+            out.append(" ".join(kept))
+    return "\n".join(out)
+
+
 _QUOTED = re.compile(r"\"[^\"]*\"|“[^”]*”|<d>.*?</d>", re.S)
 _DIALOGUE_TAG = re.compile(r"<\s*d\s*>(.+?)<\s*/\s*d\s*>", re.I | re.S)
 _CAPTION_TOKEN = re.compile(r"<\|(?:caption|lyrics)_(?:start|end)\|>", re.I)
@@ -1575,8 +1693,46 @@ def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
     return lens, note
 
 
-def pace_clause(need, have):
+# ACTIONS WITH AN END POINT. Spreading a beat across the shot only means something for
+# an action that finishes -- a walk to the door, picking something up, a door opening,
+# a garment coming off, sitting down. Said over "Mara sits on the bed", "Dan reads" or a
+# line of dialogue it asked a held posture or an ongoing activity to "finish on the last
+# frame", and the model invented an action to finish. REPORTED as characters doing
+# things the beat never wrote.
+_COMPLETIVE = re.compile(
+    r"\b(?:walk(?:s|ed)?|go(?:es)?|went|runs?|ran|cross(?:es|ed)?|head(?:s|ed)?|"
+    r"driv(?:e|es)|drove|climb(?:s|ed)?|mov(?:e|es|ed)|step(?:s|ped)?|crawl(?:s|ed)?|"
+    r"hurr(?:y|ies|ied)|rush(?:es|ed)?|return(?:s|ed)?|comes?|came|wanders?|wandered|"
+    r"stroll(?:s|ed)?|march(?:es|ed)?|backs?|backed)\s+(?:back\s+|over\s+|across\s+|up\s+|"
+    r"down\s+|out\s+|away\s+)?(?:to|into|toward|towards|across|through|onto|inside|"
+    r"outside|downstairs|upstairs|home|out\s+of|up\s+to|over\s+to)\b"
+    r"|\b(?:pick(?:s|ed)?|puts?|sets?|lays?|laid|takes?|took|pulls?|pulled|peels?|"
+    r"peeled|slips?|slipped)\s+(?:[\w'’-]+\s+){0,3}?(?:up|down|off|away|back|on)\b"
+    # Not "opens her eyes", "raises her left hand" or "looks left": a body part and
+    # a direction are not an errand finished. REPORTED.
+    r"|\b(?:opens?|opened|closes?|closed|shuts?|unlocks?|unlocked|locks?|locked)\s+"
+    r"(?:the|a|an|her|his|their|its)\b(?!\s+(?:eyes|mouth|lips|hands?|fists?|arms?|legs?))"
+    r"|\b(?:sits?|sat|lies|lay|kneels?|knelt)\s+down\b|\b(?:stands?|stood|gets?|got)\s+up\b"
+    r"|\b(?:arrives?|arrived|leaves|exits?|exited|enters?|entered)\b"
+    r"|\b(?:has|had|have)\s+left\b|\bleft(?=\s+(?:the|a|an|through|by|for|without|home|"
+    r"work)\b)"
+    # ...and the crossings and carries it missed: "crosses the room", "carries her to
+    # the bed". REPORTED.
+    r"|\bcross(?:es|ed)?\s+(?:the|a)\s+(?:\w+\s+)?(?:room|street|road|floor|hall|"
+    r"hallway|yard|lobby|kitchen|bar|courtyard|bridge|field|lawn|square|corridor|car\s+"
+    r"park|parking\s+lot)\b"
+    r"|\b(?:carr(?:ies|ied)|drags?|dragged|leads|led|walks|walked|takes|took|pulls?|"
+    r"pulled|pushes|pushed)\s+(?:her|him|them|(?-i:[A-Z][\w'’-]+))\s+(?:back\s+)?"
+    r"(?:to|into|toward|towards|across|through|onto|out\s+of|up\s+to|over\s+to)\b"
+    r"|\b(?:undress(?:es|ed)?|strips?|stripped|unbuttons?|unbuttoned|unzips?|unzipped)\b",
+    re.I)
+
+
+def pace_clause(need, have, beat=None):
     """Spread a short action across a long shot. "" when the shot is not long.
+
+    With `beat`, only an action that finishes, and never a spoken one -- see
+    _COMPLETIVE.
 
     thin_beats has always been able to SEE this -- one action sitting in a ten
     second shot -- and only ever reported it. The shot was still told what happens
@@ -1598,8 +1754,10 @@ def pace_clause(need, have):
         return ""
     if need <= 0 or (have - need) < 2.5 or have <= need * 1.25:
         return ""
-    return (" What the beat stages runs at an even pace across the whole shot, "
-            "beginning at the first frame and finishing on the last.")
+    if beat is not None and (has_speech(beat)
+                             or not _COMPLETIVE.search(engine.acted_text(str(beat)))):
+        return ""
+    return " The action runs at an even pace across the whole shot, finishing on the last frame."
 
 
 def thin_beats(beats, seconds):
@@ -1749,69 +1907,152 @@ _VOCAL_FROM = (
     (r"\bgasp(?:s|ing|ed)?\b",                      "gasping"),
 )
 
-EFFORT_BREATH = "unsteady breathing, with wordless gasps and moans of effort"   # see wordless()
+# BREATH, NOT A VOICE. Effort was heard as "unsteady breathing, with wordless gasps and
+# moans of effort": two vocals the beat never named, and a vocal is a mouth the model
+# opens. REPORTED as characters doing things the beat never wrote. A body working hard
+# breathes; anything louder is the author's to write.
+EFFORT_BREATH = "breathing"
 
+# OBJECT SOUNDS FROM A VERB ON THE OBJECT, NEVER FROM A MENTION. "A van with closed rear
+# doors" was heard as a door swinging and an engine running; "sits in cuffs" as cuffs
+# knocking; "in a grey sweater" as fabric rustling. Each is a sound of something
+# happening, so each asked the shot for an action nobody wrote. REPORTED as characters
+# doing things the beat never wrote. A sound now needs a verb acting on its object (or
+# the object itself doing the sounding: "the cuffs ratchet closed").
+_ON = r"\s+(?:at\s+|on\s+|against\s+|in\s+|with\s+)?(?:[\w'’-]+\s+){0,3}?"
+_GARMENT_WORDS = (r"(?:fabric|cloth|coat|jacket|shirt|t-shirt|dress|skirt|shorts|trousers|"
+                  r"pants|jeans|leggings|tights|socks|boots|shoes|gloves|top|vest|jumper|"
+                  r"sweater|hoodie|blouse|cardigan|robe|gown|towel|sheet|blanket)s?")
 _SOUND_FROM = (
     *_VOCAL_FROM,
     (r"\b(?:walk(?:s|ed|ing)?|step(?:s|ped|ping)?|pace[sd]?|enters?|runs?|"
      r"approach(?:es|ed)?|creep(?:s|ing)?|crept|sneak(?:s|ing)?|shuffl(?:e|es|ing)|"
-     r"stumbl(?:e|es|ing)|stagger(?:s|ing)?|feet)\b",  "footsteps"),
-    (r"\bchains?\b",                                "chain links dragging"),
-    (r"\A(?=[\s\S]*\b(?:handcuff|cuff|shackle|manacle)\w*\b)"
-     r"(?=[\s\S]*\b(?:ratchet(?:s|ed|ing)?|clos(?:e|es|ing|ed)|snap(?:s|ped|ping)?|"
-     r"lock(?:s|ed|ing)?|tighten(?:s|ed|ing)?|click(?:s|ed|ing)?)\b)",
+     r"stumbl(?:e|es|ing)|stagger(?:s|ing)?)\b(?!\s+(?:her|his|their)\s+(?:fingers?|"
+     r"hands?|tongue|eyes))",                       "footsteps"),
+    (r"\b(?:drag(?:s|ged|ging)?|rattl(?:e|es|ed|ing)|pull(?:s|ed|ing)?|yank(?:s|ed|ing)?|"
+     r"tug(?:s|ged|ging)?|jerk(?:s|ed|ing)?|lift(?:s|ed|ing)?|drop(?:s|ped|ping)?|"
+     r"wrap(?:s|ped|ping)?|loop(?:s|ed|ing)?|wind(?:s|ing)?|wound|thread(?:s|ed|ing)?|"
+     r"run(?:s|ning)?|pass(?:es|ed|ing)?|unlock(?:s|ed|ing)?|unwind(?:s|ing)?|"
+     r"shak(?:e|es|ing)|haul(?:s|ed|ing)?|thrash(?:es|ed|ing)?|struggl(?:e|es|ed|ing)|"
+     r"strain(?:s|ed|ing)?|fasten(?:s|ed|ing)?|padlock(?:s|ed|ing)?|clip(?:s|ped|ping)?)"
+     + _ON + r"chains?\b"
+     r"|\bchains?\s+(?:rattl|clank|clink|drag|jangl|swing|go(?:es)?\s+taut)\w*",
+                                                    "chain links dragging"),
+    (r"\b(?:snap(?:s|ped|ping)?|lock(?:s|ed|ing)?|click(?:s|ed|ing)?|clos(?:e|es|ed|ing)|"
+     r"ratchet(?:s|ed|ing)?|tighten(?:s|ed|ing)?|clamp(?:s|ed|ing)?|squeez(?:e|es|ed|ing))"
+     + _ON + r"(?:hand)?cuffs?\b"
+     r"|\b(?:hand)?cuffs?\s+(?:[\w'’-]+\s+){0,2}?(?:snap|lock|click|close|ratchet|tighten)\w*",
                                                     "cuffs ratcheting closed"),
-    (r"\b(?:handcuff(?:s|ed)?|cuffs?|cuffed|shackle[sd]?|manacle[sd]?)\b",
+    (r"\b(?:hand)?cuff(?:s|ed)\s+(?:her|him|them|(?-i:[A-Z][\w'’-]+))\b"
+     r"|\b(?:rattl(?:e|es|ed|ing)|shak(?:e|es|ing)|pull(?:s|ed|ing)?|tug(?:s|ged|ging)?|"
+     r"yank(?:s|ed|ing)?|jerk(?:s|ed|ing)?|twist(?:s|ed|ing)?)" + _ON
+     + r"(?:hand)?cuffs?\b|\b(?:shackl|manacl)(?:es|ed)\s+(?:her|him|them|(?-i:[A-Z]\w+))\b",
                                                     "cuffs knocking"),
-    (r"\b(?:bolt|latch|catch)(?:es|ed|ing)?\b",     "a metal bolt sliding"),
-    (r"\b(?:padlock(?:s|ed)?|locks?|locked|locking)\b(?!\s+(?:eyes|gaze|horns|onto))",
+    (r"\bbolt(?:s|ed|ing)\s+(?:the\s+)?(?:door|gate|window|hatch)\b"
+     r"|\blatch(?:es|ed|ing)\s+(?:the\s+)?\w+"
+     r"|\b(?:slid(?:e|es|ing)|draw(?:s|ing)?|drew|shoot(?:s|ing)?|shot|throw(?:s|ing)?|"
+     r"threw|lift(?:s|ed|ing)?|flick(?:s|ed|ing)?|undo(?:es)?|undid)\s+(?:the\s+)?"
+     r"(?:\w+\s+)?(?:bolt|latch)\b",                "a metal bolt sliding"),
+    (r"\b(?:locks|locking|padlocks|padlocked|padlocking|locked)\s+"
+     r"(?!(?:eyes|gaze|horns|onto|up\s+inside)\b)(?:it|them|the|a|her|his|their|up)\b"
+     r"|\b(?:snap(?:s|ped)?|click(?:s|ed)?)\s+(?:the\s+)?(?:\w+\s+)?(?:pad)?lock\b",
                                                     "a lock snapping shut"),
     (r"\b(?:drag(?:s|ged|ging)?|haul(?:s|ed|ing)?|shov(?:e|es|ing)|slid(?:e|es|ing))\b",
                                                     "something dragging on the floor"),
-    (r"\b(?:buckle(?:s|d)?|unbuckle(?:s|d)?|clasp(?:s|ed)?|strap(?:s|ped)?|harness)\b",
-                                                    "a buckle and leather creaking"),
-    (r"\b(?:pour(?:s|ed|ing)?|water|splash(?:es|ed)?|wet|puddle)\b",
+    (r"\b(?:un)?buckl(?:es|ed|ing)\s+(?:up\b|(?:the|her|his|their|it|a|him|them)\b)"
+     r"|\bstrap(?:s|ped|ping)\s+(?:her|him|them|the|it|(?-i:[A-Z][\w'’-]+))\b"
+     r"|\b(?:fasten(?:s|ed|ing)?|tighten(?:s|ed|ing)?|clasp(?:s|ed|ing)?|"
+     r"unfasten(?:s|ed|ing)?)\s+(?:the|her|his|their|a)\s+(?:\w+\s+)?"
+     r"(?:buckle|strap|harness|belt|collar)s?\b",   "a buckle and leather creaking"),
+    (r"\b(?:pour(?:s|ed|ing)?|splash(?:es|ed|ing)?)\b"
+     r"|\b(?:runs?|ran|turns?\s+on)\s+the\s+(?:tap|taps|water|bath|shower)\b"
+     r"|\bfills?\s+(?:the|a)\s+(?:\w+\s+)?(?:glass|bath|sink|kettle|bucket|tub)\b",
                                                     "water"),
-    (r"\b(?:van|car|engine|truck|motor)\b",         "an engine outside"),
-    (r"\b(?:fabric|cloth|coat|jacket|shirt|dress|skirt)\b", "fabric rustling"),
-    (r"\b(?:scissors|shears|cut(?:s|ting)?)\b",     "blades through fabric"),
-    (r"\bdoors?\b",                                 "a door on its hinges"),
+    (r"\b(?:start(?:s|ed)?|rev(?:s|ved)?|driv(?:e|es|ing)|drove|park(?:s|ed)?)\s+"
+     r"(?:[\w'’-]+\s+){0,2}?(?:van|car|engine|truck|motor)\b"
+     r"|\b(?:van|car|engine|truck|motor)\s+(?:[\w'’-]+\s+){0,1}?(?:starts?|revs?|roars?|"
+     r"idles?|pulls?\s+(?:up|away|in|out|off)|drives?\s+(?:off|away|up|in)|"
+     r"speeds?\s+(?:off|away))\b|\bdrives?\s+(?:off|away)\b",
+                                                    "an engine outside"),
+    (r"\b(?:cuts?|cutting|snips?|snipping|slices?|slicing)\s+(?:[\w'’-]+\s+){0,3}?"
+     r"(?:through\b|" + _GARMENT_WORDS + r"|clothes|sleeves?|bra|panties|underwear)"
+     r"|\b(?:scissors|shears)\s+(?:cut|snip|slice)\w*",
+                                                    "blades through fabric"),
+    (r"\b(?:open(?:s|ed|ing)?|clos(?:e|es|ed|ing)|shut(?:s|ting)?|slam(?:s|med|ming)?|"
+     r"push(?:es|ed|ing)?|pull(?:s|ed|ing)?|kick(?:s|ed|ing)?|swing(?:s|ing)?|swung|"
+     r"bang(?:s|ed|ing)?|knock(?:s|ed|ing)?\s+on|yank(?:s|ed|ing)?)\s+"
+     r"(?:open\s+|shut\s+)?(?:the|a|an|her|his|their|its|both|one|that|this)\s+"
+     r"(?:[\w'’-]+\s+){0,2}?doors?\b"
+     r"|\bdoors?\s+(?:[\w'’-]+\s+){0,1}?(?:opens?|closes?|shuts?|slams?|swings?|creaks?|"
+     r"bangs?)\b"
+     r"|\b(?:comes?|came|walks?|steps?|bursts?|goes|went|leaves|left)\s+(?:in\s+|out\s+)?"
+     r"through\s+the\s+(?:\w+\s+)?door\b",          "a door on its hinges"),
     (r"\b(?:drops?|dropped|throw(?:s|n)?|threw|toss(?:es|ed)?)\b",
                                                     "something landing"),
     (r"\b(?:smack(?:s|ed)?|slap(?:s|ped)?|hits?|strikes?|struck)\b", "a sharp impact"),
-    (r"\A(?=[\s\S]*\b(?:cuffs?|handcuffs?|shackles?|manacles?|chains?|ropes?|cords?|"
-     r"straps?|restraints?|bindings?|ties?|tape|harness|collar)\b)"
-     r"(?=[\s\S]*\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
-     r"strain(?:s|ing|ed)?|pull(?:s|ing|ed)?\s+against)\b)",
+    (r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
+     r"strain(?:s|ing|ed)?|pull(?:s|ing|ed)?|tug(?:s|ging|ged)?|yank(?:s|ing|ed)?|"
+     r"twist(?:s|ing|ed)?|jerk(?:s|ing|ed)?|fight(?:s|ing)?)\s+"
+     r"(?:against|at|in|on)\s+(?:the|her|his|their)\s+(?:\w+\s+)?"
+     r"(?:cuffs?|handcuffs?|shackles?|manacles?|chains?|ropes?|cords?|straps?|"
+     r"restraints?|bindings?|ties|tape|harness|collar)\b"
+     # ...or the hardware doing the holding while she fights it, in one sentence.
+     r"|\b(?:cuffs?|handcuffs?|shackles?|manacles?|chains?|ropes?|cords?|straps?|"
+     r"restraints?|bindings?)\s+(?:[\w'’-]+\s+){0,3}?(?:holds?|bites?|digs?|is\s+taut|"
+     r"are\s+taut|goes\s+taut|go\s+taut|pulls?\s+tight)\b[^.!?]*?\b(?:thrash(?:es|ing)?|"
+     r"struggl(?:es|ing)|writh(?:es|ing)|strain(?:s|ing)?|fights?|twists?)\b",
                                                     "restraints pulling taut"),
     (r"\b(?:thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|writh(?:e|es|ing|ed)|"
      r"strain(?:s|ing|ed)?|trembl(?:e|es|ing|ed)|shiver(?:s|ed|ing)?)\b"
      r"|\b(?:" + _EXERTION_NARROW_SRC + r")",
                                                     EFFORT_BREATH),
-    (r"\b(?:zip(?:s|ped|ping)?|unzip(?:s|ped|ping)?|zipper)\b", "a zip running"),
-    (r"\btap(?:e|es|ed|ing)\b",                     "tape pulling off"),
+    (r"\b(?:un)?zip(?:s|ped|ping)\b"
+     r"|\b(?:pull(?:s|ed|ing)?|tug(?:s|ged|ging)?|yank(?:s|ed|ing)?|draw(?:s|ing)?|"
+     r"run(?:s|ning)?|slid(?:e|es|ing))\s+(?:[\w'’-]+\s+){0,2}?zipper\b", "a zip running"),
+    (r"\b(?:tear(?:s|ing)?|tore|rip(?:s|ped|ping)?|peel(?:s|ed|ing)?|pull(?:s|ed|ing)?|"
+     r"yank(?:s|ed|ing)?|unroll(?:s|ed|ing)?|stretch(?:es|ed|ing)?|wrap(?:s|ped|ping)?|"
+     r"wind(?:s|ing)?|wound|press(?:es|ed|ing)?|smooth(?:s|ed|ing)?)\s+"
+     r"(?:[\w'’-]+\s+){0,3}?(?:duct\s+|gaffer\s+|packing\s+|masking\s+)?tape\b"
+     r"|\btap(?:es|ed|ing)\s+(?:up\s+)?(?:her|his|their|him|them|(?-i:[A-Z][\w'’-]+))\b",
+                                                    "tape pulling off"),
     (r"\A(?=[\s\S]*\b(?:bed|mattress|springs?|bunk|couch|sofa|headboard|"
      r"frame|table|desk|floorboards?)\b)"
      r"(?=[\s\S]*\b(?:rock(?:s|ed|ing)?|thrust(?:s|ing)?|grind(?:s|ing)?|"
      r"buck(?:s|ed|ing)?|writh(?:e|es|ing|ed)|arch(?:es|ed|ing)?|"
      r"thrash(?:es|ing|ed)?|struggl(?:e|es|ing|ed)|move(?:s|d)?\s+together|"
      r"shift(?:s|ed|ing)?\s+under)\b)",              "a bed frame working"),
-    (r"\bvelcro\b",                                 "velcro tearing open"),
-    (r"\b(?:rope|cord|twine|zip\s?tie)s?\b",        "rope creaking as it goes tight"),
-    (r"\b(?:shorts|trousers|pants|jeans|leggings|tights|socks|boots|shoes|"
-     r"gloves|top|vest|jumper|sweater|hoodie|trousers)\b", "fabric rustling"),
-    (r"\bkeys?\b",                                  "keys on a ring"),
+    (r"\b(?:rip(?:s|ped|ping)?|tear(?:s|ing)?|tore|pull(?:s|ed|ing)?|open(?:s|ed|ing)?|"
+     r"undo(?:es)?|undid)\s+(?:[\w'’-]+\s+){0,2}?velcro\b"
+     r"|\bvelcro\s+(?:straps?\s+)?(?:rips?|tears?)\b", "velcro tearing open"),
+    (r"\b(?:pull(?:s|ed|ing)?|tug(?:s|ged|ging)?|yank(?:s|ed|ing)?|tighten(?:s|ed|ing)?|"
+     r"cinch(?:es|ed|ing)?|knot(?:s|ted|ting)?|ties|tied|tying|wrap(?:s|ped|ping)?|"
+     r"loop(?:s|ed|ing)?|wind(?:s|ing)?|wound|haul(?:s|ed|ing)?|strain(?:s|ed|ing)?|"
+     r"thrash(?:es|ed|ing)?|struggl(?:e|es|ed|ing)|test(?:s|ed|ing)?|jerk(?:s|ed|ing)?)"
+     + _ON + r"(?:rope|cord|twine|zip\s?tie)s?\b"
+     r"|\b(?:rope|cord)s?\s+(?:creak|tighten|go(?:es)?\s+tight|bite|dig)\w*",
+                                                    "rope creaking as it goes tight"),
+    (r"\b(?:pull(?:s|ed|ing)?|tug(?:s|ged|ging)?|take(?:s|n)?|took|slip(?:s|ped|ping)?|"
+     r"peel(?:s|ed|ing)?|strip(?:s|ped|ping)?|unbutton(?:s|ed|ing)?|button(?:s|ed|ing)?|"
+     r"tear(?:s|ing)?|tore|rip(?:s|ped|ping)?|yank(?:s|ed|ing)?|drop(?:s|ped|ping)?|"
+     r"throw(?:s|n)?|threw|fold(?:s|ed|ing)?|shrug(?:s|ged|ging)?|puts?|putting|"
+     r"remov(?:e|es|ed|ing)|straighten(?:s|ed|ing)?|smooth(?:s|ed|ing)?|"
+     r"adjust(?:s|ed|ing)?|lift(?:s|ed|ing)?|hik(?:e|es|ed|ing)|wriggl(?:e|es|ed|ing)|"
+     r"kick(?:s|ed|ing)?)\s+(?:[\w'’-]+\s+){0,3}?" + _GARMENT_WORDS + r"\b"
+     r"|\b(?:undress(?:es|ed|ing)?|strips?\s+(?:off|naked|down))\b",
+                                                    "fabric rustling"),
+    (r"\b(?:jingl|rattl|fumbl|drop|pull|take|took|turn|hand|toss|throw|threw|pocket|grab|"
+     r"fish|dangl|pick)\w*\s+(?:[\w'’-]+\s+){0,3}?keys?\b"
+     r"|\bkeys?\s+(?:jingl|rattl|turn|clink)\w*",  "keys on a ring"),
     (r"\b(?:wakes?\s+up|woke|gasp(?:s|ing)?|pant(?:s|ing)?|breath(?:es|ing)?)\b",
                                                     "breathing"),
 )
 MAX_SOUNDS = 3      # a shot's audio needs a cue, not an inventory
-_VOCAL_RETIRES = (EFFORT_BREATH, "breathing")
+_VOCAL_RETIRES = (EFFORT_BREATH,)
 _VOCAL_BETWEEN = "breathing"
 # The vocals above, as a set: see the tail of sounds_for for why they are special-cased.
 _NAMED_VOCALS = frozenset(phrase for _, phrase in _VOCAL_FROM)
 _SOUND_SUPERSEDES = {
     "cuffs ratcheting closed": ("cuffs knocking",),
-    EFFORT_BREATH: ("breathing",),
     **{v: _VOCAL_RETIRES for v in _NAMED_VOCALS},
 }
 
@@ -2008,7 +2249,7 @@ _NOT_A_NAME = (r"(?!(?:The|A|An|It|This|That|These|Those|There|Then|Here|His|Her
                r"Someone|Nobody|Everyone|"
                r"TV|TVs|PA|Television|Televisions|Telly|Radio|Radios|Screen|Screens|"
                r"Speaker|Speakers|Stereo|Intercom|Phone|Telephone|Laptop|Monitor)\b)")
-_SAYS = (r"says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|calls?|"
+_SAYS = (r"says?|said|asks?|asked|whispers?|whispered|shouts?|shouted|yells?|yelled|calls?|"
          r"called|repl(?:y|ies|ied)|answers?|answered|adds?|added|murmurs?|"
          r"murmured|mutters?|muttered|tells?|told|begs?|begged|snaps?|snapped|"
          r"breathes?|breathed|hisses|hissed")
@@ -2170,13 +2411,6 @@ def non_latin_in(text):
     return out
 
 
-_ORDERED = re.compile(
-    r"\b(?:take|takes|taking|pull|pulls|remove|removes|undo|undoes|unfasten|"
-    r"unbuckle|unzip|slip|slips|step|steps|get|gets|lie|lies|lay|lays|sit|sits|"
-    r"kneel|kneels|stand|stands|turn|turns|come|comes|go|goes|put|puts|hold|"
-    r"holds|open|opens|close|closes)\b", re.I)
-
-
 _REMOTE = re.compile(r"\b(?:phone|phones|mobile|cell|radio|walkie|intercom|speaker|"
                      r"voicemail|call|calls|calling|texts?|message|letter|note|screen|"
                      r"video\s+call|through\s+the\s+(?:door|wall|window)|from\s+"
@@ -2234,61 +2468,134 @@ def worn_belt(line):
     return ""
 
 
-def told_to_act(beat, speakers, described):
-    """Who is being TOLD to do something in this beat's dialogue. [] when nobody.
+# WHAT AN ORDER OR AN INTENTION DEFERS, by kind. Only these hold anybody: an action
+# the shot could stage early -- moving, a posture, clothes coming off or going on, a
+# restraint. "Tells her to explain" or "is going to say sorry" defers nothing a body
+# could do too soon.
+_DEFER_WEAR = re.compile(
+    r"^(?:take|pull|get|slip|peel)\s+(?:[\w'’-]+\s+){0,3}?off\b"
+    r"|^(?:strip|undress|unbutton|unzip|unbuckle|unfasten|remove|disrobe|change)\b"
+    r"|^get\s+(?:un)?dressed\b|^dress\b|^put\s+(?:[\w'’-]+\s+){0,3}?on\b|^wear\b"
+    r"|^pull\s+(?:[\w'’-]+\s+){0,3}?down\b", re.I)
+_DEFER_MOVE = re.compile(
+    r"^(?:go|come|walk|run|leave|follow|move|step|crawl|climb|get|stand|sit|kneel|"
+    r"lie|lay|bend|lean|spread|arch|face|turn|roll|approach|back|hurry|crouch|squat|"
+    r"raise|lift|lower|drop|bow|hand|give|bring|fetch|open|close|"
+    r"tie|cuff|handcuff|gag|bind|blindfold|tape|chain|shackle|restrain|strap|lock)\b",
+    re.I)
+_DEFER_BIND = re.compile(
+    r"(?:tie|cuff|handcuff|gag|bind|blindfold|tape|chain|shackle|restrain|strap|lock)\b",
+    re.I)
+_ORDER_TO = re.compile(
+    r"\b(?:tells?|told|telling|asks?|asked|asking|orders?|ordered|ordering|commands?|"
+    r"commanded|instructs?|instructed|begs?|begged|begging|urges?|urged|warns?|warned|"
+    r"invites?|invited)\s+(?P<who>[\w'’-]+)\s+to\s+(?P<act>[^,;.!?]*)", re.I)
+_INTEND_TO = re.compile(
+    r"\b(?:(?:is|are|was|were|am|'s|'re)\s+(?:going|about)|plans?|planned|planning|"
+    r"threatens?|threatened|threatening)\s+to\s+(?P<act>[^,;.!?]*)", re.I)
 
-    Only where the quoted line contains an action verb, and only for people the
-    shot describes who are not the one speaking -- the listener is the one whose
-    body the instruction is about, and the one the model will move early."""
-    b = str(beat or "")
-    if not b:
-        return []
-    said = " ".join(m.group(0) for m in _QUOTED.finditer(b))
-    if not said:
-        return []
-    _lines = [x for x in re.split(r"(?<=[.!?])\s+", re.sub(r"</?d>|[\"“”]", " ", said))
-              if x.strip()]
-    if not (_ORDERED.search(said) or _ACTS_VERB.search(said)
-            or any(_COMMAND.match(x) for x in _lines)):
-        return []
-    talking = {n for n in (speakers or []) if n}
-    return [n for n in (described or []) if n and n not in talking]
+
+def _deferred_kind(act):
+    """'wear', 'move' or '' for the action an order or an intention puts off."""
+    a = str(act or "").strip()
+    if _DEFER_WEAR.match(a):
+        return "wear"
+    if _DEFER_MOVE.match(a):
+        return "move"
+    return ""
 
 
-# Verbs a line can ask for that _ORDERED did not know: the ones scenes like these run on.
-_ACTS_VERB = re.compile(
-    r"\b(?:strip|undress|spread|bend|crawl|cuff|tie|gag|blindfold|kiss|touch|suck|lick|"
-    r"spank|grab|choke|kneel|beg|open|show|face|climb|arch|roll|lean|walk|run|leave|"
-    r"move|drop|lift|raise|lower|unbutton|unzip|remove)\b", re.I)
-
-
-def ordered_in(beat, described, acted, sheet=""):
-    """Who a beat only ORDERS, THREATENS or INTENDS something for -- and who does not
-    act in it. [] when nobody.
+def deferred_holds(beat, described, acted, sheet="", speakers=()):
+    """[(name, kind)] for the people a beat only ORDERS or INTENDS a staged action for,
+    and who do not act in it. kind is 'wear' for clothes, 'move' for the rest.
 
     "Dan tells Ana to take off her shorts" asks; "Dan is going to tie her up" means to.
-    Neither does anything in this shot, and read by the model as a description of the
-    shot, both were performed in it -- a beat early. REPORTED as actions happening
-    before they are supposed to take place. Somebody the beat gives an action of their
-    own ("...and she kneels") is left to it."""
+    Neither does anything in this shot, and read as a description of it both were
+    performed in it -- a beat early. REPORTED as actions happening before they are
+    supposed to take place. Only the person the order is about -- the one told, or the
+    one who means to -- and only for a staged action: a bare "could", "wants to" or "is
+    told to answer" holds nobody. A line said to one person present ("Take off your
+    shirt.") is an order to them."""
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    people = [n for n in (described or []) if n]
     staged = engine.staged_text(beat)
-    found = list(engine._NOT_YET.finditer(staged))
-    if not found:
-        return []
-    # The one GIVING an order is doing the talking, not waiting on it: "Dan tells Ana
-    # to..." holds Ana, not Dan. The nearest name before the order verb.
-    _order = re.compile(r"^(?:tell|told|order|ask|command|instruct|beg|begg|plead|urg|"
-                        r"warn|dar|invit|motion|signal|gestur|beckon)", re.I)
-    givers = set()
-    for m in found:
-        if _order.match(m.group(0)):
-            _before = [(mm.start(), n) for n in (described or []) if n
-                       for mm in re.finditer(r"\b" + re.escape(n) + r"\b",
-                                             re.split(r"[.;!?]", staged[:m.start()])[-1])]
-            if _before:
-                givers.add(max(_before)[1])
-    return [n for n in (described or [])
-            if n and n not in givers and not acts_in(acted, n, sheet, described)]
+    found = []
+
+    def _named_before(text):
+        hits = [(mm.start(), n) for n in people
+                for mm in re.finditer(r"\b" + re.escape(n) + r"\b(?!['’]s)", text)]
+        return max(hits)[1] if hits else ""
+
+    def _by_pronoun(word, besides=""):
+        group = {"her": "she", "she": "she", "him": "he", "he": "he",
+                 "them": "they", "they": "they"}.get(word.lower(), "")
+        if not group:
+            return ""
+        pool = [n for n in people if n != besides]
+        fits = [n for n in pool if sheet_pronoun(rows.get(n, "")) == group]
+        if len(fits) == 1:
+            return fits[0]
+        if not any(sheet_pronoun(rows.get(n, "")) for n in pool) and len(pool) == 1:
+            return pool[0]
+        return ""
+
+    for m in _ORDER_TO.finditer(staged):
+        kind = _deferred_kind(m.group("act"))
+        if not kind or re.match(r"not\b", m.group("act").strip(), re.I):
+            continue
+        sentence = re.split(r"[.;!?]", staged[:m.start()])[-1]
+        giver = _named_before(sentence)
+        who = m.group("who")
+        name = next((n for n in people if n.lower() == who.lower()), "") \
+            or _by_pronoun(who, giver)
+        if name and name != giver:
+            found.append((name, kind))
+    for m in _INTEND_TO.finditer(staged):
+        kind = _deferred_kind(m.group("act"))
+        if not kind:
+            continue
+        sentence = re.split(r"[.;!?]", staged[:m.start()])[-1]
+        subj = re.search(r"\b(she|he|they)\s+$", sentence, re.I)
+        name = (_by_pronoun(subj.group(1)) if subj else "") or _named_before(sentence)
+        # THE PERSON IT IS DONE TO, for clothes and restraints: "Dan is going to take
+        # off her sweater", "threatens to strip her", "plans to tie her up" are about
+        # her sweater and her wrists. Holding Dan kept the wrong person in place and
+        # left hers free to go a beat early. REPORTED.
+        if kind == "wear" or _DEFER_BIND.match(m.group("act").strip()):
+            _obj = re.search(r"\b(?:(her|him|them|his|their)|(?-i:([A-Z][\w'’-]+)))\b",
+                             m.group("act"))
+            _target = ""
+            if _obj and _obj.group(1):
+                _target = _by_pronoun({"his": "him", "their": "them"}.get(
+                    _obj.group(1).lower(), _obj.group(1)), name)
+            elif _obj:
+                _target = next((n for n in people if n == _obj.group(2)), "")
+            if _target and _target != name:
+                name = _target
+        if name:
+            found.append((name, kind))
+    # A line said to the one person present who is not saying it.
+    said = [x.group(0) for x in _QUOTED.finditer(str(beat or ""))]
+    if said and not _REMOTE.search(str(beat or "")):
+        talking = set(speakers or [])
+        heard = [n for n in people if n not in talking]
+        if talking and len(heard) == 1:
+            for line in re.split(r"(?<=[.!?])\s+", " ".join(
+                    re.sub(r"</?d>|[\"“”]", " ", x) for x in said)):
+                line = line.strip()
+                if not line or line.rstrip(" .\"”").endswith("?"):
+                    continue
+                m = re.match(r"(?:(?:please|now|just|okay|ok|come\s+on)[,!]?\s+)?"
+                             r"(?P<neg>(?:don't|do\s+not|never)\s+)?(?P<act>.*)", line, re.I)
+                kind = _deferred_kind(m.group("act")) if m and not m.group("neg") else ""
+                if kind:
+                    found.append((heard[0], kind))
+    out = {}
+    for name, kind in found:
+        if acts_in(acted, name, sheet, described):
+            continue
+        out[name] = "wear" if "wear" in (kind, out.get(name)) else kind
+    return list(out.items())[:2]
 
 
 def acts_in(acted, name, sheet="", described=()):
@@ -2307,24 +2614,37 @@ def acts_in(acted, name, sheet="", described=()):
         t, re.I))
 
 
-def told_hold(listeners, heard=True):
-    """Give the listener something to be doing while the line is said -- and keep what
-    the line asks for OUT of this shot: where they are and what they wear, to the last
-    frame. Positively, and without stillness: the face goes on working. `heard` is
-    False for a threat or an intention nobody voices: there is nothing to listen to."""
+def told_hold(listeners, pronouns=None, wearing=()):
+    """Keep what an order or an intention asks for OUT of this shot: where the person
+    it is about is, and -- for clothes -- what they wear, to the last frame.
+
+    It used to give the listener something to do as well: "What is yet to come happens
+    in a later shot: Ana listens and reacts, staying in place". REPORTED as characters
+    doing things the beat never wrote, and the beat losing its share of the prompt. The
+    reaction was the node's, not the author's; where she is and what she wears is the
+    guarantee."""
     who = [n for n in (listeners or []) if n]
     if not who:
         return ""
-    one = len(who) == 1
-    said = who[0] if one else ", ".join(who[:-1]) + " and " + who[-1]
-    does = (("listens and reacts" if one else "listen and react") if heard
-            else ("reacts" if one else "react"))
-    return (f" What is yet to come happens in a later shot: {said} {does}, staying in "
-            f"place to the last frame, wearing what the sheet already lists.")
+    pron = dict(pronouns or {})
+    wear = set(wearing or ())
+    out = ""
+    for n in who[:2]:
+        p = pron.get(n, "")
+        place = (f"where {p} {'are' if p == 'they' else 'is'}" if p in ("she", "he", "they")
+                 else "in place")
+        poss = {"she": "her", "he": "his", "they": "their"}.get(p, f"{n}'s")
+        out += (f" {n} stays {place}"
+                + (f", wearing what {poss} entry lists" if n in wear else "") + ".")
+    return out
 
 
 # The tail both voice guards end on, defined once so they cannot drift apart.
-MOUTH_HOLD_REST = "every other mouth in the shot stays closed, those expressions moving"
+# THE MOUTHS ONLY. It ended "those expressions moving", which is the node directing a
+# face the beat never wrote. REPORTED as characters doing things the beat never said
+# and the beat losing its share of the prompt. Closed mouths and whose voice it is are
+# the guarantee; the silence pin on the audio branch does the rest.
+MOUTH_HOLD_REST = "every other mouth in the shot stays closed"
 _UP_TO_TWO_WORDS = r"(?:\s+(?!and\b|but\b|then\b|who\b|,\s*who\b)[\w,']+){0,2}?"
 
 
@@ -2369,6 +2689,22 @@ def vocal_sources_in(beat, sheet=""):
                 out.append((n, phrase))
                 break
     return out
+
+
+def second_vocal(beat, name, others=()):
+    """The vocal `name` makes as the SECOND verb of their own clause -- "Mara thrashes
+    and screams", "struggles against the cuffs and screams" -- with nobody else named
+    in between. "" when there is none. vocal_sources_in reads only a vocal right after
+    the name, so a gagged woman's scream written this way went unmuffled and unowned.
+    REPORTED. Used for the one gagged person in a shot."""
+    b = str(beat or "")
+    for pat, phrase in _VOCAL_SOURCE:
+        for m in re.finditer(r"\b" + re.escape(name) + r"\b([^.;!?]*?)\band\s+"
+                             r"(?:\w+ly\s+)?(?:" + pat + r")\b", b, re.I):
+            if not any(re.search(r"\b" + re.escape(o) + r"\b", m.group(1))
+                       for o in others if o and o != name):
+                return phrase
+    return ""
 
 
 def unpinned_vocal(beat):
@@ -2426,16 +2762,16 @@ def voice_sources(talkers, vocal, vocalisers, silent, pairs=None, rest=None):
     return f" {said[0].upper()}{said[1:]}."
 
 ONE_VOICE = (" Only the person speaking has their mouth moving; every other mouth "
-             "in the shot stays closed, those expressions moving.")
+             "in the shot stays closed.")
 
 # The same guards where the beat puts somebody's mouth to work -- a smile, a kiss, a
 # bitten lip, an angry face. "Stays closed" would argue with that, and the guard used
 # to stand down ENTIRELY there instead, leaving the listener's mouth as free as the
 # speaker's. REPORTED as other characters babbling in a beat where only one has a
-# line. Silent says what matters -- no voice -- and leaves the mouth its expression.
-MOUTH_SILENT_REST = "every other mouth in the shot is silent, those expressions moving"
+# line. Silent says what matters -- no voice -- and leaves the mouth to the beat.
+MOUTH_SILENT_REST = "every other mouth in the shot is silent"
 ONE_VOICE_BUSY = (" Only the person speaking has a voice; every other mouth in the "
-                  "shot is silent, those expressions moving.")
+                  "shot is silent.")
 
 
 _PLAIN_QUOTED = re.compile(r"[\"“]([^\"“”]{1,400}?)[\"”]")
@@ -3981,7 +4317,9 @@ RESTRAINT_HOLD_KEY = " ".join(dict.fromkeys(
               _n[:-1] if _n.endswith("s") and not _n.endswith("ss") else _n,
               _n.split()[-1])
     if w))
-MOUTH_HOLD = " Mouths in the shot stay closed, the expressions moving."
+# Closed, and nothing more: "the expressions moving" asked every face for a
+# performance the beat did not write -- see MOUTH_HOLD_REST.
+MOUTH_HOLD = " Mouths in the shot stay closed."
 
 
 # A GAGGED MOUTH IS NOT A MOUTH THE SHOT CAN USE.
@@ -4009,16 +4347,19 @@ def gag_hold(item, who="", new=False, muffled=False):
     mouth = (f"{who} mouth" if who in ("her", "his", "their")
              else f"{who}'s mouth" if who else "the mouth")
     taped = bool(re.search(r"\btape\b", item, re.I))
-    held = (f"stuck flat across {mouth}, sealing the lips from cheek to cheek" if taped
-            else f"fastened in place over {mouth}")
     if new:
         out = (f" The {item} goes {'across' if taped else 'over'} {mouth} during this "
                f"shot, and from the moment it is on it stays "
                f"{'stuck flat over the lips' if taped else 'fastened in place'} through "
                f"everything that happens after it, and in place at the last frame.")
     else:
-        out = (f" The {item} stays {held} from the first frame to the last, in place "
-               f"through every movement in the shot.")
+        # SHORT ONCE IT IS ON. The held form ran to 25-30 words in every shot after the
+        # taping ("sealing the lips from cheek to cheek from the first frame to the
+        # last, in place through every movement in the shot"), and "every movement"
+        # read as a call for some. REPORTED as gag shots getting heavier and the beat
+        # losing its share of the prompt. Where it is and that it stays is the hold.
+        out = (f" The {item} stays stuck flat across {mouth}." if taped
+               else f" The {item} stays fastened in place over {mouth}.")
     if muffled:
         out += (f" Every sound from behind it comes out muffled, the lips held shut "
                 f"under the {item.split()[-1]}.")
@@ -4038,20 +4379,30 @@ def gagged_in(state, names):
     return out
 
 
-def eyes_above(face, item):
-    """A face clause with its acting moved up to the eyes and brow, above a gag."""
+def eyes_above(face, item, who=""):
+    """A face clause with its acting moved up to the eyes and brow, above a gag --
+    `who`'s sentence only, when given."""
     if not face:
         return face
     head = (str(item or "").split() or ["gag"])[-1]
-    out = face.replace("played in the eyes and the mouth together.",
-                       f"played in the eyes and the brow above the {head}.")
-    out = out.replace("each played in the eyes and the mouth.",
-                      "each played in the eyes and the brow.")
-    return out.replace("the face shows the strain of it, the mouth set.",
-                       f"the face shows the strain of it in the eyes and the brow "
-                       f"above the {head}.")
+    lead = (re.escape(who) + r"['’]s") if who else r"(?:[\w'’-]+|The)"
+    out = re.sub(r"(" + lead + r" expression is [\w-]+)\.",
+                 lambda m: f"{m.group(1)}, in the eyes and the brow above the {head}.", face)
+    out = re.sub(r"(" + lead + r" faces? shows? the strain), the mouths? set\.",
+                 lambda m: f"{m.group(1)} in the eyes and the brow above the {head}.", out)
+    return out
 
 
+# A MOUTH IN USE, for the closed-mouth line only: "Sasha drinks the lemonade in one
+# go" and "blows out the candles" were told mouths stay closed. REPORTED. Not a voice,
+# so the silence pin is untouched.
+_MOUTH_EATS = re.compile(
+    r"\b(?:eat(?:s|ing)?|ate|drink(?:s|ing)?|drank|sip(?:s|ped|ping)?|gulp(?:s|ed|ing)?|"
+    r"swallow(?:s|ed|ing)?|blow(?:s|ing)?|blew|whistl(?:e|es|ed|ing)|pant(?:s|ed|ing)?|"
+    r"catch(?:es|ing)?\s+(?:her|his|their)\s+breath|caught\s+(?:her|his|their)\s+breath|"
+    r"bit(?:e|es|ing)?\s+(?:into|off|down)|chomp(?:s|ed|ing)?|munch(?:es|ed|ing)?|"
+    r"slurp(?:s|ed|ing)?|lick(?:s|ed|ing)?|suck(?:s|ed|ing)?\s+(?:on|at)|"
+    r"tast(?:e|es|ed|ing)|spit(?:s|ting)?|spat)\b", re.I)
 _MOUTH_WORKS = re.compile(
     r"\b(?:smil(?:e|es|ed|ing)|grin(?:s|ned|ning)?|smirk(?:s|ed|ing)?|"
     r"sneer(?:s|ed|ing)?|grimac(?:e|es|ed|ing)|pout(?:s|ed|ing)?|"
@@ -4080,8 +4431,6 @@ _DISTRESS = re.compile(
     r"freak(?:s|ing)?\s+out)\b"
     r"|\b(?:goes|went|going)\s+limp\b", re.I)
 
-DURESS_MOOD = " The mood is grim."
-DURESS_FACE = " The mood is grim; the face shows the strain of it, the mouth set."
 
 
 _OBJ_IS_THE_PERSON = (
@@ -4231,31 +4580,129 @@ _BOUND_HARDWARE = re.compile(
     r"chains?|chained|tape|taped|gag|gagged|bound|tied|bindings?)\b", re.I)
 
 
-def duress_face(beat, wearers, described, film_duress=False):
-    """One short sentence about the face, on a shot whose scene already stages duress.
+def _bound_by_beat(acted, people, sheet=""):
+    """Who among `people` this beat's own words put a strong binding act on."""
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    out = []
+    for m in _BINDING_ACT.finditer(str(acted or "")):
+        txt = m.group(0)
+        named = [n for n in people if re.search(r"\b" + re.escape(n) + r"\b", txt)]
+        if named:
+            out += named
+            continue
+        pr = re.search(r"\b(her|him|his|them|their|she|he|they)\b", txt, re.I)
+        group = {"her": "she", "she": "she", "him": "he", "his": "he", "he": "he",
+                 "them": "they", "their": "they", "they": "they"}.get(
+                     pr.group(1).lower() if pr else "", "")
+        fits = [n for n in people if group and sheet_pronoun(rows.get(n, "")) == group]
+        if len(fits) == 1:
+            out.append(fits[0])
+    return list(dict.fromkeys(out))
 
-    IMPERSONAL, the choice gaze_hold already made and for the same reason: a named
-    person is a person the model draws, and naming somebody twice in one shot is what
-    put a second girl in frame at the moment of cuffing. On the shot where that could
-    be ambiguous -- two people, one of them restrained -- the hardware hold has
-    already said "Every restraint on Nora", so the shot is not short of an
-    attribution. It is short of a sentence about her face."""
-    _emotion = emotion_in(beat)
-    if _emotion and described:
-        if len(described) < 2:
-            return mood_face(_emotion)
-        _pairs = emotion_pairs(beat, described)
-        return mood_faces(_pairs)
-    if mouth_performs(beat):
+
+# THE FACE OF SOMEBODY HELD, AND NOTHING ABOUT THE MOOD. "The mood is grim." went on
+# every shot of a film the node had judged bleak, captor-only shots included, and the
+# face clause rode on the same reading, impersonally. REPORTED as characters doing
+# things the beat never wrote, and the beat losing its share of the prompt. A film's
+# mood is the author's to set in the anchor; the face is said only for a described
+# person who is held, and named -- see duress_face.
+def strain_face(who):
+    """The held face, named: one sentence per person, so a gag's eyes-and-brow wording
+    lands on the gagged face alone -- see eyes_above."""
+    return "".join(f" {n}'s face shows the strain, the mouth set."
+                   for n in [n for n in (who or []) if n][:2])
+
+
+# A STRUGGLE OR AN EFFORT the beat gives somebody: the only thing, besides a feeling
+# or the binding itself, that puts a strained face on them. "Mara's face shows the
+# strain" went on every shot she was held in, read off the state -- three times the
+# old count, on shots where she sat reading. REPORTED as the node directing the actors.
+_EFFORT_SRC = (r"struggl(?:e|es|ed|ing)|thrash(?:es|ed|ing)?|writh(?:e|es|ed|ing)|"
+               r"strain(?:s|ed|ing)?|squirm(?:s|ed|ing)?|kick(?:s|ed|ing)?|jerk(?:s|ed|ing)?|"
+               r"buck(?:s|ed|ing)?|wriggl(?:e|es|ed|ing)|twist(?:s|ed|ing)?|fight(?:s|ing)?|"
+               r"fought|flail(?:s|ed|ing)?|heav(?:e|es|ed|ing)|wrench(?:es|ed|ing)?|"
+               r"(?:pull(?:s|ed|ing)?|tug(?:s|ged|ging)?|yank(?:s|ed|ing)?|"
+               r"work(?:s|ed|ing)?)\s+(?:hard\s+)?(?:at|against)|"
+               r"tr(?:ies|ied|ying)\s+to\s+(?:free|break|pull|wriggle|twist|get\s+free)")
+
+
+def _efforts_of(acted, people, sheet=""):
+    """Who among `people` this beat gives a struggle or an effort to -- by name, by a
+    name's body part ("Mara's wrists strain"), or by a pronoun only one of them takes."""
+    t = acted or ""
+    # ...one of several subjects too: "Mara and Ana struggle".
+    _also = r"(?:(?:\s*,\s*|\s+and\s+)(?-i:[A-Z][\w'’-]+))*"
+    out = [n for n in people if re.search(
+        r"\b" + re.escape(n)
+        + r"(?:['’]s\s+\w+)?\b" + _also + _UP_TO_TWO_WORDS
+        + r"\s+(?:" + _EFFORT_SRC + r")\b", t, re.I)]
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    for g in ("she", "he", "they"):
+        if re.search(r"\b" + g + r"\b" + _UP_TO_TWO_WORDS + r"\s+(?:" + _EFFORT_SRC
+                     + r")\b", t, re.I):
+            fits = [n for n in people if sheet_pronoun(rows.get(n, "")) == g]
+            if len(fits) == 1 and fits[0] not in out:
+                out.append(fits[0])
+    return out
+
+
+def _binders_of(acted, people, sheet=""):
+    """Who among `people` this beat has DOING a binding: the name or pronoun leading
+    the sentence or clause that holds a binding verb used as an act. "Dan forces her
+    wrists into handcuffs" read the cuffs onto Dan, and the strained face followed
+    them onto the man doing the cuffing. REPORTED."""
+    t = acted or ""
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    out = []
+    for sent in re.split(r"(?<=[.!?;])\s+", t):
+        acts = [m for m in _BIND_ANY.finditer(sent)
+                if not _state_form(sent, m)
+                and (_PARTICIPLE_FORM.search(m.group(0))
+                     or not _NOUN_BEFORE.search(sent[:m.start()]))]
+        if not acts:
+            continue
+        lead = sent[:acts[0].start()]
+        first = re.match(r"\s*(?:then\s+|now\s+)?([A-Z][\w'’-]*)", lead)
+        word = first.group(1) if first else ""
+        if word in people:
+            out.append(word)
+        elif word.lower() in ("she", "he", "they"):
+            fits = [n for n in people if sheet_pronoun(rows.get(n, "")) == word.lower()]
+            if len(fits) == 1:
+                out.append(fits[0])
+    return list(dict.fromkeys(out))
+
+
+def duress_face(beat, described, sheet="", held=None, applied_to=()):
+    """One short sentence per face: the feeling the beat names, or the strain of
+    somebody held. "" otherwise.
+
+    ONLY WHAT THE BEAT WROTE. A face is said for a feeling the beat names, for a held
+    person (`held`, read off the engine state by the caller) the beat gives a struggle
+    or an effort to, and for the person the binding goes on in this shot (`applied_to`,
+    or a binding the beat's own words put on them). It used to go on every shot a
+    held person was in. REPORTED as characters doing things the beat never wrote.
+    Never on whoever does the binding, unless the beat binds them too, and never on
+    somebody with a line: "the mouth set" on a speaker argues with the line."""
+    people = [n for n in (described or []) if n]
+    if not people:
         return ""
-    if not described:
+    pairs = emotion_pairs(beat, people, sheet)
+    if pairs:
+        return mood_faces(pairs)
+    acted = engine.acted_text(str(beat or ""))
+    if mouth_performs(acted):
         return ""
-    who = [n for n, ln in (wearers or []) if n and _BOUND_HARDWARE.search(ln or "")]
-    if not who and beat_stages_duress(beat, film_duress):
-        who = [n for n in (described or []) if n]
-    if who:
-        return DURESS_FACE
-    return DURESS_MOOD if film_duress else ""
+    bound = set(_bound_by_beat(acted, people, sheet))
+    doers = set(_binders_of(acted, people, sheet))
+    talking = set(speakers_in(beat, sheet))
+    held_set = set(held or ())
+    struggling = set(_efforts_of(acted, people, sheet))
+    who = [n for n in people
+           if n not in talking
+           and ((n in held_set and n in struggling)
+                or ((n in set(applied_to or ()) or n in bound) and n not in doers))]
+    return strain_face(who)
 
 
 _EMOTION = re.compile(
@@ -4272,43 +4719,75 @@ _EMOTION = re.compile(
 _BEAMS_AT = re.compile(r"\b(?:she|he|they|[A-Z][a-z]+)\s+beams\b")
 
 
+# FEELINGS THE BEAT GIVES SOMEBODY, NOT ONES IT MENTIONS. Read off the whole beat, a
+# line of dialogue ("I'm not angry") or a negation ("without panic") was handed to a face
+# as its expression. REPORTED as characters doing things the beat never wrote. Only the
+# acted text, outside quotes, and never a word with not/no/never/n't/without just before.
+def _negated(text, at):
+    """Is the word at `at` negated within the three words before it?"""
+    words = re.findall(r"[\w'’]+", str(text or "")[:at])[-3:]
+    return any(w.lower() in ("not", "no", "never", "without", "nor")
+               or w.lower().endswith(("n't", "n’t")) for w in words)
+
+
 def emotion_in(beat):
-    """The emotion this beat states, in the author's own word. "" when it states none."""
-    text = str(beat or "")
-    m = _EMOTION.search(text)
-    if m:
-        return m.group(0).lower()
-    return "beaming" if _BEAMS_AT.search(text) else ""
+    """The emotion this beat states, in the author's own word. "" when it states none.
+    Read from what the beat acts out -- see _negated."""
+    text = engine.acted_text(str(beat or ""))
+    for m in _EMOTION.finditer(text):
+        if not _negated(text, m.start()):
+            return m.group(0).lower()
+    m = _BEAMS_AT.search(text)
+    return "beaming" if m and not _negated(text, m.start()) else ""
 
 
-def emotion_owner(beat, names, word):
+def emotion_owner(beat, names, word, sheet=""):
     """Whose feeling it is: the person the beat puts in front of it. "" if nobody.
 
     The shape subjects_for uses, conjunction guard included, so "Dan holds the door
     and McKenna is terrified" does not hand the terror to Dan. Takes a name list
-    rather than a sheet because the caller already has the shot's cast."""
+    rather than a sheet because the caller already has the shot's cast; with `sheet`
+    a pronoun only one of them answers to counts as well ("she is terrified")."""
     b = str(beat or "")
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    tail = (_UP_TO_TWO_WORDS + r"\s+(?:is|was|looks?|looked|seems?|feels?|felt|sounds?|"
+            r"becomes?|became|goes|went|turns?|gets?|got)?\s*" + re.escape(word) + r"\b")
     for n in (names or []):
-        if n and re.search(r"\b" + re.escape(n) + r"\b" + _UP_TO_TWO_WORDS
-                           + r"\s+(?:is|was|looks?|looked|seems?|feels?|felt|sounds?|"
-                             r"becomes?|became|goes|went|turns?|gets?|got)?\s*"
-                           + re.escape(word) + r"\b", b, re.I):
+        if n and re.search(r"\b" + re.escape(n) + r"\b" + tail, b, re.I):
             return n
+    for n in (names or []):
+        p = sheet_pronoun(rows.get(n, "")) if n else ""
+        if (p in ("she", "he") and sum(1 for o in (names or [])
+                                       if sheet_pronoun(rows.get(o, "")) == p) == 1
+                and re.search(r"\b" + p + r"\b" + tail, b, re.I)):
+            return n
+    # ...and trailing its clause: "McKenna stares at the door, desperate" is hers, the
+    # clause's subject, where nobody else is named between.
+    for m in re.finditer(r",\s*(?:\w+ly\s+)?" + re.escape(word) + r"\b", b, re.I):
+        clause = re.split(r"[.;!?]|\b(?:and|but|while|as|then)\b", b[:m.start()])[-1]
+        named = [n for n in (names or []) if n and re.search(
+            r"\b" + re.escape(n) + r"\b(?!['’]s)", clause)]
+        if len(named) == 1 and re.match(r"\s*" + re.escape(named[0]) + r"\b", clause):
+            return named[0]
     return ""
 
 
-def emotion_pairs(beat, names):
+def emotion_pairs(beat, names, sheet=""):
     """[(who, feeling)] for the feelings this beat pins on people. Two at most.
 
     TWO PEOPLE CAN FEEL DIFFERENT THINGS IN ONE SHOT. "Dan is furious and McKenna is
     terrified" gave only the first of them, so one face was performing and the other
     was left to the prior -- the same half-fix as naming one of two speakers. Two at
     most, like the layering clause: a shot carrying four feelings has stopped being
-    about its beat."""
+    about its beat. Only what the beat acts out, never negated, never ownerless -- see
+    _negated."""
+    text = engine.acted_text(str(beat or ""))
     out, seen = [], set()
-    for m in _EMOTION.finditer(str(beat or "")):
+    for m in _EMOTION.finditer(text):
+        if _negated(text, m.start()):
+            continue
         word = m.group(0).lower()
-        who = emotion_owner(beat, names, word)
+        who = emotion_owner(text, names, word, sheet)
         if who and who not in seen:
             seen.add(who)
             out.append((who, word))
@@ -4320,33 +4799,22 @@ def emotion_pairs(beat, names):
 def mood_faces(pairs):
     """Say whose feeling is whose, for one or two people. "" for none."""
     ps = [(w, e) for w, e in (pairs or []) if w and e]
-    if not ps:
-        return ""
-    if len(ps) == 1:
-        return mood_face(ps[0][1], ps[0][0])
-    return (f" {ps[0][0]}'s face carries {ps[0][1]} and {ps[1][0]}'s carries "
-            f"{ps[1][1]}, each played in the eyes and the mouth.")
+    return "".join(mood_face(e, w) for w, e in ps[:2])
 
 
 def mood_face(word, who=""):
     """Say the face plays the feeling the author named. "" when they named none.
 
-    Their word, not a synonym: "terrified" and "grim" are not the same performance,
-    and the generic one was replacing the specific one on every shot.
-
-    NAMED ONCE A SECOND PERSON IS IN THE SHOT, which is the call gaze_hold already
-    makes for the same reason. Said impersonally, "the face carries it: the expression
-    is terrified" is a sentence about whoever is on screen -- so in a two-hander the
-    captor wore his victim's terror. Reported as actions being performed by all the
-    characters at once. With one person there is nobody else it could be, and naming
-    them again is a second mention of a person, which has its own cost."""
+    Their word, not a synonym: "terrified" and "grim" are not the same performance.
+    NAMED: said impersonally in a two-hander, the captor wore his victim's terror.
+    SHORT: "the face carries it ... played in the eyes and the mouth together" asked for
+    a performance on top of the author's word. REPORTED as characters doing things the
+    beat never wrote. The word, on its owner, is the whole of it."""
     if not word:
         return ""
     if who:
-        return (f" {who}'s face carries it: the expression is {word}, played in the "
-                f"eyes and the mouth together.")
-    return (f" The face carries it: the expression is {word}, played in the eyes and "
-            f"the mouth together.")
+        return f" {who}'s expression is {word}."
+    return f" The expression is {word}."
 
 
 def mouth_performs(beat):
@@ -4375,8 +4843,10 @@ def beat_puts_somebody_on_screen(beat, sheet=""):
     b = beat or ""
     if _PERSON_WORD.search(b):
         return True
-    return any(n and re.search(r"\b" + re.escape(n) + r"\b", b, re.I)
-               for n, _ in sheet_lines(sheet))
+    # Either part of a two-part name: "Maya" is "Maya Brooks" (see _name_forms). It now
+    # decides whether a shot describes anybody at all -- see _plain_people.
+    return any(n and re.search(r"\b" + re.escape(f) + r"\b", b, re.I)
+               for n, _ in sheet_lines(sheet) for f in _name_forms(n))
 
 FORM_HOLD = ", the same object in the same material."
 OTHERS_UNCHANGED = " Everyone else in the shot has on exactly what their own entry lists."
@@ -4511,6 +4981,11 @@ CUFF_RIGID_TAIL = cuff_rigid_sentence("wrists")
 CHAIN_RIGID_TAIL = " Its links keep their size and the run between them stays taut."
 _APPLY_NOW = re.compile(
     _A_DETERMINER +
+    # "Sits on the bench IN handcuffs", "WITH chains on her ankles": a noun after
+    # in/with is what she is wearing, and it read as the verb -- so a woman already
+    # cuffed was told the cuffs go on during the shot. REPORTED as restraints staged
+    # going on when the beat says they are on. "Puts her in handcuffs" is read below.
+    r"(?<!\bin\s)(?<!\bwith\s)"
     r"\b(?:cuffs|handcuffs|chains|ties|binds|locks|straps|tapes|gags|shackles|"
     r"fastens|secures|padlocks|buckles|clamps|clips|snaps|trusses|lashes|wraps|"
     r"restrains|immobili[sz]es|pinions|fetters|collars|hobbles|"
@@ -4528,7 +5003,17 @@ _APPLY_PHRASE = re.compile(
     r"|\bcovers\s+(?:her|his|their|the|[\w'’]+['’]s)\s+(?:mouth|lips|eyes|face)\s+with\b"
     r"|\b(?:loops?|wraps?|winds?|coils?|threads?|passes|runs|cinch(?:es)?|knots?|"
     r"laces?|hitch(?:es)?|slings?)\s+(?:[\w,']+\s+){0,5}?"
-    r"(?:around|round|through|under|over|behind|between)\b", re.I)
+    r"(?:around|round|through|under|over|behind|between)\b"
+    # ...and INTO them: "puts her in handcuffs", "locks Ana in chains".
+    r"|\b(?:puts|places|locks|clamps|gets|forces|clicks|snaps|shoves)\s+"
+    r"(?:[\w'’]+\s+){0,2}?in(?:to)?\s+(?:(?:a|the|some|her|his|their|steel|metal|"
+    r"leather|heavy|plastic|iron)\s+){0,2}(?:(?:hand)?cuffs|chains|shackles|manacles|"
+    r"irons|restraints|straitjacket)\b"
+    # ...and the piece itself slid, clicked or hooked ON, which the engine already read
+    # as going on: "slips the cuffs onto her wrists", "hooks a leash to her collar".
+    r"|\b(?:slips|slides|clicks|fits|presses|hooks|attaches|clips|fastens)\s+"
+    r"(?:[\w'’-]+\s+){0,3}?(?:" + "|".join(p for p, _n, _pt in engine.HARDWARE) + r")"
+    r"\s+(?:[\w'’]+\s+){0,1}?(?:on|onto|shut|to|around|round)\b", re.I)
 
 
 _TAPE = r"(?:duct|gaffer|packing|masking|electrical|parcel)"
@@ -4668,8 +5153,173 @@ def restraint_going_on(beat):
     the body at the first frame" on a woman who has been in cuffs for five shots.
     So the engine's vocabulary is mirrored in the -s forms above, deliberately, and
     test_smoke walks the two lists against each other."""
-    b = beat or ""
+    b = _worn_masked(beat or "")
     return bool(_APPLY_NOW.search(b) or _APPLY_PHRASE.search(b))
+
+
+# WHAT SHE IS ALREADY WEARING, named in passing: "in handcuffs", "with rope around her
+# wrists", "with her wrists cuffed". Read as hardware going on, a woman the beat
+# describes as tied to a chair was told the rope is "off the body at the first frame"
+# and goes on during the shot, with nobody there to tie it. REPORTED as restraints
+# staged going on when the beat says they are already on. Not where a verb in the same
+# clause puts them on: "puts her IN handcuffs" is a cuffing, and "ties her wrists to
+# the bedpost WITH rope" names what she is tied with.
+_WORN_PHRASE = re.compile(
+    r"\b(?:in|with|wearing|wears|wore)\s+"
+    r"(?:(?!(?:and|then|but|while|as|to|she|he|they|it|one)\b)[\w'’-]+\s+){0,3}?"
+    r"(?:" + "|".join(p for p, _n, _pt in engine.HARDWARE) + r")\b"
+    r"(?:\s+(?:\w+\s+)?(?:around|round|on|over|across|behind|between|at|through|"
+    r"about)\s+(?:her|his|their|the|[A-Z][\w'’-]*['’]s)(?:\s+\w+){1,2})?", re.I)
+_PUTS_INTO = re.compile(
+    r"\b(?:put|puts|putting|places|placing|locks|locking|clamps|clamping|gets|getting|"
+    r"forces|forcing|shoves|clicks|snaps)\s+(?:[\w'’]+\s+){0,2}$", re.I)
+_CLAUSE_CUT = re.compile(r"[,;:.!?]|\b(?:while|as|but|then|before|after|until)\b", re.I)
+# A BINDING VERB IN ANY TENSE. The -s list above answers "is this the shot it closes"
+# for the first restraint of a run; this one is wider, because "binding them with
+# rope", "attaches her wrists to the headboard with handcuffs" and "cuffed her" are
+# all somebody putting it on. REPORTED as the person being restrained dropped from the
+# shot, and the shot that cuffs her told the cuffs were on from its first frame.
+_BIND_ANY = re.compile(
+    r"\b(?:(?:hand)?cuff(?:s|ed|ing)?|zip-?ti(?:es|ed|eing)|ti(?:es|ed|e)|tying|"
+    r"bind(?:s|ing)?|bound|tap(?:es|ed|ing)|gag(?:s|ged|ging)?|blindfold(?:s|ed|ing)?|"
+    r"chain(?:s|ed|ing)?|shackl(?:es|ed|ing|e)|strap(?:s|ped|ping)?|lash(?:es|ed|ing)?|"
+    r"truss(?:es|ed|ing)?|secur(?:es|ed|ing|e)|fasten(?:s|ed|ing)?|"
+    r"restrain(?:s|ed|ing)?|tether(?:s|ed|ing)?|anchor(?:s|ed|ing)?|"
+    r"attach(?:es|ed|ing)?|bolt(?:s|ed|ing)?|pin(?:s|ned|ning)?|hitch(?:es|ed|ing)?|"
+    r"fix(?:es|ed|ing)?|link(?:s|ed|ing)?|connect(?:s|ed|ing)?|latch(?:es|ed|ing)?|"
+    r"moor(?:s|ed|ing)?|confin(?:es|ed|ing|e)|lock(?:s|ed|ing)?|clip(?:s|ped|ping)?|"
+    r"clamp(?:s|ed|ing)?|padlock(?:s|ed|ing)?|manacl(?:es|ed|ing|e)|"
+    r"collar(?:s|ed|ing)?|leash(?:es|ed|ing)?|pinion(?:s|ed|ing)?|fetter(?:s|ed|ing)?|"
+    r"hobbl(?:es|ed|ing|e)|buckl(?:es|ed|ing|e)|cinch(?:es|ed|ing)?|"
+    r"immobili[sz](?:es|ed|ing|e)|muzzl(?:es|ed|ing|e)|ratchet(?:s|ed|ing)?)\b", re.I)
+# ...and the forms of it that describe her rather than somebody's deed: after a be-verb
+# or a posture ("is handcuffed", "sits tied"), hung off a comma ("Mara, cuffed, falls",
+# "kneels, wrists cuffed"), after a body part ("her wrists cuffed to the headboard")
+# or in front of a noun ("her cuffed wrists"). Not "gets cuffed", "has her wrists
+# tied", "is cuffed by Dan" or "cuffed her": those are the act.
+_STATE_BEFORE = re.compile(
+    r"(?:\b(?:is|are|was|were|been|be|sits?|sat|sitting|lies|lay|lying|kneels?|knelt|"
+    r"kneeling|stands?|stood|standing|hangs?|hung|hanging|stays?|stayed|remains?|"
+    r"remained|waits?|waited|rests?|rested|slumps?|slumped|sprawls?|sprawled|"
+    r"crouches|crouched|leans?|leaned|perches?|perched|wakes?|woke|left|found|seen)"
+    r"(?:\s+[\w'’-]+){0,3}?"
+    r"|,\s*(?:(?:already|still|now|\w+ly)\s+)?(?:(?:her|his|their|the)\s+)?"
+    r"(?:(?:wrists?|ankles?|hands?|arms?|legs?|feet|mouth|lips|eyes|neck|knees?)\s+)?"
+    r"|\b(?:her|his|their|the|[A-Z][\w'’-]*['’]s)\s+"
+    r"(?:wrists?|ankles?|hands?|arms?|legs?|feet|mouth|lips|eyes|neck|knees?)"
+    r"|\b(?:her|his|their|the|a|an|[A-Z][\w'’-]*['’]s)"
+    r"|\b(?:already|still))\s*$", re.I)
+_STATE_NOT = re.compile(
+    r"\b(?:gets?|got|getting|has|have|had|having|being)\b(?:\s+[\w'’-]+){0,3}\s*$", re.I)
+_DEED_AFTER = re.compile(
+    r"\s+(?:her|him|them|it|the|a|an|some|by)\b|\s+(?-i:[A-Z][\w'’-]+)(?!['’]s)\b", re.I)
+_PARTICIPLE_FORM = re.compile(r"(?:ed|bound|tied)$", re.I)
+# The piece named, not a verb: "the cuffs", "in handcuffs", "a chain".
+_NOUN_BEFORE = re.compile(
+    r"\b(?:the|a|an|her|his|their|its|some|steel|metal|leather|heavy|iron|plastic|of|in|"
+    r"with|those|these|[A-Z][\w-]*['’]s)\s+$", re.I)
+# Which binding verbs speak for which piece: "cuffed" for the cuffs, "taped" for the
+# tape. A rope, a cord or a zip tie is tied, bound or secured, so those -- and the
+# piece no stem names -- answer to the generic verbs.
+_ITEM_STEM = (("cuff", r"(?:hand)?cuff|ratchet"), ("tape", r"tap"), ("gag", r"gag|muzzl"),
+              ("blindfold", r"blindfold"), ("chain", r"chain|padlock"),
+              ("shackle", r"shackl"), ("collar", r"collar"), ("leash", r"leash"),
+              ("manacle", r"manacl"), ("strap", r"strap|buckl"), ("hobble", r"hobbl"),
+              ("tether", r"tether"))
+_ACTS_ON = re.compile(
+    r"\b(?!(?:watches|sees|finds|leaves|keeps|eyes|studies|notices|spots|regards|"
+    r"faces|observes|joins|has|is|was|does|wears|sits|lies|stands)\b)"
+    r"[a-z]+(?:s|ed)\s+(?:her|him|them|(?-i:[A-Z][\w'’-]+))\b", re.I)
+
+
+def _state_form(text, m):
+    """Does the binding verb matched at `m` describe a state rather than an act? See
+    _STATE_BEFORE."""
+    word = m.group(0)
+    if not _PARTICIPLE_FORM.search(word):
+        return False
+    lead = text[:m.start()]
+    cuts = list(_CLAUSE_CUT.finditer(lead))
+    # Keep a comma itself: "Mara, cuffed," is hung off it.
+    clause = lead[cuts[-1].start():] if cuts else lead
+    if _STATE_NOT.search(clause):
+        return False
+    if _DEED_AFTER.match(text, m.end()):
+        return False
+    return bool(_STATE_BEFORE.search(clause))
+
+
+def _deed_in(clause):
+    """Does this clause hold a binding verb used as an act, in any tense?"""
+    return any(not _state_form(clause, m) for m in _BIND_ANY.finditer(clause))
+
+
+def _worn_spans(beat):
+    """[(start, end)] of every phrase in `beat` naming hardware as already worn."""
+    b = beat or ""
+    out = []
+    for m in _WORN_PHRASE.finditer(b):
+        lead = m.group(0).split()[0].lower()
+        clause = _CLAUSE_CUT.split(b[:m.start()])[-1]
+        if lead == "in" and _PUTS_INTO.search(clause):
+            continue
+        # WITH WHAT SHE IS TIED, not what she wears: a binding verb in the clause, in
+        # any tense ("binding them with rope", "cuffing her wrists with steel
+        # handcuffs"), or any verb acting on her ("attaches her wrists to the
+        # headboard with handcuffs"). Only a clause that does neither -- "sits with
+        # tape over her mouth", "gets up with rope around her wrists" -- is worn.
+        if lead == "with" and (_APPLY_NOW.search(clause + "with")
+                               or _APPLY_PHRASE.search(clause + "with")
+                               or _deed_in(clause) or _ACTS_ON.search(clause)):
+            continue
+        out.append((m.start(), m.end()))
+    return out
+
+
+def _worn_masked(beat):
+    """`beat` with its already-worn hardware phrases blanked out. See _WORN_PHRASE."""
+    b = beat or ""
+    for lo, hi in reversed(_worn_spans(b)):
+        b = b[:lo] + " " * (hi - lo) + b[hi:]
+    return b
+
+
+def staged_on_now(beat, item=""):
+    """For a piece the state recorded as applied in this beat: is it put on now, rather
+    than described as already on?
+
+    A first mention is not a fastening. "Jade sits tied to a chair with rope around
+    her wrists", "her wrists cuffed to the headboard", "Mara is handcuffed to the
+    radiator": each puts a restraint in the state for the first time, and each was
+    told it goes on during the shot. REPORTED. A piece the beat names as worn ("with
+    tape over her mouth while he ties her ankles") is not the one going on.
+
+    Everything else the state recorded IS going on. This used to require the -s verbs
+    of restraint_going_on as well, so "binding them with rope", "ratchets the cuffs onto
+    her wrists" and "cuffed her" were read as already on: the person being restrained
+    dropped out of her own shot and the cuffing shot said the cuffs were on from the
+    first frame. REPORTED. So the test is only for the worn wordings: a worn phrase
+    (see _worn_spans), or the piece's verb in a state form (see _STATE_BEFORE)."""
+    b = beat or ""
+    if item:
+        canon = {c for c, _p, _w, _a in engine.hardware_spans(str(item))}
+        head = str(item).split()[-1].lower().rstrip("s") if str(item).split() else ""
+        for lo, hi in _worn_spans(b):
+            _in = engine.hardware_spans(b[lo:hi])
+            if any(c in canon for c, _p, _w, _a in _in) or (
+                    head and any(str(w or c).split()[-1].lower().rstrip("s") == head
+                                 for c, _p, w, _a in _in)):
+                return False
+    verbs = [m for m in _BIND_ANY.finditer(b)
+             if _PARTICIPLE_FORM.search(m.group(0)) or not _NOUN_BEFORE.search(b[:m.start()])]
+    stems = [st for key, st in _ITEM_STEM if key in str(item).lower()]
+    mine = [m for m in verbs if stems and re.match(stems[0], m.group(0), re.I)]
+    if not mine:
+        # No verb of its own: the generic ones (tied, bound, secured), not another
+        # piece's -- "Mara, already cuffed, watches Dan tie her ankles" is new rope.
+        mine = [m for m in verbs
+                if not any(re.match(st, m.group(0), re.I) for _k, st in _ITEM_STEM)]
+    return not (mine and all(_state_form(b, m) for m in mine))
 
 
 # Keep this compact: it is repeated in every shot while restraints remain present.
@@ -4779,10 +5429,70 @@ _PEOPLE_MODIFIER = re.compile(
     r"unions?|clubs?|nights?|members?|badges?|handbooks?|policy|policies)\b)", re.I)
 
 
-def extras_in(beat):
-    """Does this beat stage people beyond the ones the sheet names, IN the frame?"""
+# ONE PERSON THE SHEET DOES NOT NAME: a waiter, an old man, a stranger, her mother, an
+# officer, children. Only crowds counted, so "A waiter brings the bill" was told there
+# is one person in the shot -- the count forbidding, as a positive fact, the waiter the
+# author just asked for. A plain man or woman needs "a"/"an": "the man" is as often
+# somebody the sheet does name. Not somebody only talked about, called or texted.
+_EXTRA_ROLE = (r"waiters?|waitress(?:es)?|bartenders?|barmen|barman|barmaid|clerks?|"
+               r"cashiers?|receptionists?|strangers?|officers?|policem[ae]n|police\s+officers?|"
+               r"cops?|guards?|soldiers?|doctors?|nurses?|drivers?|cabbies|cabbie|"
+               r"neighbou?rs?|shopkeepers?|landlord|landlady|priests?|vendors?|porters?|"
+               r"butlers?|maids?|mother|father|mum|mom|dad|brother|sister|grandmother|"
+               r"grandfather|husband|wife|boyfriend|girlfriend|children|kids|child|"
+               r"toddler|baby|teenagers?|passengers?|security\s+guards?|bouncers?")
+_EXTRA_ONE = re.compile(
+    r"(?<!\babout\s)(?<!\bof\s)(?<!\bcalls\s)(?<!\btexts\s)(?<!\bphones\s)"
+    r"\b(?:(?:a|an|another|the|her|his|their|some|two|three|several)\s+"
+    r"(?:(?:old|young|elderly|tall|short|older|younger|little|small|uniformed|masked|"
+    r"bearded|grey-haired|middle-aged|fat|thin|big|large)\s+){0,2}"
+    r"(?:" + _EXTRA_ROLE + r")"
+    r"|(?:a|an|another)\s+(?:(?:old|young|elderly|tall|short|older|younger|little|"
+    r"uniformed|masked|bearded|grey-haired|middle-aged)\s+){0,2}"
+    r"(?:man|woman|boy|girl|guy|lady|gentleman|person|figure|stranger)"
+    r"|children|kids)\b(?!['’]s\b)", re.I)
+
+
+# WHERE ONE ROLE NOUN IS A PERSON IN THE FRAME. As a modifier ("the passenger seat",
+# "the guard rail", "the baby monitor", "the driver door") it is a thing, and beside a
+# name ("her husband Dan", "Mara, a nurse,", "the guard Dan") it is somebody the sheet
+# already counts; "like a stranger" is nobody at all. Each took the two-person count off
+# a two-person shot. REPORTED.
+_ROLE_NEXT_OK = re.compile(
+    r"\s*(?:[.,;:!?)\"”]|$)|\s+(?:[a-z]+(?:s|ed)|is|was|are|were|has|had|will|can|"
+    r"who|that|and|or|with|in|on|at|by|from|to|into|onto|behind|beside|near|across|"
+    r"through|outside|inside|over|under|of|for|as|then|while|stands?|sits?|waits?|"
+    r"comes?|came|runs?|ran|walks?|looks?|takes?|took|gives?|gave|holds?|held|"
+    r"steps?|leans?|nods?|says?|said|asks?|tells?|calls?|shouts?)\b")
+
+
+def _heads_its_phrase(text, m):
+    """Does the role noun matched at `m` head its own noun phrase, as a person? See
+    _ROLE_NEXT_OK."""
+    after = text[m.end():]
+    if not _ROLE_NEXT_OK.match(after) or re.match(r"\s+(?-i:[A-Z][\w'’-]+)", after):
+        return False
+    before = text[:m.start()]
+    if re.search(r"\b(?:like|as)\s+$", before, re.I):
+        return False
+    # "Mara, a nurse," -- an appositive after a name.
+    if re.search(r"(?-i:[A-Z][\w'’-]+)\s*,\s*$", before):
+        return False
+    return True
+
+
+def extras_in(beat, singular=True):
+    """Does this beat stage people beyond the ones the sheet names, IN the frame?
+
+    `singular` counts one unnamed person too -- see _EXTRA_ONE. The film-long latch
+    reads crowds only, so one waiter does not take the body count off every shot
+    after the one he serves in."""
     b = str(beat or "")
     hits = list(_EXTRA_PEOPLE.finditer(b))
+    if singular and not hits:
+        _st = engine.staged_text(b)
+        if any(_heads_its_phrase(_st, m) for m in _EXTRA_ONE.finditer(_st)):
+            return not (_NOT_STAGED.search(b) or _REMOTE.search(b))
     if not hits:
         return False
     if all(_PEOPLE_MODIFIER.match(b, m.start()) for m in hits):
@@ -4801,13 +5511,32 @@ def extras_dismissed(beat):
 _CONTACT_SRC = (
     r"kiss(?:es|ed|ing)?|hug(?:s|ged|ging)?|embrac(?:e|es|ed|ing)|"
     r"straddl(?:e|es|ed|ing)|mount(?:s|ed|ing)?|caress(?:es|ed|ing)?|"
-    r"strok(?:es|ed|ing)?|cuddl(?:e|es|ed|ing)|hold(?:s|ing)?|held|"
-    r"grab(?:s|bed|bing)?|touch(?:es|ed|ing)?|caught|catch(?:es|ing)?|"
-    r"pull(?:s|ed|ing)?|take[sn]?|took|taking|push(?:es|ed|ing)?|"
+    r"strok(?:es|ed|ing)?|cuddl(?:e|es|ed|ing)|"
+    r"grab(?:s|bed|bing)?|touch(?:es|ed|ing)?|"
     r"danc(?:e|es|ed|ing)\s+with|lean(?:s|ed|ing)?\s+(?:on|against|into)|"
-    r"press(?:es|ed|ing)?\s+(?:against|into)|sit(?:s|ting)?\s+on|"
-    r"wraps?\s+(?:her|his|their)\s+arms?\s+around|"
-    r"reach(?:es|ed|ing)?\s+for|undress(?:es|ed|ing)?")
+    r"press(?:es|ed|ing)?\s+(?:against|into)|"
+    r"wraps?\s+(?:her|his|their)\s+arms?\s+around")
+# HANDLING VERBS ONLY WITH THE PERSON RIGHT AFTER THEM. "Dan takes Mara's coat", "pulls
+# the chair out for Mara", "reaches for the phone Mara left" each paired two bodies in
+# contact, from a verb whose object was a thing. REPORTED as characters doing things the
+# beat never wrote. "Takes Mara to the car", "pulls Mara close" still are.
+_HANDLING_CONTACT_SRC = (
+    r"hold(?:s|ing)?|held|caught|catch(?:es|ing)?|pull(?:s|ed|ing)?|take[sn]?|took|"
+    r"taking|push(?:es|ed|ing)?|sit(?:s|ting)?\s+on|sat\s+on|reach(?:es|ed|ing)?\s+for|"
+    r"undress(?:es|ed|ing)?")
+# ...and the person is the object itself, ending the clause or followed by a
+# preposition or a particle -- never a possessive.
+_CONTACT_OBJ_END = (r"(?!['’]s\b)(?=\s*(?:[.,;:!?]|$)|\s+(?:to|with|on|onto|in|into|"
+                    r"against|close|closer|tight|tighter|tightly|back|up|down|over|"
+                    r"around|round|from|by|across|toward|towards|for|at|under|through|"
+                    r"again|away|off|near|beside|gently|softly|hard|deeply|slowly|"
+                    r"tenderly|passionately|and|\w+ly)\b)")
+# ...a contact verb's person, whole or by a part of the body.
+_CONTACT_BODY_PART = (r"['’]s\s+(?:\w+\s+)?(?:neck|nape|hair|wrists?|hands?|face|"
+                      r"cheeks?|lips|mouth|shoulders?|arms?|back|waist|hips?|thighs?|legs?|"
+                      r"knees?|feet|foot|ankles?|chest|breasts?|stomach|belly|forehead|jaw|"
+                      r"chin|ears?|throat|fingers?|palms?|skin|body|head|side|temple|brow)\b")
+_CONTACT_PART_END = r"(?:" + _CONTACT_BODY_PART + r"|(?!['’]s\b))"
 _CONTACT_SPLIT = re.compile(r"(?<=[.;!?])\s+|\s+\b(?:while|as|and|then)\b\s+|,\s+", re.I)
 
 
@@ -4821,17 +5550,25 @@ def contact_pairs(beat, names):
     out = []
     for part in _CONTACT_SPLIT.split(b):
         for a in people:
-            m = re.search(r"\b" + re.escape(a) + r"\b\s+(?:\w+\s+){0,2}?(?:"
-                          + _CONTACT_SRC + r")\b", part, re.I)
-            if not m:
-                continue
-            tail = part[m.end():]
-            for c in people:
-                if c == a:
+            # A contact verb takes the person or a part of them ("kisses Mara's neck",
+            # "kisses Mara hungrily"); only a HANDLING verb needs the person as its
+            # whole object. Applied to both, the handling test unpaired every kiss on a
+            # neck and every adverb off its list. REPORTED.
+            for src, obj_end in ((_CONTACT_SRC, _CONTACT_PART_END),
+                                 (_HANDLING_CONTACT_SRC,
+                                  r"(?:" + _CONTACT_OBJ_END + r"|" + _CONTACT_BODY_PART
+                                  + r")")):
+                m = re.search(r"\b" + re.escape(a) + r"\b\s+(?:\w+\s+){0,2}?(?:"
+                              + src + r")\b", part, re.I)
+                if not m:
                     continue
-                if re.match(r"\W{0,14}(?:the\s+)?" + re.escape(c) + r"\b", tail, re.I):
-                    if not any({a, c} == set(p) for p in out):
-                        out.append((a, c))
+                tail = part[m.end():]
+                lead = (r"\s+(?:the\s+\w+\s+of\s+)?" if src is _CONTACT_SRC else r"\s+")
+                hit = next((c for c in people if c != a and re.match(
+                    lead + re.escape(c) + r"\b" + obj_end, tail, re.I)), None)
+                if hit:
+                    if not any({a, hit} == set(p) for p in out):
+                        out.append((a, hit))
                     break
         if len(out) >= 2:
             break
@@ -4847,10 +5584,11 @@ def contact_hold(pairs):
     ps = [(a, b) for a, b in (pairs or []) if a and b]
     if not ps:
         return ""
+    # Who is with whom, and no more: "those two bodies together" asked for more contact
+    # than the beat's own verb.
     if len(ps) == 1:
-        return f" The contact is {ps[0][0]} with {ps[0][1]}: those two bodies together."
-    return (f" The contact is {ps[0][0]} with {ps[0][1]}, and {ps[1][0]} with "
-            f"{ps[1][1]}: two pairs, each body with its own partner.")
+        return f" The contact is {ps[0][0]} with {ps[0][1]}."
+    return f" The contact is {ps[0][0]} with {ps[0][1]}, and {ps[1][0]} with {ps[1][1]}."
 
 
 def lora_facts(patcher):
@@ -5388,29 +6126,92 @@ def lying_facing(text):
 # all about the arms. The prior for a person on a bed with somebody working over them
 # is up on the elbows or the hands, so while Dan cuffed her or taped her mouth she
 # pushed herself up off the mattress. REPORTED: she should be lying flat on the bed.
-# Said in the opening tokens, like the pose, with the arms placed whenever nothing
-# else places them -- an unplaced arm is the one the prior props her up on.
+# Said with the arms placed whenever nothing else places them -- an unplaced arm is the
+# one the prior props her up on -- and only on the shots she is being worked on (see
+# handles_person), in the guard list: every other shot says "Mara is lying down.".
 _LYING_SURFACE = re.compile(
     r"\b(?:on|onto|across|to|in)\s+(?:the|a|an|her|his|their)\s+((?:\w+\s+)?"
     r"(?:bed|mattress|floor|floorboards|ground|carpet|rug|cot|bunk|futon|tiles|concrete|"
     r"sofa|couch|bench|table))\b", re.I)
 
 
-def lying_stays(who="", poss="", surface="", arms_free=False):
+# HANDS ON HER: somebody else's verb with her, or a part of her, as its object.
+_HANDLING = (
+    r"push(?:es|ed|ing)?|shov(?:e|es|ed|ing)|pull(?:s|ed|ing)?|drag(?:s|ged|ging)?|"
+    r"roll(?:s|ed|ing)?|flip(?:s|ped|ping)?|turn(?:s|ed|ing)?|lift(?:s|ed|ing)?|"
+    r"carr(?:y|ies|ied|ying)|grab(?:s|bed|bing)?|seiz(?:e|es|ed|ing)|grip(?:s|ped|ping)?|"
+    r"hold(?:s|ing)?|held|pin(?:s|ned|ning)?|press(?:es|ed|ing)?|strok(?:e|es|ed|ing)|"
+    r"caress(?:es|ed|ing)?|touch(?:es|ed|ing)?|straddl(?:e|es|ed|ing)|"
+    r"shak(?:e|es|ing)|slap(?:s|ped|ping)?|position(?:s|ed|ing)?|spread(?:s|ing)?|"
+    r"ties|tied|tying|tap(?:es|ed|ing)|(?:hand)?cuff(?:s|ed|ing)?|bind(?:s|ing)?|"
+    r"gag(?:s|ged|ging)?|blindfold(?:s|ed|ing)?|unties|untied|uncuff(?:s|ed)?|"
+    r"unlock(?:s|ed)?|frees|freed|releas(?:e|es|ed)|"
+    r"climb(?:s|ed|ing)?\s+(?:on|onto|over|on\s+top\s+of)|"
+    r"kneel(?:s|ing)?\s+(?:on|over|astride)|knelt\s+(?:on|over|astride)|"
+    r"sits?\s+(?:on|astride)|lies\s+(?:on|across)|lays?\s+(?:on|over|across)")
+_HANDLED_PART = (r"(?:hair|face|cheeks?|arms?|wrists?|legs?|ankles?|shoulders?|back|"
+                 r"hips?|waist|head|neck|throat|body|chin|hands?|thighs?|knees?|feet|"
+                 r"foot|stomach|belly|side|chest|mouth|lips|jaw|elbows?)")
+_OBJECT_TAIL = (r"(?=\s*(?:[,.;!?]|$)|\s+(?:down|up|over|onto|into|on|off|back|away|to|"
+                r"towards?|across|by|and|then|with|from|against|out|in|closer|tight|"
+                r"tighter|flat|close|around|round|forward|upright|aside|still|face)\b)")
+
+
+def handles_person(acted, name, sheet="", described=()):
+    """Does somebody ELSE put their hands on `name` in this beat -- "Dan pushes her
+    down", "Dan strokes her hair", "Dan rolls Mara onto her stomach"? Her own verbs
+    ("Mara rolls onto her side") are not handling, and neither is a beat about his
+    phone. Used to keep the lying hold to the shots she is being worked on."""
+    t = str(acted or "")
+    if not name or not t:
+        return False
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    pron = sheet_pronoun(rows.get(name, ""))
+    others = [n for n in (described or []) if n and n != name]
+    objs = [re.escape(name)]
+    _shared = any(sheet_pronoun(rows.get(o, "")) == pron for o in others) if pron else False
+    if pron in ("she", "he") and not _shared:
+        objs.append({"she": "her", "he": "him"}[pron])
+    elif not pron and others:
+        objs += ["her", "him"]
+    poss = [re.escape(name) + r"['’]s"]
+    if pron in ("she", "he") and not _shared:
+        poss.append({"she": "her", "he": "his"}[pron])
+    elif not pron and others:
+        poss += ["her", "his"]
+    rx = re.compile(
+        r"\b(?:" + _HANDLING + r")\s+(?:[\w'’]+\s+){0,2}?"
+        r"(?:(?:" + "|".join(poss) + r")\s+(?:\w+\s+)?" + _HANDLED_PART + r"\b"
+        r"|(?:" + "|".join(objs) + r")\b" + _OBJECT_TAIL + r")", re.I)
+    _self = {"she": "she", "he": "he"}.get(pron, "")
+    for m in rx.finditer(t):
+        sentence = re.split(r"[.;!?]", t[:m.start()])[-1]
+        subj = [(x.start(), x.group(0)) for x in re.finditer(
+            r"\b(?:" + "|".join(re.escape(n) for n in [name] + others)
+            + r"|she|he)\b(?!['’]s)", sentence, re.I)]
+        if not subj:
+            continue
+        last = subj[-1][1]
+        if last == name or (_self and last.lower() == _self):
+            continue
+        if last.lower() in ("she", "he") and not pron:
+            continue                # with no pronoun on the sheet it may be her
+        return True
+    return False
+
+
+def lying_stays(who="", surface=""):
     """The sentence keeping a RESTRAINED lying body lying for the whole shot.
 
     Short and plain on purpose. It said "her weight down on it the whole time ...
     while it is done to her", which a video model reads as intimate staging -- REPORTED
     as every scene drifting that way -- and it fired for anybody lying down at all, a
     woman in bed with a fever included. It is for the body being restrained, which is
-    what it was asked for, and says only that she stays down."""
+    what it was asked for, and says only that she stays down. Not where her arms are:
+    "her arms resting at her sides" placed arms no beat mentioned. REPORTED."""
     subj = who or "The body"
-    poss = poss or ("its" if not who else "the")
-    out = (f" {subj} stays lying flat{f' on the {surface}' if surface else ''} "
-           f"through the whole shot")
-    if arms_free:
-        out += f", {poss} arms resting at {poss} sides"
-    return out + "."
+    return (f" {subj} stays lying flat{f' on the {surface}' if surface else ''} "
+            f"through the whole shot.")
 
 
 def facing_clause(facing):
@@ -5685,14 +6486,17 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
         # A CHAIN IS DRAWN TO ITS FULL LENGTH. A pair of cuffs has no length to draw
         # -- it has two rings a fixed distance apart -- and telling the model metal is
         # at full length between two wrists is telling it to draw a chain there.
+        # THE POSITION, NOT A STRUGGLE. Both forms ended "and the body strains against it
+        # while the fastenings hold" -- written to keep a posed body from freezing, and
+        # read as a direction: every later shot of her kneeling asked her to fight the
+        # cuffs. REPORTED as characters doing things the beat never wrote. That the
+        # position keeps is the hold; what the body does in it is the beat's.
         if item and _CUFF_FORM.search(item) and not re.search(r"\bchain", item, re.I):
             out += ("; the rings are locked where they are and that spacing does not "
-                    "change, so the position it fixes is the position that keeps, and "
-                    "the body strains against it while the fastenings hold")
+                    "change, so the position it fixes is the position that keeps")
         else:
             out += (f"; {_stuff} {_drawn} already drawn to {'their' if _stuff == 'they' else 'its'} "
-                    "full length, so the position it fixes is the position that keeps, "
-                    "and the body strains against it while the fastenings hold")
+                    "full length, so the position it fixes is the position that keeps")
     elif rigid:
         out += rigid_tail(item, part or held_part([item] if item else []), plural,
                           where=where)
@@ -5797,8 +6601,10 @@ _BINDING_VERB = re.compile(
     r"pinned|attached|affixed)\b", re.I)
 
 
+# Said only where the BODY turns (see rotates_in), and without "as the view comes
+# round", which asked the camera for an orbit nobody wrote.
 TURN_HOLD = (" What is on the body now is all that is on it, front, side and behind, and "
-             "whatever is fastened stays fastened and closed as the view comes round.")
+             "whatever is fastened stays fastened and closed.")
 
 _TURN_CUE = re.compile(
     r"\b(?:turn(?:s|ed|ing)?|rotat(?:es?|ed|ing)|spin(?:s|ning)?|swivel(?:s|led)?|"
@@ -5833,6 +6639,37 @@ def body_moved(text, names=()):
 def turns_in(text, names=()):
     """Does this beat rotate a body, move one, or bring the view around it?"""
     return bool(_TURN_CUE.search(text or "")) or body_moved(text, names)
+
+
+# A WHOLE BODY TURNING, and nothing less. TURN_HOLD fired on any "turn": the page, the
+# key, the light off, her head, "turns to him", a body carried across a room. Each
+# added a sentence about every side of the body to a beat that showed none of them.
+# REPORTED as the beat losing its share of the prompt to clauses it never asked for.
+_ROTATES = re.compile(
+    r"\b(?:turn(?:s|ed|ing)?|spin(?:s|ning)?|spun|swivel(?:s|led|ling)?|"
+    r"rotat(?:es?|ed|ing)|whirl(?:s|ed|ing)?)\s+(?:right\s+|slowly\s+|quickly\s+)?"
+    # ...round on the spot, not "turns around the corner": that is a walk. REPORTED.
+    r"(?:a)?round\b(?!\s+(?:the|a|an)\s+(?:corner|bend|block|building|car|truck|van|"
+    r"table|room|desk|counter|bar|back|side|front))"
+    r"|\b(?:turn(?:s|ed|ing)?|roll(?:s|ed|ing)?|flip(?:s|ped|ping)?)\s+(?:right\s+)?over\b"
+    r"|\bturn(?:s|ed|ing)?\s+(?:to\s+face\s+)?away\b"
+    r"|\bturn(?:s|ed|ing)?\s+(?:her|his|their)\s+back\b"
+    # A body spinning, not a thing spun: "twirls her hair", "spins the bottle".
+    # REPORTED.
+    r"|\b(?:spin(?:s|ning)?|spun|pirouett(?:e|es|ed|ing)|twirl(?:s|ed|ing)?)\b"
+    r"(?!\s+(?:the|a|an|her|his|their|its|some|this|that)\b)"
+    r"|\broll(?:s|ed|ing)?\s+(?:over\s+)?onto\s+(?:her|his|their)\s+(?:side|back|front|"
+    r"stomach|belly|face)\b"
+    r"|\b(?:roll(?:s|ed|ing)?|flip(?:s|ped|ping)?|turn(?:s|ed|ing)?|spin(?:s|ning)?|spun|"
+    r"twirl(?:s|ed|ing)?)\s+(?:her|him|them|"
+    r"(?-i:[A-Z][\w'’-]+))\s+(?:over|onto|around|round|face\s+down|face\s+up)\b"
+    r"|\bfrom\s+behind\b|\bback\s+to\s+the\s+camera\b"
+    r"|\bshows?\s+(?:her|his|their)\s+back\b|\bfaces?\s+(?:away|the\s+wall)\b", re.I)
+
+
+def rotates_in(text):
+    """Does this beat turn a whole body round -- see _ROTATES?"""
+    return bool(_ROTATES.search(text or ""))
 
 
 FALL_HOLD = (" A bound body falls as one piece: the fastened limbs stay fastened and travel "
@@ -5896,7 +6733,10 @@ _FALL_CUE = re.compile(
     # Falls that never say "fall". REPORTED as bound hands catching the body: every
     # one of these went out with no fall guard at all.
     r"trip(?:s|ped|ping)?\s+(?:over|on|up|and)|tumbl(?:e|es|ed|ing)|"
-    r"sprawl(?:s|ed|ing)?|pitch(?:es|ed|ing)?\s+(?:forwards?|backwards?|over|headlong)|"
+    # Sent sprawling, not sprawled: "sprawls on the sofa" is lying down -- the
+    # posture table has it -- and was read as both a posture and a fall.
+    r"(?:sends?|sent|goes|went|knocks?|knocked)\s+(?:(?:her|him|them|[A-Z][\w-]+)\s+)?"
+    r"sprawling|pitch(?:es|ed|ing)?\s+(?:forwards?|backwards?|over|headlong)|"
     r"(?:knees|legs)\s+(?:buckle|buckled|give\s+way|gave\s+way|give\s+out|gave\s+out)|"
     r"crash(?:es|ed|ing)?\s+(?:down|(?:on|onto|to|into)\s+(?:the|a)\s+(?:\w+\s+)?"
     + _LANDING + r")|"
@@ -5925,6 +6765,59 @@ _PERSON_FALLER = re.compile(
     r"[A-Z][\w-]{1,24})\b")
 
 
+# Falls that are not a body going down: asleep, silent, in love, behind, apart; a
+# voice dropping to a whisper; somebody stumbling over their words; going down the
+# stairs or down on one knee.
+_NOT_A_FALL = re.compile(
+    # "Flat", "through", "under" and "away" only in their non-body senses: "the deal
+    # falls through", "falls under his spell". "Mara falls flat on her back", "falls
+    # through the ice" and "falls under the table" are bodies going down, and a thing
+    # falling flat is no person anyway -- the subject test below sees to it. REPORTED
+    # as the bound-fall hold lost.
+    r"(?:falls?|fell|falling)\s+(?:\w+ly\s+)?(?:asleep|silent|quiet|still|apart|behind|"
+    r"for\b|in\s+love|ill|short|open|into\s+(?:place|line|step|silence|a\s+rhythm|"
+    r"conversation|a\s+doze|a\s+sleep|sleep)|in\s+with|on\s+deaf|"
+    r"(?:through|away)(?=\s*(?:[.;,!?]|$))|under\s+(?:(?:his|her|their|the|a|an)\s+)?"
+    r"(?:spell|suspicion|control|influence|sway|scrutiny|category|heading|"
+    r"jurisdiction|command))"
+    # Down on a knee is a kneel. REPORTED as "drops to one knee" staged as a full fall
+    # onto the shoulder, hip or side.
+    r"|(?:drops?|dropped|dropping|sinks?|sank|goes|went)\s+(?:down\s+)?(?:on)?to\s+"
+    r"(?:one|a|her|his|their|both)\s+(?:knee|knees|crouch|squat)\b"
+    r"|(?:stumbl\w*|trip\w*)\s+(?:over|through|on)\s+(?:(?:her|his|their|the|a|an)\s+)?"
+    r"(?:own\s+|first\s+|next\s+)?(?:words?|lines?|apology|answer|sentence|name|reply|"
+    r"speech|explanation|excuse|question|response|vows?)\b"
+    r"|drops?\s+to\s+(?:a\s+)?(?:whisper|murmur|hush|mutter)"
+    r"|(?:goes|went)\s+down\s+(?:on\b|the\s|a\s|to\s+the\s+(?:basement|cellar|lobby|"
+    r"kitchen|beach|street|shop|bar|car))", re.I)
+# What a person is called when they are the subject. A capital that is not a name --
+# "Night falls", "Silence falls" -- is the thing coming down, not somebody.
+_FALLER_HEAD = frozenset(
+    "she he they her his their him them herself himself themselves body man woman "
+    "men women boy girl guy person figure guard officer stranger driver".split())
+_NOT_A_FALLER = frozenset(
+    "night silence darkness dusk dawn evening rain snow sleep quiet mist fog light "
+    "shadow shadows sun moon everything nothing something it the a an this that "
+    "tears hair dust ash leaves".split())
+_FALLER_SKIP = frozenset(
+    "is was are were gets got get being been then suddenly finally slowly almost "
+    "nearly just also both all".split())
+
+
+def _faller_is_person(subject):
+    """True for a person, False for a thing, None for no subject at all (elided)."""
+    toks = re.findall(r"[A-Za-z][\w'’-]*", subject or "")
+    while toks and (toks[-1].lower() in _FALLER_SKIP or toks[-1].lower().endswith("ly")):
+        toks.pop()
+    if not toks:
+        return None
+    head = re.sub(r"['’]s?$", "", toks[-1])
+    low = head.lower()
+    if low in _FALLER_HEAD:
+        return True
+    return bool(head[:1].isupper() and low not in _NOT_A_FALLER)
+
+
 def falls_in(text):
     """Does a BODY go down in this beat? A dropped garment is not a fall.
 
@@ -5934,19 +6827,58 @@ def falls_in(text):
 
     The subject is whatever sits between the start of the clause and the verb. An
     object there -- "it drops to the ground", "the belt falls to the floor" -- is
-    the thing being let go of, not somebody going down."""
+    the thing being let go of, not somebody going down.
+
+    A PERSON, OR NOTHING. The subject was read and then ignored -- the loop returned
+    True whatever it found -- so "Night falls over the town", "Mara falls asleep" and
+    "Mara stumbles over her words" were each told what takes the landing and how the
+    legs fold, a fall nobody wrote. REPORTED as characters doing things the beat never
+    wrote. The subject now has to resolve to a person; an elided one ("trips and
+    falls") is the sentence's own subject; the idioms in _NOT_A_FALL are no fall."""
     t = text or ""
     for m in _FALL_CUE.finditer(t):
+        if _NOT_A_FALL.match(t, m.start()):
+            continue
+        # A person in the cue itself -- "sends him sprawling", "knocks Kate down",
+        # "throws her onto the bed" -- is the one going down, whatever did it.
+        if re.search(r"\s(?:her|him|them|herself|himself|themselves|(?-i:[A-Z][\w-]+))\s",
+                     m.group(0) + " ", re.I) and not re.search(
+                         r"\b(?:balance|footing)\b", m.group(0), re.I):
+            return True
         head = t[:m.start()]
         cut = max((c.end() for c in
                    re.finditer(r"[.;!?]\s+|,\s*|\s+(?:and|but|then|so)\s+", head)),
                   default=0)
         subject = head[cut:]
+        # ...and a subject joined by "and": "Mara and the chair fall over" is Mara going
+        # down with the chair she is tied to. Cut at the "and", the subject was only
+        # the chair, and the bound-fall hold was lost for the restrained body.
+        _and = re.search(r"(?:^|[.;!?,]\s*)((?:[\w'’-]+\s+){0,2}?[\w'’-]+)\s+and\s+$",
+                         head[:cut])
+        if (_and and _faller_is_person(_and.group(1))
+                and not _OBJECT_FALLER.search(_and.group(1))):
+            return True
         if _OBJECT_FALLER.search(subject):
             continue                      # a thing came down, not a person
-        if not subject.strip() or _PERSON_FALLER.search(subject):
+        person = _faller_is_person(subject)
+        if person is None:
+            # Elided: the sentence's own subject, or a fragment with none at all. Over a
+            # description set off by commas, to the name in front of it: "Mara, cuffed,
+            # falls", "Mara, tied to the chair, topples over". REPORTED as the bound-fall
+            # hold lost for exactly the restrained subjects it is for.
+            start = max((c.end() for c in re.finditer(r"[.;!?]\s+", head)), default=0)
+            sent = head[start:cut] if cut > start else ""
+            first = sent.split(",")[0]
+            named = (len(re.findall(r"[A-Za-z][\w'’-]*", first)) <= 3
+                     and "," in sent and _faller_is_person(first)
+                     and not _OBJECT_FALLER.search(first))
+            lead = re.match(r"\s*((?:[\w'’-]+\s+){0,2}?)(?:[a-z]+(?:s|es|ed)|is|was)\b",
+                            first, re.I)
+            person = (True if cut <= start else
+                      bool(named or (lead and _faller_is_person(lead.group(1))
+                                     and not _OBJECT_FALLER.search(lead.group(1)))))
+        if person:
             return True
-        return True
     return False
 
 
@@ -5982,10 +6914,31 @@ def fallers_in(text, names, pronouns=None):
 CHAIN_HOLD = (" Every restraint stays closed and fastened as it was put on, its links "
               "keeping their size and the run between them taut") + FORM_HOLD
 
+# ...and without the strain, for the reason restraint_sentence gives.
 CHAIN_POSE_HOLD = (" Every restraint stays closed and fastened as it was put on; the metal "
                    "is already drawn to its full length, so the position it fixes is the "
-                   "position that keeps, and the body strains against it while the "
-                   "fastenings hold") + FORM_HOLD
+                   "position that keeps") + FORM_HOLD
+
+# A posture the body takes up itself, which no hardware forces: the end of a pose.
+# Read as posture_in reads it, so a try ("tries to stand") or a denial ("cannot stand")
+# is not an arrival.
+_ATTEMPT = re.compile(r"\b(?:tr(?:y|ies|ied|ying)|struggl(?:e|es|ed|ing)|attempts?|"
+                      r"cannot|can't|unable|fails?|failed)\b", re.I)
+
+
+def _leaves_pose(acted, sheet, held=()):
+    """Does somebody held in hardware stand, sit or walk of their own in this beat?"""
+    t = str(acted or "")
+    held = set(held or ())
+    if not t or not held:
+        return False
+    cast = [n for n, _l in sheet_lines(sheet) if n]
+    got = posture_in(t, cast)
+    if any(n in held and p in ("standing", "sitting") for n, p in got.items()):
+        return True
+    return (not _ATTEMPT.search(t)
+            and any(n in held for n in subjects_for(t, sheet, r"walks?|walked")))
+
 
 # A position that hardware can be locked to enforce.
 _FORCED_POSE = re.compile(
@@ -6018,8 +6971,10 @@ _LIMB_ANCHOR = (
      r"behind\s+(?:her|his|their)\b", "behind the back"),
     (r"at\s+the\s+small\s+of\s+(?:her|his|their|the)\s+back", "behind the back"),
     (r"\b(?:hands?|wrists?|arms?)\s+behind\s+back\b", "behind the back"),
-    (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?in\s+front\s+of\s+(?:her|his|their)\s+"
-     r"(?:body|chest|waist)", "in front of the body"),
+    # ...and "cuffs Ana's wrists in front of her", with no body part after it.
+    (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?in\s+front(?:\s+of\s+(?:her|his|their)"
+     r"(?:\s+(?:body|chest|waist)|(?!\s+(?:face|eyes|mouth|head|nose)\b)))?\b",
+     "in front of the body"),
     (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?(?:(?:out\s+)?to\s+the\s+sides?|spread\s+wide)",
      "out to the sides"),
     (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?at\s+(?:her|his|their|the)\s+waist",
@@ -6139,6 +7094,30 @@ def light_changes(beat):
     return bool(_LIGHT_CHANGES.search(str(beat or "")))
 
 
+# What in _CAMERA_ASKED asks the camera NOT to move, or only names its style.
+_CAMERA_STAYS = re.compile(r"hand-?held|static|still|fixed|locked|stationary|steady|"
+                           r"tripod|\b(?:holds?|stays?|remains?|sits?|stands?)\b|"
+                           r"^cameras?\s*:$", re.I)
+
+
+def camera_moves(text):
+    """Does this text ask the camera to MOVE -- a pan, a push-in, a follow, an orbit?
+
+    "The camera is" is read with what follows it: "is tracking Mara" moves, "is still"
+    and "is on Mara" do not. A bare "is" counted as staying, so a tracking camera was
+    held. REPORTED."""
+    t = str(text or "")
+    for m in _CAMERA_ASKED.finditer(t):
+        said = m.group(0).strip()
+        if re.search(r"\bis$", said, re.I):
+            said += " " + " ".join(t[m.end():].split()[:2])
+            if not re.search(r"\bis\s+(?:\w+ly\s+)?\w+ing\b", said, re.I):
+                continue
+        if not _CAMERA_STAYS.search(said):
+            return True
+    return False
+
+
 def camera_hold(beat, anchor="", moving=False):
     """One sentence holding the camera still, where nothing has placed it.
 
@@ -6181,25 +7160,27 @@ def frame_hold(beat, anchor="", people=1, outdoor=False, held=False):
     both characters entirely in the shot, so nothing is missed. `people` is how many
     are described; 0 is an empty frame and gets nothing.
 
-    `held` is a shot that opens on the previous shot's last frame with the camera held
-    still. That frame already holds them whole -- every shot before it said so -- and
-    "with the room around them" asks the held camera for a WIDER view than the frame
-    it opens on, which the model settles by cutting to a side-on wide in a room drawn
-    fresh. So there it says the bodies STAY whole: a keeping, not a widening."""
+    `held` is a shot that opens on the previous shot's last frame. That frame already
+    holds them whole -- the shot that composed it said so -- and "with the room around
+    them" asks for a WIDER view than the frame it opens on, which the model settles by
+    cutting to a side-on wide in a room drawn fresh. It used to say the bodies STAY
+    whole there instead, "for the whole take", on every shot: a framing sentence the
+    beat never asked for, which the keyframe and the camera hold already cover.
+    REPORTED as the beat losing its share of the prompt. A held shot gets nothing.
+
+    And nothing where the author asked for a camera move (_CAMERA_ASKED): a frame
+    that moves is theirs to compose."""
     b = str(beat or "")
     if _FRAME_SIZE.search(b) or _FRAME_SIZE.search(str(anchor or "")):
         return ""
     if tight_framing(b) or tight_framing(str(anchor or "")):
         return ""
+    if camera_moves(b) or camera_moves(str(anchor or "")):
+        return ""
     if people is None:
         people = 1
-    if int(people) < 1:
+    if int(people) < 1 or held:
         return ""
-    if held:
-        if int(people) > 1:
-            return (" Every body in the shot stays whole in the frame, head to feet, "
-                    "for the whole take.")
-        return " The whole body stays in the frame, head to feet, for the whole take."
     place = "the surroundings" if outdoor else "the room"     # see outdoors()
     if int(people) > 1:
         return (f" The frame holds every body in it whole, head to feet, with {place} "
@@ -6213,15 +7194,51 @@ def entrance_clause(names):
     The shot opens on the previous shot's last frame, and they are not in it. Said
     this way the frame stays the frame -- the camera, the room, the people already
     there -- and the newcomer comes into it, rather than the shot being recomposed
-    around them. Positive, like every clause here: where they come from, and that the
-    rest stays where it is."""
+    around them. Positive, like every clause here: where they come from.
+
+    Without ", and everything already in the frame stays where it is": a direction to
+    every other body in the shot, which their own beat never gave. REPORTED as
+    characters doing things the beat never wrote. The held camera and the keyframe
+    already keep the frame. Never for somebody already there -- see
+    already_in_position."""
     names = [n for n in (names or []) if n]
     if not names:
         return ""
     who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
     verb = "comes" if len(names) == 1 else "come"
-    return (f" {who} {verb} into the frame from its edge as the shot begins, and "
-            f"everything already in the frame stays where it is.")
+    return f" {who} {verb} into the frame from its edge as the shot begins."
+
+
+# A beat that has somebody already THERE and in place: looking up from something,
+# watching from somewhere, sitting at it, being at, on or in it, on the phone.
+_IN_POSITION = re.compile(
+    r"(?:is|are|was|were)\s+(?:already\s+|still\s+)?(?:at|on|in|by|behind|beside|near|"
+    r"inside|sitting|seated|standing|lying|kneeling|waiting|asleep|perched|curled|"
+    r"leaning|slumped|propped)\b"
+    r"|,?\s*already\b"
+    r"|(?:looks?|glances?|peers?)\s+up\s+from\b"
+    r"|(?:watch(?:es)?|looks?|stares?|peers?)\s+(?:out\s+|on\s+)?from\b"
+    r"|sits?\s+(?:at|on|in|behind|beside|by|across)\b"
+    r"|stands?\s+(?:at|by|behind|beside|in|near|across)\b"
+    r"|lies\s+(?:on|in)\b|waits?\s+(?:at|by|in|on|behind)\b"
+    r"|(?:leans?|perch(?:es)?|lounges?|sprawls?)\s+(?:on|against|in|at|across)\b"
+    r"|dials\b|answers\b|picks\s+up\s+the\s+(?:phone|receiver)\b"
+    r"|takes\s+it\b|keeps?\s+(?:typing|reading|working|writing|talking)\b", re.I)
+
+
+def already_in_position(acted, name, sheet=""):
+    """Does the beat write `name` as already there and in place, rather than arriving?
+
+    Read off the words straight after the name -- an adverb allowed between -- so
+    "Dan looks up from his phone" is there and "Dan crosses to the desk" is not."""
+    t = str(acted or "")
+    if not t or not name:
+        return False
+    for m in re.finditer(r"\b" + re.escape(name) + r"\b(?!['’])", t):
+        tail = t[m.end():]
+        if re.match(r"\s*(?:\w+ly\s+)?(?:" + _IN_POSITION.pattern + r")", tail, re.I):
+            return True
+    return False
 
 
 def tight_framing(text):
@@ -6416,11 +7433,74 @@ def dialogue_gaze(n_people):
     speaker's name is spent by the mouth guard and the listener's by told_hold,
     and a third mention is a third person. Positively phrased -- at cfg 1 naming
     the lens would ask for it. Says nothing about where the camera is."""
-    if n_people < 2:
+    # TWO PEOPLE ONLY. "Eyes on whoever is speaking, faces turned to them" turned a
+    # whole room's heads on every line, a gaze nobody wrote. REPORTED as characters
+    # doing things the beat never said. See faces_each_other for when two do.
+    if n_people != 2:
         return ""
-    if n_people == 2:
-        return " They face each other, eyes on each other."
-    return " Eyes on whoever is speaking, faces turned to them."
+    return " They face each other, eyes on each other."
+
+
+_NOT_FACE_TO_FACE = re.compile(
+    r"\bto\s+(?:herself|himself|themselves|itself|no\s+one|nobody)\b"
+    r"|\boff[\s-]?(?:screen|camera)\b"
+    r"|\b(?:from|through|behind|across)\s+(?:the\s+)?(?:other\s+room|another\s+room|"
+    r"next\s+room|hall|hallway|door|wall|window|landing|stairs|upstairs|downstairs|"
+    r"outside|kitchen|bathroom)\b"
+    r"|\b(?:at|to|into)\s+(?:the|her|his|their)\s+(?:tv|television|telly|screen|mirror|"
+    r"camera|radio|laptop|monitor|phone|reflection|computer|webcam|microphone|mic)\b",
+    re.I)
+
+
+# A call that an earlier beat started and none has ended yet: "Lou dials a number."
+# then 'Lou says, "You have one hour."' is a line down the phone.
+_CALL_STARTS = re.compile(
+    r"\b(?:dials?|dialled|dialed|dialing|dialling)\b"
+    r"|\bphone\s+to\s+(?:her|his|their)\s+ear\b"
+    r"|\b(?:answers?|picks?\s+up)\s+(?:the|her|his|their)\s+(?:phone|call)\b"
+    r"|\bon\s+the\s+phone\b|\bvideo\s+call\b", re.I)
+_CALL_ENDS = re.compile(
+    r"\bhangs?\s+up\b|\bhung\s+up\b|\bends?\s+the\s+call\b"
+    r"|\bputs?\s+(?:the|her|his|their)\s+phone\s+(?:down|away)\b", re.I)
+# Side by side in a moving car, nobody turns to face anybody.
+_AT_THE_WHEEL = re.compile(r"\b(?:drives?|driving|drove)\b|\b(?:at|behind)\s+the\s+wheel\b"
+                           r"|\bgrips?\s+the\s+wheel\b", re.I)
+# A listener the last beat left running, climbing or leaving has a task of their own.
+_ON_THE_MOVE_SRC = (r"sprints?|runs?|ran|flees|fled|races?|dashes|bolts?|vaults?|"
+                    r"climbs?|escapes?|walks?\s+(?:away|off|out)|storms?\s+(?:off|out)|"
+                    r"leaves")
+
+
+def faces_each_other(beat, acted, sheet, described, poses=None, facing="",
+                     on_call=False, scene="", prev=""):
+    """Is this a line said by one of two people TO the other, face to face?
+
+    The dialogue eye-line is inferred, never written, so it is said only where nothing
+    in the beat argues with it. Said down a phone (this beat's, or one an earlier beat
+    picked up: `on_call`), through a door, to herself, at a television, from off
+    screen, from the driving seat, to somebody lying face down, or to somebody with an
+    action of their own -- in this beat, or still running from the last (`prev`) -- it
+    was a turn of the head the author never wrote and sometimes could not have meant.
+    REPORTED as characters doing things the beat never said."""
+    people = [n for n in (described or []) if n]
+    if len(people) != 2:
+        return False
+    b = str(beat or "")
+    if (on_call or _REMOTE.search(b) or _NOT_FACE_TO_FACE.search(b)
+            or _AT_THE_WHEEL.search(f"{scene} {acted}")):
+        return False
+    talkers = [n for n in (speakers_in(b, sheet) or []) if n in people]
+    if not talkers:
+        return False
+    listeners = [n for n in people if n not in talkers] or people
+    _moving = set(subjects_for(str(prev or ""), sheet, _ON_THE_MOVE_SRC))
+    for n in listeners:
+        if len(talkers) == 1 and (acts_in(acted, n, sheet, described) or n in _moving):
+            return False
+        if (poses or {}).get(n) == "lying down" and (
+                facing == "face down" or lying_facing(acted) == "face down"):
+            return False
+    return True
 
 
 def forced_pose(text):
@@ -6460,14 +7540,42 @@ _BODY_PART = re.compile(
     r"knees?|feet|foot|hands?)\b", re.I)
 
 
-def unanchored_hardware(text):
+# A BELT IS CLOTHING UNTIL SOMETHING SAYS OTHERWISE. "The radio on Bertrand's belt
+# crackles" and "Bertrand tightens his belt" were each told "a belt closes around the
+# waist and hips" as a piece of hardware. REPORTED. Somebody's own belt is never placed
+# unless the beat binds or seals with it, and an unowned one only in a film with
+# restraints or a seal in it (`gear`).
+_BELT_CONTEXT = re.compile(
+    r"\b(?:restrain\w*|strap(?:s|ped|ping)?|lock(?:s|ed|ing)?|padlock\w*|chastity|"
+    r"seal\w*|bound|binds?|binding|tied|ties|tying|cuff\w*|chain\w*|shackl\w*)\b", re.I)
+_OWN_BELT = re.compile(r"\b(?:his|her|their|my|your|(?-i:[A-Z][\w'’-]*)['’]s)\s+"
+                       r"(?:\w+\s+)?belt", re.I)
+# ...and what the beat takes off is not placed: "unties the blindfold" was told "a
+# blindfold covers the eyes". REPORTED.
+_TAKES_OFF = (r"\b(?:unties?|untied|untying|removes?|removed|removing|unbuckles?|"
+              r"unbuckled|unclips?|unclipped|unfastens?|unfastened|unlocks?|unlocked|"
+              r"cuts?|snips?|slices?|(?:takes?|took|pulls?|pulled|lifts?|lifted|slides?|"
+              r"slid|slips?|slipped|peels?|peeled|rips?|ripped|tears?|tore|yanks?|"
+              r"yanked)\s+off)\s+(?:[\w'’]+\s+){{0,3}}?(?:{pat})"
+              r"|\b(?:takes?|took|pulls?|pulled|lifts?|lifted|slides?|slid|slips?|slipped|"
+              r"peels?|peeled|rips?|ripped|tears?|tore|yanks?|yanked|gets?|got)\s+"
+              r"(?:[\w'’]+\s+){{0,2}}?(?:{pat})\s+(?:\w+\s+)?off\b")
+
+
+def unanchored_hardware(text, gear=True):
     """Phrases placing any hardware that is named with no body part beside it.
 
     A window of 60 characters either side counts as 'beside'. If the text already
-    says where the thing goes, nothing is added -- what you wrote wins."""
+    says where the thing goes, nothing is added -- what you wrote wins. Nothing the
+    text takes off, and a belt only as gear -- see _BELT_CONTEXT."""
     out = []
     t = text or ""
     for pat, phrase in _HARDWARE_ANCHOR:
+        if re.search(_TAKES_OFF.format(pat=pat), t, re.I):
+            continue
+        if phrase.startswith("a belt ") and not _BELT_CONTEXT.search(t) and (
+                not gear or _OWN_BELT.search(t)):
+            continue
         placed = False
         found = False
         for m in re.finditer(r"\b(?:" + pat + r")", t, re.I):
@@ -6521,7 +7629,11 @@ _STATE_PRED = re.compile(r"\b(" + _STATE_THING + r")\s+" +
                          _STATE_WORD + r")\b", re.I)
 
 
-_POSTURE_OF = engine._POSTURE_OF
+# ...plus down on a knee, which is a kneel -- see _NOT_A_FALL.
+_POSTURE_OF = tuple(engine._POSTURE_OF) + (
+    ("kneeling", re.compile(r"\b(?:drops?|dropped|dropping|sinks?|sank|sinking)\s+"
+                            r"(?:down\s+)?(?:on)?to\s+(?:one|a|her|his|their|both)\s+"
+                            r"knees?\b", re.I)),)
 _NOT_A_BODY = engine._NOT_A_BODY
 
 
@@ -6666,6 +7778,94 @@ def posture_cleared(beat, poses):
     return out
 
 
+# WHAT A BODY DOES WITHOUT LEAVING ITS POSTURE: speaking, looking, the face, the breath,
+# waiting -- and dressing or undressing, which a squat was REPORTED not holding through.
+_IN_PLACE_ACT = re.compile(
+    r"(?:says?|said|asks?|asked|tells?|told|whispers?|whispered|repl(?:ies|ied)|"
+    r"answers?|answered|shouts?|shouted|yells?|yelled|calls?|called|murmurs?|"
+    r"mutters?|adds?|added|continues?|looks?|looked|watch(?:es|ed)|stares?|stared|"
+    r"glances?|glanced|gazes?|peers?|smiles?|smiled|grins?|grinned|frowns?|"
+    r"laughs?|laughed|giggles?|nods?|nodded|shakes|shook|sighs?|sighed|breathes?|"
+    r"breathed|blinks?|cries|cried|sobs?|sobbed|weeps|waits?|waited|listens?|"
+    r"listened|pauses?|paused|thinks?|hesitates?|swallows?|winces?|flinches?|"
+    r"shivers?|trembles?|gasps?|moans?|groans?|whimpers?|blushes|stays?|stayed|"
+    r"remains?|keeps?|holds?|"
+    r"(?:takes?|took|pulls?|pulled|slips?|slipped|peels?|peeled)\s+(?:off|on|out\s+of)|"
+    r"(?:puts?|pulls?)\s+on|removes?|removed|unbuttons?|unzips?|undresses|strips|"
+    r"buttons?|zips?|ties|unties|(?:turns?|turned|lifts?|lifted|raises?|raised|"
+    r"drops?|dropped|lowers?|lowered|tilts?|tilted|closes?|closed|opens?|opened|"
+    r"shuts?|moves?|shifts?|rests?|rested)\s+(?:her|his|their)\s+(?:head|face|eyes?|"
+    r"chin|gaze|mouth|lips?))\b", re.I)
+
+
+# SOMEBODY ELSE MOVES THE BODY, or it moves itself somewhere: "Hobb pulls Lark to her
+# feet", "walks Lark to the patrol car", "Lark ducks into the back seat". Lark went on
+# "kneeling" through all of it, because only a posture verb of her own cleared it and
+# a restrained body is not cleared by its own actions. REPORTED.
+_MOVES_BODY = (
+    r"(?:pull(?:s|ed)?|haul(?:s|ed)?|yank(?:s|ed)?|hoist(?:s|ed)?|heav(?:es|ed)|"
+    r"help(?:s|ed)?|lift(?:s|ed)?|drag(?:s|ged)?|carr(?:ies|ied)|scoop(?:s|ed)?)\s+"
+    r"{who}\b(?:\s+(?:up|to\s+(?:her|his|their)\s+feet|stand|onto|into|out|off|across|"
+    r"along|through|toward|towards|away|back|down|over|from|to)\b)?"
+    r"|(?:walk(?:s|ed)?|lead(?:s)?|led|march(?:es|ed)?|steer(?:s|ed)?|guid(?:es|ed)|"
+    r"escort(?:s|ed)?|frogmarch(?:es|ed)?|push(?:es|ed)?|shov(?:es|ed))\s+{who}\s+"
+    r"(?:\w+\s+)?(?:to|into|out|toward|towards|across|along|through|down|up|back|"
+    r"outside|inside|over)\b")
+_MOVES_SELF = (r"{who}\s+(?:\w+ly\s+)?(?:ducks?|ducked|climbs?|climbed|slides?|slid|"
+               r"crawls?|crawled|steps?|stepped|gets?|got|clambers?|clambered|scrambles?|"
+               r"scrambled)\s+(?:back\s+)?(?:into|in|out|onto|up|off|down|through)\b")
+
+
+def carried_off(acted, name, sheet="", described=()):
+    """Does this beat move `name` -- somebody else carrying, pulling or walking them,
+    or them getting into or out of something? See _MOVES_BODY."""
+    t = _outside_speech(str(acted or ""))
+    who = [re.escape(name)]
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    pron = sheet_pronoun(rows.get(name, ""))
+    if pron in ("she", "he") and sum(1 for n in (described or [])
+                                     if sheet_pronoun(rows.get(n, "")) == pron) == 1:
+        who.append({"she": "her", "he": "him"}[pron])
+        subj = pron
+    else:
+        subj = ""
+    alt = "(?:" + "|".join(who) + ")"
+    if re.search(r"\b(?:" + _MOVES_BODY.format(who=alt) + r")", t, re.I):
+        return True
+    self_alt = "(?:" + "|".join([re.escape(name)] + ([subj] if subj else [])) + ")"
+    return bool(re.search(r"\b" + _MOVES_SELF.format(who=self_alt), t, re.I))
+
+
+def own_action(acted, name, sheet="", described=()):
+    """Does the beat give `name` a body action of their own -- a verb straight after the
+    name, or the pronoun only they answer to here -- that is not one of _IN_PLACE_ACT?
+
+    "Mara sprints down the path", "Mara checks her phone": the beat is directing her,
+    and a posture carried from an earlier beat argues with it. "Mara smiles",
+    "Mara says ...", "Kate takes off her shirt" leave her where she was."""
+    t = _outside_speech(str(acted or ""))
+    who = [re.escape(name)]
+    rows = dict((n, ln) for n, ln in sheet_lines(sheet) if n)
+    pron = sheet_pronoun(rows.get(name, ""))
+    if pron in ("she", "he") and sum(1 for n in (described or [])
+                                     if sheet_pronoun(rows.get(n, "")) == pron) == 1:
+        who.append(pron)
+    for m in re.finditer(
+            # A state is not an action, and an adverb is not the verb: "Mara has tears
+            # in her eyes", "seems tired", "always smiles" each popped a carried kneel.
+            # REPORTED.
+            r"\b(?:" + "|".join(who) + r")\b(?:\s*,[^,.;]*,)?\s*,?\s*"
+            r"(?:(?:and|then)\s+)?(?:(?:\w+ly|always|just|now|still|never|often|again|"
+            r"also|only|even|almost|already|once|finally|soon)\s+)*"
+            r"(?!(?:is|was|and|or|but|then|to|as|in|on|at|with|by|of|for|has|does|seems|"
+            r"looks|feels|wears|needs|wants|appears|sounds|knows|remembers|hates|loves|"
+            r"likes)\b)"
+            r"(?-i:([a-z]+(?:s|es|ed)))\b", t, re.I):
+        if not _IN_PLACE_ACT.match(t, m.start(1)):
+            return True
+    return False
+
+
 def posture_hold(poses, described, upright=()):
     """One short sentence keeping people in the pose an earlier beat put them in.
 
@@ -6676,8 +7876,8 @@ def posture_hold(poses, described, upright=()):
     this node was rebuilt to escape.
 
     STANDING IS NOT SAID -- it is the default -- EXCEPT for somebody in restraints
-    (`upright`). There the shot describes hardware holding the body and the body
-    straining against it, and standing is not what that implies: a woman standing
+    (`upright`). There the shot describes hardware holding the body, and standing is
+    not what that implies: a woman standing
     when she was tied was on the floor with her legs spread by the next beat.
     REPORTED. For her it is said, and said as feet on the floor."""
     upright = set(upright or ())
@@ -6855,7 +8055,22 @@ def travel_legs(beat):
     frm, via, to = travel_in(beat)
     if via and not to:
         via, to = "", via
+    # A THRESHOLD IS NOT A ROOM. "Mara walks to the doorway" or "to the office door"
+    # moved the whole shot into a room called the doorway, or the office: the next
+    # shot, about Dan on the sofa she left him on, was told it "takes place in the
+    # doorway", walls, floor and furniture -- a person who never moved relocated to
+    # where somebody else walked. REPORTED as characters doing things the beat never
+    # wrote. A walk to a door stays in the room it starts in.
+    b = str(beat or "")
+    frm, via, to = (
+        "" if (not leg or leg in _THRESHOLDS
+               or re.search(r"\b" + re.escape(leg) + r"\s+(?:door|doors|doorway|window|"
+                            r"windows|gate)\b", b, re.I)) else leg
+        for leg in (frm, via, to))
     return frm, via, to
+
+
+_THRESHOLDS = frozenset(("doorway",))
 
 
 _OUTDOOR = re.compile(
@@ -6995,23 +8210,53 @@ _GOES_BACKWARD = re.compile(
     r"retreats?|retreating|reverses?|reversing)\b", re.I)
 
 
-def facing_phrase(beat=""):
-    """"each body facing the way it goes", unless the beat walks backwards."""
-    return "" if _GOES_BACKWARD.search(str(beat or "")) else " each body facing the way it goes"
+def facing_phrase(beat="", movers=()):
+    """"each body facing the way it goes", unless the beat walks backwards.
+
+    ONLY THE ONES WHO MOVE. "Each body" is every body described, so "Mara walks to the
+    workbench" walked Dan, still in the frame, to the workbench with her. REPORTED as
+    characters doing things the beat never wrote. With `movers` -- see movers_in --
+    they are named, and nobody else is moved."""
+    if _GOES_BACKWARD.search(str(beat or "")):
+        return ""
+    if movers:
+        return f" {_join_names(list(movers))} facing the way of travel"
+    return " each body facing the way it goes"
 
 
-def move_clause(dest, beat=""):
+def movers_in(acted, sheet, described):
+    """The described people this beat moves, where that is not all of them. [] when the
+    beat does not say, when everybody moves, or when a walk takes somebody along
+    ("walks Dan to the door", "leads her out") -- "each body" is right for those."""
+    described = [n for n in (described or []) if n]
+    movers = [n for n in subjects_for(
+        acted, sheet, _MOVES_OFF_SRC + r"|sprints?|jogs?|hurr(?:y|ies)|rush(?:es)?|"
+        r"strides?|strolls?|wanders?|paces?|pads?|marche?s?") if n in described]
+    if not movers or set(movers) >= set(described):
+        return []
+    others = [n for n in described if n not in movers]
+    if re.search(r"\b(?:walks?|leads?|led|drags?|dragged|carr(?:y|ies|ied)|escorts?|"
+                 r"guides?|pulls?|pushes|takes?|brings?|ushers?|marches|follows?)\s+"
+                 r"(?:" + "|".join(re.escape(n) for n in others) + r"|her|him|them)\b",
+                 str(acted or ""), re.I):
+        return []
+    return movers
+
+
+def move_clause(dest, beat="", movers=()):
     """Perform an arrival the place list cannot name. "" when there is nowhere.
 
     The BODIES end nearer the destination. It was "the shot travels to the {dest}"
     with "the {dest} nearer at the last frame" -- the destination nearer the lens,
     which is a push-in, and the camera did it. The last-frame comparison stays,
-    because it is what says which way the walk runs."""
+    because it is what says which way the walk runs. `movers` names who -- see
+    facing_phrase."""
     if not dest:
         return ""
-    facing = facing_phrase(beat)
+    facing = facing_phrase(beat, movers)
+    who = f" {_join_names(list(movers))}" if movers else " each body"
     return (f" The move to the {dest} plays out on screen from its first step to its "
-            f"last,{facing + ' and' if facing else ' each body'} nearer the {dest} at "
+            f"last,{facing + ' and' if facing else who} nearer the {dest} at "
             f"the last frame than at the first.")
 
 
@@ -7021,7 +8266,7 @@ _WALKS_THERE = re.compile(
     r"leads?|led|drags?|dragged|hurr(?:y|ies|ied)|strides?|strode|marche[sd])\b", re.I)
 
 
-def travel_anchor(frm, via, to, here="", beat=""):
+def travel_anchor(frm, via, to, here="", beat="", movers=()):
     """Say where the shot starts, what it passes, and where it ends. "" if nowhere.
 
     `here` is the room an earlier beat established, used when the beat names no
@@ -7032,7 +8277,7 @@ def travel_anchor(frm, via, to, here="", beat=""):
     start = frm or here
     if not to or start == to:
         return ""
-    facing = facing_phrase(beat)
+    facing = facing_phrase(beat, movers)
     walk = ("the walk between them played out on screen, every step in frame"
             + (f",{facing}." if facing else "."))
     # A FALL IS NOT A WALK. "Tumbles down the steps" arrives somewhere as surely as a
@@ -7710,7 +8955,17 @@ def _modifier_of_a_named_entry(word, span, scene):
 
 _DISPLACE = engine._DISPLACE
 scene_name_for = engine.scene_name_for
-displaced_garments = engine.displaced_garments
+def displaced_garments(beat, scene):
+    """engine.displaced_garments, kept to garments. "Drago lifts Calla into the trunk"
+    read "lifts" plus whatever followed as a garment raised, and "The calla into the
+    trunk stays on, pulled up" was carried three beats on. REPORTED. A capture has to
+    name a garment, and never starts with somebody's name."""
+    named = {n.lower() for n, _ in sheet_lines(scene or "") if n}
+    named |= {w.lower() for w in re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][\w'’-]+)",
+                                            str(beat or ""))}
+    return [(g, how) for g, how in engine.displaced_garments(beat, scene)
+            if engine.garment_words(g)
+            and str(g).split()[0].lower().rstrip("'’s") not in named]
 puts_it_back = engine.puts_it_back
 restored_garments = engine.restored_garments
 
@@ -7787,8 +9042,11 @@ def off_now_clause(name, line_now, gone_items, beat="", after_removal=False,
     if not worn:
         return ""
     what = worn[0] if len(worn) == 1 else ", ".join(worn[:-1]) + " and " + worn[-1]
-    pron = {"she": "her", "he": "his", "they": "their"}.get(sheet_pronoun(line_now) or "", "their")
-    verb = "wear" if pron == "their" else "wears"
+    # "Zoe wear only their purple sweater" for an entry with no pronoun: the verb
+    # agrees with the one name, and "wear" is only for a declared "they". REPORTED.
+    _declared = sheet_pronoun(line_now) or ""
+    pron = {"she": "her", "he": "his", "they": "their"}.get(_declared, "their")
+    verb = "wear" if _declared == "they" else "wears"
     return f" {name} {verb} only {pron} {what} now."
 
 
@@ -9444,6 +10702,20 @@ class H3LongVideos:
                 f"{'them' if len(_undeclared) > 1 else 'that entry'}, and the shot keeps "
                 f"whoever the previous one described instead. Write the pronoun into each "
                 f"entry (\"Owen: he, 42, ...\")")
+        # The opening paragraph's staging, withheld after shot 1 -- see scene_staging.
+        _scene_staged = scene_staging(scene, sheet)
+        # Who the opening paragraph lays down, until a beat gets them up -- see
+        # withhold_staging.
+        scene_lying = {n for _st, _who, _pos in _scene_staged.values()
+                       if _pos == "lying down" for n in _who}
+        # Only the people the paragraph PLACES -- a subject, or somebody beside one --
+        # not anybody it mentions: "Mara waits for Dan to come home" has Dan away, and
+        # reading him as there put him in a keyframe that never held him, with no
+        # entrance. REPORTED.
+        _opening_names = {n for n, _ in sheet_lines(sheet) if n and re.search(
+            r"(?:^|[.!?;:]\s+|,\s*|\b(?:and|while|as|when|where|but|with|beside|"
+            r"near|behind|opposite|next\s+to|across\s+from)\s+)"
+            + re.escape(n) + r"(?![\w'’-])(?!['’]s)", scene or "", re.M)}
         static = build_scene(anchor, scene, "", "")
         scene = build_scene(anchor, scene, "", sheet)      # the whole of it, for inference
         _described_rooms = set(rooms_named(static))
@@ -9534,7 +10806,11 @@ class H3LongVideos:
         lying_on = {}             # name -> what they were laid on, where the beat said
         lying_shots = []          # shots told a body stays lying flat
         facing = ""               # which way up a lying body is, until it gets up
+        on_call = False           # a phone call an earlier beat started -- see faces_each_other
+        prev_acted = ""           # the last beat's acted text, for the same
         here = place_named(scene) or first_place(scene)
+        _opening_room = here         # where the opening paragraph puts people
+        _present_shots = {}          # 0-based shot -> newcomers the beat has already there
         _opening = extract_directives(beats[0])[0] if beats else ""
         ambient_bed = (scene_ambient(anchor, scene)
                        or scene_ambient(anchor, _opening)) if auto_sound else ""
@@ -9585,6 +10861,7 @@ class H3LongVideos:
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
         legs_held = ""              # where a beat or the sheet fastened the legs
+        arms_of, legs_of = {}, {}   # ...per wearer, from the beat that fastened them
         limbs_freed = False         # the last piece on a limb came off -- see below
         arms_freed = legs_freed = False   # ...counted per pair of limbs
         stayed_on = []              # (shot, who) kept described because still in frame
@@ -9706,7 +10983,10 @@ class H3LongVideos:
             _frm, _via, _to = travel_legs(_acted)
             _is_travel = bool(travel_anchor(_frm, _via, _to, here, body))
             _room_before = here
-            _place_now = _to or _frm or place_named(_acted) or here
+            _named_place = place_named(_acted)
+            if _named_place in _THRESHOLDS:
+                _named_place = ""        # standing in a doorway is not a room -- see travel_legs
+            _place_now = _to or _frm or _named_place or here
             _opens_in = _frm or (_room_before if _is_travel else _place_now)
             _is_cut = bool(len(plan) and _opens_in and _room_before
                            and _opens_in != _room_before)
@@ -9730,10 +11010,16 @@ class H3LongVideos:
                 # cuffs had no body to be on, and the next beat's tape went on a woman
                 # the text had never placed in cuffs. REPORTED as the handcuffs breaking
                 # when the duct tape goes on. The state knows whose they are.
+                # ...but only somebody it is genuinely put ON or taken OFF: a restraint
+                # the beat describes as already worn ("Jade sits tied to a chair") is
+                # nobody's work in this shot, and reading it as one pulled whoever the
+                # reader guessed into the frame. REPORTED with the rope on the wrong
+                # person. See staged_on_now.
                 _worked_on = [n for n, _l in sheet_lines(sheet)
                               if n and n not in (active or [])
                               and any(_w == n for _w, _r in
-                                      list(_ch.get("applied") or [])
+                                      [(_w, _r) for _w, _r in (_ch.get("applied") or [])
+                                       if staged_on_now(_acted, getattr(_r, "item", ""))]
                                       + list(_ch.get("released") or []))]
                 if _worked_on and not _leaves_room:
                     _keep = set(list(active or []) + _worked_on)
@@ -9886,16 +11172,41 @@ class H3LongVideos:
                         f"sheet, or write the entrance into beat 1")
                 if _new and not arrives_in(_acted) and plan:
                     _placed_shots[len(plan)] = list(_new)
+                    # ALREADY THERE IS NOT AN ENTRANCE. "Dan looks up from his phone",
+                    # "Dan is already sitting on the crate", or a Dan the opening
+                    # paragraph stood by the window of this very room, was walked in
+                    # from the edge of the frame -- an entrance nobody wrote. REPORTED
+                    # as characters doing things the beat never wrote. They get no
+                    # entrance, and the opening paragraph's sentence about them rides
+                    # this shot. Freeing the camera to find them was tried and kept
+                    # out: the camera hold is a reported fix of its own. Routing
+                    # the shot through the soft cut instead was weighed and refused:
+                    # that is the restart this used to be -- reported as angles
+                    # changing between beats -- and on FastH3 a start from nothing.
+                    _present_shots[len(plan)] = [
+                        n for n in _new
+                        if already_in_position(_acted, n, sheet)
+                        or (n in _opening_names
+                            and (_opens_in or "") == (_opening_room or ""))]
+                    _walk_in = [n for n in _new if n not in _present_shots[len(plan)]]
+                    _there = _present_shots[len(plan)]
                     notes.append(
                         f"shot {len(plan) + 1} introduces {', '.join(_new)} in "
                         f"position rather than arriving. The shot still opens on the "
                         f"previous shot's last frame -- same camera, same room, everyone "
-                        f"and everything in it where they were -- and "
-                        f"{'they come' if len(_new) > 1 else _new[0] + ' comes'} into it "
-                        f"from the edge of the frame as it begins. It used to restart "
-                        f"there instead, which cost the camera angle and everything the "
-                        f"last frame remembered (on FastH3, all of it). Write the entrance "
-                        f"yourself -- 'walks in', 'steps through' -- to say how")
+                        f"and everything in it where they were"
+                        + (f" -- and {'they come' if len(_walk_in) > 1 else _walk_in[0] + ' comes'}"
+                           f" into it from the edge of the frame as it begins"
+                           if _walk_in else "")
+                        + (f"; {_join_names(_there)} "
+                           f"{'are' if len(_there) > 1 else 'is'} written as already "
+                           f"there, so no entrance is added and the beat's own words "
+                           f"place {'them' if len(_there) > 1 else _there[0]}"
+                           if _there else "")
+                        + ". It used to restart "
+                        "there instead, which cost the camera angle and everything the "
+                        "last frame remembered (on FastH3, all of it). Write the entrance "
+                        "yourself -- 'walks in', 'steps through' -- to say how")
                 _back_cands = [n for n in active if n not in _was and n in _seen_before]
                 _seen_before.update(active)
             else:
@@ -10439,29 +11750,43 @@ class H3LongVideos:
                     r"(?:(?!(?:with|using|by|and|to|from|in|on|over|across|round|around|"
                     r"wrists?|ankles?|hands?|arms?|legs?|feet|neck|throat|mouth|lips|eyes|"
                     r"face|head|waist|knees?)\b)\w+\s+)?" + _head + r"s?\b", _acted or ""))
+            # ...and only what the beat PUTS on. New to the state is not new to the
+            # body: "her wrists cuffed to the headboard" is the first anybody hears of
+            # the cuffs, and they have been on since before the shot. See staged_on_now.
             _new_on = {(_n, _r.item) for _n, _q in _state.people.items()
                        for _k, _r in _q.hardware.items()
                        if (_n, _k) not in _hw_before and _r.item
-                       and not _possessed(_r.item)}
+                       and not _possessed(_r.item)
+                       and staged_on_now(_acted, _r.item)}
             if (not early_hardware and restraint_going_on(_acted)
                     and restraint_present(_scene_for_state)):
                 early_hardware.append(len(plan) + 1)
             if restrained and rigid_hardware(f"{_acted} {shot_scene}"):
                 rigid_latched = True
-            if rigid_latched and forced_pose(f"{_acted} {shot_scene}"):
+            # A POSE ENDS WHEN THE BODY LEAVES IT. "Posed" latched on the kneel and held
+            # for the rest of the film, so after "Mara stands up" the cuffs still fixed
+            # "the position that keeps" -- a kneel she had got up out of. REPORTED as
+            # characters held in poses the beat did not ask for. A posture of her own
+            # that no hardware forces clears it; a forced one in the same beat wins.
+            _unposed = (posed and not forced_pose(_acted)
+                        and _leaves_pose(_acted, shot_sheet, restrained_who))
+            if _unposed:
+                posed = False
+            elif rigid_latched and forced_pose(f"{_acted} {shot_scene}"):
                 posed = True
             _have = plan_lengths([body], ceiling,
                                  shot_length == "from the beat", pace)[0][0] / H3_FPS
-            _pace = pace_clause(beat_seconds(body), _have)
+            _pace = pace_clause(beat_seconds(body), _have, beat=body)
             if _pace:
                 paced_shots.append(len(plan) + 1)
-            _travel = travel_anchor(_frm, _via, _to, here, body)
+            _movers = movers_in(_acted, shot_sheet, active or [])
+            _travel = travel_anchor(_frm, _via, _to, here, body, movers=_movers)
             _journey = bool(_travel)     # between places: the camera has to go too
             if _travel:
                 travel_shots.append(len(plan) + 1)
             else:
                 _open_to = moved_to(_acted, active)
-                _travel = move_clause(_open_to, body)
+                _travel = move_clause(_open_to, body, movers=_movers)
                 if _travel:
                     open_moves.append((len(plan) + 1, _open_to))
             here = _place_now
@@ -10495,14 +11820,56 @@ class H3LongVideos:
                         if (auto_sound and _where) else ambient_bed)
             if _where and auto_sound and (_room_now != _room or _bed_now != ambient_bed):
                 acoustic_shots.append((len(plan) + 1, here))
+            # NOBODY ON SCREEN, NOBODY DESCRIBED. A beat of the clock, the rain, the
+            # empty yard, still carried the last shot's people in full -- a sheet line
+            # each and a body count -- which is how a face turns up in a shot of a
+            # clock. Withheld for people who wear nothing to keep and have had nothing
+            # taken off: a restraint, a seal or a removal is still described, so it
+            # holds in the frame it opens on.
+            _bare_frame = bool(character_guard and not beat_puts_somebody_on_screen(body, sheet))
+            # ...but only where the frame is composed afresh, or the last one held
+            # nobody. A take that opens on the previous last frame still shows its
+            # people, and stripping their lines and count left the held keyframe's
+            # bodies undescribed. REPORTED.
+            _k_fresh = len(plan)
+            _composed_fresh = (not plan or _k_fresh in cut_shots
+                               or _k_fresh in reentry_shots
+                               or (restart_after_removal
+                                   and (_k_fresh - 1) in stripped_shots))
+            _plain_people = (_bare_frame and not sealed
+                             and (_composed_fresh or not _still_there) and not any(
+                (n in (restrained_who or ()))
+                or (n in _state.people and _state.people[n].hardware)
+                or any(n in (gone_by.get(t) or ()) for t in gone)
+                for n in (active or [])))
+            if _plain_people and not plan:
+                # The opening shot of an empty place: whoever the guard fell back on was
+                # never drawn, so the next beat that names them introduces them.
+                _seen_before.difference_update(active or [])
+                _in_frame = []
+                shot_frames[len(plan)] = ([], [])
             _pose_now = posture_in(_acted, active if character_guard and active
                                    else [n for n, _ in sheet_lines(_who_sheet) if n])
-            for _gone_pose in posture_cleared(_acted, poses):
+            _cleared_now = posture_cleared(_acted, poses)
+            for _gone_pose in _cleared_now:
                 poses.pop(_gone_pose, None)
                 lying_on.pop(_gone_pose, None)
                 facing = ""          # up off the floor is no longer facing anywhere
+            # HER OWN ACTION TAKES OVER FROM A CARRIED POSTURE. "Mara kneels to tie her
+            # shoe", then "Mara sprints down the path" -- and the shot was told "Mara is
+            # kneeling" beside the sprint, because sprinting is not on the travel list.
+            # REPORTED as characters held in poses the beat did not ask for. Somebody
+            # free whose beat gives them an action of their own is directed by it; the
+            # open-ended carry stays for a restrained body and a body lying down.
+            _held_bodies = set(_hw_by_wearer) | set(restrained_who or ())
+            for _n, _p in list(poses.items()):
+                if ((_p != "lying down" and _n not in _held_bodies
+                     and own_action(_acted, _n, _who_sheet, active or [_n]))
+                        or carried_off(_acted, _n, _who_sheet, active or [_n])):
+                    poses.pop(_n, None)
+                    lying_on.pop(_n, None)
             _poses_held = {n: p for n, p in poses.items() if n not in _pose_now}
-            _posture = ("" if not hold_scene_state
+            _posture = ("" if (not hold_scene_state or _plain_people)
                         else posture_hold({n: p for n, p in poses.items()
                                            if n not in _pose_now},
                                           active if character_guard else
@@ -10523,6 +11890,23 @@ class H3LongVideos:
             _legs_now = legs_anchor(_acted) if restrained else ""
             if _legs_now:
                 legs_held = _legs_now
+            # PER WEARER, from that wearer's own piece. One latched position was put on
+            # every restrained person in the shot, so Ana, cuffed in front, was said to
+            # have her arms behind her like Mara, and Mara's free ankles were said to
+            # be tied together like Ana's. REPORTED.
+            for _n, _r in (_ch.get("applied") or []):
+                _pt = getattr(_r, "part", "")
+                if _pt in ("wrists", "arms", "hands", "elbows"):
+                    arms_of[_n] = (_anchor_now.split(", at the")[0].strip()
+                                   or getattr(_r, "position", "") or "")
+                elif _pt in ("ankles", "legs", "knees", "thighs", "feet"):
+                    legs_of[_n] = _legs_now
+                # ...and whatever else the same beat places for the one it binds: a
+                # hogtie is one cable on the wrists that draws the ankles up too.
+                if _legs_now and _n not in legs_of:
+                    legs_of[_n] = _legs_now
+                if _anchor_now and _n not in arms_of:
+                    arms_of[_n] = _anchor_now.split(", at the")[0].strip()
             # ANYTHING CLOSED OVER THE GROIN STAYS UNTIL A REMOVAL NAMES IT. Latched
             # like anchored above and cleared in the same place, so it outlives the
             # beat that applied it -- the reported failure was the tape being there
@@ -10539,7 +11923,7 @@ class H3LongVideos:
                 anchored_shots.append(len(plan) + 1)
             if _holding and (_anchor_tight or tight_framing(body)):
                 tight_shots.append(len(plan) + 1)
-            turn = TURN_HOLD if (turns_in(_acted, cast)
+            turn = TURN_HOLD if (rotates_in(_acted)
                                  and (gone or shown or restrained)) else ""
             _falls = falls_in(_acted)
             fall = (FALL_HOLD if (restrained and _falls)
@@ -10554,13 +11938,47 @@ class H3LongVideos:
                          or names_any(RESTRAINT_HOLD_KEY, toks)
                          or any(restraint_present(t) for t in toks))
             anchors = ("" if (_off_here or hardware_handled(_acted))
-                       else anchor_clause(unanchored_hardware(_acted)))
+                       else anchor_clause(unanchored_hardware(
+                           _acted, gear=bool(restrained or sealed))))
             if anchors:
                 notes.append(f"shot {i_shot + 1} names hardware with no body part beside "
                              f"it, so the shot says where it sits: "
                              f"{anchors.split(': ', 1)[1].rstrip('.')}")
+            # The opening paragraph's staging is the opening shot's -- see
+            # scene_staging. Every shot that opens on the last frame has it withheld;
+            # a cut, a re-entry or a restart composes afresh and gets it whole, and the
+            # shot that first shows somebody the paragraph placed keeps their sentence.
+            # Only the text the model is told: every reader in this file still has all
+            # of shot_scene.
+            _k_now = len(plan)
+            _opens_on_frame = bool(_k_now and _k_now not in cut_shots
+                                   and _k_now not in reentry_shots
+                                   and not (restart_after_removal
+                                            and (_k_now - 1) in stripped_shots))
+            # LYING, TRACKED, NOT ASSUMED. Anyone with no recorded pose counted as
+            # lying -- including somebody a walk had just got up -- so the opening
+            # "Mara lies on the bed reading a paperback" went on being stamped after
+            # she crossed to the window. REPORTED. Seeded from the paragraph; a posture
+            # cleared or changed, an action of their own or a move ends it.
+            scene_lying -= set(_cleared_now)
+            scene_lying -= {n for n, _p in _pose_now.items() if _p != "lying down"}
+            scene_lying -= set(_movers or ())
+            scene_lying -= {n for n in list(scene_lying)
+                            if own_action(_acted, n, _who_sheet, active or [n])}
+            _scene_text = (withhold_staging(
+                shot_scene, _scene_staged,
+                keep=(set(_present_shots.get(_k_now, [])) | set(restrained_who or ())
+                      | {n for n, _q in _state.people.items() if _q.hardware}),
+                lying=scene_lying)
+                if (_opens_on_frame and _scene_staged) else shot_scene)
+            if _plain_people:
+                _cast_names = [n for n, _ in sheet_lines(sheet) if n]
+                _scene_text = "\n".join(
+                    ln for ln in _scene_text.split("\n")
+                    if not any(re.match(r"\s*" + re.escape(n) + r"\s*:", ln)
+                               for n in _cast_names))
             _scene_sent, _held_rooms, _held_blocked, _held_text = scene_for_here(
-                shot_scene, here, anchor,
+                _scene_text, here, anchor,
                 [n for n, _ in sheet_lines(shot_sheet) if n], body)
             if _held_rooms and _held_blocked:
                 scene_welded.append((len(plan) + 1, list(_held_rooms)))
@@ -10757,7 +12175,7 @@ class H3LongVideos:
                         if not character_guard or n in active]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
-            if extras_in(body):
+            if extras_in(body, singular=False):
                 _extras_seen = True
             elif extras_dismissed(body):
                 _extras_seen = False
@@ -10788,7 +12206,16 @@ class H3LongVideos:
             _carried = [n for n in _was
                         if n not in set(_described or []) and looking_at.get(n)
                         and n not in set(subjects_for(_acted, sheet, _MOVES_OFF_SRC))]
-            _gazers = [n for n in (_described or []) if looking_at.get(n)] + _carried
+            # ONLY ON THE SHOT THAT WRITES THE LOOK. A look was held until something
+            # ended it, so "Mara looks at the door" put her eyes on the door through
+            # every later shot -- kissing, being cuffed, walking out -- and a looker who
+            # had left the beat was named into the shot to keep looking. REPORTED as
+            # characters doing things the beat never wrote. The beat that stages a look
+            # gets it said back; the shots after it are left to their own beats.
+            _gazers = ([n for n in dict.fromkeys(list(_lookers or []) + list(_described or []))
+                        if n in set(_described or []) | set(_lookers or [])
+                        and (looking_at.get(n) or ("",))[0] == _look_now]
+                       if _look_now else [])
             _gaze = ""
             _faces = ""     # the eye-line inferred for a dialogue shot
             _contact = (contact_hold(contact_pairs(_acted, _described))
@@ -10821,12 +12248,17 @@ class H3LongVideos:
                 (first_frame is not None and not _first_is_plate) if _k == 0 else
                 (_k not in cut_shots and _k not in reentry_shots
                  and not (restart_after_removal and (_k - 1) in stripped_shots)))
-            # Everyone described, whole, on every shot -- see frame_hold. On a held
-            # keyframe it is the "stays whole" form, never the widening one.
-            _bodies = len(_described or []) or (1 if beat_puts_somebody_on_screen(body, sheet)
-                                                else 0)
+            # Everyone described, whole -- see frame_hold. Only where the frame is
+            # composed afresh: shot 1, a cut, a restart, a journey. A shot opening on
+            # the last frame already has its framing, and the camera hold keeps it.
+            # Nobody, where the beat puts nobody on screen.
+            # ...and everyone the shot describes, whether or not the beat names them:
+            # a restrained woman held in a shot of the rain is a body in the frame.
+            # REPORTED as the whole-body hold lost on such a shot.
+            _bodies = (len(_described) if (_described and not _plain_people) else
+                       (1 if beat_puts_somebody_on_screen(body, sheet) else 0))
             _frame = frame_hold(body, anchor, _bodies, outdoor=_outside,
-                                held=bool(_on_keyframe and _camera))
+                                held=bool(_on_keyframe and not _journey))
             if _frame:
                 frame_shots.append(len(plan) + 1)
             _place_words = 0            # words the hold spends saying where -- see _placed_hold
@@ -10926,7 +12358,20 @@ class H3LongVideos:
                             part=held_part(merge_hardware_names(_hw_shown[n])),
                             where=_placed_on([n]))
                         for n in _own]
-                    hold = "".join(h for h, _w in _parts)
+                    # EVERYONE ELSE ONCE, AND ONLY WHERE IT SAYS SOMETHING. Each wearer's
+                    # sentence ended on "Everyone else in the shot has on exactly what
+                    # their own entry lists", so two wearers said it twice -- and a split
+                    # made only because a piece goes on now said it beside the one
+                    # sentence that already names her, about somebody whose entry is the
+                    # piece going on. REPORTED as gag shots getting heavier. Said once,
+                    # after the sentences, where two or more wearers share the frame with
+                    # somebody wearing none of it.
+                    hold = "".join(h.replace(OTHERS_UNCHANGED, "") for h, _w in _parts)
+                    _fresh_names = {_n for _n, i in _new_on if i in _fresh}
+                    if len(_own) >= 2 and any(
+                            n not in _own and n not in _fresh_names
+                            for n in (_described or [])):
+                        hold += OTHERS_UNCHANGED
                     _place_words = sum(w for _h, w in _parts)
                 elif not _here_items and _skip:
                     hold = ""       # all of it is a gag or going on now -- said below
@@ -10970,9 +12415,44 @@ class H3LongVideos:
             # together at the small of the back" -- her position, on him. Reported as
             # the restraint changing mid-scene, and worst where beats name one of two
             # people and lean on continuity for the other.
-            if _pose and restrained_who:
-                _pose = pose_of(_pose, [n for n in (_described or [])
-                                        if n in restrained_who], _described)
+            _pose_known = bool(_arms_pos or _legs_pos)
+            _held_here = [n for n in (_described or []) if n in (restrained_who or ())]
+            if _held_here and _wearer_here and (arms_of or legs_of):
+                # Each wearer's own arms and legs; never one body's pose said of two
+                # who differ. A wearer with no record of their own takes the shot's
+                # latched one only where nobody here has a record either.
+                def _has(_n, parts):
+                    _q = _state.people.get(_n)
+                    return _q is None or any(r.part in parts for r in _q.hardware.values())
+                _line_of = dict(sheet_lines(shot_sheet))
+                _recorded = any(n in arms_of or n in legs_of for n in _held_here)
+                _groups = {}
+                for _n in _held_here:
+                    _a = (arms_of.get(_n) if _n in arms_of else
+                          (limb_anchor(_line_of.get(_n, "")).split(", at the")[0].strip()
+                           or ("" if _recorded else _arms_pos)))
+                    _l = (legs_of.get(_n) if _n in legs_of else
+                          (legs_anchor(_line_of.get(_n, ""))
+                           or ("" if _recorded else _legs_pos)))
+                    # A tie that draws the ankles to the wrists or the neck is held by
+                    # whatever is still on the body, not only by a piece on the legs.
+                    _tied_up = _l in ("ankles to the wrists", "ankles to the neck")
+                    _any = (_state.people.get(_n) is None
+                            or bool(_state.people[_n].hardware))
+                    _a = _a if ((_has(_n, ("wrists", "arms", "hands", "elbows"))
+                                 or (_tied_up and _any)) and not arms_freed) else ""
+                    _l = _l if ((_has(_n, ("ankles", "legs", "knees", "thighs", "feet"))
+                                 or (_tied_up and _any)) and not legs_freed) else ""
+                    if not _a and _l == "ankles to the wrists":
+                        _a = "behind the back"
+                    _groups.setdefault((_a, _l), []).append(_n)
+                _pose = "".join(
+                    pose_of(pose_clause(_a, lying=_lying_now, legs=_l, facing=facing),
+                            _names, _described)
+                    for (_a, _l), _names in _groups.items())
+                _pose_known = bool(_pose)
+            elif _pose and restrained_who:
+                _pose = pose_of(_pose, _held_here, _described)
             def _whose_in(_n):
                 """How a lead sentence says whose: nothing with one person in the
                 shot, a pronoun where only _n answers to it -- the pose sentence beside
@@ -10992,8 +12472,12 @@ class H3LongVideos:
             _gag_talk = set(speakers_in(body, _who_sheet)) if has_speech(body) else set()
             _gag_voc = ({_n for _n, _p in vocal_sources_in(body, shot_sheet)}
                         if voice_in(body) else set())
+            _gag_second = ""
+            if voice_in(body) and len(_gag_on) == 1 and not (_gag_talk | _gag_voc):
+                _gag_second = second_vocal(body, next(iter(_gag_on)), _described or [])
             _gag_loose = bool(voice_in(body) and not (_gag_talk | _gag_voc)
-                              and unpinned_vocal(body) and len(_gag_on) == 1)
+                              and (unpinned_vocal(body) or _gag_second)
+                              and len(_gag_on) == 1)
             _muffled = {_n for _n in _gag_on
                         if _n in _gag_talk or _n in _gag_voc or _gag_loose}
             _gag = "".join(
@@ -11018,8 +12502,11 @@ class H3LongVideos:
             _fall_led = False
             _down = (fallers_in(_acted, _described, _pron_of)
                      if _bound_fall else set())
+            # ...and only a fall the bound body is IN: named, or the one person here.
             if _bound_fall and (not _limb_now
-                                or (_down and not (_down & set(restrained_who or ())))):
+                                or (_down and not (_down & set(restrained_who or ())))
+                                or (not _down and not set(_described or [])
+                                    <= set(restrained_who or ()))):
                 # A gag or a collar binds no limb: her hands are free, and a sentence
                 # keeping "the arms in the hold" puts them in one nobody fastened. And
                 # when the one falling is somebody else, the bound body is not falling.
@@ -11029,9 +12516,8 @@ class H3LongVideos:
                 fall = bound_fall_clause(
                     _arms_pos, _legs_pos,
                     who=(_whose_in(_fallers[0]) if len(_fallers) == 1 else ""))
-            # A BODY LEFT LYING, held down in the lead -- see lying_stays.
+            # A BODY LEFT LYING, held down -- see lying_stays.
             _down_lead, _lying_led = "", set()
-            _rows_here = dict(sheet_lines(shot_sheet))
             for _n in (_described or []):
                 if _poses_held.get(_n) != "lying down":
                     continue
@@ -11040,21 +12526,21 @@ class H3LongVideos:
                 _going_on_her = any(_w == _n for _w, _i in _new_on)
                 if _n not in (restrained_who or ()) and not _going_on_her:
                     continue
-                _q = _state.people.get(_n)
-                _limbs_held = bool(_q and any(_r.part in ("wrists", "arms", "hands")
-                                              for _r in _q.hardware.values()))
-                _arms_free = not (_limbs_held or (_arms_pos and _n in (restrained_who or ()))
-                                  or re.search(r"\b(?:arms?|hands?|elbows?|wrists?|"
-                                               r"fingers?)\b", _acted or "", re.I))
-                _pr = sheet_pronoun(_rows_here.get(_n, ""))
+                # ...AND ONLY WHILE SHE IS BEING WORKED ON: a restraint going on her or
+                # coming off her, or somebody's hands on her. It sat straight after the
+                # beat on every later shot -- "Dan checks his phone" pinned her flat to
+                # the bed through the whole shot -- the strongest place in the prompt,
+                # spent on a beat that never mentions her. REPORTED as characters held
+                # in poses the beat did not ask for. The reported case it exists for is
+                # being cuffed or taped while lying; any other shot keeps the plain
+                # posture hold.
+                _coming_off_her = any(_w == _n for _w, _r in (_ch.get("released") or []))
+                if not (_going_on_her or _coming_off_her
+                        or handles_person(_acted, _n, shot_sheet, _described)):
+                    continue
                 _subj = _whose_in(_n)       # "her"/"his", the name, or "" when alone
                 _who = ({"her": "She", "his": "He"}.get(_subj, _subj) if _subj else "")
-                _poss = (_subj if _subj in ("her", "his")
-                         else {"she": "her", "he": "his", "they": "their"}.get(_pr, ""))
-                # The arms only where a restraint is going on her with them still free:
-                # the shot she was reported pushing herself up on them.
-                _down_lead += lying_stays(_who, _poss, lying_on.get(_n, ""),
-                                          arms_free=bool(_arms_free and _going_on_her))
+                _down_lead += lying_stays(_who, lying_on.get(_n, ""))
                 _lying_led.add(_n)
             if _down_lead:
                 lying_shots.append(len(plan) + 1)
@@ -11068,32 +12554,43 @@ class H3LongVideos:
                                               | set(restrained_who or ())))
                 if not _posture and (len(plan) + 1) in posture_shots:
                     posture_shots.remove(len(plan) + 1)
-            # THE FRAME LEADS TOO, for the reason the pose does: what the opening
-            # tokens say is what the frame settles on, and as guard 15 of 15 it was
-            # the first thing a crowded shot dropped -- a restrained, half-dressed body
-            # is exactly the crowded shot, and exactly the one that must not be cropped.
-            _frame_led = False
+            # THE FRAME NO LONGER LEADS. It led for the reason the pose does -- as guard
+            # 15 of 15 it was the first thing a crowded shot dropped -- but it now goes
+            # only on a shot composed afresh (see frame_hold), where it sits mid-list at
+            # priority 8, behind the beat's own words instead of ahead of them.
             _speaks = has_speech(body)
             _in_shot = (_described if character_guard else
                         [n for n, _ in sheet_lines(_who_sheet) if n])
-            _listeners = (told_to_act(body, speakers_in(body, _who_sheet), _in_shot)
-                          if _speaks else [])
-            _listeners += ordered_in(body, _in_shot, _acted, _who_sheet)
-            # ...and never over somebody the beat does give an action of their own.
+            # Only the person an order or an intention is about, and only for an action
+            # the shot could stage early -- see deferred_holds and told_hold.
+            _defer = deferred_holds(body, _in_shot, _acted, _who_sheet,
+                                    speakers=speakers_in(body, _who_sheet) if _speaks else ())
             # Not where the shot DOES something -- a removal or a fastening, written
             # or directed: "asks Dan to take the belt off" with "remove: belt" is Dan
             # taking it off, now, and the ask is how the author said so.
             if toks or _applying:
-                _listeners = []
-            _told = told_hold([n for n in dict.fromkeys(_listeners)
-                               if not acts_in(_acted, n, _who_sheet, _in_shot)],
-                              heard=bool(_speaks or re.search(
-                                  r"\b(?:tells?|told|orders?|ordered|asks?|asked|commands?|"
-                                  r"instructs?|begs?|begged|pleads?|urges?|warns?|says?|said)\b",
-                                  body or "", re.I)))
+                _defer = []
+            _rows_told = dict(sheet_lines(_who_sheet))
+            _told = told_hold([n for n, _k in _defer],
+                              pronouns={n: sheet_pronoun(_rows_told.get(n, ""))
+                                        for n, _k in _defer},
+                              wearing={n for n, _k in _defer if _k == "wear"})
             if _told:
                 told_shots.append(len(plan) + 1)
-            _entering = entrance_clause(_placed_shots.get(len(plan)))
+            # ONE OR THE OTHER for a person: "Dan stays where he is" beside "Dan comes
+            # into the frame from its edge" asks for both. REPORTED. The entrance is
+            # what the frame needs; the stay goes.
+            _enter_names = [n for n in (_placed_shots.get(len(plan)) or [])
+                            if n not in _present_shots.get(len(plan), [])]
+            if _told and any(n in _enter_names for n, _k in _defer):
+                _defer = [(n, k) for n, k in _defer if n not in _enter_names]
+                _told = told_hold([n for n, _k in _defer],
+                                  pronouns={n: sheet_pronoun(_rows_told.get(n, ""))
+                                            for n, _k in _defer},
+                                  wearing={n for n, _k in _defer if _k == "wear"})
+                if not _told and (len(plan) + 1) in told_shots:
+                    told_shots.remove(len(plan) + 1)
+            _entering = entrance_clause(_enter_names)
             _told_led = False
             # THE SEAL, said on the right body and at the right time. The shot that puts
             # it on is told both ends -- off at the first frame, on and staying on once
@@ -11110,10 +12607,10 @@ class H3LongVideos:
                 if _sp != "the":
                     for _w in ("waist", "legs", "groin"):
                         _seal = _seal.replace(f" the {_w}", f" {_sp} {_w}")
-            _gag_led = _down_led = False
+            _gag_led = False
             _fall_lead = fall if (_bound_fall and _wearer_here) else ""
-            if (_pose or _seal or _facing or _frame or _entering or _told or _gag
-                    or _fall_lead or _down_lead) and body:
+            if (_pose or _seal or _facing or _entering or _told or _gag
+                    or _fall_lead) and body:
                 _at = line.find(body)
                 if _at >= 0:
                     _cut = _at + len(body)
@@ -11121,16 +12618,17 @@ class H3LongVideos:
                     # after it, where it cannot be crowded out -- see told_hold.
                     # The legs lead as the arms do: bound ankles with free hands are
                     # still a pose, and late in the shot it was the one that gave.
-                    _lead = (_told + _entering + _frame
-                             + (_pose if (_arms_pos or _legs_pos) else "")
-                             + _fall_lead + _gag + _facing + _down_lead + _seal)
+                    # Not the lying hold: it goes in the guard list, behind the
+                    # beat's own words -- see lying_stays above. Nor the frame: see
+                    # frame_hold.
+                    _lead = (_told + _entering
+                             + (_pose if _pose_known else "")
+                             + _fall_lead + _gag + _facing + _seal)
                     _told_led = bool(_told)
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
-                    _pose_led = _pose if (_arms_pos or _legs_pos) else ""
+                    _pose_led = _pose if _pose_known else ""
                     _seal_led = bool(_seal)
-                    _frame_led = bool(_frame)
                     _gag_led = bool(_gag)
-                    _down_led = bool(_down_lead)
                     _fall_led = bool(_fall_lead)
             _speaks = has_speech(body)
             _own = sound_described(body)
@@ -11149,26 +12647,36 @@ class H3LongVideos:
             _has_people = beat_puts_somebody_on_screen(body, sheet)
             _device_line = (mouths_shut_when_no_line
                             and speech_is_a_devices(body, sheet))
+            # Held per the engine state: binding hardware on a described person -- see
+            # duress_face. A collar alone holds nobody.
+            _held_now = [n for n in (_described or []) if n in _state.people
+                         and any(_BOUND_HARDWARE.search(f"{_k} {getattr(_r, 'item', '')}")
+                                 for _k, _r in _state.people[n].hardware.items())]
             _duress = (duress_face(
-                body,
-                [(n, ln) for n, ln in sheet_lines(shot_sheet) if n in set(_wearers)],
-                _described, _film_duress) if hold_gaze else "")
+                body, _described, sheet=shot_sheet, held=_held_now,
+                applied_to={_n for _n, _i in _new_on}) if hold_gaze else "")
             # A face under a gag acts ABOVE it. "Played in the eyes and the mouth" is
             # a mouth the tape is over, and the face won.
             if _duress and _gag_on:
-                _faces_of = ([_n for _n, _w in emotion_pairs(body, _described)]
-                             or list(_described or []) or list(_gag_on))
-                _gagged_face = next((_n for _n in _faces_of if _n in _gag_on), "")
-                if _gagged_face:
-                    _duress = eyes_above(_duress, _gag_on[_gagged_face])
+                _faces_of = ([_n for _n, _w in emotion_pairs(body, _described, shot_sheet)]
+                             or _held_now or list(_described or []) or list(_gag_on))
+                for _gagged_face in [_n for _n in _faces_of if _n in _gag_on][:2]:
+                    _duress = eyes_above(_duress, _gag_on[_gagged_face], who=_gagged_face)
             if _duress:
                 duress_shots.append(len(plan) + 1)
             _mouth_busy = bool(mouth_performs(body) or emotion_in(body))
+            # NOT BESIDE THE MACHINE'S VOICE. device_voice_clause already closes the
+            # room's mouths ("their own mouths closed"), so the shot said it twice.
+            # REPORTED as guards crowding the beat. The silence pin is untouched: a
+            # device line opens the branch for the device, as it always did.
             _mouth = MOUTH_HOLD if (mouths_shut_when_no_line and _has_people
-                                    and (not _speaks or _device_line)
-                                    and not _voiced and not _mouth_busy) else ""
+                                    and not _speaks
+                                    and not _voiced and not _mouth_busy
+                                    and not _MOUTH_EATS.search(_acted or "")) else ""
             _mouth_from_silence = bool(_mouth)
             _vocal_src = vocal_sources_in(body, shot_sheet) if _voiced else []
+            if _voiced and not _vocal_src and _gag_second:
+                _vocal_src = [(next(iter(_gag_on)), _gag_second)]
             # A sound behind a gag is that sound MUFFLED: "the screaming is Mara's"
             # opened the mouth the tape was over, and the tape went.
             _vocal_src = [(_n, f"muffled {_p}" if _n in _muffled else _p)
@@ -11178,10 +12686,15 @@ class H3LongVideos:
             # A busy mouth no longer stands the voice guard down: whoever does NOT
             # have the line is still told so, as silent rather than closed. See
             # MOUTH_SILENT_REST.
+            # A SHOUTED LINE HAS A SPEAKER. "Dan shouts, ..." is a voice verb, and with
+            # no vocal source credited the guard stood down -- no "Only Dan speaks", no
+            # language, and the listener's mouth left free. REPORTED. It stands down
+            # only where nobody at all can be credited.
+            _talkers_pre = speakers_in(body, shot_sheet) if _speaks else []
             if (not _mouth and mouths_shut_when_no_line and (_speaks or _voicers)
                     and not _device_line
-                    and not (_voiced and not _voicers)):
-                _talkers = speakers_in(body, shot_sheet) if _speaks else []
+                    and not (_voiced and not _voicers and not _talkers_pre)):
+                _talkers = _talkers_pre
                 _open = set(_talkers) | set(_voicers)
                 _here_too = [n for n in _was
                              if n not in set(_described or [])
@@ -11221,7 +12734,8 @@ class H3LongVideos:
                                             fallback=_script_lang,
                                             named=engine.language_named(body))
             _lang = (LANGUAGE_HOLD.format(lang=_shot_lang)
-                     if (_speaks and not _voiced) else "")
+                     if (_speaks and (not _voiced or (_talkers_pre and not _voicers)))
+                     else "")
             if _lang and _shot_lang not in _langs_used:
                 _langs_used.append(_shot_lang)
             if _lang:
@@ -11229,10 +12743,21 @@ class H3LongVideos:
             _said_words = len(engine.spoken_text(body).split())
             if _said_words:
                 _spoken_words[len(plan) + 1] = _said_words
-            _device = device_voice_clause(body) if (_device_line and _has_people) else ""
+            # People in the room by the scene or the carried cast count, not only by
+            # the beat: "The smart speaker says ..." in a living room the paragraph
+            # fills with two people had no line saying the voice is the machine's.
+            # REPORTED.
+            _room_people = bool(_has_people or (_described or []) or any(
+                re.search(r"(?<![\w'’-])" + re.escape(n) + r"(?![\w'’-])", _scene_text or "")
+                for n, _ in sheet_lines(sheet) if n))
+            _device = device_voice_clause(body) if (_device_line and _room_people) else ""
             if _device:
                 device_shots.append(len(plan) + 1)
-            heard = ([] if (not auto_sound or _own)
+            # A SPEAKING SHOT GETS THE ROOM AND NOTHING ELSE. An inferred door, chain or
+            # footstep beside a line is an action the beat never wrote, competing with
+            # the voice. REPORTED as characters doing things the beat never wrote. The
+            # bed and the room tone are added below as before.
+            heard = ([] if (not auto_sound or _own or _speaks)
                      else sounds_for(_acted, held=[_state_key(t) for t, _ in _pairs]))
             # The beat's own vocal goes into the list whether or not the beat also reads
             # as a written sound. Only when it did was it put back, so "cries out" and
@@ -11294,8 +12819,29 @@ class H3LongVideos:
                     _gaze = gaze_hold(_target)
             if _gaze:
                 gaze_shots.append(len(plan) + 1)
+            if _leaves_room:
+                on_call = False     # a call does not follow a cut into another room
+            if _CALL_STARTS.search(_acted or ""):
+                on_call = True
+            _on_call_now = on_call
+            if _CALL_ENDS.search(_acted or ""):
+                on_call = False
+            _prev_for_gaze, prev_acted = prev_acted, _acted
+            # NOT OVER SOMETHING THE BEAT OR THE STATE ALREADY HAS THEM DOING: a written
+            # occupation ("Dex works the bag"), a gaze of their own, or a hold -- lying,
+            # bound, gagged. "They face each other" on those was the node's staging, not
+            # the beat's. REPORTED.
+            _occupied = any(
+                n in (restrained_who or ()) or n in (_gag_on or {})
+                or poses.get(n) == "lying down" or looking_at.get(n)
+                or own_action(_acted, n, shot_sheet, _described)
+                for n in (_described or []))
             if (hold_gaze and not _gaze and _speaks and not _look_now
-                    and not _device_line and len(_described or []) >= 2):
+                    and not _device_line and not _occupied
+                    and faces_each_other(body, _acted, shot_sheet, _described,
+                                         poses=poses, facing=facing,
+                                         on_call=_on_call_now, scene=shot_scene,
+                                         prev=_prev_for_gaze)):
                 _faces = dialogue_gaze(len(_described))
                 if _faces:
                     dialogue_gaze_shots.append(len(plan) + 1)
@@ -11341,7 +12887,7 @@ class H3LongVideos:
                 (3, "hold", hold),           # hardware coming open is not a drift
                 (4, "fall", "" if _fall_led else fall),   # a landing; hoisted when bound
                 (3, "gag", "" if _gag_led else _gag),     # hoisted, see gag_hold
-                (3, "down", "" if _down_led else _down_lead),   # see lying_stays
+                (3, "down", _down_lead),   # see lying_stays
                 (4, "travel", _travel),      # a journey needs both its ends
                 (4, "where", _where),        # ...and later shots need the new room
                 (5, "pace", _pace),          # ...and a short action needs the whole shot
@@ -11356,9 +12902,9 @@ class H3LongVideos:
                 (12, "duress", _duress),
                 (12, "mouth", _mouth),
                 (12, "language", _lang),   # ...and in which language
-                (3, "contact", _contact),
+                (13, "contact", _contact),   # who with whom; the beat says what
                 (15, "faces", _faces),
-                (15, "frame", "" if _frame_led else _frame),   # hoisted, see above
+                (8, "frame", _frame),        # a fresh composition only -- see frame_hold
                 (13, "camera", _camera),
                 (6, "told", "" if _told_led else _told),   # hoisted, see above
                 (13, "turn", turn),
@@ -11391,7 +12937,12 @@ class H3LongVideos:
                                list(_in_frame or []) + list(_carried_on) + list(_carried))
                            if n not in (_described or [])
                            and re.search(r"\b" + re.escape(n) + r"\b", _kept)]
-            _cast_hold = cast_hold(list(_described or []) + _also_named, body, _extras_seen)
+            # NOT FOR NOBODY: a beat that puts nobody on screen describes nobody -- see
+            # _plain_people. A beat somebody walks into or out of keeps its count: a
+            # name with no body counted is the random person it was REPORTED as.
+            _cast_hold = ("" if _plain_people else
+                          cast_hold(list(_described or []) + _also_named, body,
+                                    _extras_seen))
             # A REPEATED NAMING IS SPENT AS A PRONOUN. Only the clauses this node
             # wrote, only where the pronoun resolves to one person, and only after
             # cast_hold has counted the bodies -- the first naming survives, so the
@@ -11418,8 +12969,10 @@ class H3LongVideos:
             _events = (list(sounds_for(_acted, held=[_state_key(t)
                                                    for t, _ in _pairs]))
                        if auto_sound else [])
+            # Nobody described is nobody pictured: a recovered face is never taken from
+            # a shot of the clock -- see _plain_people.
             plan.add(shot_text,
-                     list(active) if character_guard else [],
+                     list(active) if (character_guard and not _plain_people) else [],
                      _speaks, (_own and not _mute_written) or _voiced,
                      _voiced and not _own, _events)
 
@@ -11726,11 +13279,13 @@ class H3LongVideos:
         if frame_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in frame_shots)} are told what the "
-                f"frame HOLDS: every person described in them whole, head to feet -- right "
-                f"after your beat, where the frame is decided. A shot that opens on the "
-                f"last one's final frame with the camera held is told they STAY whole, not "
-                f"to widen onto the room, since widening a held take is how it cuts to a "
-                f"new angle in a new place. An attribute a prompt does not state is left to "
+                f"frame HOLDS: every person described in them whole, head to feet. Only "
+                f"where the frame is composed afresh -- shot 1, a cut, a restart, a "
+                f"journey: a shot that opens on the last one's final frame already has its "
+                f"framing, the camera hold keeps it, and widening a held take is how it "
+                f"cuts to a new angle in a new place. Nothing is said on a shot whose beat "
+                f"puts nobody on screen, or where you move the camera yourself. An "
+                f"attribute a prompt does not state is left to "
                 f"the model's PRIOR, and the prior for a named, described person is a "
                 f"portrait: cropped to the face, with the clothes and restraints below it "
                 f"out of the picture and redrawn from nothing when they come back into "
@@ -12194,39 +13749,14 @@ class H3LongVideos:
                 f"lips-closed line loses to a stream that has decided somebody is "
                 f"talking. Shots staging effort are left out on purpose -- straining is "
                 f"vocal and that mouth should be open")
-        if _film_mood == "grim":
+        # No mood line any more -- see strain_face. The note says where the tone goes.
+        if _film_mood == "grim" or _film_duress:
             notes.append(
-                "the anchor declares the film's tone, so every shot carries \"The mood "
-                "is grim.\" and no guessing is done. That is the reliable way to set "
-                "it: swept over 512 beats, inferring a mood from the beats alone "
-                "called an ORDINARY film grim as often as a duress one, because the "
-                "words overlap -- screams is a waterslide, tied is a boat, bound is a "
-                "flight to Lisbon, chained is a desk job")
-        elif _film_mood == "light":
-            notes.append(
-                "the anchor declares a light tone, so no grim mood is applied to any "
-                "shot whatever the beats say. That is the override for a wrong "
-                "reading, and it wins outright")
-        elif _film_duress:
-            notes.append(
-                "no tone is declared in the anchor, and the beats or the character "
-                "sheet carry UNAMBIGUOUS duress -- hardware on a body, a captor, an "
-                "abduction, being locked in -- so every shot carries \"The mood is "
-                "grim.\" Only unambiguous evidence counts here: ordinary coercion "
-                "verbs and distress words are not enough on their own, because "
-                "grabbing, dragging and screaming are as much a garden centre and a "
-                "waterslide as an abduction. Write the tone into the anchor to settle "
-                "it either way")
-        elif any(beat_duress_strength(b) for b in beats):
-            notes.append(
-                "some beats read as though they MIGHT stage duress -- coercion or "
-                "distress verbs -- but nothing unambiguous, so no mood was applied and "
-                "every face is left to the model, whose prior for a described person "
-                "is a pleasant posed portrait. If this film has a tone, write it into "
-                "the anchor: 'grim', 'tense', 'a kidnapping' and the like turn it on "
-                "for every shot, and 'warm' or 'comic' turn it off for good. Measured "
-                "over 512 beats, guessing from the beats alone is no better than a "
-                "coin toss, so it does not guess")
+                "this film reads as one of duress, and the node writes no mood line for "
+                "it: a film's tone is the author's, set in the anchor, which goes into "
+                "every shot as written. A face is told the strain only on a shot where "
+                "a described person is held -- in hardware, or bound by the beat -- and "
+                "named, so the captor alone in a frame is left to the beat")
         if vocal_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in vocal_shots)} have a vocal that "
@@ -12247,9 +13777,9 @@ class H3LongVideos:
         if duress_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in duress_shots)} are told what the "
-                f"face is doing, because the scene already stages duress -- restraint "
-                f"hardware the sheet lists on somebody in the shot, or your own "
-                f"distress verbs in the beat. Reported as somebody smiling at the "
+                f"face is doing, because a described person in them is held -- in "
+                f"hardware, or bound by the beat -- or the beat names a feeling and "
+                f"whose it is. Reported as somebody smiling at the "
                 f"camera in a scene of duress: a four-shot scene of a woman handcuffed "
                 f"in a van had not one word in it about anybody's face, and an "
                 f"attribute a prompt does not state is not LEFT to the model, it is "
