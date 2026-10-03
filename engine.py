@@ -268,7 +268,10 @@ APPLY_VERB = (
     # "stuffs a cloth into her mouth", "pushes a ball gag into her mouth". REPORTED as
     # a scream left unmuffled with nothing over the mouth.
     r"(?:stuff(?:s|ed|ing)?|shov(?:e|es|ed|ing)|push(?:es|ed|ing)?|forc(?:e|es|ed|ing)|"
-    r"jam(?:s|med|ming)?|cram(?:s|med|ming)?|wedg(?:e|es|ed|ing)|insert(?:s|ed|ing)?)"
+    r"jam(?:s|med|ming)?|cram(?:s|med|ming)?|wedg(?:e|es|ed|ing)|insert(?:s|ed|ing)?|"
+    # ...or PUT or FITTED in: "puts a ball gag in her mouth" put nothing on. REPORTED.
+    r"puts?|putting|fits?|fitted|fitting|places?|placed|placing|slips?|slipped|slipping|"
+    r"pops?|popped|popping)"
     r"(?:\s+[^\s.;!?]+){0,6}?\s+(?:in|into|inside|between)\s+"
     r"(?:[\w'’]+\s+){0,2}?(?:mouth|lips|teeth)|"
     # ...and the part first: "covers her mouth with duct tape".
@@ -665,6 +668,111 @@ _CHAINED_PART = re.compile(
     r"\b(wrists?|ankles?|hands|feet|legs)\s+(?:(?:are|were|is|was|now|still|both|each)\s+)?"
     r"(chained)\b(?!\s+(?:to|onto|up\s+to)\b)", re.I)
 
+# A THING CARRIED, NOT A PERSON HELD. "Car keys clipped to his belt", "a knife strapped to
+# his thigh", "a watch strapped to her wrist", "keys on a chain": the strap, the clip and
+# the chain hold the thing, and each was read as a restraint on its owner. REPORTED as
+# holds on the captor and on a free wrist. The whole phrase is blanked before reading.
+_CARRIED_NOUN = (r"(?:keys?|key\s?rings?|key\s?chains?|knife|knives|blade|dagger|sword|"
+                 r"gun|pistol|revolver|rifle|holster|phone|watch|wristwatch|badge|wallet|"
+                 r"purse|radio|walkie-talkie|torch|flashlight|bag|pouch|sheath|camera|"
+                 r"lanyard|backpack|rucksack|baton|taser|canteen|flask|bottle|pendant|"
+                 r"locket|medallion|whistle|crucifix|charm|tools?|pager|compass|binoculars)")
+_CARRIED_PHRASE = re.compile(
+    r"\b" + _CARRIED_NOUN + r"\b"
+    r"(?:\s+(?:is|are|was|were|kept|worn|hangs?|hanging|hung|dangles?|dangling|sits?))?"
+    r"(?:\s+(?:clipped|strapped|hooked|chained|tucked|looped|fastened|attached|tied|"
+    r"buckled|belted|secured|taped|holstered|slung))?"
+    r"\s+(?:to|on|onto|at|from|in|inside|under|round|around|across|over)\s+"
+    r"(?:(?:a|an|the|his|her|their|its|one)\s+)?(?:[\w-]+\s+){0,2}?"
+    r"(?:belt|hip|thigh|leg|ankle|wrist|arm|neck|chest|waist|shoulder|back|chain|strap|"
+    r"cord|lanyard|clip|ring|loop|string|thong|keyring)s?\b", re.I)
+
+
+# A FASTENING VERB ON A THING: "Dan tapes the box shut", "straps the bag to his back",
+# "cuffs his sleeves". Nothing in the clause is a body, so nobody is restrained.
+_THING_OBJECT = re.compile(r"\s+(?:the|a|an|this|that|these|those|some|its|his|their)\s+\S",
+                           re.I)
+_PERSON_WORD = re.compile(r"\b(?:her|him|them|herself|himself|themselves|woman|women|man|men|"
+                          r"girl|boy|prisoner|captive|hostage|suspect|victim|person|"
+                          r"(?-i:[A-Z][\w'’-]+))\b", re.I)
+
+
+def _fastens_a_thing(text, end):
+    """Is the fastening verb ending at `end` used on a THING? See _THING_OBJECT."""
+    if not _THING_OBJECT.match(text, end):
+        return False
+    clause = re.split(r"[.;!?]|\b(?:and|then|while|before|after)\b", text[end:], maxsplit=1)[0]
+    return not (_RESTRAINABLE.search(clause) or _PERSON_WORD.search(clause))
+
+
+def carried_masked(text):
+    """`text` with every carried-thing phrase blanked, position for position. See
+    _CARRIED_PHRASE."""
+    t = str(text or "")
+    return _CARRIED_PHRASE.sub(lambda m: " " * len(m.group(0)), t)
+
+
+# The kind of gag, which decides the mouth: "a ball gag", "a ring gag" hold it open.
+_GAG_KIND = re.compile(r"\b((?:" + _ADJ + r"\s+){0,2}(?:ball|bit|ring|o-ring|spider|"
+                       r"open[-\s]mouth|inflatable))\s+$", re.I)
+
+# A TIE WITH NOTHING NAMED TO TIE WITH. "Dan ties her hands behind her back", "binds her
+# wrists and ankles" and "ties her ankles together" named no piece, so nothing went on,
+# hardware_changed never moved and no later shot held anything. REPORTED as restraints
+# that did not register. Rope is the default soft tie, one piece on each part the verb
+# names; a piece named WITH the verb ("with duct tape") is used instead.
+_TIE_LIMB = r"(?:wrists?|ankles?|hands|feet|legs|arms|knees|elbows|thumbs)"
+_TIE_LIMBS = (_TIE_LIMB + r"(?:\s*(?:,\s*(?:and\s+)?|and\s+)(?:(?:her|his|their|the)\s+)?"
+              + _TIE_LIMB + r")*")
+_TIES_LIMBS = re.compile(
+    r"\b(?:ties|tied|tying|reties|retied|binds|bound|binding)\s+"
+    r"(?:(?:her|his|their|the|[A-Z][\w'’-]*['’]s)\s+)?(?:(?:own|two|both)\s+)?"
+    r"(" + _TIE_LIMBS + r")\b", re.I)
+# ...and the state it leaves: "her hands tied behind her back", "wrists bound".
+_LIMBS_TIED = re.compile(
+    r"\b(" + _TIE_LIMBS + r")\s+(?:(?:are|were|is|was|now|still|both|each|firmly|tightly|"
+    r"securely|already)\s+){0,2}(tied|bound)\b"
+    r"(?!\s+(?:for|to\s+(?:be|go|happen|lose|win|fail)|up\s+in)\b)", re.I)
+_TIE_PART = {"wrist": "wrists", "hands": "wrists", "ankle": "ankles", "feet": "ankles"}
+
+
+def _tied_limbs(text, raw):
+    """Rows for the limbs a tying verb names with no piece of its own -- see _TIES_LIMBS.
+    Each goes at the verb, so the clause it is read in is the one with the verb."""
+    out = []
+    for rx in (_TIES_LIMBS, _LIMBS_TIED):
+        for m in rx.finditer(text):
+            verb_at = m.start() if rx is _TIES_LIMBS else m.start(2)
+            lo = max([x.end() for x in re.finditer(r"[.;!?]", text[:m.start()])], default=0)
+            hi = min([x.start() for x in re.finditer(r"[.;!?]", text) if x.start() >= m.end()],
+                     default=len(text))
+            parts = []
+            for w in re.findall(_TIE_LIMB, m.group(1), re.I):
+                p = _TIE_PART.get(w.lower(), w.lower())
+                p = next((n for pt, n in PARTS if re.fullmatch(pt, p, re.I)), p)
+                if p not in parts:
+                    parts.append(p)
+            # What it is tied WITH, in the same sentence after the verb.
+            tool = next((r for r in raw if m.start() <= r[3] < hi and r[0] in PART_VARIES
+                         and _WITH_BEFORE.search(text[:r[3]])), None)
+            covered = {_TIE_PART.get(r[1], r[1]) for r in raw + out
+                       if lo <= r[3] < hi and r is not tool}
+            todo = [p for p in parts if p not in covered]
+            if not todo:
+                continue
+            if tool is not None:
+                if len(parts) < 2 and _TIE_PART.get(tool[1], tool[1]) in parts:
+                    continue            # one limb, already on it: as it was
+                for r in [r for r in raw if r[0] == tool[0] and m.start() <= r[3] < hi
+                          and _TIE_PART.get(r[1], r[1]) in parts]:
+                    raw.remove(r)
+                canon, written = tool[0], tool[2]
+            else:
+                canon, written = "rope", "rope"
+            for p in todo:
+                out.append([canon, p, written, verb_at])
+    return out
+
 
 def hardware_spans(text):
     """Every piece of hardware named, as (canonical, part, as-written, at).
@@ -678,7 +786,7 @@ def hardware_spans(text):
     ALL of it, too. The old reader returned only the longest single match, so a
     beat that put on cuffs and a collar recorded one and lost the other for the
     rest of the film."""
-    text = text or ""
+    text = carried_masked(text or "")
     parts = part_spans(text)
     raw, verb_ats = [], []
     for m in _HW_ONE.finditer(text):
@@ -688,6 +796,9 @@ def hardware_spans(text):
         if canon == "chain" and not noun.lower().endswith("ed") \
                 and not _NOUN_BEFORE.search(text[:m.start()]):
             verb_ats.append(m.start())
+            continue
+        if not adj and not _NOUN_BEFORE.search(text[:m.start()]) \
+                and _fastens_a_thing(text, m.end()):
             continue
         written = f"{adj} {noun}".strip().lower()
         if noun.lower().endswith(("ed", "ing")) or (
@@ -703,6 +814,10 @@ def hardware_spans(text):
             if _ANIMAL.search(re.split(r"[.;!?]", text[:m.start()])[-1] + " "
                               + re.split(r"[.;!?]", text[m.start():])[0]):
                 continue
+        elif canon == "gag":
+            _kind = _GAG_KIND.search(text[:m.start(2)])
+            if _kind:
+                written = f"{_kind.group(1).lower()} gag"
         raw.append([canon, part, written, m.start()])
     # The present participle, with its object: "Dan is cuffing her wrists" named no
     # piece, so nothing went on. Never bare -- "she is gagging" is not a gag.
@@ -757,7 +872,9 @@ def hardware_spans(text):
             continue
         noun = re.sub(r"s$", "", m.group(1).lower()) if m.group(1).lower() == "socks" \
             else m.group(1).lower()
-        raw.append(["gag", "mouth", f"{noun} gag", m.start(1)])
+        # Stuffed IN, it holds the mouth open -- see mouth_held_open.
+        _in = not (m.group("over") or m.group("out"))
+        raw.append(["gag", "mouth", f"{'stuffed ' if _in else ''}{noun} gag", m.start(1)])
     _ats = [(c, at) for c, _pt, _w, at in raw]
     _tether = []
     for row in raw:
@@ -828,6 +945,7 @@ def hardware_spans(text):
         _pt = next((pt for pt, at in parts if at == m.start(1)), None)
         if _pt and not any(c == "chain" and pt == _pt for c, pt, _w, _a in raw):
             raw.append(["chain", _pt, "chain", m.start(2)])
+    raw += _tied_limbs(text, raw)
     out, seen = [], {}
     for canon, part, written, at in raw:
         key = (canon, part)
@@ -1187,8 +1305,64 @@ def posture_in(text):
     for that, but off the same vocabulary."""
     t = text or ""
     hits = sorted((m.start(), name) for name, rx in _POSTURE_OF
-                  for m in rx.finditer(t) if not denied_posture(t, m.start()))
+                  for m in rx.finditer(t) if not denied_posture(t, m.start())
+                  and not posture_of_a_thing(t, m.start()))
     return hits[0][1] if hits else ""
+
+
+# THINGS LIE, SIT AND STAND TOO. "A phone lies on the nightstand", "keys lie on the
+# table", "her hair lies loose", "a bag sits on the chair": a posture verb whose subject
+# is a thing puts nobody anywhere. REPORTED as a woman held lying down from the first
+# shot, while she stood.
+_PERSON_SUBJECT = frozenset("""
+i you he she we they everyone everybody someone somebody anyone anybody nobody both
+woman women man men girl girls boy boys guy guys lady ladies person people body bodies
+figure figures guard guards officer officers stranger strangers driver prisoner captive
+hostage victim nurse doctor child children kid kids teen teenager couple pair twins wife
+husband mother father sister brother daughter son friend boss captor intruder soldier
+cop detective agent thief burglar patient head face
+""".split())
+_THING_SUBJECT = re.compile(
+    r"^(?:it|its|phones?|keys?|bags?|clothes|clothing|hair|books?|bottles?|glass(?:es)?|"
+    r"cups?|mugs?|plates?|bowls?|lamps?|lights?|candles?|papers?|letters?|notes?|"
+    r"knife|knives|guns?|pistols?|wallets?|purses?|towels?|blankets?|sheets?|duvet|"
+    r"pillows?|cushions?|chairs?|tables?|beds?|sofas?|couch|desks?|rugs?|mattress|"
+    r"boxe?s|box|cases?|crates?|doors?|house|room|building|trees?|shadows?|sun|moon|"
+    r"remote|laptop|tray|basket|suitcase|backpack|toys?|window|windows|curtains?|"
+    r"mirror|clock|vase|flowers?|plant|television|tv|screen|radio|camera|food|drink|"
+    r"wine|coffee|tea|water|cigarettes?|ashtray|newspaper|magazines?|cards?|money|"
+    r"cash|dishes|cutlery|tools?|weapons?|dog|dogs|cat|cats|rubbish|trash|"
+    r"" + _HW_NOUN + r"|(?:" + GARMENT_WORDS + r")s?)$", re.I)
+_SUBJECT_FILLER = frozenset("""
+is are was were still now just then also all already slowly quietly simply only even
+""".split())
+
+
+def posture_of_a_thing(text, at):
+    """Is the posture verb at `at` said of a THING rather than a person? An elided
+    subject ("... and lies down") is the person before it, and a name is a person."""
+    before = str(text or "")[:max(0, int(at))]
+    start = max((m.end() for m in re.finditer(r"[.;!?:\n]", before)), default=0)
+    clause = before[start:]
+    rel = None
+    for m in re.finditer(r",|\b(?:and|but|then|while|as|so|when|where|that|which|who)\b",
+                         clause, re.I):
+        rel = m
+    span = clause
+    if rel is not None:
+        # "the phone THAT lies on the table" is the phone lying.
+        span = (clause[:rel.start()] if rel.group(0).lower() in ("that", "which")
+                else clause[rel.end():])
+    words = re.findall(r"[A-Za-z][\w'’-]*", span)
+    while words and (words[-1].lower() in _SUBJECT_FILLER or words[-1].lower().endswith("ly")):
+        words.pop()
+    if not words:
+        return False
+    if rel is not None and rel.group(0).lower() in ("that", "which"):
+        words = words[-3:]
+    if any(w.lower() in _PERSON_SUBJECT for w in words):
+        return False
+    return bool(_THING_SUBJECT.match(re.sub(r"['’]s$", "", words[-1])))
 
 
 DET_POSS = r"(?:the|her|his|their|its|a|an|\w+['’]s)"
@@ -1918,7 +2092,7 @@ class SceneState:
             self.people[name] = Person(name)
         return self.people[name]
 
-    def declare(self, name, description, staged_later=()):
+    def declare(self, name, description, staged_later=(), hardware_only=False):
         """Take what a character sheet already says as read.
 
         A sheet entry is a STATE, not an event: "Kate: she, 30, coat, handcuffs"
@@ -1955,6 +2129,8 @@ class SceneState:
                                           position_in(description or ""),
                                           anchor_in(description or ""), 0)
             p.declared.add((canon, part))
+        if hardware_only:
+            return p                # a scene sentence: its clothes are the sheet's to say
         _off = [_garment_key(x) for x in p.removed]
         for g in garments_in(description or ""):
             key = _garment_key(g)
@@ -2460,7 +2636,7 @@ _APPLIED_TO_PRONOUN = re.compile(
     r"applied|buckles?|buckled|straps?|strapped|ties|tied|fastens?|fastened|locks?|"
     r"locked|clips?|clipped|snaps?|snapped|clamps?|clamped|cuffs|cuffed|chains|chained|"
     r"loops?|looped|slips?|slipped|secures?|secured|attaches|attached|cinches|cinched|"
-    r"tightens?|tightened|shackles|shackled|hooks?|hooked|"
+    r"tightens?|tightened|shackles|shackled|hooks?|hooked|fits?|fitted|pops?|popped|"
     # ...and a gag stuffed or pushed in: see APPLY_VERB.
     r"stuff(?:s|ed)?|shov(?:es|ed)|push(?:es|ed)|forc(?:es|ed)|jam(?:s|med)|"
     r"cram(?:s|med)|wedg(?:es|ed)|inserts?|inserted|"
@@ -2868,6 +3044,16 @@ def held_part_of(items):
         return "wrists"
     limbs = [p for p in parts if p in ("ankles", "arms")]
     return limbs[0] if limbs else parts[0]
+
+
+_OPEN_MOUTH = re.compile(r"\b(?:ball|bit|ring|o-ring|spider|open[-\s]mouth|inflatable|"
+                         r"stuffed)\b", re.I)
+
+
+def mouth_held_open(item):
+    """Does this gag hold the mouth OPEN -- a ball, a bit or a ring between the teeth, or
+    cloth stuffed in? A mouth told to stay closed is a mouth with none of those in it."""
+    return bool(_OPEN_MOUTH.search(str(item or "")))
 
 
 def staged_applications(beats):

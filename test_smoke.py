@@ -13,9 +13,11 @@ Run: python test_smoke.py
 """
 
 import importlib.util
+import inspect
 import io
 import os
 import itertools
+import math
 import re
 import sys
 import types
@@ -1443,6 +1445,160 @@ def test_the_cuffs_stay_in_the_picture():
     check("an unrestrained scene is untouched", not held(plain), "")
 
 
+_HOLD_MEM = "Mara: she, 28, grey sweater, jeans.\nDan: he, 40, black jacket."
+_HOLD_SCENE = ("A small bedroom with a double bed.\n\n"
+               "Dan grabs Mara by the arm.\n"
+               "hold: Mara, handcuffs behind her back; duct tape over her mouth\n\n"
+               "Mara struggles.\n\n"
+               "remove: duct tape\nDan looks at her.\n\n"
+               "Dan walks to the door.")
+_CUFFS_HELD = re.compile(r"The handcuffs\b[^.]*? stay closed")
+_GOES_ON = re.compile(r"\b(?:goes|go) (?:on|across)\b[^.]*during this shot")
+
+
+def test_a_hold_line_keeps_each_piece_on():
+    """REPORTED: restraints and gags written in a wording the reader does not know
+    registered nothing, so the next beat lost them. A hold: line registers each piece on
+    its person from that beat on, whatever the beat's own wording."""
+    print("\n=== a hold: line keeps each piece on from its beat on ===")
+    seen, _script = _prompts_sent(_HOLD_SCENE, character_memory=_HOLD_MEM)
+    sh = [p for p, _n in seen]
+    check("every beat renders", len(sh) == 4, str(len(sh)))
+    check("the line itself never reaches the model", all("hold:" not in s for s in sh), "")
+    check("the shot it is under is told the cuffs go on",
+          bool(re.search(r"The handcuffs go on [^.]*during this shot", sh[0])), sh[0])
+    check("...and the tape", "duct tape goes across her mouth during this shot" in sh[0], sh[0])
+    check("...with the arms where the line put them", "arms are behind the body" in sh[0], sh[0])
+    check("the next shot holds the cuffs", bool(_CUFFS_HELD.search(sh[1])), sh[1])
+    check("...and the tape", "duct tape stays stuck flat across her mouth" in sh[1], sh[1])
+    check("...without putting either on again", not _GOES_ON.search(sh[1]), sh[1])
+    # One person on the sheet: the name can be left out. A paragraph holding only the
+    # line belongs to the beat above it rather than becoming a shot of its own.
+    one = _shots("A bare room.\n\nMara sits on the bed.\n\n"
+                 "hold: zip ties on her wrists in front of her body\n\nMara rocks.",
+                 character_memory="Mara: she, 28, grey dress.")
+    check("a paragraph holding only the line is no shot of its own", len(one) == 2,
+          str(len(one)))
+    check("...and the beat above it puts the piece on", "zip ties go on" in one[0], one[0])
+    check("the next shot holds it where the line put it",
+          "zip ties on the wrists stay" in one[1] and "in front of the body" in one[1],
+          one[1])
+
+
+def test_a_remove_line_takes_off_only_the_held_piece_it_names():
+    print("\n=== remove: takes off the held piece it names and nothing else ===")
+    sh = _shots(_HOLD_SCENE, character_memory=_HOLD_MEM)
+    check("the tape comes off in the shot that removes it", "takes the duct tape off" in sh[2],
+          sh[2])
+    check("...and is not held after it", "duct tape" not in sh[3], sh[3])
+    check("the cuffs stay on through the removal and after",
+          all(_CUFFS_HELD.search(s) for s in sh[2:]), "")
+    # Tape on two parts: the one named by its part comes off, the other stays held.
+    P = ("A small bedroom.\n\nDan grabs Mara.\n"
+         "hold: Mara, tape around her wrists; duct tape over her mouth\n\n"
+         "Mara waits.\n\nremove: duct tape over her mouth\nDan looks at her.\n\nMara waits.")
+    two = _shots(P, character_memory=_HOLD_MEM)
+    check("tape on the wrists is held beside tape on the mouth",
+          "tape on the wrists stays" in two[1] and "across her mouth" in two[1], two[1])
+    check("...and stays held once the mouth tape is off",
+          "tape on the wrists stays" in two[3] and "across her mouth" not in two[3], two[3])
+    # The same pair in prose: the mouth tape used to take the wrist tape out of the hold.
+    prose = _shots("A small bedroom.\n\nDan tapes her wrists together.\n\n"
+                   "Dan presses duct tape over her mouth.\n\nMara waits.",
+                   character_memory=_HOLD_MEM)
+    check("wrist tape written in prose is held beside the mouth tape",
+          all("tape on the wrists stays" in s for s in prose[1:]), prose[2])
+
+
+def test_info_lists_the_restraints_registered_per_shot():
+    print("\n=== info lists what is registered on each shot ===")
+    info = run_node(_HOLD_SCENE, plan_only=True, character_memory=_HOLD_MEM)[2]
+    check("each piece, its part and position, per person per shot",
+          "shot 1: Mara -- handcuffs (wrists, behind the back), duct tape (mouth)" in info,
+          info[-600:])
+    check("...still listed on the shot after", "shot 2: Mara -- handcuffs (wrists, behind "
+          "the back), duct tape (mouth)" in info, "")
+    check("...and the removal shows in it",
+          "shot 3: Mara -- handcuffs (wrists, behind the back);" in info, "")
+    plain = run_node("A room.\n\nMara waits.\n\nMara walks to the window.", plan_only=True,
+                     character_memory=_HOLD_MEM)[2]
+    check("a scene with nothing on lists nothing", "registered per shot" not in plain, "")
+
+
+def test_wording_that_registers_nothing_is_named():
+    print("\n=== a beat naming a piece that registered nothing is named in info ===")
+    # Wordings the reader still does not register. "ties her hands" and "puts a ball gag
+    # in her mouth" register now, and are checked below as not named.
+    P = ("A small bedroom.\n\nDan restrains her hands behind her back.\n\n"
+         "Dan works a ball gag between her teeth.\n\nMara struggles.")
+    info = run_node(P, plan_only=True, character_memory=_HOLD_MEM)[2]
+    check("the gag is named", "shot 2 names 'ball gag' but nothing was registered -- add a "
+          "hold: line if it should stay on" in info, info[-500:])
+    check("...and the tie",
+          "shot 1 names 'restrains her hands' but nothing was registered" in info, "")
+    held = P.replace("behind her back.", "behind her back.\nhold: Mara, rope binding her "
+                     "wrists behind her back").replace("her teeth.", "her teeth.\n"
+                                                       "hold: Mara, ball gag")
+    info2, script2 = run_node(held, plan_only=True, character_memory=_HOLD_MEM)[2:4]
+    check("hold: lines answer it", "nothing was registered" not in info2, info2[-500:])
+    check("...and the gag is held on the shot after", "ball gag stays" in
+          script2.split("---")[-1], script2[-600:])
+    known = run_node("A small bedroom.\n\nDan handcuffs her wrists behind her back.\n\n"
+                     "Dan presses duct tape over her mouth.\n\nMara strains against the "
+                     "cuffs.", plan_only=True, character_memory=_HOLD_MEM)[2]
+    check("wording the reader registers is not named, nor a piece already on",
+          "nothing was registered" not in known, known[-500:])
+    tied = run_node("A small bedroom.\n\nDan ties her hands behind her back.\n\n"
+                    "Dan puts a ball gag in her mouth.\n\nMara struggles.", plan_only=True,
+                    character_memory=_HOLD_MEM)[2]
+    check("...nor a tie or a gag in the wordings that now register",
+          "nothing was registered" not in tied, tied[-500:])
+
+
+def test_a_newly_read_piece_is_timed_sized_and_pictured():
+    """The reader, the hold: line, the applying shot and the held portrait were fixed
+    side by side. A piece the reader now reads, and one only a hold: line registers,
+    get the applying length and wording and retire her portrait like any other."""
+    print("\n=== a newly read piece is timed, sized and pictured like any other ===")
+    room = "A small bedroom with a double bed.\n\nMara stands by the bed.\n\n"
+
+    def planned(text):
+        out = run_node(room + text, character_memory=_HOLD_MEM, plan_only=True,
+                       shot_seconds=10.0)
+        info = str(out[2])
+        m = re.search(r"sized per beat: ([^=]+)=", info)
+        lens = ([int(x) for x in re.findall(r"(\d+)f/", m.group(1))] if m else
+                [int(re.search(r"shot\(s\) x (\d+)f", info).group(1))] * out[6])
+        return lens, _shots_of(out), info
+
+    for beat in ("Dan ties her hands behind her back.", "Dan puts a ball gag in her mouth.",
+                 "Dan cuffs Mara.",
+                 "Dan works a ball gag between her teeth.\nhold: Mara, ball gag"):
+        name = repr(beat.splitlines()[0])
+        lens, sh, info = planned(beat + "\n\nMara struggles.")
+        check(f"{name}: the shot that puts it on gets one more action",
+              len(lens) == 3 and lens[1] > lens[0] == lens[2] == S.MIN_AUTO_FRAMES, str(lens))
+        check(f"{name}: ...and the note names it",
+              "shot(s) 2 put a restraint, gag or seal on" in info, info[:300])
+        check(f"{name}: ...and it is told it goes on, ending in plain view",
+              "during this shot" in sh[1] and "in plain view" in sh[1], sh[1][:500])
+        check(f"{name}: ...with no shot saying still",
+              not any(re.search(r"\bstill\b", s, re.I) for s in sh), "")
+    pic = torch.rand(1, H, W, 3)
+    mem = "Mara: she, 28, grey sweater, jeans. <Picture 1>\nDan: he, 40, black jacket."
+    for beat in ("Dan ties her hands behind her back.",
+                 "Dan works a ball gag between her teeth.\nhold: Mara, ball gag"):
+        name = repr(beat.splitlines()[0])
+        rows, _info = _pictures_sent(room + beat + "\n\nMara struggles.\n\nDan looks at her.",
+                                     character_memory=mem, ref_image_1=pic)
+        check(f"{name}: her portrait rides up to the shot that puts it on",
+              len(rows) == 4 and all(any(r is pic for r in row["refs"]) for row in rows[:2]),
+              str([len(r["refs"]) for r in rows]))
+        check(f"{name}: ...and gives way to the frame of her after it",
+              all(not any(r is pic for r in row["refs"]) and row["handoff"] is not None
+                  for row in rows[2:]), str([len(r["refs"]) for r in rows]))
+
+
 def test_a_sheet_that_claims_hardware_too_early():
     print("\n=== the sheet listing cuffs she has not been put in yet ===")
     mem = "Mara: she, 22, grey dress, handcuffs on her wrists.\nDan: he, 41."
@@ -2060,8 +2216,12 @@ def test_one_photographed_face_and_two_people():
     wearing now, which is the same frame a returning face is recovered from."""
     print("\n=== one photographed face and two people to draw ===")
     mem = "Dan: <Picture 1>, he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
-    P = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
-         "Dan and Crystal talk.\n\nDan laughs.")
+    # Shot 3 cuts to the hallway, and the frame before it -- Dan beside her -- cannot
+    # ride with his portrait, so nothing pictures her there but her own face.
+    P = ("A flat with a kitchen and a hallway.\n\n"
+         "In the kitchen, Crystal reads at the table alone.\n\n"
+         "Dan sits down at the table with Crystal.\n\n"
+         "In the hallway, Dan and Crystal talk.\n\nDan laughs.")
     rows = _encoded_refs(P, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))
     counts = [n for _p, n in rows]
     tags = [re.findall(r"<Picture (\d+)>", p) for p, _n in rows]
@@ -2075,9 +2235,23 @@ def test_one_photographed_face_and_two_people():
           str(tags[2]))
     info = str(run_node(P, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))[2])
     check("the run says whose face it sent and where it came from",
-          "shot 3 gave Crystal a face of their own, from shot 2" in info, info[-200:])
+          "shot 3 gave Crystal a face of their own, from shot 1" in info, info[-200:])
     check("...and that tagging her does the same from the first shot",
           "does the same thing from the first shot" in info)
+
+    # NOT FOR SOMEBODY THE KEYFRAME ALREADY SHOWS. Reported: the same frame went out
+    # twice, once as the keyframe and once as her face, so she was pictured twice.
+    kept = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
+            "Dan and Crystal talk.\n\nDan laughs.")
+    krows = _encoder_rows(kept, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))
+    check("opening on a frame of her, the shot sends Dan's portrait and that frame",
+          krows[2][1] == 2 and "Crystal: <Picture" not in krows[2][0],
+          f"{krows[2][1]} pictures: {krows[2][0][-160:]}")
+    check("...every picture named",
+          not _unnamed_pictures(krows), "; ".join(_unnamed_pictures(krows)))
+    kinfo = str(run_node(kept, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))[2])
+    check("...and no face of her own rides beside it", "face of their own" not in kinfo,
+          kinfo[-200:])
 
     never = ("A kitchen.\n\nDan and Crystal talk.\n\nDan pours coffee.\n\nCrystal laughs.")
     quiet = str(run_node(never, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))[2])
@@ -2086,8 +2260,11 @@ def test_one_photographed_face_and_two_people():
     check("...and the state is still reported as the hazard it is",
           "no <Picture N> of their own" in quiet, quiet[-200:])
 
-    changed = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
-               "Crystal takes off her jacket.\nremove: jacket\n\nDan and Crystal talk.")
+    changed = ("A flat with a kitchen and a hallway.\n\n"
+               "In the kitchen, Crystal reads at the table alone.\n\n"
+               "Crystal takes off her jacket.\nremove: jacket\n\n"
+               "Dan sits down at the table with Crystal.\n\n"
+               "In the hallway, Dan and Crystal talk.")
     stale = str(run_node(changed, character_memory=mem + ", a denim jacket",
                          ref_image_1=torch.rand(1, H, W, 3))[2])
     check("a frame from before she changed clothes is not sent",
@@ -2096,12 +2273,12 @@ def test_one_photographed_face_and_two_people():
     # NOT BESIDE THE DEMOTED HANDOFF. Below the safe aug the handoff -- the frame she was
     # alone in -- rides in the reference rows as soon as any reference does, so her face
     # sent as well was a second picture of her in the same shot.
-    low = _encoded_refs(P, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3),
+    low = _encoded_refs(kept, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3),
                         ref_noise_aug=0.95)
     check("below the safe aug she is pictured once: Dan's reference and the handoff",
           low[2][1] == 2, str([n for _p, n in low]))
     check("...and every picture is still named",
-          not _unnamed_pictures(_encoder_rows(P, character_memory=mem,
+          not _unnamed_pictures(_encoder_rows(kept, character_memory=mem,
                                               ref_image_1=torch.rand(1, H, W, 3),
                                               ref_noise_aug=0.95)))
 
@@ -3839,8 +4016,10 @@ def test_a_fast_h3_is_sent_no_reference():
     check("fast_h3 reads the gate layers", S.fast_h3(FakeFastH3()) is True)
     check("...and a stock or hybrid H3 is not one", S.fast_h3(FakeModel()) is False)
     mem = "Dan: <Picture 1>, he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
-    P = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
-         "Dan and Crystal talk.\n\nDan walks out.\n\nCrystal looks up.\n\n"
+    P = ("A flat with a kitchen and a hallway.\n\n"
+         "In the kitchen, Crystal reads at the table alone.\n\n"
+         "In the hallway, Dan checks his phone.\n\n"
+         "In the kitchen, Dan and Crystal talk.\n\nDan walks out.\n\nCrystal looks up.\n\n"
          "Dan comes back in and sits down.")
     kw = dict(character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))
     base = _encoded_refs(P, **kw)
@@ -5616,6 +5795,33 @@ def test_the_soundtrack_is_the_models_own():
           _opt[23:26] == ["ambient_audio", "ambient_level", "foley_level"])
     check("...and the three after them have not shifted",
           _opt[26:29] == ["speech_lead_seconds", "speech_tail_seconds", "hold_levels"])
+    check("pose control's inputs are appended after them, in this order, and last",
+          _opt[29:] == ["pose_controlnet", "pose_strength", "pose_end", "pose_shots",
+                        "pose_draw"], _opt[29:])
+    _pspec = S.H3LongVideos.INPUT_TYPES()["optional"]
+    check("...the controlnet a socket, the rest widgets with their defaults",
+          _pspec["pose_controlnet"][0] == "MODEL_PATCH"
+          and (_pspec["pose_strength"][1]["default"], _pspec["pose_strength"][1]["min"],
+               _pspec["pose_strength"][1]["max"], _pspec["pose_strength"][1]["step"])
+          == (1.0, 0.0, 2.0, 0.05)
+          and (_pspec["pose_end"][1]["default"], _pspec["pose_end"][1]["min"],
+               _pspec["pose_end"][1]["max"], _pspec["pose_end"][1]["step"])
+          == (0.6, 0.1, 1.0, 0.05)
+          and _pspec["pose_shots"][0] == ["repair broken shots", "every restrained shot",
+                                          "bound falls only"]
+          and _pspec["pose_shots"][1]["default"] == "repair broken shots"
+          and _pspec["pose_draw"][0] == ["everyone", "everyone, thick lines",
+                                         "bound person only"]
+          and _pspec["pose_draw"][1]["default"] == "everyone")
+    check("...each with a tooltip",
+          all(_pspec[k][1].get("tooltip") for k in ("pose_controlnet", "pose_strength",
+                                                    "pose_end", "pose_shots", "pose_draw")))
+    check("...and the controlnet's says what to wire and which checkpoint it needs",
+          "Load Model Patch" in _pspec["pose_controlnet"][1]["tooltip"]
+          and "b25-49" in _pspec["pose_controlnet"][1]["tooltip"])
+    check("pose_strength and pose_end are range-checked like the other numbers",
+          S._WIDGET_RANGE["pose_strength"] == (1.0, 0.0, 2.0, float)
+          and S._WIDGET_RANGE["pose_end"] == (0.6, 0.1, 1.0, float))
     _bed = {"waveform": torch.full((1, 2, 8000), 0.5), "sample_rate": 44100}
     _mixed, _note = S.mix_ambient(torch.zeros((1, 2, 16000)), 44100, _bed, 0.5)
     check("a wired bed reaches the soundtrack", float(_mixed.abs().max()) > 0.1)
@@ -7771,6 +7977,110 @@ def test_the_applying_shot_says_where_the_limbs_finish():
           "By the last frame the wrists" not in neck[0], neck[0][:240])
 
 
+def test_an_applying_shot_is_sized_and_timed_for_the_hold():
+    """REPORTED: restraints breaking once applied and tape gone in the next beat.
+
+    An applying beat got the 73-frame floor, leaned short on purpose, and its text put
+    the deadline on the last frame -- the frame the next shot is pinned to. That frame
+    showed the cuffs open in his hands, or his hand over her mouth and no tape. The
+    applying shot now gets one more action's time, closes the piece by mid-shot, and
+    ends on it in plain view with the hands clear; every other shot is unchanged."""
+    print("\n=== an applying shot is sized and timed for the hold ===")
+    mem = "Mara: she, 28, grey sweater, jeans.\nDan: he, 40, black jacket."
+    room = "A small bedroom with a double bed and a nightstand. Evening light.\n\n"
+    beats = ["Dan handcuffs her wrists behind her back.",
+             "Dan presses duct tape over her mouth.",
+             "Dan pushes her down onto the bed.",
+             "Mara struggles.",
+             "Dan walks to the door."]
+
+    def planned(text, **kw):
+        out = run_node(room + text, character_memory=mem, plan_only=True,
+                       **{"shot_seconds": 10.0, **kw})
+        info = str(out[2])
+        m = re.search(r"sized per beat: ([^=]+)=", info)
+        lens = ([int(x) for x in re.findall(r"(\d+)f/", m.group(1))] if m else
+                [int(re.search(r"shot\(s\) x (\d+)f", info).group(1))] * out[6])
+        return lens, _shots_of(out), info
+
+    lens, sh, info = planned("\n\n".join(beats))
+    check("the cuffing and taping shots get about two actions' time",
+          lens[:2] == [124, 124], str(lens))
+    check("...and the shots after them keep the floor",
+          lens[2:] == [S.MIN_AUTO_FRAMES] * 3, str(lens))
+    check("...and the run says why", "shot(s) 1, 2 put a restraint, gag or seal on" in info,
+          info[:200])
+    check("the cuffing shot closes them by mid-shot",
+          "closed on the body by the middle of the shot and closed for the rest of it"
+          in sh[0], sh[0][:500])
+    check("...and ends on them in plain view, his hands clear",
+          "in plain view and the hands that closed it have let go and are clear of it"
+          in sh[0], sh[0][:500])
+    check("...with the wrists placed when they close",
+          "The wrists are already behind the back when the hardware closes in the first "
+          "half of the shot" in sh[0], sh[0][:600])
+    check("the taping shot sticks it on in the first half and holds it",
+          "The duct tape goes across her mouth during this shot: it is on in the first half "
+          "of the shot and stuck flat over the lips for the rest of it" in sh[1], sh[1][:400])
+    check("...across her mouth in plain view at the end, his hand clear",
+          "at the last frame it is across her mouth in plain view and the hand that put it "
+          "there has let go and is clear of the face" in sh[1], sh[1][:500])
+    check("the shots after carry only the hold",
+          all("first half" not in s and "middle of the shot" not in s and "plain view" not in s
+              for s in sh[2:]), sh[2][:300])
+    check("no shot says still", not any(re.search(r"\bstill\b", s, re.I) for s in sh), "")
+
+    # What reaches sampling: the two applying shots are the longer latents.
+    seen, orig = [], S.sample_shot
+
+    def spy(model, cond, negative, latent, *a, **k):
+        seen.append(int(latent["samples"].parts[0].shape[2]))
+        return orig(model, cond, negative, latent, *a, **k)
+    S.sample_shot = spy
+    try:
+        out = run_node(room + "\n\n".join(beats), character_memory=mem, shot_seconds=10.0)
+    finally:
+        S.sample_shot = orig
+    check("the longer applying shots are what gets sampled",
+          len(seen) == 5 and seen[0] == seen[1] > seen[2] == seen[3] == seen[4], str(seen))
+    check("...and the frames come back at that length",
+          out[5] == sum(lens) - (len(lens) - 1), f"{out[5]} vs {lens}")
+
+    # Only a beat that puts a piece on is lengthened.
+    plain, _, _ = planned("Mara paces by the window.\n\nDan walks in.\n\nMara sits on the bed.")
+    check("a scene that applies nothing keeps its lengths",
+          plain == [S.MIN_AUTO_FRAMES] * 3, str(plain))
+    off, _, _ = planned("Dan handcuffs her wrists behind her back.\n\n"
+                        "Dan unlocks her handcuffs.\n\nMara rubs her wrists.")
+    check("taking a piece off is not lengthened", off == [124, 73, 73], str(off))
+    worn, _, _ = planned("Mara sits on the bench in handcuffs.\n\nMara looks up.")
+    check("a piece already worn is not lengthened", worn == [73, 73], str(worn))
+    later, lsh, _ = planned("Dan handcuffs her wrists behind her back.\n\n"
+                            "Dan ties her ankles with rope.\n\nMara struggles.")
+    check("a piece added to somebody already restrained is lengthened too",
+          later == [124, 124, 73], str(later))
+    check("...and goes on by mid-shot, hands clear at the end",
+          re.search(r"rope goes on[^.]*during this shot: off the body at the first frame, on "
+                    r"and fastened by the middle of the shot", lsh[1])
+          and "the hands that fastened it have let go and are clear of it" in lsh[1],
+          lsh[1][-500:])
+    sealed, ssh, _ = planned("Dan wraps duct tape around her waist and between her legs."
+                             "\n\nMara struggles.")
+    check("a seal going on is lengthened", sealed[0] > 124 and sealed[1] == 73, str(sealed))
+    check("...and is on in the first half, in plain view at the end",
+          "on in the first half of the shot" in ssh[0] and "in plain view" in ssh[0],
+          ssh[0][:500])
+    brisk, _, _ = planned("\n\n".join(beats), pace=0.6)
+    check("a brisk pace does not lean an applying shot short",
+          brisk[:2] == [124, 124] and brisk[2:] == [73, 73, 73], str(brisk))
+    # Told when the piece goes on, so not also told to finish on the last frame.
+    fixed, fsh, _ = planned("Dan puts the handcuffs on her.\n\nMara struggles.",
+                            shot_length="fixed")
+    check("a long fixed shot that applies is not told to finish on the last frame",
+          "finishing on the last frame" not in fsh[0]
+          and "by the middle of the shot" in fsh[0], fsh[0][-400:])
+
+
 def test_a_collar_in_the_sheet_is_held_like_hardware():
     """Reported: the collar was missing from her neck when she was seen in her
     room. It was not the room -- the collar never latched at all.
@@ -8903,7 +9213,9 @@ def test_a_gag_and_a_bound_fall_hold_through_the_beat():
         "Dan rips the tape off her mouth.\n\nMara screams.",
         character_memory=mem, plan_only=True))
     check("the shot that tapes her says it goes on then and stays",
-          "duct tape goes across" in sh[1] and "in place at the last frame" in sh[1],
+          "duct tape goes across" in sh[1]
+          and "stuck flat over the lips for the rest of it" in sh[1]
+          and "at the last frame it is across her mouth in plain view" in sh[1],
           sh[1][:400])
     check("...fastened to no chair", "fast at the chair" not in " ".join(sh), "")
     check("...and the cuffs already on are not told they go on",
@@ -9884,6 +10196,219 @@ def test_one_person_gets_one_picture():
           "<Picture 3>" not in text, " ".join(text.split())[-200:])
 
 
+def _pictures_sent(P, **kw):
+    """Per shot: the prompt, the references, the handoff and how it rides."""
+    seen = []
+    orig = S.build_conditioning
+    def spy(clip, vae, audio_vae, prompt, *a, **k):
+        seen.append(dict(prompt=prompt, refs=[r for r in (k.get("refs") or [])
+                                              if r is not None],
+                         handoff=k.get("handoff"), as_ref=bool(k.get("handoff_as_ref"))))
+        return orig(clip, vae, audio_vae, prompt, *a, **k)
+    S.build_conditioning = spy
+    try:
+        out = run_node(P, **kw)
+    finally:
+        S.build_conditioning = orig
+    return seen, str(out[2])
+
+
+_HELD_MEM = "Mara: she, 28, grey sweater, jeans. <Picture 1>\nDan: he, 35, black jacket."
+_HELD_ROOM = "A small bedroom at night, a double bed against the wall, a door on the left."
+_HELD_BEATS = ["Dan handcuffs her wrists behind her back.",
+               "Dan presses duct tape over her mouth.",
+               "Dan pushes her down onto the bed.", "Mara struggles.",
+               "Dan walks to the door."]
+
+
+def test_a_held_portrait_gives_way_to_the_frame_of_her_now():
+    """REPORTED: tape and cuffs gone in the shot after they went on.
+
+    A tagged portrait rode every shot she was in, near-clean, and it shows her before
+    the cuffs and the tape: free hands and a bare mouth, beside a keyframe that showed
+    them on. From the shot after they go on, the keyframe is her picture."""
+    print("\n=== a held person is pictured as she is now ===")
+    pic = torch.rand(1, H, W, 3)
+    P = _HELD_ROOM + "\n\n" + "\n\n".join(_HELD_BEATS)
+    for label, extra in (("", {}), (" (with a first frame)",
+                                    {"first_frame": torch.rand(1, H, W, 3)})):
+        rows, info = _pictures_sent(P, character_memory=_HELD_MEM, ref_image_1=pic, **extra)
+        check("the shot that puts the cuffs on carries her portrait" + label,
+              any(r is pic for r in rows[0]["refs"]), str(len(rows[0]["refs"])))
+        check("...and no later shot does, each opening on a frame of her" + label,
+              all(not any(r is pic for r in row["refs"]) and row["handoff"] is not None
+                  for row in rows[1:]), str([len(r["refs"]) for r in rows]))
+        check("...with her tag gone from those shots and her line mended" + label,
+              all("<Picture" not in row["prompt"] and "jeans.." not in row["prompt"]
+                  and "Mara: she, 28, grey sweater, jeans." in row["prompt"]
+                  for row in rows[1:]), rows[1]["prompt"][:120])
+        check("...and the run says so" + label,
+              "left out where the shot opens on a frame that shows them: Mara on shot 2"
+              in info, info[-300:])
+    check("every picture is named",
+          not _unnamed_pictures(_encoder_rows(P, character_memory=_HELD_MEM,
+                                              ref_image_1=pic)))
+    # A sheet that lists the cuffs a beat puts on: the beat starts the clock.
+    listed = ("Mara: she, 28, grey sweater, jeans, steel handcuffs. <Picture 1>\n"
+              "Dan: he, 35, black jacket.")
+    rows, _info = _pictures_sent(P, character_memory=listed, ref_image_1=pic)
+    check("cuffs the sheet lists and beat 1 puts on count from beat 1",
+          not any(r is pic for row in rows[1:] for r in row["refs"]),
+          str([len(r["refs"]) for r in rows]))
+    # Cuffed before the film starts: nothing changes, and the portrait is the author's.
+    on = ("Mara: she, 28, grey sweater, steel handcuffs locked on her wrists. <Picture 1>\n"
+          "Dan: he, 35, black jacket.")
+    rows, _info = _pictures_sent(_HELD_ROOM + "\n\nMara paces.\n\nDan walks in.\n\n"
+                                 "Mara struggles.", character_memory=on, ref_image_1=pic)
+    check("...and a person held from before the first shot keeps her portrait",
+          all(any(r is pic for r in row["refs"]) for row in rows),
+          str([len(r["refs"]) for r in rows]))
+    # Handcuffs lying on a nightstand are on nobody.
+    props = ("A cheap motel room. A pair of handcuffs and a roll of duct tape lie on the "
+             "nightstand.\n\nMara paces by the window.\n\nDan comes in and talks to her."
+             "\n\nMara picks up the handcuffs.\n\nMara looks at Dan.")
+    rows, _info = _pictures_sent(props, character_memory=_HELD_MEM, ref_image_1=pic)
+    check("...and props in the room put nothing on her: the portrait rides every shot",
+          all(any(r is pic for r in row["refs"]) for row in rows),
+          str([len(r["refs"]) for r in rows]))
+
+    # Somebody else's portrait stays, renumbered to the place it now has.
+    both = ("Mara: <Picture 1>, she, 28, grey sweater, jeans.\n"
+            "Dan: <Picture 2>, he, 35, black jacket.")
+    dan = torch.rand(1, H, W, 3)
+    rows, _info = _pictures_sent(P, character_memory=both, ref_image_1=pic, ref_image_2=dan)
+    check("Dan's portrait rides on where he is described, and only his",
+          all(all(x is dan for x in r["refs"])
+              and len(r["refs"]) == int("Dan: <Picture 1>, he" in r["prompt"])
+              for r in rows[1:]) and any(r["refs"] for r in rows[1:]),
+          str([len(r["refs"]) for r in rows]))
+    check("...claimed as <Picture 1> on his own line, hers mended",
+          all("Dan: <Picture 2>" not in r["prompt"] and "Mara: she, 28, grey" in r["prompt"]
+              for r in rows[1:]), rows[2]["prompt"][:160])
+    check("...with the keyframe named after it",
+          not _unnamed_pictures(_encoder_rows(P, character_memory=both, ref_image_1=pic,
+                                              ref_image_2=dan)))
+
+    # On FastH3 the tag is the author's to send, and the keyframe still shows her.
+    rows, _info = _pictures_sent(P, character_memory=_HELD_MEM, ref_image_1=pic,
+                                 model=FakeFastH3())
+    check("on FastH3 too the shots after the cuffs open on her without the portrait",
+          any(r is pic for r in rows[0]["refs"])
+          and all(not r["refs"] for r in rows[1:]), str([len(r["refs"]) for r in rows]))
+
+
+def test_a_cut_keeps_the_frame_of_a_held_person():
+    """REPORTED: the tape gone once the scene moved to another room.
+
+    A cut threw the last frame away whenever somebody tagged was in it, and the portrait
+    from before the tape became the one picture of her in the new room."""
+    print("\n=== a cut keeps the frame of a held person ===")
+    pic = torch.rand(1, H, W, 3)
+    rooms = ("A small apartment at night: a bedroom with a double bed, and a tiled "
+             "bathroom next to it.")
+    alone = ["Dan handcuffs her wrists behind her back.",
+             "Dan presses duct tape over her mouth.", "Dan walks out of the room.",
+             "In the bathroom, Mara kneels on the tiles.", "Mara struggles."]
+    rows, info = _pictures_sent(rooms + "\n\n" + "\n\n".join(alone),
+                                character_memory=_HELD_MEM, ref_image_1=pic)
+    cut = rows[3]
+    check("the cut carries her last frame, taped and cuffed, as her picture",
+          cut["handoff"] is not None and cut["as_ref"] and not cut["refs"],
+          f"handoff={cut['handoff'] is not None} as_ref={cut['as_ref']} refs={len(cut['refs'])}")
+    check("...claimed as her a moment earlier, with no portrait beside it",
+          "<Picture 1> is Mara a moment earlier" in cut["prompt"]
+          and "<Picture 2>" not in cut["prompt"], cut["prompt"][-200:])
+    check("...and the shot after opens on the frame of her in the bathroom",
+          rows[4]["handoff"] is not None and not rows[4]["refs"])
+
+    # Dan is in that last frame and not in the bathroom: the frame cannot ride, so
+    # the portrait stays for her face, and the hold is named beside it.
+    company = ["Dan handcuffs her wrists behind her back.",
+               "Dan presses duct tape over her mouth.",
+               "Dan pushes her down onto the bed.",
+               "In the bathroom, Mara kneels on the tiles.", "Mara struggles."]
+    rows, info = _pictures_sent(rooms + "\n\n" + "\n\n".join(company),
+                                character_memory=_HELD_MEM, ref_image_1=pic)
+    said = rows[3]["prompt"]
+    check("with no frame of her since, the portrait stays",
+          rows[3]["handoff"] is None and any(r is pic for r in rows[3]["refs"]))
+    check("...with a sentence that it shows who she is and what is on her now",
+          re.search(r"<Picture 1> shows who Mara is; [^.]*duct tape[^.]*in place now\.",
+                    said) and "handcuffs" in said.split("shows who Mara is")[1].split(".")[0],
+          said[-260:])
+    check("...positively worded",
+          "shows who" in said and "still" not in said.lower().partition("shows who")[2][:160])
+    check("...and reported",
+          "kept with a sentence naming what is on them now" in info, info[-300:])
+    check("...and the next shot opens on her without it",
+          rows[4]["handoff"] is not None and not rows[4]["refs"])
+
+
+def test_a_held_person_comes_back_with_a_frame_from_after():
+    """REPORTED: restraints not looking the same when a character comes back.
+
+    A tagged person coming back after the cuffs went on had only the portrait from
+    before them. A frame of her alone from after it is her picture now -- and one from
+    before it never is."""
+    print("\n=== a held person comes back with a frame from after ===")
+    pic = torch.rand(1, H, W, 3)
+    flat = "A small flat at night: a bedroom with a double bed, and a narrow hallway outside it."
+    back = ["Dan handcuffs her wrists behind her back.", "Dan walks out of the room.",
+            "In the hallway, Dan waits by the door.",
+            "In the bedroom, Mara struggles on the bed."]
+    rows, info = _pictures_sent(flat + "\n\n" + "\n\n".join(back),
+                                character_memory=_HELD_MEM, ref_image_1=pic)
+    ret = rows[3]
+    check("back in the bedroom she is pictured once, by a frame from after the cuffs",
+          len(ret["refs"]) == 1 and ret["refs"][0] is not pic and ret["handoff"] is None,
+          f"{len(ret['refs'])} refs")
+    check("...claimed by her own tag", "<Picture 1>" in ret["prompt"].split("Dan:")[0],
+          ret["prompt"][:120])
+    check("...and reported with where it came from",
+          "replaced by a frame of them alone from after it went on: Mara on shot 4, "
+          "from shot 2" in info, info[-300:])
+
+    before = ["Mara sits alone on the bed.",
+              "Dan walks in and handcuffs her wrists behind her back.",
+              "Dan leads her out of the room.", "In the hallway, Dan waits by the door.",
+              "In the bedroom, Mara struggles on the bed."]
+    rows, info = _pictures_sent(flat + "\n\n" + "\n\n".join(before),
+                                character_memory=_HELD_MEM, ref_image_1=pic)
+    ret = rows[4]
+    check("a frame of her from before the cuffs is not sent in the portrait's place",
+          ret["refs"] and ret["refs"][0] is pic, f"{len(ret['refs'])} refs")
+    check("...the portrait goes with the hold named",
+          "<Picture 1> shows who Mara is; the handcuffs" in ret["prompt"],
+          ret["prompt"][-240:])
+
+
+def test_a_gag_only_the_hold_reads_retires_older_frames():
+    """REPORTED: a gag gone when she came back into the room.
+
+    A frame is reused only while nothing she wears has changed, and that was counted
+    only for wordings the state reads. A gag the hold read and the state did not left
+    the frame from before it eligible, and it came back as her face."""
+    print("\n=== a gag only the hold reads retires older frames ===")
+    mem = "Mara: she, 28, grey sweater, jeans.\nDan: he, 35, black jacket."
+    P = (_HELD_ROOM + "\n\nMara sits alone on the bed.\n\n"
+         "Dan walks in, puts a ball gag in her mouth and buckles it.\n\n"
+         "Dan leads her out of the room.\n\nDan stands alone by the window.\n\n"
+         "Dan leads her back into the room.")
+    rows, info = _pictures_sent(P, character_memory=mem)
+    check("coming back, she is not sent the frame of her from before the gag",
+          not rows[4]["refs"], f"{len(rows[4]['refs'])} refs")
+    check("...and no recovered face is reported", "recovered a face" not in info,
+          info[-200:])
+    # The same shape with nothing put on her: the frame is hers to come back with.
+    plain = (_HELD_ROOM + "\n\nMara sits alone on the bed.\n\n"
+             "Dan walks in and sits beside her.\n\nDan leads her out of the room.\n\n"
+             "Dan stands alone by the window.\n\nDan leads her back into the room.")
+    rows, info = _pictures_sent(plain, character_memory=mem)
+    check("...where nothing changed, the frame of her rides as before",
+          len(rows[4]["refs"]) == 1 and "recovered a face for Mara" in info,
+          f"{len(rows[4]['refs'])} refs")
+
+
 def test_an_untagged_picture_is_not_a_stranger():
     """A picture the prompt never mentions is read as ANOTHER person standing beside
     the ones it describes, and no sentence here can argue with a photograph.
@@ -10634,6 +11159,191 @@ def test_a_described_body_falls_as_a_body():
           S.posture_in("Dex drops to one knee, exhausted.", ["Dex"]) == {"Dex": "kneeling"})
 
 
+_BOUND_MEM = "Mara: she, 28, grey sweater, jeans.\nDan: he, 40, black jacket."
+
+
+def _hardware_changed(P, **kw):
+    """The 1-based shots the render path is told put hardware on or took it off."""
+    got = {}
+    orig = S.H3LongVideos._render
+
+    def spy(self, prepared):
+        got["hw"] = set(prepared.hardware_changed or ())
+        return orig(self, prepared)
+    S.H3LongVideos._render = spy
+    try:
+        run_node(P, **kw)
+    finally:
+        S.H3LongVideos._render = orig
+    return got.get("hw", set())
+
+
+def test_every_tie_and_gag_wording_is_held_by_name():
+    """REPORTED: restraints breaking when applied and gags gone in the next beat. Each
+    of these registered nothing, so hardware_changed never moved and the shots after
+    named no piece -- "Every restraint stays closed" at best, the gag never again."""
+    print("\n=== every tie and gag wording is held by name ===")
+    cases = (("Dan ties her hands behind her back.", "rope", True),
+             ("Dan ties her wrists together.", "rope", False),
+             ("Dan ties her ankles together.", "rope", False),
+             ("Dan binds her wrists and ankles.", "rope", False),
+             ("Dan puts a gag in her mouth.", "gag", False),
+             ("Dan puts a ball gag in her mouth.", "ball gag", False),
+             ("Dan fits a ball gag in her mouth.", "ball gag", False),
+             ("Dan puts a ball gag in her mouth and buckles it.", "ball gag", False),
+             ("Dan cuffs Mara.", "cuffs", False),
+             ("Dan gagged her.", "gag", False))
+    broken = []
+    for beat, word, behind in cases:
+        P = f"A bedroom.\n\nMara stands by the window.\n\n{beat}\n\nMara struggles.\n\n" \
+            "Dan walks to the door."
+        sh = _shots_of(run_node(P, plan_only=True, character_memory=_BOUND_MEM))
+        why = [f"shot {i + 1} does not hold the {word}" for i in (2, 3)
+               if not _held_in(sh[i], word)]
+        if behind and not all("behind the body" in s for s in sh[1:]):
+            why.append("the hands are not placed behind the back")
+        if re.search(r"(?:on|over) dan's|dan's (?:arms|wrists|ankles|mouth)", " ".join(sh).lower()):
+            why.append("held on Dan")
+        if _hardware_changed(P, character_memory=_BOUND_MEM) != {2}:
+            why.append("hardware_changed did not move on the shot that puts it on")
+        if why:
+            broken.append(f"{beat} -> {', '.join(why)}")
+    check("each wording goes on her, moves hardware_changed and is held by name after",
+          not broken, "; ".join(broken))
+
+
+def test_props_and_carried_things_hold_nobody():
+    """REPORTED: a woman held lying down from the first shot while she stood, holds on
+    the captor, and holds before anything was applied. A phone that lies on the
+    nightstand and hair that lies loose lay nobody down; keys clipped to a belt, a
+    knife strapped to a thigh, a watch strapped to a wrist and keys on a chain are
+    carried things; handcuffs lying on the nightstand are on nobody."""
+    print("\n=== props and carried things hold nobody ===")
+    beats = "\n\nMara paces by the window.\n\nDan handcuffs her wrists behind her back." \
+            "\n\nMara struggles."
+    for scene, mem in (("A bedroom. A phone lies on the nightstand.", _BOUND_MEM),
+                       ("A bedroom. Keys lie on the table.", _BOUND_MEM),
+                       ("A bedroom.", "Mara: she, 28, long dark hair that lies loose over "
+                                      "her shoulders, grey sweater.\nDan: he, 40, black jacket.")):
+        sh = _shots_of(run_node(scene + beats, plan_only=True, character_memory=mem))
+        check(f"nobody laid down by {scene[11:] or 'her hair'}",
+              not any("whole length" in s or "lying" in s for s in sh), sh[1][:300])
+    sh = _shots_of(run_node("A motel room. A pair of handcuffs and a roll of duct tape lie on "
+                            "the nightstand." + beats, plan_only=True,
+                            character_memory=_BOUND_MEM))
+    check("handcuffs set on the nightstand hold nobody before the cuffing",
+          not re.search(r"closed and fastened|restraint", sh[0]), sh[0][-260:])
+    mem = ("Mara: she, 28, grey sweater, a watch strapped to her wrist.\n"
+           "Dan: he, 40, black jacket, car keys clipped to his belt, a knife strapped to "
+           "his thigh, keys on a chain at his belt.")
+    sh = _shots_of(run_node("A bedroom." + beats, plan_only=True, character_memory=mem))
+    check("carried things hold nobody before the cuffing",
+          not re.search(r"closed and fastened|restraint|tied and holding", sh[0]), sh[0][-260:])
+    check("...the cuffing shot is still told the wrists are behind the back as they close",
+          "already behind the back when the hardware closes" in sh[1], sh[1][-400:])
+    check("...and the hold is never his",
+          not re.search(r"(?:on|over) dan's|dan's (?:arms|wrists|ankles|thighs)|on dan\b",
+                        " ".join(sh).lower()), sh[2][-300:])
+    check("...nor the straps on her watch",
+          not any(_held_in(s, "straps") for s in sh), sh[2][-300:])
+    # The scene paragraph arms the hold through a piece with a wearer, as the sheet does.
+    for text, want in (("A cellar. Mara is handcuffed to the rail.", ["Mara"]),
+                       ("A cellar. Dan stands over her, her wrists cuffed to the rail.", ["Mara"]),
+                       ("A motel room. A pair of handcuffs lies on the nightstand.", []),
+                       ("A room. Dan holds a pair of handcuffs.", [])):
+        got = [w for w, _s in S.scene_restraints(text, ["Mara", "Dan"],
+                                                 {"Mara": "she", "Dan": "he"})]
+        check(f"the scene's piece is on: {want or 'nobody'}, for {text!r}", got == want, str(got))
+
+
+def test_a_bound_body_holds_nothing_in_its_hands():
+    """REPORTED: a sheet line asking for "a phone in her hand" beside "both arms are
+    behind the body". While her wrists are held, what her hands hold is not said."""
+    print("\n=== a bound body holds nothing in its hands ===")
+    for item in ("a phone in her hand", "holding a mug"):
+        mem = f"Mara: she, 28, grey sweater, {item}.\nDan: he, 40, black jacket."
+        sh = _shots_of(run_node("A bedroom.\n\nMara paces.\n\nDan handcuffs her wrists behind "
+                                "her back.\n\nMara struggles.", plan_only=True,
+                                character_memory=mem))
+        word = item.split()[-1] if "mug" in item else "phone"
+        check(f"said while she is free: {item!r}", word in sh[0], sh[0][:300])
+        check(f"...not while her wrists are held: {item!r}",
+              word not in sh[1] and word not in sh[2], sh[2][:300])
+        check(f"...and the rest of her entry stays: {item!r}",
+              "grey sweater" in sh[2], sh[2][:300])
+    check("a worn thing keeps its place in the fragment",
+          S.hands_free_line("Mara: she, 28, grey sweater with a phone in her hand, jeans.")
+          == "Mara: she, 28, grey sweater, jeans.")
+
+
+def test_a_gag_that_holds_the_mouth_open_is_not_told_closed():
+    """REPORTED: "Mouths in the shot stay closed" beside a ball gag, which a model can
+    satisfy only by drawing no gag. A ball, a bit, a ring or a stuffed cloth holds the
+    mouth open; tape keeps the old line."""
+    print("\n=== a gag that holds the mouth open is not told closed ===")
+    for beat in ("Dan pushes a ball gag into her mouth.", "Dan buckles a bit gag in her mouth.",
+                 "Dan buckles a ring gag in her mouth.", "Dan stuffs a cloth into her mouth."):
+        sh = _shots_of(run_node(f"A bedroom.\n\n{beat}\n\nMara struggles.\n\nMara waits alone.",
+                                plan_only=True, character_memory=_BOUND_MEM))
+        check(f"no closed-mouth line: {beat!r}",
+              not any("Mouths in the shot stay closed" in s for s in sh), sh[1][-200:])
+        check(f"...the other mouths are still held: {beat!r}",
+              "Every other mouth in the shot stays closed" in sh[1], sh[1][-200:])
+    sh = _shots_of(run_node("A bedroom.\n\nDan presses duct tape over her mouth.\n\n"
+                            "Mara struggles.", plan_only=True, character_memory=_BOUND_MEM))
+    check("tape keeps the closed-mouth line", "Mouths in the shot stay closed" in sh[1],
+          sh[1][-200:])
+    check("a muffled sound around a ball gag comes through an open mouth",
+          "mouth held open around the gag" in S.gag_hold("ball gag", muffled=True)
+          and "lips held shut" in S.gag_hold("duct tape", muffled=True))
+
+
+def test_a_bound_fall_in_any_wording_keeps_the_hands():
+    """REPORTED: bound people catching falls with their hands. "Slips and falls" read as
+    nobody falling and took the free fall beside a free man; a push onto the bed and a
+    drop to the floor got no fall sentence; cuffs with no position placed no hands; the
+    lying sentence went ahead of the fall. "Falls to her knees" is a kneel."""
+    print("\n=== a bound fall in any wording keeps the hands ===")
+    cuffs = "A bedroom.\n\nDan handcuffs her wrists behind her back.\n\n"
+    for beat in ("Mara slips and falls.", "Mara tries to run but falls.",
+                 "Dan pushes her onto the bed.", "Dan shoves her onto the sofa.",
+                 "Dan throws her onto the mattress.", "Dan drops her on the floor.",
+                 "Dan pushes her down onto the bed."):
+        sh = _shots_of(run_node(cuffs + beat, plan_only=True, character_memory=_BOUND_MEM))
+        check(f"hands placed for the fall: {beat!r}",
+              "hands stay locked together behind the back for the whole fall" in sh[1]
+              and "the arms stay with it" not in sh[1], sh[1][:400])
+        if "whole length" in sh[1]:
+            check(f"...and the landing is said after the fall: {beat!r}",
+                  0 <= sh[1].find("for the whole fall") < sh[1].index("whole length"),
+                  sh[1][:400])
+    sh = _shots_of(run_node(cuffs + "Mara falls to her knees.", plan_only=True,
+                            character_memory=_BOUND_MEM))
+    check("falling to her knees is a kneel", "for the whole fall" not in sh[1], sh[1][:300])
+    check("...and held as one", S.posture_in("Mara falls to her knees.", ["Mara"])
+          == {"Mara": "kneeling"})
+    for beat, where in (("Dan handcuffs her.", "behind the back"),
+                        ("Dan cuffs her hands in front of her.",
+                         "and held in against the front of the body")):
+        sh = _shots_of(run_node(f"A bedroom.\n\n{beat}\n\nDan shoves her to the floor.",
+                                plan_only=True, character_memory=_BOUND_MEM))
+        check(f"the hands are placed for the fall after {beat!r}",
+              f"hands stay locked together {where}" in sh[1], sh[1][:300])
+    sh = _shots_of(run_node("A bedroom.\n\nDan ties her wrists and ankles together with "
+                            "rope.\n\nMara falls over.", plan_only=True,
+                            character_memory=_BOUND_MEM))
+    check("rope on the wrists and the ankles keeps the hands too",
+          "for the whole fall" in sh[1] and "the arms stay with it" not in sh[1], sh[1][:300])
+    names, pron = ["Mara", "Dan"], {"Mara": "she", "Dan": "he"}
+    for text, want in (("Mara slips and falls.", {"Mara"}),
+                       ("She tries to run but falls.", {"Mara"}),
+                       ("Dan pushes her onto the bed.", {"Mara"}),
+                       ("Dan drops Mara on the floor.", {"Mara"}),
+                       ("Dan trips over the crate and falls.", {"Dan"})):
+        check(f"who falls: {text!r}", S.fallers_in(text, names, pron) == want,
+              str(S.fallers_in(text, names, pron)))
+
+
 def test_a_role_noun_that_is_no_extra_keeps_the_count():
     """REPORTED: "passenger seat", "guard rail", "baby monitor", "her husband Dan" and
     "Mara, a nurse" each took the two-person count off a two-person shot."""
@@ -10809,6 +11519,1289 @@ def test_the_smaller_readers_say_only_what_is():
           "arms" not in S.lying_stays("She", "cot"))
 
 
+# --- pose control ---------------------------------------------------------------------
+
+_POSE_MEM = "Mara: she, 28, grey sweater, blue jeans.\nDan: he, 40, black jacket."
+# Shot 1 puts the cuffs on (left alone), shot 2 is a bound fall, shot 3 holds.
+_POSE_SCRIPT = ("A bedroom at night.\n\nDan handcuffs Mara's wrists behind her back.\n\n"
+                "Mara stumbles and falls to the floor.\n\nMara looks at the door.")
+
+
+def _pose_lin(width):
+    return types.SimpleNamespace(adaln_proj=types.SimpleNamespace(
+        linear=types.SimpleNamespace(in_features=width)))
+
+
+def _pose_patch(width=8):
+    """What Load Model Patch hands over for the H3 Fun ControlNet: a MODEL_PATCH whose
+    .model has init_stream, injection_layers and control blocks of this adaln width."""
+    return types.SimpleNamespace(model=types.SimpleNamespace(
+        init_stream=lambda *a, **k: None, injection_layers=(0, 10, 20, 30, 40),
+        control_blocks=[_pose_lin(width)]))
+
+
+class _PoseModel(_PatcherModel):
+    """A ModelPatcher stand-in whose diffusion model has an adaln width to compare."""
+
+    def __init__(self, width=8, **kw):
+        super().__init__(**kw)
+        self.dm.blocks[0].adaln_proj = _pose_lin(width).adaln_proj
+
+
+class _PoseVAE(FakeVAE):
+    """Encodes a frame sequence to the video latent's own length, as the real VAE does."""
+
+    def __init__(self):
+        super().__init__()
+        self.decodes = 0
+
+    def encode(self, image):
+        self.encodes += 1
+        n = image.shape[0]
+        return torch.zeros(1, 24, S.video_latent_t(n) if n > 1 else 1, H // 16, W // 16)
+
+    def decode(self, latent):
+        self.decodes += 1
+        return FakeVAE.decode(self, latent)
+
+
+def _pose_skeleton(neck, arms, T=20.0):
+    """A front-facing COCO-18 (18, 3) skeleton in pixels, torso length T. arms: 'behind'
+    (elbows back, wrists hidden behind the body), 'catch' (both hands flung out to the
+    sides, as a fall is caught) or 'free' (hanging at the sides)."""
+    import numpy as np
+    pc = S.pose_control
+    kp = np.zeros((18, 3), dtype=np.float32)
+
+    def put(i, a, b):
+        kp[i, 0] = neck[0] - b * T
+        kp[i, 1] = neck[1] + a * T
+        kp[i, 2] = 0.9
+    hs = 0.39
+    for i, a, b in ((pc.NECK, 0, 0), (pc.RSHO, 0, hs), (pc.LSHO, 0, -hs), (pc.RHIP, 1, 0.21),
+                    (pc.LHIP, 1, -0.21), (pc.NOSE, -0.28, 0), (pc.REYE, -0.33, 0.06),
+                    (pc.LEYE, -0.33, -0.06), (pc.REAR, -0.30, 0.12), (pc.LEAR, -0.30, -0.12),
+                    (pc.RKNE, 1.85, 0.21), (pc.LKNE, 1.85, -0.21), (pc.RANK, 2.7, 0.21),
+                    (pc.LANK, 2.7, -0.21)):
+        put(i, a, b)
+    if arms == "behind":
+        put(pc.RELB, 0.55, 1.05 * hs)
+        put(pc.LELB, 0.55, -1.05 * hs)
+    elif arms == "catch":
+        put(pc.RELB, 0.0, 0.8)
+        put(pc.LELB, 0.0, -0.8)
+        put(pc.RWRI, 0.0, 1.3)
+        put(pc.LWRI, 0.0, -1.3)
+    else:
+        put(pc.RELB, 0.55, hs + 0.03)
+        put(pc.LELB, 0.55, -hs - 0.03)
+        put(pc.RWRI, 1.0, hs + 0.05)
+        put(pc.LWRI, 1.0, -hs - 0.05)
+    return kp
+
+
+class _FakePoseDetector:
+    """pose_control.PoseDetector with scripted people: Mara (bound) on the left, Dan
+    (free, arms at his sides) on the right. Each shot's detect() takes the next scenario
+    from `script`: "broken" flings Mara's hands out to catch the fall for six analysed
+    frames after the first eight, "clean" keeps her wrists behind her back. A one-frame
+    detect (the handoff frame) shows both as they stand."""
+    made = []
+    script = []
+    fail = False
+    looks = None        # [Mara's, Dan's] appearance vectors to report, or None
+
+    def __init__(self, device=None):
+        self.device = device
+        self.calls, self.closed, self.released = [], 0, 0
+        _FakePoseDetector.made.append(self)
+
+    def available(self):
+        return True, ""
+
+    def detect(self, frames, stride=2):
+        if _FakePoseDetector.fail:
+            raise RuntimeError("DWPose exploded")
+        F = int(frames.shape[0])
+        self.calls.append(F)
+        index = list(range(0, F, stride))
+        if index[-1] != F - 1:
+            index.append(F - 1)
+        scen = (_FakePoseDetector.script.pop(0) if (F > 1 and _FakePoseDetector.script)
+                else "clean")
+        people = []
+        for k, _t in enumerate(index):
+            arms = "catch" if (scen == "broken" and 8 <= k <= 13) else "behind"
+            people.append([_pose_skeleton((40.0, 18.0), arms),
+                           _pose_skeleton((95.0, 18.0), "free")])
+        if _FakePoseDetector.looks is not None:
+            return {"index": index, "people": people,
+                    "appearance": [list(_FakePoseDetector.looks) for _ in index]}
+        return {"index": index, "people": people}
+
+    def close(self):
+        self.closed += 1
+
+    def release(self):
+        self.released += 1
+
+
+def _build_hint_sig(det, frame_count, height, width, bound, carry=None, mode="repair",
+                    draw="everyone", *, cast_count=None):
+    """build_hint's signature before latch mode."""
+
+
+def _build_hint_sig_latch(det, frame_count, height, width, bound, carry=None, mode="repair",
+                          draw="everyone", *, cast_count=None, latch_after=None):
+    """build_hint's signature with latch mode."""
+
+
+def _build_hint_sig_looks(det, frame_count, height, width, bound, carry=None, mode="repair",
+                          draw="everyone", *, cast_count=None, latch_after=None,
+                          carry_appearance=None):
+    """build_hint's signature with latch mode and appearance carry."""
+
+
+def _identify_sig(people, boxes):
+    """identify_by_boxes' signature before appearance carry."""
+
+
+def _identify_sig_looks(people, boxes, *, appearance=None, carry_appearance=None):
+    """identify_by_boxes' signature with appearance carry."""
+
+
+class _PoseRig:
+    """Installs the fakes for one pose-control run and takes them out again: the
+    detector, the DWPose file check, the patch install (a spy that clones and marks the
+    model with its sigma window), a spy on build_hint, a spy on sample_shot, and a
+    scheduler comfy can be asked for its sigmas.
+
+    Latch mode is off unless asked for: the build_hint spy shows the node a signature
+    without latch_after, so the shot that puts the cuffs on is skipped as with an older
+    pose_control.py, and each script entry stays one analysed shot whatever
+    pose_control.py the run finds. latch=True shows latch_after; `build` stands in for
+    the real build_hint. appearance=True also shows carry_appearance on build_hint and
+    identify_by_boxes; every identify_by_boxes call is recorded in `identifies`."""
+
+    def __init__(self, script=(), oom_in_pass_2=False, interrupt_in_pass_2=False,
+                 latch=False, build=None, appearance=False):
+        self.samples, self.installs, self.hints, self.identifies = [], [], [], []
+        self.oom, self.interrupt = oom_in_pass_2, interrupt_in_pass_2
+        self.latch, self.build, self.appearance = latch, build, appearance
+        _FakePoseDetector.made = []
+        _FakePoseDetector.script = list(script)
+        _FakePoseDetector.fail = False
+        _FakePoseDetector.looks = None
+
+    def __enter__(self):
+        pc = S.pose_control
+        self.saved = (S.sample_shot, pc.PoseDetector, pc.dwpose_status,
+                      pc.install_pose_control, pc.build_hint, pc.identify_by_boxes)
+        self.had_cs = hasattr(sys.modules["comfy.samplers"], "calculate_sigmas")
+        rig = self
+        real_build = pc.build_hint
+        real_identify = pc.identify_by_boxes
+
+        def spy(model, cond, negative, latent, seed, steps, cfg, sampler_name, scheduler,
+                sigmas=None, *a, **k):
+            rig.samples.append(dict(model=model, seed=seed, latent=latent, cond=cond,
+                                    window=getattr(model, "pose_window", None)))
+            if getattr(model, "pose_window", None) is not None:
+                if rig.oom:
+                    raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+                if rig.interrupt:
+                    raise type("InterruptProcessingException", (Exception,), {})()
+            return fake_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
+                                 cond, negative, latent)[0]
+
+        def install(model, pose_cn, vae, hint_latent, latent_shape, strength, s_start, s_end):
+            rig.installs.append(dict(model=model, pose_cn=pose_cn, shape=tuple(latent_shape),
+                                     hint=tuple(hint_latent.shape), strength=strength,
+                                     window=(s_start, s_end)))
+            m = model.clone()
+            m.pose_window = (s_start, s_end)
+            return m
+
+        def build(det, frame_count, height, width, bound, carry=None, mode="repair",
+                  draw="everyone", **kw):
+            hint, rep = (rig.build or real_build)(det, frame_count, height, width, bound,
+                                                  carry=carry, mode=mode, draw=draw, **kw)
+            rig.hints.append(dict(bound=bound, carry=carry, mode=mode, draw=draw, kw=kw,
+                                  shape=None if hint is None else tuple(hint.shape),
+                                  report=rep))
+            return hint, rep
+        build.__signature__ = inspect.signature(
+            _build_hint_sig_looks if self.appearance
+            else _build_hint_sig_latch if self.latch else _build_hint_sig)
+
+        def identify(people, boxes, **kw):
+            rig.identifies.append(dict(kw))
+            return real_identify(people, boxes)
+        identify.__signature__ = inspect.signature(_identify_sig_looks if self.appearance
+                                                   else _identify_sig)
+
+        S.sample_shot = spy
+        pc.PoseDetector = _FakePoseDetector
+        pc.dwpose_status = lambda: (True, "")
+        pc.install_pose_control = install
+        pc.build_hint = build
+        pc.identify_by_boxes = identify
+        sys.modules["comfy.samplers"].calculate_sigmas = (
+            lambda ms, sch, n: torch.linspace(1.0, 0.0, int(n) + 1))
+        return self
+
+    def __exit__(self, *exc):
+        pc = S.pose_control
+        (S.sample_shot, pc.PoseDetector, pc.dwpose_status,
+         pc.install_pose_control, pc.build_hint, pc.identify_by_boxes) = self.saved
+        _FakePoseDetector.looks = None
+        if not self.had_cs:
+            try:
+                delattr(sys.modules["comfy.samplers"], "calculate_sigmas")
+            except AttributeError:
+                pass
+        return False
+
+    def per_shot(self):
+        """Sampling passes per shot, keyed by the latent each shot sampled."""
+        out, order = {}, []
+        for s in self.samples:
+            k = id(s["latent"])
+            if k not in out:
+                order.append(k)
+            out.setdefault(k, []).append(s)
+        return [out[k] for k in order]
+
+
+def _pose_info(out):
+    """The info notes pose control wrote: its status, its plan and one line per shot."""
+    return [p for p in out[2].split(" | ")
+            if p.startswith("pose control") or re.match(r"shot \d+: pose ", p)]
+
+
+def _no_timing(info):
+    """info without the wall-clock numbers, which differ from run to run (and without
+    the note that compares two of them)."""
+    info = " | ".join(p for p in info.split(" | ")
+                      if not p.startswith("decode is costing more than sampling"))
+    return re.sub(r"\d+(?:\.\d+)?s\b|\(\d+%\)", "#", info)
+
+
+def test_pose_control_unwired_changes_nothing():
+    """ASKED FOR: pose control is off unless the Fun ControlNet is wired with a strength
+    above 0, and then the render is the render of today -- the same passes, the same
+    frames, the same sound, the same info."""
+    print("\n=== pose control: unwired, nothing changes ===")
+    # The first run after another test's model says the checkpoint changed; that note
+    # is about the previous test, not pose control.
+    run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(), plan_only=True)
+    runs = {}
+    for key, kw in (("unwired", {}),
+                    ("strength 0", dict(pose_controlnet=_pose_patch(), pose_strength=0.0)),
+                    ("hold_restraints off", dict(pose_controlnet=_pose_patch(),
+                                                 hold_restraints=False))):
+        with _PoseRig(script=["broken", "broken"]) as rig:
+            torch.manual_seed(1234)
+            out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                           vae=_PoseVAE(), steps=8, **kw)
+            runs[key] = (out, rig.per_shot(), list(_FakePoseDetector.made), list(rig.installs))
+    base, per_shot, made, installs = runs["unwired"]
+    check("unwired: one sampling pass per shot", [len(p) for p in per_shot] == [1, 1, 1],
+          [len(p) for p in per_shot])
+    check("...no detector built and no control installed", not made and not installs)
+    check("...and info says nothing about pose control", not _pose_info(base), _pose_info(base))
+    out0, per0, made0, inst0 = runs["strength 0"]
+    check("wired at strength 0: the same passes", [len(p) for p in per0] == [1, 1, 1])
+    check("...the same frames", torch.equal(out0[0], base[0]))
+    check("...the same sound", torch.equal(out0[1]["waveform"], base[1]["waveform"]))
+    check("...and the same info, word for word", _no_timing(out0[2]) == _no_timing(base[2]),
+          [p for p in out0[2].split(" | ") if p not in base[2].split(" | ")][:3])
+    outh, perh, madeh, insth = runs["hold_restraints off"]
+    check("hold_restraints off: no second pass and no detector",
+          [len(p) for p in perh] == [1, 1, 1] and not madeh and not insth)
+    check("...and info says why pose control is off",
+          any("hold_restraints is off" in p for p in _pose_info(outh)), _pose_info(outh))
+
+
+def test_pose_control_repairs_a_broken_shot():
+    """ASKED FOR: with the controlnet wired, a shot whose pass 1 breaks the restraint
+    -- the cuffed hands flung out to catch a fall -- is sampled again on a clone carrying
+    the control, with the same seed, conditioning and latent, held for the first
+    pose_end of ITS OWN schedule; a shot that holds is sampled once and its decoded
+    frames reused; the shot that puts the cuffs on is left alone."""
+    print("\n=== pose control: repair broken shots ===")
+    vae = _PoseVAE()
+    with _PoseRig(script=["broken", "clean"]) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=vae, pose_controlnet=_pose_patch(), steps=8)
+    per = rig.per_shot()
+    check("passes per shot: cuffs going on 1, broken fall 2, held shot 1",
+          [len(p) for p in per] == [1, 2, 1], [len(p) for p in per])
+    if len(per) == 3 and len(per[1]) == 2:
+        p1, p2 = per[1]
+        check("pass 2 uses the same seed, latent and conditioning as pass 1",
+              p1["seed"] == p2["seed"] and p1["latent"] is p2["latent"]
+              and p1["cond"] is p2["cond"])
+        check("...on a clone carrying the control, and pass 1 on the plain model",
+              p2["window"] is not None and p1["window"] is None
+              and p2["model"] is not p1["model"])
+        check("the window holds the first 5 of 8 steps of the shot's own schedule",
+              p2["window"] == (1.0 + 1e-3, (0.5 + 0.375) / 2), p2["window"])
+    check("control installed once, at the node's strength, with the wired patch",
+          len(rig.installs) == 1 and rig.installs[0]["strength"] == 1.0
+          and rig.installs[0]["pose_cn"].model.injection_layers == (0, 10, 20, 30, 40))
+    if rig.installs:
+        check("the hint latent has the shot's video latent shape",
+              rig.installs[0]["hint"] == rig.installs[0]["shape"]
+              == (1, 24, S.video_latent_t(FRAMES), H // 16, W // 16), rig.installs[0])
+    check("the skeleton video is the shot's frame count at the sampled size",
+          rig.hints and rig.hints[0]["shape"] == (FRAMES, H, W, 3),
+          rig.hints[0]["shape"] if rig.hints else None)
+    check("build_hint was told the planned cast at the opening frame",
+          rig.hints and all(h["kw"].get("cast_count") == 2 for h in rig.hints),
+          [h["kw"] for h in rig.hints])
+    check("...and the restrained person's held position, with the fall",
+          rig.hints and rig.hints[0]["bound"] == {"Mara": {
+              "arms": "behind the back", "legs": "", "ankle_gap": 0.12,
+              "anchored": False, "fall": True, "latch_limbs": ()}},
+          rig.hints[0]["bound"] if rig.hints else None)
+    check("the shot after carries who is who from the handoff frame; the first has none",
+          len(rig.hints) == 2 and rig.hints[0]["carry"] is None
+          and set(rig.hints[1]["carry"] or {}) == {"Mara"},
+          [h["carry"] for h in rig.hints])
+    check("the held shot's pass-1 frames were reused, not decoded twice",
+          vae.decodes == 4, vae.decodes)
+    d = _FakePoseDetector.made
+    check("one detector for the whole render, moved off the card after every read and "
+          "released at the end",
+          len(d) == 1 and d[0].calls == [FRAMES, 1, FRAMES] and d[0].closed == 3
+          and d[0].released == 1, [(x.calls, x.closed, x.released) for x in d])
+    info = _pose_info(out)
+    check("info: the status line", any(p.startswith("pose control: on; strength 1.00; the "
+                                                    "first 5 of 8 steps") for p in info), info)
+    check("info: shot 1 left alone, and why (latch mode, which it needs, is off in this rig)",
+          "shot 1: pose skipped -- latch mode needs the updated pose_control.py" in info, info)
+    check("info: shot 2 repaired, naming who and how",
+          any(p.startswith("shot 2: pose repaired (Mara: arms behind the back") for p in info),
+          info)
+    check("info: shot 3 checked", any(p.startswith("shot 3: pose checked, nothing broken")
+                                      for p in info), info)
+    check("...each with what the check saw: the break and its frames, or the share held",
+          any(p.startswith("shot 2: pose repaired") and "hands out to the sides" in p
+              and "frames 16-26" in p for p in info)
+          and any(p.startswith("shot 3: pose checked") and "held in 100% of frames" in p
+                  and "identified across the cut: Mara" in p for p in info), info)
+    check("info: one extra pass counted",
+          any(p.startswith("pose control: 1 extra pass,") for p in info), info)
+    check("the render is whole: every shot's frames, trimmed at the seams",
+          out[5] == 3 * FRAMES - 2, out[5])
+
+    with _PoseRig(script=["broken", "clean"]) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), pose_end=0.6,
+                       sigmas=torch.tensor([1.0, 0.9, 0.8, 0.6, 0.3, 0.0]))
+    check("a wired schedule is the one the window is read from: first 3 of 5 steps",
+          len(rig.installs) == 1
+          and abs(rig.installs[0]["window"][0] - (1.0 + 1e-3)) < 1e-6
+          and abs(rig.installs[0]["window"][1] - 0.7) < 1e-6,
+          [i["window"] for i in rig.installs])
+    check("...and the status line counts that schedule's steps, not the steps widget",
+          any(p.startswith("pose control: on; strength 1.00; the first 3 of 5 steps")
+              for p in _pose_info(out)), _pose_info(out))
+
+    with _PoseRig(script=["broken", "clean"]) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), plan_only=True)
+    info = _pose_info(out)
+    check("plan_only: the status and the plan, with nothing sampled or read",
+          not rig.samples and not _FakePoseDetector.made
+          and any(p.startswith("pose control plan -- shot 1: pose skipped -- latch mode "
+                               "needs the updated pose_control.py; shot 2: checked after "
+                               "its first render (Mara: arms behind the back, falling); "
+                               "shot 3: checked after its first render") for p in info), info)
+
+
+def test_pose_control_holds_back_where_it_must():
+    """A base the controlnet cannot run on, a pass 2 that runs out of VRAM, a pose
+    estimator that fails, an interrupt: none of them may take a render down, and none
+    may be swallowed silently -- except the interrupt, which always goes through."""
+    print("\n=== pose control: fallbacks ===")
+    with _PoseRig(script=["broken", "broken"]) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(width=16),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    check("an adaln width mismatch: one pass per shot, nothing read",
+          [len(p) for p in rig.per_shot()] == [1, 1, 1] and not _FakePoseDetector.made)
+    check("...with a note naming both widths and the base it needs",
+          any("16" in p and "8-wide" in p and "pose control off" in p
+              for p in _pose_info(out)), _pose_info(out))
+
+    with _PoseRig(script=["broken", "broken"], oom_in_pass_2=True) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    check("an OOM in pass 2 keeps pass 1, turns pose control off, and the render finishes",
+          out[5] == 3 * FRAMES - 2 and [len(p) for p in rig.per_shot()] == [1, 2, 1],
+          (out[5], [len(p) for p in rig.per_shot()]))
+    check("...and says so, with no pose line for the shot after",
+          "shot 2: pose pass ran out of VRAM, kept the uncontrolled render; pose control is "
+          "off for the rest of the run" in _pose_info(out)
+          and not any(p.startswith("shot 3:") for p in _pose_info(out)), _pose_info(out))
+
+    with _PoseRig(script=["broken", "broken"]) as rig:
+        _FakePoseDetector.fail = True
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    check("a pose estimator that fails: pass 1 kept, pose off for the rest of the run",
+          [len(p) for p in rig.per_shot()] == [1, 1, 1] and out[5] == 3 * FRAMES - 2)
+    check("...and the note says what failed",
+          any(p.startswith("shot 2: pose skipped -- the pose estimator failed") for p in
+              _pose_info(out)) and not any(p.startswith("shot 3:") for p in _pose_info(out)),
+          _pose_info(out))
+
+    raised = None
+    with _PoseRig(script=["broken", "broken"], interrupt_in_pass_2=True):
+        try:
+            run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                     vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+        except Exception as e:
+            raised = e
+    check("an interrupt during pass 2 stops the render",
+          type(raised).__name__ == "InterruptProcessingException", repr(raised))
+    check("...and the detector is released on the way out",
+          _FakePoseDetector.made and _FakePoseDetector.made[0].released >= 1)
+
+    saved = S.pose_control.dwpose_paths
+    try:
+        S.pose_control.dwpose_paths = lambda: ("/nonexistent/yolox_l.torchscript.pt",
+                                               "/nonexistent/dw-ll_ucoco_384_bs5.torchscript.pt")
+        with _PoseRig(script=["broken"]) as rig:
+            S.pose_control.dwpose_status = rig.saved[2]       # the real file check
+            out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                           vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    finally:
+        S.pose_control.dwpose_paths = saved
+    check("DWPose files missing: off, one pass per shot, nothing loaded",
+          [len(p) for p in rig.per_shot()] == [1, 1, 1] and not _FakePoseDetector.made)
+    check("...and the note gives both paths",
+          any("yolox_l.torchscript.pt" in p and "dw-ll_ucoco_384_bs5" in p
+              for p in _pose_info(out)), _pose_info(out))
+
+
+def test_pose_control_modes():
+    """'every restrained shot' re-renders every candidate whether it broke or not;
+    'bound falls only' only the shot where the bound body falls."""
+    print("\n=== pose control: modes ===")
+    with _PoseRig(script=["clean", "clean"]) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8,
+                       pose_shots="every restrained shot")
+    check("every restrained shot: both bound shots sampled twice, nothing broken",
+          [len(p) for p in rig.per_shot()] == [1, 2, 2], [len(p) for p in rig.per_shot()])
+    check("...each held, and said so",
+          any(p.startswith("shot 2: pose held (Mara") for p in _pose_info(out))
+          and any(p.startswith("shot 3: pose held (Mara") for p in _pose_info(out)),
+          _pose_info(out))
+    check("...build_hint asked in its own word for the mode",
+          [h["mode"] for h in rig.hints] == ["every", "every"], [h["mode"] for h in rig.hints])
+
+    with _PoseRig(script=["clean", "clean"]) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8,
+                       pose_shots="bound falls only", pose_draw="bound person only")
+    check("bound falls only: the fall sampled twice, the held shot once",
+          [len(p) for p in rig.per_shot()] == [1, 2, 1], [len(p) for p in rig.per_shot()])
+    check("...the held shot named as skipped, and never read",
+          "shot 3: pose skipped -- no bound fall in it" in _pose_info(out)
+          and _FakePoseDetector.made and _FakePoseDetector.made[0].calls == [FRAMES],
+          (_pose_info(out), [d.calls for d in _FakePoseDetector.made]))
+    check("...and the draw option reaches build_hint",
+          [h["draw"] for h in rig.hints] == ["bound person only"], [h["draw"] for h in rig.hints])
+
+    with _PoseRig(script=["clean", "clean"]) as rig:
+        run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                 vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    check("repair broken shots: the bound fall is re-rendered even when it held",
+          [len(p) for p in rig.per_shot()] == [1, 2, 1], [len(p) for p in rig.per_shot()])
+
+    try:
+        run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, plan_only=True,
+                 pose_shots="every shot")
+        bad = None
+    except RuntimeError as e:
+        bad = str(e)
+    check("a pose_shots value that is not one of its options is caught as a shifted "
+          "workflow", bad and "out of position" in bad, bad)
+
+
+def test_pose_control_goes_on_after_vsa():
+    """The Fun block patch must wrap FastH3's VSA patch, not the reverse: installed on a
+    clone after VSA, per shot. And VSA never goes on over an upstream Fun ControlNet:
+    comfy's apply_block_sparse_attention replaces every slot, so the control would go."""
+    print("\n=== pose control: after FastH3's VSA ===")
+    calls = []
+    fake = types.ModuleType("comfy_extras.nodes_sparse_attention")
+
+    def _apply(model, **kw):
+        calls.append(kw)
+        m = model.clone()
+        m.model_options["transformer_options"]["patches_replace"] = {"dit": {"block": "vsa"}}
+        return m
+    fake.apply_block_sparse_attention = _apply
+    fake.parse_block_list = lambda text: []
+    saved = {k: sys.modules.get(k) for k in ("comfy_extras", "comfy_extras.nodes_sparse_attention",
+                                             "comfy.patcher_extension")}
+    sys.modules["comfy_extras"] = types.ModuleType("comfy_extras")
+    sys.modules["comfy_extras.nodes_sparse_attention"] = fake
+    _pe = types.ModuleType("comfy.patcher_extension")
+    _pe.WrappersMP = types.SimpleNamespace(DIFFUSION_MODEL="diffusion_model")
+    sys.modules["comfy.patcher_extension"] = _pe
+    conf = os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    try:
+        with _PoseRig(script=["broken", "clean"]) as rig:
+            run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(fast=True),
+                     vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+        check("VSA applied once, before any shot",
+              len(calls) == 1, calls)
+        check("the control went on a model that already carries VSA",
+              rig.installs and all(
+                  i["model"].model_options["transformer_options"].get("patches_replace")
+                  == {"dit": {"block": "vsa"}} for i in rig.installs), rig.installs)
+
+        Fun = type("MiniMaxH3FunControlBlockPatch", (), {"__init__": lambda self, previous=None:
+                                                         setattr(self, "previous", previous)})
+        calls.clear()
+        m = _PoseModel(fast=True)
+        fun = {("double_block", b): Fun() for b in (0, 10, 20)}
+        m.model_options["transformer_options"]["patches_replace"] = {"dit": dict(fun)}
+        m2, note = S.apply_fast_h3_vsa(m)
+        check("an upstream Fun ControlNet: VSA is not put over it, and its blocks stay",
+              not calls and m2 is m and note == ""
+              and m2.model_options["transformer_options"]["patches_replace"]["dit"] == fun,
+              (calls, note))
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        if conf is not None:
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = conf
+
+
+def test_pose_facts_reach_the_shot_plan():
+    """What the planner knows about each shot's restraint goes onto the Shot: who is
+    held, in which position, fastened or not, how far the ankles may part, who falls,
+    and whether limb hardware changes in it."""
+    print("\n=== pose control: facts on the shot plan ===")
+    got = {}
+    orig = S.H3LongVideos._render
+    S.H3LongVideos._render = lambda self, prepared: got.__setitem__("p", prepared)
+    try:
+        run_node(_POSE_SCRIPT, character_memory=_POSE_MEM)
+        shots = got["p"].plan.shots
+        check("the shot that cuffs her: limbs going on, none coming off",
+              shots[0].limbs_on and not shots[0].limbs_off
+              and not shots[1].limb_change and not shots[2].limb_change,
+              [(s.limbs_on, s.limbs_off) for s in shots])
+        check("...her arms latch there, and only there",
+              [s.bound_pose["Mara"]["latch_limbs"] for s in shots] == [("arms",), (), ()],
+              [s.bound_pose for s in shots])
+        check("the fall: a bound fall, by Mara", shots[1].bound_fall and shots[1].fallers == ["Mara"]
+              and not shots[2].bound_fall, [(s.bound_fall, s.fallers) for s in shots])
+        check("Mara's arms behind the back on every shot she is held in, Dan nowhere",
+              all(set(s.bound_pose) == {"Mara"} and s.bound_pose["Mara"]["arms"] == "behind the back"
+                  for s in shots), [s.bound_pose for s in shots])
+        run_node("A cell.\n\nDan shackles Mara's ankles together with iron shackles.\n\n"
+                 "Mara shuffles across the cell.", character_memory=_POSE_MEM)
+        s2 = got["p"].plan.shots[-1]
+        check("iron shackles: ankles together, with a chain's gap",
+              s2.bound_pose.get("Mara", {}).get("legs") == "ankles together"
+              and s2.bound_pose["Mara"]["ankle_gap"] == S.POSE_GAP_LINKED, s2.bound_pose)
+        run_node("A bedroom.\n\nDan handcuffs Mara's wrists to the headboard above her "
+                 "head.\n\nMara pulls at the cuffs.", character_memory=_POSE_MEM)
+        s2 = got["p"].plan.shots[-1]
+        check("cuffed to the headboard: anchored, so left as rendered",
+              s2.bound_pose.get("Mara", {}).get("anchored") is True
+              and S.pose_candidate(s2, ["Mara", "Dan"], S.POSE_SHOT_MODES[0])
+              == ({}, "the restrained person is fastened to an object"), s2.bound_pose)
+        run_node("A cell.\n\nDan hogties Mara, ankles to her wrists.\n\nMara struggles on "
+                 "the floor.", character_memory=_POSE_MEM)
+        sh = got["p"].plan.shots
+        check("a hogtie with no item named is still limbs going on where it goes on",
+              sh[0].limbs_on and not sh[0].limbs_off and not sh[1].limb_change,
+              [(s.limbs_on, s.limbs_off) for s in sh])
+        run_node("A bedroom at night.\n\nDan handcuffs her wrists behind her back.\n\n"
+                 "Dan wraps duct tape around her mouth.\n\nMara looks at the door.",
+                 character_memory=_POSE_MEM)
+        sh = got["p"].plan.shots
+        check("tape going over her mouth is not a limb change", not sh[1].limb_change,
+              [s.limb_change for s in sh])
+    finally:
+        S.H3LongVideos._render = orig
+    shot = S.ShotPlan()
+    shot.add("x", ["Mara"], False, False, False, [])
+    s = shot.shots[0]
+    s.bound_pose = {"Mara": S.pose_wearer_facts("behind the back", "")}
+    check("candidate: a held wearer in the opening frame",
+          S.pose_candidate(s, ["Mara", "Dan"], S.POSE_SHOT_MODES[0])[0] == {"Mara": s.bound_pose["Mara"]})
+    check("...not when she is not in the opening frame",
+          S.pose_candidate(s, ["Dan"], S.POSE_SHOT_MODES[0])
+          == ({}, "the restrained person is not in the opening frame"))
+    s.bound_pose = {"Mara": S.pose_wearer_facts("out to the sides", "ankles to the neck")}
+    check("...and not for positions the skeleton leaves to pass 1, silently",
+          S.pose_candidate(s, ["Mara"], S.POSE_SHOT_MODES[0]) == ({}, ""))
+
+
+def _pose_plan_of(prompt, memory=_POSE_MEM):
+    """The prepared plan of one plan_only run, pose control left unwired."""
+    got = {}
+    orig = S.H3LongVideos._render
+    S.H3LongVideos._render = lambda self, prepared: got.__setitem__("p", prepared)
+    try:
+        run_node(prompt, character_memory=memory, model=_PoseModel())
+    finally:
+        S.H3LongVideos._render = orig
+    return got["p"].plan.shots
+
+
+def test_pose_at_the_waist_is_a_position_not_an_anchor():
+    """REVIEWED: "at the waist" is one of limb_anchor's positions, with no leading comma,
+    and the "at the" prefix read it as fastened to an object -- so it could never be
+    held. Anchored comes from the object point alone; "to the pipe" with no position is
+    still fastened, and now says so."""
+    print("\n=== pose control: at the waist is held ===")
+    check("limb_anchor_parts: a position, a point, both",
+          S.limb_anchor_parts("at the waist") == ("at the waist", "")
+          and S.limb_anchor_parts("at the pipe") == ("", "at the pipe")
+          and S.limb_anchor_parts("behind the back, at the headboard")
+          == ("behind the back", "at the headboard")
+          and S.limb_anchor_parts("at the waist, at the bed frame")
+          == ("at the waist", "at the bed frame"))
+    check("pose_wearer_facts: at the waist is not anchored; a point is",
+          S.pose_wearer_facts("at the waist", "")["anchored"] is False
+          and S.pose_wearer_facts("behind the back, at the headboard", "")["anchored"] is True
+          and S.pose_wearer_facts("at the pipe", "")["arms"] == "")
+    for beat in ("Dan handcuffs Mara's wrists at her waist.",
+                 "Dan ties Mara's wrists at her waist with rope.",
+                 "Mara's wrists are cuffed at her waist."):
+        s = _pose_plan_of("A small room.\n\n" + beat + "\n\nMara pulls against the restraints.")[-1]
+        f = s.bound_pose.get("Mara", {})
+        bound, why = S.pose_candidate(s, ["Mara", "Dan"], S.POSE_SHOT_MODES[0])
+        check(f"{beat!r}: the shot after holds her arms at the waist",
+              f.get("arms") == "at the waist" and f.get("anchored") is False
+              and set(bound) == {"Mara"} and not why, (s.bound_pose, why))
+    for beat in ("Dan handcuffs Mara to the pipe.",
+                 "Dan handcuffs Mara's wrist to the bed frame."):
+        s = _pose_plan_of("A small room.\n\n" + beat + "\n\nMara pulls against the restraints.")[-1]
+        check(f"{beat!r}: fastened to an object, and the shot says so",
+              S.pose_candidate(s, ["Mara", "Dan"], S.POSE_SHOT_MODES[0])
+              == ({}, "the restrained person is fastened to an object"), s.bound_pose)
+
+
+def test_pose_a_hogtie_over_cuffs_is_limbs_going_on():
+    """REVIEWED: a hogtie on somebody already in limb hardware registers no piece, so it
+    was no limb change -- and the shot that ties her was a candidate that would draw her
+    hogtied from frame 0. It is limbs going on now, with only the new limbs latched."""
+    print("\n=== pose control: a hogtie over cuffs goes on ===")
+    cuffs = "Mara: she, 28, grey sweater, blue jeans, handcuffs.\nDan: he, 40, black jacket."
+    for script, k in (("A cell.\n\nDan hogties Mara, ankles to her wrists.\n\nMara struggles "
+                       "on the floor.", 0),
+                      ("A cell.\n\nMara stands by the wall.\n\nDan hogties Mara.\n\nMara "
+                       "struggles on the floor.", 1)):
+        sh = _pose_plan_of(script, cuffs)
+        s, after = sh[k], sh[k + 1]
+        check(f"sheet cuffs, {script.split(chr(10) * 2)[k + 1]!r}: limbs going on, her legs "
+              f"latch, her cuffed arms do not",
+              s.limbs_on and not s.limbs_off
+              and s.bound_pose["Mara"]["latch_limbs"] == ("legs",)
+              and not after.limb_change and after.bound_pose["Mara"]["latch_limbs"] == (),
+              [(x.limbs_on, x.limbs_off, x.bound_pose) for x in sh])
+        saved = S.pose_latch_ready
+        try:
+            S.pose_latch_ready = lambda: True
+            bound, why = S.pose_candidate(s, ["Mara", "Dan"], S.POSE_SHOT_MODES[0])
+        finally:
+            S.pose_latch_ready = saved
+        check("...a latch candidate, legs only", not why
+              and bound.get("Mara", {}).get("latch_limbs") == ("legs",), (bound, why))
+        check("...and never held from frame 0 by a pose_control.py without latch mode",
+              S.pose_candidate(s, ["Mara", "Dan"], S.POSE_SHOT_MODES[0])
+              == ({}, S.POSE_LATCH_NEEDS_UPDATE) or S.pose_latch_ready())
+    sh = _pose_plan_of("A cell.\n\nDan handcuffs Mara's wrists behind her back.\n\nDan hogties "
+                       "Mara, ankles to her wrists.\n\nMara struggles on the floor.")
+    check("cuffed one shot, hogtied the next: limbs going on in both, the arms latch "
+          "only where the cuffs closed",
+          sh[0].limbs_on and sh[1].limbs_on and not sh[1].limbs_off
+          and sh[0].bound_pose["Mara"]["latch_limbs"] == ("arms",)
+          and sh[1].bound_pose["Mara"]["latch_limbs"] == (),
+          [(x.limbs_on, x.bound_pose) for x in sh])
+    sh = _pose_plan_of("A cell.\n\nDan hogties Mara.\n\nMara struggles on the floor.")
+    check("hogtied with nothing on: both limbs latch",
+          sh[0].limbs_on and sh[0].bound_pose["Mara"]["latch_limbs"] == ("arms", "legs"),
+          sh[0].bound_pose)
+
+
+def test_pose_check_decode_keeps_the_dit():
+    """REVIEWED: the pose check's decode kept only the video VAE, so on a machine short
+    of RAM the guard freed the DiT's host copy first -- right before pass 2 needs it --
+    and could free the audio VAE too."""
+    print("\n=== pose control: the check's decode keeps the DiT ===")
+    seen = []
+    real_ram, real_dec = S.ensure_host_ram, S._decode_video
+    S.ensure_host_ram = lambda need, keep=(), what="": seen.append(("ram", what, keep)) or 0
+
+    def dec(vae, out, tiled, free_first=None, keep=(), **kw):
+        seen.append(("decode", free_first, keep))
+        return real_dec(vae, out, tiled, free_first=free_first, keep=keep, **kw)
+    S._decode_video = dec
+    avae = FakeAudioVAE()
+    try:
+        with _PoseRig(script=["broken", "clean"]) as rig:
+            run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                     vae=_PoseVAE(), audio_vae=avae, pose_controlnet=_pose_patch(), steps=8)
+    finally:
+        S.ensure_host_ram, S._decode_video = real_ram, real_dec
+    dits = {id(x["model"]) for x in rig.samples if x["window"] is None}
+    ram = [k for t, what, k in seen if t == "ram" and what == "the pose check's decode"]
+    check("the RAM guard before the check's decode keeps the DiT that sampled pass 1, and "
+          "both VAEs",
+          ram and all(avae in k and any(id(x) in dits for x in k) for k in ram), ram)
+    idx = [i for i, x in enumerate(seen) if x[0] == "ram" and x[1] == "the pose check's decode"]
+    dec_keeps = [seen[i + 1][2] for i in idx if i + 1 < len(seen) and seen[i + 1][0] == "decode"]
+    check("...and the decode keeps the audio VAE on the card",
+          dec_keeps and all(avae in k for k in dec_keeps), dec_keeps)
+
+
+class _OneDetector(_FakePoseDetector):
+    """Mara alone, wrists behind her back in every frame."""
+
+    def detect(self, frames, stride=2):
+        F = int(frames.shape[0])
+        self.calls.append(F)
+        index = list(range(0, F, stride))
+        if index[-1] != F - 1:
+            index.append(F - 1)
+        return {"index": index,
+                "people": [[_pose_skeleton((40.0, 18.0), "behind")] for _ in index]}
+
+
+_POSE_ONE_MEM = "Mara: she, 28, grey sweater, blue jeans."
+_POSE_CUT_SCRIPT = (
+    "A small flat at night. Her bedroom has an unmade bed and a lamp. The living room has a "
+    "green sofa. The kitchen is small and white.\n\n"
+    "Mara's wrists are tied behind her back with rope. Mara gets up and comes out of her "
+    "bedroom.\n\nMara walks down the hallway to the living room.\n\n"
+    "Mara goes from the living room to the kitchen.\n\n"
+    "Mara sits on the sofa in the living room.\n\nMara looks at the door.")
+
+
+def test_pose_no_handoff_read_where_the_carry_is_not_used():
+    """REVIEWED: the handoff frame was read whenever the next shot was a candidate, even
+    when it opens on a cut, a re-entry or a restart and the carry is thrown away. It is
+    read in the next shot now, once that shot is known to open on it."""
+    print("\n=== pose control: no handoff read before a cut ===")
+    with _PoseRig(script=[]) as rig:
+        S.pose_control.PoseDetector = _OneDetector
+        out = run_node(_POSE_CUT_SCRIPT, character_memory=_POSE_ONE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8,
+                       pose_shots=S.POSE_SHOT_MODES[1])
+    cut = [p for p in out[2].split(" | ") if "CUT" in p]
+    calls = [d.calls for d in _FakePoseDetector.made]
+    check("the scene cuts at shot 4", cut and cut[0].startswith("shot(s) 4 CUT"), cut)
+    check("one-frame reads only where the next shot opens on the frame: before shots 3 "
+          "and 5, not before the cut",
+          len(calls) == 1 and [c == 1 for c in calls[0]]
+          == [False, True, False, False, True, False], calls)
+    check("...and the carries match",
+          [sorted(h["carry"]) if h["carry"] else None for h in rig.hints]
+          == [None, ["Mara"], None, ["Mara"]], [h["carry"] for h in rig.hints])
+
+
+def test_pose_schedule_drops_the_penultimate_sigma():
+    """REVIEWED: KSampler builds dpm_2's and uni_pc's schedules one step longer and drops
+    the penultimate sigma; the window read off the plain schedule was a step off."""
+    print("\n=== pose control: KSampler's discarded sigma ===")
+    cs = sys.modules["comfy.samplers"]
+    had = hasattr(cs, "calculate_sigmas")
+    saved, saved_land = getattr(cs, "calculate_sigmas", None), S.landing_schedule
+    try:
+        cs.calculate_sigmas = lambda ms, sch, n: torch.linspace(1.0, 0.0, int(n) + 1)
+        m = _PoseModel()
+        want = torch.cat([torch.linspace(1.0, 0.0, 10)[:-2], torch.tensor([0.0])])
+        for name in ("dpm_2", "dpm_2_ancestral", "uni_pc", "uni_pc_bh2"):
+            got = S.pose_shot_schedule(m, None, "simple", 8, name)
+            check(f"{name}: 9 steps' sigmas with the penultimate dropped, as KSampler runs",
+                  got is not None and len(got) == 9 and torch.allclose(got, want),
+                  None if got is None else [round(float(x), 3) for x in got])
+        check("euler and res_multistep: the plain schedule",
+              all(torch.allclose(S.pose_shot_schedule(m, None, "simple", 8, n),
+                                 torch.linspace(1.0, 0.0, 9)) for n in ("euler", "res_multistep")))
+        wired = torch.tensor([1.0, 0.7, 0.3, 0.0])
+        check("a wired schedule is taken as it is",
+              S.pose_shot_schedule(m, wired, "simple", 8, "dpm_2") is wired)
+        S.landing_schedule = lambda *a, **k: torch.zeros(10)
+        check("a landed shot samples on custom sigmas, where nothing is dropped",
+              torch.allclose(S.pose_shot_schedule(m, None, "simple", 8, "dpm_2", True, 12.0,
+                                                  3.0), torch.linspace(1.0, 0.0, 9)))
+    finally:
+        S.landing_schedule = saved_land
+        if had:
+            cs.calculate_sigmas = saved
+        elif hasattr(cs, "calculate_sigmas"):
+            delattr(cs, "calculate_sigmas")
+
+
+def test_pose_oom_in_pass_2_frees_and_stops():
+    """REVIEWED: after an out-of-memory error in pass 2 the render carries on in the same
+    node run, and comfy cleans up only when a node ends. Pass 1 is kept, the caches are
+    freed, and pose control stops for the rest of the run."""
+    print("\n=== pose control: OOM in pass 2 ===")
+    mm_ = sys.modules["comfy.model_management"]
+    real_sec, real_clean = mm_.soft_empty_cache, S._pose_oom_cleanup
+    cleaned = []
+    count = [0]
+
+    def sec(*a, **k):
+        count[0] += 1
+
+    def spy():
+        before = count[0]
+        real_clean()
+        cleaned.append(count[0] - before)
+    mm_.soft_empty_cache, S._pose_oom_cleanup = sec, spy
+    try:
+        with _PoseRig(script=["broken", "broken"], oom_in_pass_2=True,
+                      build=_fake_latch_build()[0]) as rig:
+            out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                           vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    finally:
+        mm_.soft_empty_cache, S._pose_oom_cleanup = real_sec, real_clean
+    check("the OOM cleanup ran once, and emptied comfy's cache",
+          cleaned and len(cleaned) == 1 and cleaned[0] >= 1, cleaned)
+    check("pass 1 kept, no second pass tried on the shot after",
+          [len(p) for p in rig.per_shot()] == [1, 2, 1] and out[5] == 3 * FRAMES - 2,
+          [len(p) for p in rig.per_shot()])
+    check("the info line says pose control is off",
+          any(p.startswith("shot 2: pose pass ran out of VRAM") and "off for the rest of the "
+              "run" in p for p in _pose_info(out)), _pose_info(out))
+
+
+def test_pose_never_holds_the_one_restraining():
+    """REVIEWED: "Dan handcuffs her wrists" with two women in the sheet records the cuffs
+    on Dan, the captor. Pose control leaves alone a wearer who does the restraining in
+    the beat, and one recorded off a beat whose pronoun cannot be them."""
+    print("\n=== pose control: never the one restraining ===")
+    two = ("Mara: she, 28, grey sweater, blue jeans.\nKate: she, 30, red coat.\n"
+           "Dan: he, 40, black jacket.")
+    script = ("A bedroom at night.\n\nDan handcuffs her wrists behind her back.\n\nDan wraps "
+              "duct tape around her mouth.\n\nMara looks at the door.")
+    sh = _pose_plan_of(script, two)
+    for k, s in enumerate(sh):
+        check(f"shot {k + 1}: Dan is never a pose candidate",
+              "Dan" not in S.pose_candidate(s, list(s.cast) or ["Mara", "Dan"],
+                                            S.POSE_SHOT_MODES[1])[0], (s.bound_pose, s.restrainers))
+    check("...and the shots that hold him say why",
+          all(S.pose_candidate(s, list(s.cast), S.POSE_SHOT_MODES[1])[1]
+              == "the one doing the restraining is read as the restrained person"
+              for s in sh if "Dan" in s.bound_pose), [(s.bound_pose, s.restrainers) for s in sh])
+    sh = _pose_plan_of(script)
+    check("one woman in the sheet: her arms are held as before",
+          all(set(S.pose_candidate(s, list(s.cast), S.POSE_SHOT_MODES[1])[0]) <= {"Mara"}
+              for s in sh) and not any(s.restrainers for s in sh)
+          and set(S.pose_candidate(sh[2], list(sh[2].cast), S.POSE_SHOT_MODES[1])[0])
+          == {"Mara"}, [(s.bound_pose, s.restrainers) for s in sh])
+    check("restrains_in: the doer, never the possessor",
+          S.restrains_in("Dan handcuffs Mara's wrists.", "Dan")
+          and not S.restrains_in("Dan handcuffs Mara's wrists.", "Mara")
+          and not S.restrains_in("Mara looks at Dan.", "Dan"))
+
+
+def _fake_latch_build(latched_at=4):
+    """A build_hint with latch mode: Mara is person 0; a latch shot latches its latch
+    limbs latched_at analysed frames after latch_after (None: never)."""
+    calls = []
+    pc = S.pose_control
+
+    def build(det, frame_count, height, width, bound, carry=None, mode="repair",
+              draw="everyone", *, cast_count=None, latch_after=None):
+        calls.append(dict(frame_count=frame_count, bound=bound, carry=carry,
+                          latch_after=latch_after))
+        rep = {"boxes_last": pc.torso_boxes(det["people"][-1], {"Mara": 0}),
+               "broken": False, "notes": ["Mara: held"], "skipped": "", "latched": {}}
+        if latch_after is not None:
+            rep["latched"] = {n: (None if latched_at is None or not f.get("latch_limbs")
+                                  else latch_after + latched_at) for n, f in bound.items()}
+            if latched_at is None:
+                rep["skipped"] = "no limb latched"
+                return None, rep
+        return torch.zeros(int(frame_count), int(height), int(width), 3), rep
+    return build, calls
+
+
+def test_pose_latch_mode():
+    """ASKED FOR: restraints break right after they go on. The shot where limb hardware
+    goes on is a candidate in latch mode: build_hint is told latch_after = ceil(0.4 x
+    frames) and which limbs this shot puts on; they are drawn as detected until they
+    settle, then held. A shot where it comes off is still left alone."""
+    print("\n=== pose control: latch mode ===")
+    build, calls = _fake_latch_build()
+    with _PoseRig(script=["clean", "clean", "clean"], latch=True, build=build) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8,
+                       pose_shots=S.POSE_SHOT_MODES[1])
+    info = _pose_info(out)
+    check("every shot sampled twice, the cuffing one included",
+          [len(p) for p in rig.per_shot()] == [2, 2, 2], [len(p) for p in rig.per_shot()])
+    check("the cuffing shot: latch_after is ceil(0.4 x its frames), its arms latch",
+          len(calls) == 3 and calls[0]["latch_after"]
+          == int(math.ceil(S.POSE_LATCH_FROM * calls[0]["frame_count"]))
+          and calls[0]["bound"]["Mara"]["latch_limbs"] == ("arms",), calls[:1])
+    check("the shots after: no latch_after, nothing latched, held from frame 0",
+          [c["latch_after"] for c in calls[1:]] == [None, None]
+          and all(c["bound"]["Mara"]["latch_limbs"] == () for c in calls[1:]), calls[1:])
+    check("the latch shot's boxes carry to the next shot like any other",
+          [sorted(c["carry"]) if c["carry"] else None for c in calls]
+          == [None, ["Mara"], ["Mara"]], [c["carry"] for c in calls])
+    lat = calls[0]["latch_after"] + 4 if calls else None
+    check("info: the latch shot names who, how and the frame",
+          any(p.startswith(f"shot 1: pose latched (Mara: arms behind the back) at frame {lat} "
+                           f"-- Mara: held") for p in info), info)
+    check("info: the plan says the shot latches",
+          any(p.startswith("pose control plan -- shot 1: rendered a second time, latched as "
+                           "the restraint goes on (Mara: arms behind the back)") for p in info),
+          info)
+
+    build, calls = _fake_latch_build(latched_at=None)
+    with _PoseRig(script=["clean", "clean", "clean"], latch=True, build=build) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8,
+                       pose_shots=S.POSE_SHOT_MODES[1])
+    check("nothing latches: pass 1 kept, and build_hint's reason in info",
+          [len(p) for p in rig.per_shot()] == [1, 2, 2]
+          and "shot 1: pose skipped -- no limb latched" in _pose_info(out), _pose_info(out))
+
+    def old_build(det, frame_count, height, width, bound, carry=None, mode="repair",
+                  draw="everyone", *, cast_count=None):
+        return _fake_latch_build()[0](det, frame_count, height, width, bound, carry, mode,
+                                      draw, cast_count=cast_count)
+    with _PoseRig(script=["clean", "clean", "clean"], latch=True, build=old_build) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8,
+                       pose_shots=S.POSE_SHOT_MODES[1])
+    check("a build_hint that refuses latch_after: the shot falls back to pass 1, with "
+          "the note",
+          [len(p) for p in rig.per_shot()] == [1, 2, 2]
+          and "shot 1: pose skipped -- latch mode needs the updated pose_control.py"
+          in _pose_info(out), _pose_info(out))
+    with _PoseRig(script=[]) as rig:
+        out = run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), plan_only=True)
+    check("a pose_control.py without latch mode: the plan skips the shot, and info "
+          "says what is needed",
+          "pose control: latch mode needs the updated pose_control.py" in _pose_info(out)
+          and any("shot 1: pose skipped -- latch mode needs the updated pose_control.py" in p
+                  for p in _pose_info(out)), _pose_info(out))
+    script = ("A cell.\n\nDan ties Mara's ankles together with rope.\n\nDan handcuffs Mara's "
+              "wrists behind her back.\n\nDan unlocks the handcuffs.\n\nMara rubs her wrists.")
+    sh = _pose_plan_of(script)
+    check("rope on her ankles, then cuffs: each shot latches only what it puts on",
+          [s.bound_pose["Mara"]["latch_limbs"] for s in sh] == [("legs",), ("arms",), (), ()]
+          and [(s.limbs_on, s.limbs_off) for s in sh]
+          == [(True, False), (True, False), (False, True), (False, False)],
+          [(s.limbs_on, s.limbs_off, s.bound_pose) for s in sh])
+    with _PoseRig(script=[], latch=True, build=build) as rig:
+        out = run_node(script, character_memory=_POSE_MEM, model=_PoseModel(), vae=_PoseVAE(),
+                       pose_controlnet=_pose_patch(), plan_only=True)
+    check("the shot where the cuffs come off is still left alone, her roped ankles "
+          "notwithstanding",
+          any("shot 2: checked after its first render, latched as the restraint goes on "
+              "(Mara: arms behind the back, ankles together); shot 3: pose skipped -- "
+              "restraints come off in it; shot 4: checked" in p for p in _pose_info(out)),
+          _pose_info(out))
+
+
+def test_pose_control_carries_appearance():
+    """Who is who crosses a cut by look as well as by place: the restrained person's
+    appearance at a shot's end goes to the handoff match and to the next shot's
+    build_hint, when the loaded pose_control.py can compare it; an older one is called
+    exactly as before."""
+    print("\n=== pose control: appearance carried across the cut ===")
+    pc = S.pose_control
+    mara, dan = [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]
+    calls = []
+
+    def build(det, frame_count, height, width, bound, carry=None, mode="repair",
+              draw="everyone", **kw):
+        calls.append(dict(carry=carry, kw=dict(kw)))
+        return None, {"boxes_last": pc.torso_boxes(det["people"][-1], {"Mara": 0}),
+                      "broken": False, "notes": [], "skipped": "", "latched": {},
+                      "appearance_last": {"Mara": list(mara)}}
+
+    with _PoseRig(script=["clean", "clean"], build=build, appearance=True) as rig:
+        _FakePoseDetector.looks = [mara, dan]
+        run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                 vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    check("the first analysed shot (the cuffing, latched) has nothing to carry; each "
+          "shot after gets Mara's look",
+          len(calls) == 3 and "carry_appearance" not in calls[0]["kw"]
+          and all(c["kw"].get("carry_appearance") == {"Mara": mara}
+                  and set(c["carry"] or {}) == {"Mara"} for c in calls[1:]), calls)
+    check("each handoff match is given the frame's looks and the carried one",
+          rig.identifies == [{"appearance": [mara, dan],
+                              "carry_appearance": {"Mara": mara}}] * 2, rig.identifies)
+
+    calls.clear()
+    with _PoseRig(script=["clean", "clean"], build=build) as rig:
+        _FakePoseDetector.looks = [mara, dan]
+        run_node(_POSE_SCRIPT, character_memory=_POSE_MEM, model=_PoseModel(),
+                 vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8)
+    check("an older pose_control.py: no appearance keyword reaches either call",
+          len(calls) == 2 and all("carry_appearance" not in c["kw"] for c in calls)
+          and rig.identifies == [{}] and set(calls[1]["carry"] or {}) == {"Mara"},
+          (calls, rig.identifies))
+
+
+def test_pose_latch_with_the_real_build_hint():
+    """The latch wiring against pose_control.py's own build_hint, once it has latch mode:
+    Mara alone, her wrists tied behind her back in the first shot, every frame behind."""
+    print("\n=== pose control: latch mode, the real build_hint ===")
+    if not S.pose_latch_ready():
+        print("  (pose_control.py has no latch mode yet: only the fallback is checked)")
+        s = S.ShotPlan()
+        s.add("x", ["Mara"], False, False, False, [])
+        s.shots[0].bound_pose = {"Mara": S.pose_wearer_facts("behind the back", "",
+                                                             latch=("arms",))}
+        s.shots[0].limbs_on = True
+        check("without it, a latch shot is skipped with the note",
+              S.pose_candidate(s.shots[0], ["Mara"], S.POSE_SHOT_MODES[1])
+              == ({}, S.POSE_LATCH_NEEDS_UPDATE))
+        return
+    with _PoseRig(script=[], latch=True) as rig:
+        S.pose_control.PoseDetector = _OneDetector
+        out = run_node(_POSE_CUT_SCRIPT, character_memory=_POSE_ONE_MEM, model=_PoseModel(),
+                       vae=_PoseVAE(), pose_controlnet=_pose_patch(), steps=8,
+                       pose_shots=S.POSE_SHOT_MODES[1])
+    h0 = rig.hints[0] if rig.hints else {}
+    check("shot 1 reaches build_hint with latch_after and her arms to latch",
+          h0 and h0["kw"].get("latch_after") is not None
+          and h0["bound"]["Mara"]["latch_limbs"] == ("arms",), h0 and (h0["kw"], h0["bound"]))
+    check("...and its report says when she latched",
+          h0 and "Mara" in ((h0["report"] or {}).get("latched") or {}),
+          h0 and h0["report"])
+    check("info: shot 1 latched",
+          any(p.startswith("shot 1: pose latched (Mara: arms behind the back) at frame")
+              for p in _pose_info(out)), _pose_info(out))
+
+
+def _flow_simple(steps, shift=12.0):
+    """comfy's 'simple' scheduler on a shift-12 discrete-flow model: 1, .988, .973, .952,
+    .923, .878, .8, .632, 0 at 8 steps. Its last step leaves the audio branch high enough
+    that the node splices in the soft-landing call."""
+    ts = torch.arange(1, 1001, dtype=torch.float64) / 1000.0
+    sig = shift * ts / (1 + (shift - 1) * ts)
+    ss = len(sig) / steps
+    return torch.tensor([float(sig[-(1 + int(x * ss))]) for x in range(steps)] + [0.0],
+                        dtype=torch.float32)
+
+
+class _FunPatchStub:
+    """comfy's MiniMaxH3FunControlPatch, constructor and register() only. register marks
+    the clone it was put on, so a sampling spy can tell a controlled pass from a plain one."""
+    made = []
+
+    def __init__(self, model_patch, vae, control_video, mask, source_video, strength,
+                 sigma_start, sigma_end):
+        self.model_patch, self.vae, self.control_video = model_patch, vae, control_video
+        self.mask, self.source_video, self.strength = mask, source_video, strength
+        self.sigma_start, self.sigma_end = sigma_start, sigma_end
+        self.control_latent = self.control_latent_shape = self.registered_on = None
+        _FunPatchStub.made.append(self)
+
+    def cleanup(self):
+        self.control_latent = self.control_latent_shape = None
+
+    def register(self, model):
+        self.registered_on = model
+        model.model_options.setdefault("transformer_options", {})["fun_pose_patch"] = self
+
+
+class _MarkVAE(_PoseVAE):
+    """Decodes a latent to frames of a quarter of its mean: the sampling spy fills a
+    plain pass's video latent with 1 and a controlled pass's with 2."""
+
+    def __init__(self):
+        super().__init__()
+        self.marks = []
+
+    def decode(self, latent):
+        self.decodes += 1
+        t = latent.shape[2] if latent.ndim == 5 else 1
+        mark = float(latent.float().mean()) if latent.numel() else 0.0
+        self.marks.append(round(mark, 3))
+        return torch.full((max(1, (t - 2) // 5 * 17 + 5), H, W, 3),
+                          0.25 * mark).to(_vae_out_dtype())
+
+
+def test_pose_control_full_render():
+    """A whole 5-beat restraint render with pose control wired, through the real
+    sample_shot, soft landing, encode_hint, pose_sigma_window and install_pose_control;
+    only comfy's sampler, its Fun patch class and DWPose are fakes. Mara's hands fly out
+    in shot 3 and only there: shot 3 alone samples twice, its control latent is the video
+    latent's shape, the window holds the first ceil(pose_end x steps) steps of the
+    schedule the shot samples on, every other shot is the unwired render's, and info has
+    a pose line per shot."""
+    print("\n=== pose control: a full 5-beat render ===")
+    script = ("A cell at night.\n\nDan handcuffs Mara's wrists behind her back.\n\n"
+              "Mara glares at Dan.\n\nMara stumbles and falls to the floor.\n\n"
+              "Mara looks at the door.\n\nDan looks down at Mara.")
+    pc = S.pose_control
+    cs, sm, nd = sys.modules["comfy.samplers"], sys.modules["comfy.sample"], sys.modules["nodes"]
+    names = ((cs, "calculate_sigmas"), (sm, "sample_custom"), (sm, "fix_empty_latent_channels"),
+             (sm, "prepare_noise"), (nd, "common_ksampler"), (pc, "PoseDetector"),
+             (pc, "dwpose_status"), (pc, "_PRESET_CLS"), (pc, "build_hint"))
+    saved = [(o, n, getattr(o, n, None), hasattr(o, n)) for o, n in names]
+    mods = {k: sys.modules.get(k) for k in ("comfy_extras", "comfy_extras.nodes_minimax_h3")}
+    samples = []
+
+    def patch_of(model):
+        return getattr(model, "model_options", {}).get("transformer_options", {}).get(
+            "fun_pose_patch")
+
+    def record(model, seed, image, positive, sigmas):
+        v, a = image.unbind()
+        samples.append(dict(model=model, seed=seed, video=v, cond=positive,
+                            sigmas=[float(x) for x in sigmas], patch=patch_of(model)))
+        return FakeNested((torch.full_like(v, 2.0 if patch_of(model) else 1.0), a.clone()))
+
+    def ksampler(model, seed, steps, cfg, sn, sch, positive, negative, latent, denoise=1.0):
+        out = dict(latent)
+        out["samples"] = record(model, seed, latent["samples"], positive, _flow_simple(steps))
+        return (out,)
+
+    def custom(model, noise, cfg, sampler, sigmas, positive, negative, image, **kw):
+        return record(model, kw.get("seed"), image, positive, sigmas)
+
+    def render(pose_end, wired):
+        samples.clear()
+        _FakePoseDetector.made, _FakePoseDetector.script = [], ["clean", "broken", "clean", "clean"]
+        _FakePoseDetector.fail = False
+        _FunPatchStub.made = []
+        pc._PRESET_CLS = None
+        vae, clip = _MarkVAE(), FakeCLIP()
+        torch.manual_seed(7)
+        out = run_node(script, character_memory=_POSE_MEM, model=_PoseModel(), vae=vae,
+                       clip=clip, steps=8, **(dict(pose_controlnet=_pose_patch(),
+                                                   pose_end=pose_end) if wired else {}))
+        by, order = {}, []
+        for s in samples:
+            if id(s["video"]) not in by:
+                order.append(id(s["video"]))
+            by.setdefault(id(s["video"]), []).append(s)
+        return dict(out=out, shots=[by[k] for k in order], marks=list(vae.marks),
+                    prompts=[p for p, _r in clip.seen], dets=list(_FakePoseDetector.made),
+                    patches=list(_FunPatchStub.made))
+
+    try:
+        cs.calculate_sigmas = lambda ms, sch, n: _flow_simple(int(n))
+        sm.sample_custom, nd.common_ksampler = custom, ksampler
+        sm.fix_empty_latent_channels = lambda model, img, *a, **k: img
+        sm.prepare_noise = lambda img, seed, inds=None: img
+        pc.PoseDetector, pc.dwpose_status = _FakePoseDetector, (lambda: (True, ""))
+        # The real build_hint, shown without latch_after: shot 1, which cuffs her, stays
+        # one pass whatever pose_control.py is here. Latch mode has its own tests.
+        _real_build = pc.build_hint
+        pc.build_hint = lambda *a, **k: _real_build(*a, **k)
+        pc.build_hint.__signature__ = inspect.signature(_build_hint_sig)
+        sys.modules["comfy_extras"] = types.ModuleType("comfy_extras")
+        sys.modules["comfy_extras.nodes_minimax_h3"] = _fh = types.ModuleType("nmh3")
+        _fh.MiniMaxH3FunControlPatch = _FunPatchStub
+        run_node(script, character_memory=_POSE_MEM, model=_PoseModel(), plan_only=True)
+        base = render(0.6, wired=False)
+        for pose_end in (0.6, 0.5, 1.0):
+            r = render(pose_end, wired=True)
+            tag = f"pose_end {pose_end}: "
+            per = [len(p) for p in r["shots"]]
+            check(tag + "only shot 3 samples twice; unwired, every shot once",
+                  per == [1, 1, 2, 1, 1] and [len(p) for p in base["shots"]] == [1] * 5,
+                  (per, [len(p) for p in base["shots"]]))
+            if per != [1, 1, 2, 1, 1]:
+                continue
+            p1, p2 = r["shots"][2]
+            fun = p2["patch"]
+            check(tag + "pass 2 on a clone carrying the one Fun patch made, pass 1 plain; "
+                  "same seed, conditioning, latent and schedule",
+                  p1["patch"] is None and fun is not None and fun.registered_on is p2["model"]
+                  and p2["model"] is not p1["model"] and r["patches"] == [fun]
+                  and p1["seed"] == p2["seed"] and p1["cond"] is p2["cond"]
+                  and p1["video"] is p2["video"] and p1["sigmas"] == p2["sigmas"])
+            check(tag + "the control latent is preset, fp32, with the video latent's shape",
+                  tuple(fun.preset_latent.shape) == tuple(p2["video"].shape)
+                  == tuple(fun.control_latent_shape) == tuple(fun.control_latent.shape)
+                  and fun.preset_latent.dtype == torch.float32 and fun.control_video is None
+                  and tuple(p2["video"].shape)[:2] == (1, 24), tuple(fun.preset_latent.shape))
+            sched = p2["sigmas"]
+            k = math.ceil(pose_end * 8 - 1e-9)
+            held = sum(1 for x in sched[:-1] if fun.sigma_end <= x <= fun.sigma_start)
+            check(tag + f"the schedule sampled carries the soft-landing call (9 calls), and "
+                  f"the window holds its first {k} steps"
+                  + (", the landing call too" if k == 8 else ""),
+                  len(sched) == 10 and held == (9 if k == 8 else k)
+                  and abs(fun.sigma_start - (sched[0] + 1e-3)) < 1e-6
+                  and (fun.sigma_end == -1.0 if k == 8 else
+                       abs(fun.sigma_end - (sched[k - 1] + sched[k]) / 2) < 1e-6),
+                  (held, fun.sigma_start, fun.sigma_end, [round(x, 3) for x in sched]))
+            info = _pose_info(r["out"])
+            check(tag + "the status line says the same count",
+                  any(p.startswith(f"pose control: on; strength 1.00; the first {k} of 8 "
+                                   f"steps") for p in info), info)
+            others = [r["shots"][i][0] for i in (0, 1, 3, 4)]
+            check(tag + "shots 1, 2, 4, 5 sample once, on the plain model, as unwired",
+                  all(s["model"] is p1["model"] and s["patch"] is None for s in others)
+                  and all(a["seed"] == b["seed"] and a["sigmas"] == b["sigmas"]
+                          and a["video"].shape == b["video"].shape
+                          for a, b in zip([p[0] for p in r["shots"]],
+                                          [p[0] for p in base["shots"]]))
+                  and r["prompts"] == base["prompts"])
+            check(tag + "decodes: shot 3's pass 1 for the check, then its pass 2; each "
+                  "checked shot reuses its pass-1 frames",
+                  r["marks"] == [1.0, 1.0, 1.0, 2.0, 1.0, 1.0], r["marks"])
+            fr, bf = r["out"][0], base["out"][0]
+            marks = [round(float(fr[i].mean()) / 0.25, 2) for i in range(fr.shape[0])]
+            a = marks.index(2.0) if 2.0 in marks else -1
+            b = len(marks) - marks[::-1].index(2.0) if a >= 0 else -1
+            check(tag + "the output has pass 2's frames for shot 3 only, and every other "
+                  "frame and the sound are the unwired render's",
+                  a > 0 and set(marks[a:b]) == {2.0} and fr.shape == bf.shape
+                  and torch.equal(fr[:a], bf[:a]) and torch.equal(fr[b:], bf[b:])
+                  and torch.equal(r["out"][1]["waveform"], base["out"][1]["waveform"]),
+                  (a, b, fr.shape, bf.shape))
+            d = r["dets"]
+            check(tag + "one detector: shots 2-5 read, off the card after every read, "
+                  "released at the end",
+                  len(d) == 1 and sum(1 for c in d[0].calls if c > 1) == 4
+                  and d[0].closed == len(d[0].calls) and d[0].released >= 1,
+                  [(x.calls, x.closed, x.released) for x in d])
+            check(tag + "info: a pose line for every shot, and one extra pass",
+                  "shot 1: pose skipped -- latch mode needs the updated pose_control.py" in info
+                  and any(p.startswith("shot 2: pose checked, nothing broken") for p in info)
+                  and any(p.startswith("shot 3: pose repaired (Mara: arms behind the back, "
+                                       "falling)") and "hands out to the sides" in p
+                          and "frames 16-26" in p for p in info)
+                  and any(p.startswith("shot 4: pose checked, nothing broken") for p in info)
+                  and any(p.startswith("shot 5: pose checked, nothing broken") for p in info)
+                  and any(p.startswith("pose control: 1 extra pass,") for p in info), info)
+    finally:
+        for o, n, v, had in saved:
+            if had:
+                setattr(o, n, v)
+            elif hasattr(o, n):
+                delattr(o, n)
+        for k, v in mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -10953,6 +12946,7 @@ def main():
     test_no_guard_sentence_carries_a_negation()
     test_hardware_waits_for_the_beat_that_puts_it_on()
     test_the_applying_shot_says_where_the_limbs_finish()
+    test_an_applying_shot_is_sized_and_timed_for_the_hold()
     test_a_collar_in_the_sheet_is_held_like_hardware()
     test_an_undergarment_keeps_its_words_and_waits_for_its_picture()
     test_an_under_layer_belongs_to_somebody()
@@ -11038,6 +13032,11 @@ def main():
     test_the_cuffs_hold_when_the_tape_goes_on()
     test_no_kind_of_restraint_breaks()
     test_a_sealed_piece_stays_through_everything_else()
+    test_a_hold_line_keeps_each_piece_on()
+    test_a_remove_line_takes_off_only_the_held_piece_it_names()
+    test_info_lists_the_restraints_registered_per_shot()
+    test_wording_that_registers_nothing_is_named()
+    test_a_newly_read_piece_is_timed_sized_and_pictured()
     test_a_dropped_clause_is_not_reported_as_sent()
     test_a_promoted_clause_opens_in_upper_case()
     test_the_reports_say_what_happened()
@@ -11048,6 +13047,10 @@ def main():
     test_a_sound_given_up_is_really_silenced()
     test_a_carried_frame_does_not_add_an_uncounted_body()
     test_one_person_gets_one_picture()
+    test_a_held_portrait_gives_way_to_the_frame_of_her_now()
+    test_a_cut_keeps_the_frame_of_a_held_person()
+    test_a_held_person_comes_back_with_a_frame_from_after()
+    test_a_gag_only_the_hold_reads_retires_older_frames()
     test_an_untagged_picture_is_not_a_stranger()
     test_a_beat_that_moves_a_garment_keeps_the_cast()
     test_a_carried_clause_and_the_count_agree()
@@ -11069,6 +13072,11 @@ def main():
     test_a_strained_face_only_where_the_beat_writes_it()
     test_each_wearer_keeps_their_own_pose()
     test_a_described_body_falls_as_a_body()
+    test_every_tie_and_gag_wording_is_held_by_name()
+    test_props_and_carried_things_hold_nobody()
+    test_a_bound_body_holds_nothing_in_its_hands()
+    test_a_gag_that_holds_the_mouth_open_is_not_told_closed()
+    test_a_bound_fall_in_any_wording_keeps_the_hands()
     test_a_role_noun_that_is_no_extra_keeps_the_count()
     test_an_intended_act_holds_the_person_it_is_done_to()
     test_a_body_laid_down_by_the_opening_is_tracked()
@@ -11077,6 +13085,23 @@ def main():
     test_a_body_moved_by_somebody_else_leaves_its_posture()
     test_a_piece_taken_off_is_not_placed()
     test_the_smaller_readers_say_only_what_is()
+    test_pose_control_unwired_changes_nothing()
+    test_pose_control_repairs_a_broken_shot()
+    test_pose_control_holds_back_where_it_must()
+    test_pose_control_modes()
+    test_pose_control_goes_on_after_vsa()
+    test_pose_facts_reach_the_shot_plan()
+    test_pose_at_the_waist_is_a_position_not_an_anchor()
+    test_pose_a_hogtie_over_cuffs_is_limbs_going_on()
+    test_pose_check_decode_keeps_the_dit()
+    test_pose_no_handoff_read_where_the_carry_is_not_used()
+    test_pose_schedule_drops_the_penultimate_sigma()
+    test_pose_oom_in_pass_2_frees_and_stops()
+    test_pose_never_holds_the_one_restraining()
+    test_pose_latch_mode()
+    test_pose_latch_with_the_real_build_hint()
+    test_pose_control_full_render()
+    test_pose_control_carries_appearance()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

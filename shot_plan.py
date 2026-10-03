@@ -18,6 +18,18 @@ class Shot:
     frame_count: int = 0
     refs: list[object] = field(default_factory=list)
     line_seconds: float = 0.0     # the planner's estimate of the spoken line, words / WORDS_PER_SEC
+    # Pose control's facts, from the restraint planning (see sampler.pose_candidate).
+    bound_pose: dict = field(default_factory=dict)   # {name: {arms, legs, ankle_gap, anchored, fall, latch_limbs}}, on-screen wearers
+    bound_fall: bool = False      # a restrained body falls in this shot
+    fallers: list[str] = field(default_factory=list)  # who falls in it, when bound_fall
+    limbs_on: bool = False        # limb hardware goes on in this shot
+    limbs_off: bool = False       # limb hardware comes off in this shot
+    restrainers: list[str] = field(default_factory=list)  # wearers pose control leaves alone: they do the restraining
+
+    @property
+    def limb_change(self):
+        """Limb hardware goes on or comes off in this shot."""
+        return bool(self.limbs_on or self.limbs_off)
 
 
 @dataclass
@@ -104,6 +116,9 @@ class PreparedVideo:
     w: int
     shot_rooms: object = None         # {0-based shot: (room it opens in, room it ends in)}
     hardware_changed: object = None   # 1-based shots that put hardware on or take it off
+    held_shots: object = None         # {1-based shot: {name: shot their restraint or gag went on}}, as it opens
+    held_items: object = None         # {1-based shot: {name: (items, where)}} for those held through it
+    portrait_slots: object = None     # {0-based shot: {name: 1-based places of their portraits in its refs}}
     shot_frames: object = None        # {0-based shot: (who its frames show, who is still there at its end)}
     reentry_shots: object = None      # {0-based shot: who walks in while the keyframe still has them}
     own_grade_shots: object = None    # {0-based shots whose change of level over the take is the author's}
@@ -111,3 +126,10 @@ class PreparedVideo:
     outdoor_shots: object = None      # {0-based shots whose place is outside}
     fast_h3: bool = False             # FastVideo's FastH3: VSA goes on at render
     hyperflow: object = None          # Hyperflow's settings, with "two_time" when it can run
+    pose_controlnet: object = None    # the MODEL_PATCH wired to pose_controlnet
+    pose_ok: bool = False             # pose_status passed: pose control runs this render
+    pose_note: str = ""               # pose_status's note
+    pose_strength: float = 1.0
+    pose_end: float = 0.6             # share of the steps held to the skeleton
+    pose_shots: str = "repair broken shots"
+    pose_draw: str = "everyone"

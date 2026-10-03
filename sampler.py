@@ -9,6 +9,7 @@ conditioning assembly, and tensor/runtime operations have separate owner modules
 """
 
 import glob
+import inspect
 import json
 import math
 import os
@@ -43,6 +44,14 @@ _plan_module = _load_local("h3_shot_plan", "shot_plan.py")
 _runtime_module = _load_local("h3_runtime", "runtime.py")
 _audio_module = _load_local("h3_audio", "audio.py")
 _cond_module = _load_local("h3_conditioning", "conditioning.py")
+# Pose control for restrained characters, loaded the same way. A module that fails to
+# load costs pose control only, and says so in info; the node itself still loads.
+try:
+    pose_control = _load_local("h3_pose_control", "pose_control.py")
+    _POSE_LOAD_ERROR = ""
+except Exception as _pose_e:          # pragma: no cover - only on a broken install
+    pose_control = None
+    _POSE_LOAD_ERROR = f"{type(_pose_e).__name__}: {_pose_e}"
 ShotPlan = _plan_module.ShotPlan
 PreparedVideo = _plan_module.PreparedVideo
 
@@ -218,7 +227,7 @@ def paragraphs(text):
     return [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip()) if p.strip()]
 
 
-_SHEET_LINE = re.compile(r"^\s*(?!(?i:remove|off|add|wear|wardrobe)\s*:)"
+_SHEET_LINE = re.compile(r"^\s*(?!(?i:remove|off|add|wear|wardrobe|hold)\s*:)"
                          r"[A-Za-z][\w'’-]{0,24}(?:\s+[A-Z][\w'’-]{0,24}){0,2}\s*:\s*\S")
 
 
@@ -1640,7 +1649,7 @@ def beat_seconds(beat):
 MIN_AUTO_FRAMES = 73           # ~3.0s: the shortest shot that can hold one action
 
 
-def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
+def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0, applying=()):
     """Frames for each shot. Returns (lengths, note).
 
     'fixed' gives every shot the ceiling. 'from the beat' sizes each shot from what
@@ -1654,18 +1663,36 @@ def plan_lengths(beats, ceiling_frames, from_beat, pace=1.0):
     it performs the same action more slowly, which is what slow-looking footage is.
 
     `pace` scales the whole estimate: below 1.0 the shots get shorter and the motion
-    in them brisker, above 1.0 they get longer and slower."""
+    in them brisker, above 1.0 they get longer and slower.
+
+    `applying` is the 1-based shots whose beat puts a restraint, gag or seal on. Each
+    gets one more action's time on top of its floored estimate and is not leaned
+    short, `pace` below 1.0 included: its last frame is the one the next shot is
+    pinned to, and that frame has to show the piece on and the hands clear of it, not
+    the putting-on half done. Reported as restraints and tape gone in the next beat."""
     if not from_beat:
         return [ceiling_frames] * len(beats), ""
     pace = max(0.05, float(pace if pace else 1.0))
-    lens, capped = [], []
-    for b in beats:
+    _applying = {int(n) for n in (applying or ())}
+    lens, capped, held = [], [], []
+    for _n, b in enumerate(beats, 1):
         need = beat_seconds(b) * pace
+        if _n in _applying:
+            need = (max(beat_seconds(b), MIN_AUTO_FRAMES / H3_FPS)
+                    + SECONDS_PER_ACTION) * max(1.0, pace)
         want = align_frame_count_nearest(int(round(need * H3_FPS))) if need else MIN_AUTO_FRAMES
         if want > ceiling_frames:
             capped.append((len(lens) + 1, want))
         lens.append(min(max(MIN_AUTO_FRAMES, want), ceiling_frames))
+        if _n in _applying and want <= ceiling_frames:
+            held.append(_n)         # a capped one is reported as capped, below
     note = ""
+    if held:
+        note += (f"shot(s) {', '.join(str(n) for n in held)} put a restraint, gag or seal "
+                 f"on, so each is given one more action's time: the piece goes on in the "
+                 f"first half and is held for the rest, and the last frame -- the one the "
+                 f"next shot opens on -- shows it in plain view with the hands clear of "
+                 f"it. ")
     if ceiling_frames < MIN_AUTO_FRAMES:
         note += (f"shot_seconds is {ceiling_frames / H3_FPS:.1f}s, below the "
                  f"{MIN_AUTO_FRAMES / H3_FPS:.1f}s one staged action needs. Every shot "
@@ -2877,6 +2904,45 @@ def resolve_tags(text, ref_list):
     out = re.sub(r"\s{2,}", " ", out)
     return out.strip(), [ref_list[n - 1] for n in live], dropped
 
+
+def drop_portraits(text, refs, slots):
+    """(text, refs) with the pictures in `slots` (1-based) taken out of the shot.
+
+    Their tags go with them and every tag left is renumbered to match what the shot
+    still carries -- resolve_tags' own renumbering, run on the remainder. Used where a
+    frame of the person as they are now stands in for their portrait."""
+    gone = {int(k) for k in (slots or ())}
+    refs = list(refs or [])
+    if not gone:
+        return text, refs
+    out = _PICTURE_TAG.sub(
+        lambda m: "\x00" if int(m.group(1)) in gone else m.group(0), text or "")
+    out = re.sub(r"([.!?])[ \t]*\x00[ \t]*\.", r"\1", out)     # "jeans. <Picture 1>."
+    out = re.sub(r":[ \t]*\x00[ \t]*,[ \t]*", ": ", out)        # "Mara: <Picture 1>, she"
+    out = re.sub(r",[ \t]*\x00[ \t]*(?=[,.;])", "", out)        # ", <Picture 1>."
+    out = re.sub(r"[ \t]*\x00", "", out)
+    out, kept, _ = resolve_tags(out, refs)
+    return out, kept
+
+
+def held_picture_note(n, who, items=None, where=None):
+    """One sentence for a portrait that predates what holds its subject now.
+
+    The portrait shows them before the restraint or gag went on, and a picture is the
+    strongest thing in the prompt. Where no frame of them as they are now exists, the
+    portrait stays for the face and this names what is on them in this shot. Reported
+    as tape and cuffs gone in the shot after they went on."""
+    names = merge_hardware_names(items or []) or ["restraints"]
+    said, placed = [], False
+    for it in names:
+        at = _where_of(it, where, who=who) if where else ""
+        placed = placed or bool(at)
+        said.append(f"the {it} {at}" if at else f"the {it}")
+    plural = len(names) > 1 or names[0].lower().endswith("s")
+    return (f" <Picture {n}> shows who {who} is; {_join_names(said)} "
+            f"{'are' if plural else 'is'} in place{'' if placed else f' on {who}'} now.")
+
+
 def check_audio_vae_loaded(audio_vae):
     """Catch an UNCONVERTED audio VAE checkpoint.
 
@@ -3881,9 +3947,11 @@ FAST_H3_VSA_START = 0.20
 def apply_fast_h3_vsa(model):
     """(model, note): VSA put on a FastH3 model, unless it cannot or need not be.
 
-    Never over the reader's own sparse-attention node, and never under the
-    cudaMallocAsync allocator -- that combination aborts the process (see
-    sparse_attention_allocator_abort), and here it would be the node's doing."""
+    Never over a DiT block patch already on the model -- the reader's own
+    sparse-attention node, or an upstream Fun ControlNet, whose control VSA would
+    replace (see sparse_dit_patched) -- and never under the cudaMallocAsync allocator --
+    that combination aborts the process (see sparse_attention_allocator_abort), and here
+    it would be the node's doing."""
     if sparse_dit_patched(model) is not False:
         return model, ""            # already patched upstream, or a model that cannot say
     conf = str(os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "") or "")
@@ -3914,8 +3982,14 @@ def sparse_dit_patched(model):
     That patch is how ComfyUI's Model Sparse Attention node registers itself
     (set_model_patch_replace -> model_options["transformer_options"]["patches_replace"]
     ["dit"]), whatever method it was set to. None is distinct from False on purpose: a stub
-    or hand-built model carries no model_options at all, and the one caller of this turns a
-    True into a refusal, so "cannot tell" must never be read as "not there"."""
+    or hand-built model carries no model_options at all, and a caller of this turns a
+    True into a refusal, so "cannot tell" must never be read as "not there".
+
+    ANY patch in those slots counts, a Fun control block included. apply_fast_h3_vsa
+    reads this: comfy's apply_block_sparse_attention REPLACES every slot rather than
+    wrapping it, so VSA put over an upstream "Apply MiniMax H3 Fun ControlNet" would
+    drop that control silently. Pose control installs its own block per shot, on a clone
+    made after VSA, so it never reaches this check."""
     opts = getattr(model, "model_options", None)
     if not isinstance(opts, dict):
         return None
@@ -3923,6 +3997,39 @@ def sparse_dit_patched(model):
     if not isinstance(tops, dict):
         return None
     return bool((tops.get("patches_replace") or {}).get("dit"))
+
+
+def sparse_attention_patched(model):
+    """sparse_dit_patched, with a slot holding only a MiniMax H3 Fun control block (or a
+    chain of them) not counted: that block is not sparse attention. For the allocator
+    check alone, whose question is whether sparse attention runs at all."""
+    found = sparse_dit_patched(model)
+    if not found:
+        return found
+    dit = model.model_options["transformer_options"]["patches_replace"]["dit"]
+    if not isinstance(dit, dict):
+        return True
+    return any(_holds_sparse_patch(p) for p in dit.values())
+
+
+# comfy's MiniMax H3 Fun ControlNet registers its blocks in the same "dit" replace slots
+# as sparse attention (comfy_extras/nodes_minimax_h3.py). It is not sparse attention: it
+# keeps whatever patch was on the slot before it as `.previous` and calls through it. So
+# for the allocator check a Fun block counts only through what it wraps. Matched by class
+# name, so comfy_extras need not be importable here.
+_FUN_CONTROL_BLOCK = "MiniMaxH3FunControlBlockPatch"
+
+
+def _holds_sparse_patch(patch):
+    """False for a dit replace entry that is the Fun control block patch alone (or a chain
+    of them); True for anything else, including a Fun block wrapping another patch."""
+    seen = 0
+    while type(patch).__name__ == _FUN_CONTROL_BLOCK and seen < 64:
+        patch = getattr(patch, "previous", None)
+        if patch is None:
+            return False
+        seen += 1
+    return True
 
 
 def sparse_attention_allocator_abort(model):
@@ -3947,7 +4054,7 @@ def sparse_attention_allocator_abort(model):
     conf = str(os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "") or "")
     if "cudamallocasync" not in conf.lower():
         return ""
-    if sparse_dit_patched(model) is not True:
+    if sparse_attention_patched(model) is not True:
         return ""
     return ("this render would ABORT the ComfyUI process rather than fail: a sparse-attention "
             "patch is on the model AND torch is using the cudaMallocAsync allocator "
@@ -4338,9 +4445,10 @@ MOUTH_HOLD = " Mouths in the shot stay closed."
 def gag_hold(item, who="", new=False, muffled=False):
     """One person's gag, held for the whole shot. "" when there is no item.
 
-    `new` is the shot that puts it on -- off at the first frame, and once on, on to
-    the last, through whatever else the beat does after it. `muffled` adds what a
-    voice behind it sounds like, for a shot that gives that person a sound or a line."""
+    `new` is the shot that puts it on -- off at the first frame, on in the first half,
+    held for the rest, and in plain view with the hand off it at the last frame.
+    `muffled` adds what a voice behind it sounds like, for a shot that gives that
+    person a sound or a line."""
     item = str(item or "").strip()
     if not item:
         return ""
@@ -4348,10 +4456,16 @@ def gag_hold(item, who="", new=False, muffled=False):
              else f"{who}'s mouth" if who else "the mouth")
     taped = bool(re.search(r"\btape\b", item, re.I))
     if new:
-        out = (f" The {item} goes {'across' if taped else 'over'} {mouth} during this "
-               f"shot, and from the moment it is on it stays "
-               f"{'stuck flat over the lips' if taped else 'fastened in place'} through "
-               f"everything that happens after it, and in place at the last frame.")
+        # ON BY MID-SHOT, HAND AWAY AT THE END. "In place at the last frame" put the
+        # deadline on the one frame the next shot opens on, so that frame often showed
+        # the hand pressing it on and no tape. Reported as tape gone in the next
+        # beat. The second half of the shot is the hold, and the last frame shows it.
+        _on = "across" if taped else "over"
+        out = (f" The {item} goes {_on} {mouth} during this shot: it is on in the first "
+               f"half of the shot and "
+               f"{'stuck flat over the lips' if taped else 'fastened in place'} for the "
+               f"rest of it, and at the last frame it is {_on} {mouth} in plain view and "
+               f"the hand that put it there has let go and is clear of the face.")
     else:
         # SHORT ONCE IT IS ON. The held form ran to 25-30 words in every shot after the
         # taping ("sealing the lips from cheek to cheek from the first frame to the
@@ -4361,9 +4475,22 @@ def gag_hold(item, who="", new=False, muffled=False):
         out = (f" The {item} stays stuck flat across {mouth}." if taped
                else f" The {item} stays fastened in place over {mouth}.")
     if muffled:
-        out += (f" Every sound from behind it comes out muffled, the lips held shut "
-                f"under the {item.split()[-1]}.")
+        # ...around a ball, a bit, a ring or a stuffed cloth the mouth is held open, not
+        # shut: see engine.mouth_held_open.
+        _lips = ("the mouth held open around the" if engine.mouth_held_open(item)
+                 else "the lips held shut under the")
+        out += f" Every sound from behind it comes out muffled, {_lips} {item.split()[-1]}."
     return out
+
+
+def mouths_closed_but(held_open, others):
+    """MOUTH_HOLD for everybody but the people whose gag holds the mouth open -- the gag
+    sentence has already said where theirs is. "" when nobody else is in the shot."""
+    if not held_open:
+        return MOUTH_HOLD
+    if not others:
+        return ""
+    return " " + MOUTH_HOLD_REST[0].upper() + MOUTH_HOLD_REST[1:] + "."
 
 
 def gagged_in(state, names):
@@ -4851,8 +4978,15 @@ def beat_puts_somebody_on_screen(beat, sheet=""):
 FORM_HOLD = ", the same object in the same material."
 OTHERS_UNCHANGED = " Everyone else in the shot has on exactly what their own entry lists."
 
+# CLOSED BY MID-SHOT, HANDS CLEAR AT THE END. "Closed on it by the last" set the
+# deadline on the frame the next shot is pinned to, and a shot that ends mid-motion
+# hands on open cuffs still in somebody's hands. Reported as restraints breaking in the
+# beat after they go on. The closing comes first; the rest of the shot holds it.
 RESTRAINT_GOING_ON = (" The hardware goes on during this shot: it is open and off the "
-                      "body at the first frame, and closed on it by the last.")
+                      "body at the first frame, closed on the body by the middle of the "
+                      "shot and closed for the rest of it, and by the last frame it is "
+                      "on the body in plain view and the hands that closed it have let "
+                      "go and are clear of it.")
 
 
 def newly_on_clause(items, where=None, who="", posed=False):
@@ -4862,34 +4996,38 @@ def newly_on_clause(items, where=None, who="", posed=False):
     hardware goes on during this shot" would take the cuffs off at the first frame.
 
     Once on, on: the beat usually does something after it -- "ties her ankles, then
-    drags her to the chair" -- and the end of the shot is where it went missing."""
+    drags her to the chair" -- and the end of the shot is where it went missing. So it
+    is fastened by the middle of the shot and held for the rest, and the last frame,
+    which the next shot opens on, shows it in plain view with the hands clear of it."""
     out = ""
     for item in [str(i).strip() for i in (items or []) if str(i).strip()]:
         plural = item.endswith("s") and not item.endswith("ss")
         at, _sep, fast = _where_of(item, where, who).rstrip(",").partition(", fast at the ")
+        _it = "them" if plural else "it"
         out += (f" The {item} {'go' if plural else 'goes'}"
                 + (f" {at}" if at else " on")
                 + " during this shot"
                 + (f", fastened to the {fast}" if fast else "")
-                + f": off the body at the first frame, and once "
-                  f"{'they are' if plural else 'it is'} on, "
-                  f"{'they stay' if plural else 'it stays'} fastened through everything "
-                  f"that happens after, and on at the last frame"
+                + ": off the body at the first frame, on and fastened by the middle of "
+                  "the shot"
                 # ...and holding its shape from the moment it closes, in the words for
                 # what it IS -- see rigid_tail. A chain going on is still a chain, and
-                # one that forces a position is drawn to its length by the end.
-                + (f"; by the last frame {'they are' if plural else 'it is'} drawn to "
-                   f"{'their' if plural else 'its'} full length, so the position "
-                   f"{'they fix' if plural else 'it fixes'} is the position that keeps"
+                # one that forces a position is drawn to its length once it closes.
+                + (f" and drawn to {'their' if plural else 'its'} full length, so the "
+                   f"position {'they fix' if plural else 'it fixes'} is the position "
+                   f"that keeps"
                    if (posed and rigid_hardware(item) and not (
                        _CUFF_FORM.search(item) and not re.search(r"\bchain", item, re.I)))
                    else rigid_tail(item, "wrists", plural, where=where).rstrip(",")
                    if rigid_hardware(item) else "")
-                + ".")
+                + f"; {'they stay' if plural else 'it stays'} fastened for the rest of "
+                  f"the shot, and at the last frame {'they are' if plural else 'it is'} "
+                  f"on the body in plain view and the hands that fastened {_it} have let "
+                  f"go and are clear of {_it}.")
     return out
 # WHERE THE HARDWARE CLOSES, not only where the limbs end up. RESTRAINT_GOING_ON
 # gives the hardware both of its ends -- open and off at the first frame, closed by
-# the last -- and this used to give the limbs only their last one. Between those two
+# mid-shot -- and this used to give the limbs only their last one. Between those two
 # facts nothing said where the closing HAPPENS, and a video model asked to go from no
 # cuffs to cuffs does the likeliest thing in front of the body and leaves them there.
 # Reported as wrists cuffed in front on the shot that applies them, while every shot
@@ -4899,10 +5037,11 @@ def newly_on_clause(items, where=None, who="", posed=False):
 # The second sentence is the original and is left word for word, because the shot
 # after this one inherits the last frame and that is the sentence that pins it.
 # Positively phrased, like everything else here -- at cfg 1 naming where they are NOT
-# is naming it.
-RESTRAINT_ENDS_AT = (" The {part} are already {where} when the hardware closes, and it "
-                     "closes on them there. By the last frame the {part} are {where}, "
-                     "and stay there.")
+# is naming it. The closing is placed in the first half, as RESTRAINT_GOING_ON places
+# it, so the last frame is the hold and not the act.
+RESTRAINT_ENDS_AT = (" The {part} are already {where} when the hardware closes in the "
+                     "first half of the shot, and it closes on them there. By the last "
+                     "frame the {part} are {where}, and stay there.")
 # WHAT A PAIR OF CUFFS IS, as opposed to what a chain is.
 #
 # _RIGID_HARDWARE puts handcuffs, manacles, shackles and irons in the same bucket as
@@ -5332,6 +5471,50 @@ def restraint_wearers(sheet):
     Read from the entries rather than the beat, because the entry is what says who is
     WEARING it -- a beat can mention a chain without anyone being in it."""
     return [n for n, ln in sheet_lines(sheet) if n and restraint_present(ln)]
+
+
+_WORN_IN = re.compile(
+    r"\b(?:in|wearing|wears|wore)\s+(?:(?:a|an|the|some|her|his|their|pair\s+of|set\s+of)\s+)*"
+    r"(?:[\w-]+\s+){0,2}?(?:" + "|".join(p for p, _n, _pt in engine.HARDWARE) + r")\b", re.I)
+
+
+def scene_restraints(text, cast, pronouns=None):
+    """[(wearer, sentence)] for the scene paragraph's sentences that put a piece ON
+    somebody -- "Mara is handcuffed to the rail", "McKenna lies in the back, wrists
+    cuffed behind her back". The state takes these as it takes a sheet entry, so the
+    hold is armed by a piece with a wearer; a piece lying on a table, carried, or in
+    somebody's hand is not one. Sheet lines are skipped: the sheet is declared itself.
+    A wearer the sentence does not settle is "" -- see the latch."""
+    people = [n for n in (cast or []) if n]
+    head = (re.compile(r"\s*(?:" + "|".join(re.escape(n) for n in people) + r")\s*:")
+            if people else None)
+    out = []
+    for line in str(text or "").split("\n"):
+        if head is not None and head.match(line):
+            continue
+        for s in re.split(r"(?<=[.!?])\s+", line.strip()):
+            if not s or not engine.hardware_spans(s) or not restraint_present(s):
+                continue
+            if not (engine.applies_hardware(s) or _WORN_IN.search(s)):
+                continue
+            named = engine.names_in(s, people)
+            _pr = re.search(r"\b(she|her|he|him|his)\b", s, re.I)
+            _group = ({"her": "she", "him": "he", "his": "he"}.get(_pr.group(1).lower(),
+                                                                  _pr.group(1).lower())
+                      if _pr else "")
+            _fits = [n for n in people if _group and (pronouns or {}).get(n) == _group]
+            if len(named) > 1:
+                who = engine.wearer_of(s, people)
+            elif named:
+                # "Dan stands over her, her wrists cuffed to the rail" is hers.
+                who = (_fits[0] if (len(_fits) == 1 and _fits[0] != named[0]
+                                    and (pronouns or {}).get(named[0]))
+                       else named[0])
+            else:
+                who = (_fits[0] if len(_fits) == 1
+                       else people[0] if len(people) == 1 else "")
+            out.append((who, s))
+    return out
 
 
 GUARD_FLOOR_WORDS = 90
@@ -5951,10 +6134,13 @@ def seal_comes_off(beat, item):
     return False
 
 
+# On in the first half and held for the rest, hands clear at the last frame -- the
+# same timing as RESTRAINT_GOING_ON, for the same reported fault.
 SEALED_ON = (" The {item} goes around the waist and between the legs during this shot, "
-             "covering the groin completely, and from the moment it is on it lies flat "
-             "against the skin there, sealing it, through everything that happens after it "
-             "and in place at the last frame.")
+             "covering the groin completely: it is on in the first half of the shot and "
+             "lies flat against the skin there, sealing it, for the rest of the shot, and "
+             "at the last frame it is in plain view and the hands that put it on have let "
+             "go and are clear of it.")
 SEALED_HOLD = (" The {item} runs around the waist and passes between the legs, "
                "covering the groin completely and lying flat against the skin there, "
                "and it stays exactly so for the whole shot.")
@@ -6334,6 +6520,18 @@ def pose_of(pose, who, described):
     return re.sub(r"(?<![\w'])The body is", f"{subject}'s body is", out)
 
 
+_LYING_SENTENCE = re.compile(
+    r"\s*(?:The whole length of (?:the|[\w'’-]+['’]s) body|(?:The|[\w'’-]+['’]s) body is "
+    r"lying)[^.]*\.")
+
+
+def split_lying(pose):
+    """(pose without its lying sentences, those sentences) -- for the shot whose fall
+    has to come before the landing. See pose_clause and pose_of."""
+    lying = "".join(" " + m.group(0).strip() for m in _LYING_SENTENCE.finditer(pose or ""))
+    return _LYING_SENTENCE.sub("", pose or ""), lying
+
+
 def merge_hardware_names(items):
     """One name per piece of hardware, keeping the fullest wording of each.
 
@@ -6599,6 +6797,15 @@ _BINDING_VERB = re.compile(
     r"strapped|taped|taping|gagged|shackled|fastened|fastens|secured|secures|"
     r"padlocked|trussed|lashed|wrapped|clamped|clamping|clipped|clipping|"
     r"pinned|attached|affixed)\b", re.I)
+# Set down on a piece of furniture: "a pair of handcuffs lies on the nightstand" is an
+# object in the room, not a restraint on anybody. REPORTED as holds before any cuffing.
+_RESTING_ON = re.compile(
+    r"\b(?:lies?|lay|lying|rests?|rested|resting|sits?|sat|sitting|waits?|waiting)\s+"
+    r"(?:\w+\s+){0,2}?(?:on|in|across|beside|by|inside|atop|under|next\s+to)\s+"
+    r"(?:the|a|an|his|her|their)\s+(?:\w+\s+)?(?:nightstand|bedside\s+table|table|desk|"
+    r"dresser|counter|shelf|drawer|floor|tray|chair|bench|stool|bag|box|case|sofa|couch|"
+    r"cabinet|cupboard|mantelpiece|mantel|windowsill|sill|bed|mattress|ground|rug|carpet)s?\b",
+    re.I)
 
 
 # Said only where the BODY turns (see rotates_in), and without "as the view comes
@@ -6747,6 +6954,13 @@ _FALL_CUE = re.compile(
     r"(?:throw|throws|threw|thrown|hurl(?:s|ed)?|fling|flings|flung|toss(?:es|ed)?|"
     r"knock(?:s|ed)?)\s+" + _THROWN_ON + _LANDING + r"|"
     r"(?:shov(?:e|es|ed)|push(?:es|ed)?)\s+" + _THROWN_ON + _FLOOR_LIKE + r"|"
+    # ...and a PERSON put down onto one by somebody else: "pushes her onto the bed",
+    # "shoves Mara onto the sofa", "drops her on the floor". REPORTED as a bound body
+    # landing with no fall sentence, so nothing kept the hands off the landing.
+    r"(?:shov(?:e|es|ed)|push(?:es|ed)?|drops?|dropped|dumps?|dumped)\s+"
+    r"(?:her|him|them|(?-i:[A-Z][\w-]+))\s+(?:(?:down|back|backwards?|hard|roughly|"
+    r"face[-\s]?(?:down|first))\s+)?(?:on|onto|to|across|into)\s+"
+    r"(?:the|a|an|her|his|their)\s+(?:\w+\s+)?" + _LANDING + r"|"
     r"(?:push|knock|shove|pull|drag|throw|thr[eo]w)(?:es|s|ed|n)?\s+"
     r"(?:(?:her|him|them|herself|himself|themselves|[A-Z][\w-]+)\s+"
     r"(?:over|down|to\s+the\s+(?:floor|ground))|to\s+the\s+(?:floor|ground))|"
@@ -6781,8 +6995,9 @@ _NOT_A_FALL = re.compile(
     r"(?:spell|suspicion|control|influence|sway|scrutiny|category|heading|"
     r"jurisdiction|command))"
     # Down on a knee is a kneel. REPORTED as "drops to one knee" staged as a full fall
-    # onto the shoulder, hip or side.
-    r"|(?:drops?|dropped|dropping|sinks?|sank|goes|went)\s+(?:down\s+)?(?:on)?to\s+"
+    # onto the shoulder, hip or side. "Falls to her knees" too.
+    r"|(?:drops?|dropped|dropping|sinks?|sank|goes|went|falls?|fell|falling)\s+"
+    r"(?:down\s+)?(?:on)?to\s+"
     r"(?:one|a|her|his|their|both)\s+(?:knee|knees|crouch|squat)\b"
     r"|(?:stumbl\w*|trip\w*)\s+(?:over|through|on)\s+(?:(?:her|his|their|the|a|an)\s+)?"
     r"(?:own\s+|first\s+|next\s+)?(?:words?|lines?|apology|answer|sentence|name|reply|"
@@ -6895,19 +7110,40 @@ def fallers_in(text, names, pronouns=None):
         p = (pronouns or {}).get(n)
         for w in {"she": ("she", "her"), "he": ("he", "him")}.get(p, ()):
             by_word.setdefault(w, []).append(n)
+
+    def _people(span):
+        """[(at, name)] for everybody `span` names, by name or by an unshared pronoun."""
+        got = [(x.start(), n) for n in (names or [])
+               for x in re.finditer(r"\b" + re.escape(n) + r"\b", span)]
+        got += [(x.start(), who[0]) for w, who in by_word.items() if len(who) == 1
+                for x in re.finditer(r"\b" + w + r"\b", span, re.I)]
+        return sorted(got)
+
     for m in _FALL_CUE.finditer(t):
+        if _NOT_A_FALL.match(t, m.start()):
+            continue
+        # THE PERSON PUT DOWN, not the one doing it: "Dan pushes HER onto the bed".
+        obj = re.search(r"\s((?:her|him|them)|(?-i:[A-Z][\w-]+))\s", m.group(0) + " ", re.I)
+        if obj and not re.search(r"\b(?:balance|footing)\b", m.group(0), re.I):
+            got = _people(obj.group(1))
+            if got:
+                out.update(n for _a, n in got)
+                continue
         head = t[:m.start()]
         cut = max((c.end() for c in
                    re.finditer(r"[.;!?]\s+|,\s*|\s+(?:and|but|then|so)\s+", head)),
                   default=0)
         stop = re.search(r"[.;!?,]|\s+(?:and|but|then|so)\s+", t[m.end():])
         clause = t[cut:m.end() + (stop.start() if stop else len(t) - m.end())]
-        for n in (names or []):
-            if re.search(r"\b" + re.escape(n) + r"\b", clause):
-                out.add(n)
-        for w, who in by_word.items():
-            if len(who) == 1 and re.search(r"\b" + w + r"\b", clause, re.I):
-                out.add(who[0])
+        got = _people(clause)
+        if not got and re.fullmatch(r"\s*(?:(?:\w+ly|then|also|suddenly|finally|just)\s+)*",
+                                    head[cut:], re.I):
+            # AN ELIDED SUBJECT IS THE ONE BEFORE IT: "Mara slips and falls", "tries to
+            # run but falls". Read as nobody, the bound fall gave way to the free one
+            # whenever somebody free shared the shot. REPORTED.
+            start = max((c.end() for c in re.finditer(r"[.;!?]\s+", head)), default=0)
+            got = _people(t[start:cut])[:1]
+        out.update(n for _a, n in got)
     return out
 
 
@@ -7014,6 +7250,23 @@ def limb_anchor(text):
     if where and point:
         return f"{where}, {point}"
     return where or point
+
+
+# limb_anchor's own positions. "at the waist" is one of them, not an object.
+_LIMB_WHERE = frozenset(phrase for _pat, phrase in _LIMB_ANCHOR)
+
+
+def limb_anchor_parts(position):
+    """(where, point) of a limb_anchor phrase: "behind the back, at the headboard" gives
+    ("behind the back", "at the headboard"), "at the pipe" ("", "at the pipe") and "at
+    the waist" ("at the waist", ""). The point is the object the limbs are fastened to."""
+    p = re.sub(r"\s+", " ", str(position or "")).strip()
+    if ", at the " in p:
+        where, point = p.split(", at the ", 1)
+        return where.strip(), "at the " + point.strip()
+    if p.lower().startswith("at the ") and p.lower() not in _LIMB_WHERE:
+        return "", p
+    return p, ""
 
 
 _TIGHT_FRAME = re.compile(
@@ -7631,8 +7884,8 @@ _STATE_PRED = re.compile(r"\b(" + _STATE_THING + r")\s+" +
 
 # ...plus down on a knee, which is a kneel -- see _NOT_A_FALL.
 _POSTURE_OF = tuple(engine._POSTURE_OF) + (
-    ("kneeling", re.compile(r"\b(?:drops?|dropped|dropping|sinks?|sank|sinking)\s+"
-                            r"(?:down\s+)?(?:on)?to\s+(?:one|a|her|his|their|both)\s+"
+    ("kneeling", re.compile(r"\b(?:drops?|dropped|dropping|sinks?|sank|sinking|falls?|fell|"
+                            r"falling)\s+(?:down\s+)?(?:on)?to\s+(?:one|a|her|his|their|both)\s+"
                             r"knees?\b", re.I)),)
 _NOT_A_BODY = engine._NOT_A_BODY
 
@@ -7665,7 +7918,9 @@ def posture_in(beat, cast):
         hits = sorted(((m.start(), pose) for pose, rx in _POSTURE_OF
                        for m in rx.finditer(part)
                        if not _in_a_request(b, base + m.start())
-                       and not engine.denied_posture(part, m.start())),
+                       and not engine.denied_posture(part, m.start())
+                       # "a phone lies on the nightstand" lays nobody down
+                       and not engine.posture_of_a_thing(part, m.start())),
                       key=lambda h: h[0])
         prev = 0
         for at, pose in hits:
@@ -8802,7 +9057,9 @@ def _merely_handled(part, shown=True):
 
     `shown` counts holding one UP as handling it, which is right for the hold and
     wrong for the clause that says where a piece of hardware sits."""
-    moved = _HANDLING_VERB.search(part) or (shown and _SHOWN_VERB.search(part))
+    rest = _RESTING_ON.search(part)
+    moved = (_HANDLING_VERB.search(part) or (shown and _SHOWN_VERB.search(part))
+             or (rest and engine.posture_of_a_thing(part, rest.start())))
     return bool(moved) and not (
         _BINDING_VERB.search(part) or _BODY_PART.search(part)
         or _ANCHOR_POINT.search(part))
@@ -8828,8 +9085,9 @@ def restraint_present(text):
 
     Plain hardware counts on its own. Ambiguous hardware needs a binding verb or a
     body part alongside it, so a chain-link fence and a leather belt do not arm a
-    continuity rule about restraints."""
-    t = text or ""
+    continuity rule about restraints. A carried thing is not hardware at all: see
+    engine.carried_masked."""
+    t = engine.carried_masked(text or "")
     if engine.applies_hardware(t) and (_BODY_PART.search(t)
                                        or engine._APPLIED_TO_PRONOUN.search(t)):
         return True
@@ -9514,7 +9772,246 @@ def extract_directives(beat):
         return ""
 
     body = _EXACT_LINE.sub("", _ADD_LINE.sub(take_added, _REMOVE_LINE.sub(take_removed, beat or "")))
+    body = _HOLD_LINE.sub("", body)
     return re.sub(r"\n{2,}", "\n", body).strip(), removed, added
+
+
+# HOLD: A PIECE THE AUTHOR DECLARES ON, WITHOUT ANY PROSE TO PARSE.
+#
+#     Dan grabs her by the arm.
+#     hold: Mara, handcuffs behind her back; duct tape over her mouth
+#
+# Reported: restraints and gags written in wordings the reader does not know ("ties her
+# hands", "puts a ball gag in her mouth") were never registered, so no later shot held
+# them. A hold: line registers each piece on that person from this beat on -- the
+# applying wording on this shot, the named hold after -- until a `remove:` line names it.
+_HOLD_LINE = re.compile(r"^[ \t]*hold[ \t]*:[ \t]*(.*?)[ \t]*$", re.I | re.M)
+_HOLD_WHO = re.compile(r"\s*([A-Za-z][\w'’-]*?)(?:['’]s)?(?:\s*[,:;–—-]\s*|\s+)(.*)$", re.S)
+_HOLD_CUT = re.compile(
+    r"\s*(?:,|\b(?:behind|over|across|on|onto|upon|in|into|inside|around|round|at|to|"
+    r"between|above|below|under|beneath|through|from|with|against|chained|locked|"
+    r"fastened|tied|taped|strapped|clipped|hooked|bound|cuffed|holding|keeping|binding|"
+    r"tying|locking|fastening|pinning|joining|linking|running|leading|tight|tightly|"
+    r"firmly|snug|snugly|now|still|that|which)\b)", re.I)
+_HOLD_MEASURE = re.compile(
+    r"^(?:(?:one|two|three|four|several|some|more)\s+)?"
+    r"(?:(?:pair|set|length|strip|piece|roll|coil|loop|bit|band|layer|wrap)s?\s+of\s+)+", re.I)
+_HOLD_PART_OF = {"hands": "wrists", "feet": "ankles"}
+_HOLD_LIMBS = ("wrists", "ankles", "arms", "legs", "knees", "thighs", "elbows")
+_HOLD_LEG_PARTS = ("ankles", "legs", "knees", "thighs", "feet")
+_HOLD_ARM_PARTS = ("wrists", "arms", "hands", "elbows")
+# A piece no hardware word names still goes on the part the line gives it: "a scarf over
+# her eyes" is a blindfold in the author's words.
+_HOLD_BY_PART = {"mouth": "gag", "eyes": "blindfold", "neck": "collar"}
+
+
+def hold_lines(beat):
+    """[the text of each `hold:` line] in this beat, in the order written."""
+    return [m.group(1).strip() for m in _HOLD_LINE.finditer(beat or "") if m.group(1).strip()]
+
+
+def strip_hold_lines(beat):
+    """The beat with its `hold:` lines taken out: they are read, never sent."""
+    return re.sub(r"\n{2,}", "\n", _HOLD_LINE.sub("", beat or "")).strip()
+
+
+def hold_pieces(line, cast):
+    """(person, [pieces]) for one `hold:` line. The person is the first word where it is a
+    name on the sheet, else the only person on it; "" when neither."""
+    text = str(line or "").strip()
+    names = [n for n in (cast or []) if n]
+    who, rest = "", text
+    m = _HOLD_WHO.match(text)
+    if m:
+        hit = next((n for n in names if n.lower() == m.group(1).lower()), "")
+        if hit:
+            who, rest = hit, m.group(2)
+    if not who and len(names) == 1:
+        who = names[0]
+    return who, [p.strip(" \t.,;") for p in rest.split(";") if p.strip(" \t.,;")]
+
+
+def hold_restraints_of(piece):
+    """[(canonical, part, item, position, anchor, legs)] for one `hold:` piece.
+
+    Read with the engine's own hardware, part and position readers. No verb is needed:
+    the line itself says the piece is on. The item keeps the author's words ("ball
+    gag", "duct tape"); a part named in the piece wins over the hardware default, so
+    "cuffs on her ankles" is on the ankles."""
+    t = re.sub(r"\s+", " ", str(piece or "")).strip()
+    if not t:
+        return []
+    lead = _HOLD_CUT.split(t, 1)[0]
+    head = _REMOVE_ITEM_LEAD.sub("", lead).strip()
+    head = _HOLD_MEASURE.sub("", head).strip().lower()
+    pos = engine.position_in(t)
+    anc = engine.anchor_in(t)
+    if not anc:
+        _at = engine._ANCHOR_AT.search(t)
+        anc = re.sub(r"\s+", " ", _at.group(1).lower()) if _at else ""
+    spans = engine.hardware_spans(t)
+    own = engine.hardware_spans(head) if head else []
+    # The part is read from the placement, never from the item's own name: "leg irons"
+    # are on the ankles, as the hardware table has them.
+    named = [_HOLD_PART_OF.get(p, p) for p, _at in engine.part_spans(t[len(lead):])]
+    if not named and not own:
+        named = [_HOLD_PART_OF.get(p, p) for p, _at in engine.part_spans(lead)]
+    if not spans:
+        if not named or not head:
+            return []
+        spans = [(_HOLD_BY_PART.get(named[0], "straps"), named[0], head, 0)]
+        own = [spans[0]]
+    out = []
+    for canon, part, written, _at in spans:
+        part = _HOLD_PART_OF.get(part, part)
+        if (canon not in engine.PART_VARIES and named and part not in named
+                and part in _HOLD_LIMBS and named[0] in _HOLD_LIMBS):
+            part = named[0]
+        item = head if (len(own) == 1 and own[0][0] == canon) else (written or canon)
+        legs = ""
+        if part in _HOLD_LEG_PARTS:
+            legs = legs_anchor(t) or ("" if engine._is_rigid(item) or canon == "spreader bar"
+                                      else "ankles together")
+        out.append((canon, part, item or canon, pos, anc, legs))
+    return out
+
+
+def register_holds(state, changed, holds, cast, shot):
+    """Put every piece this beat's `hold:` lines name on its person, as applied in this
+    shot. ([(name, Restraint, legs, new)], [what could not be used]).
+
+    A piece already on keeps its place in the order and takes any position or anchor
+    the line gives it; a new one joins `changed["applied"]`, so everything that reads an
+    application -- both ends on this shot, the named hold after -- reads it too."""
+    got, problems = [], []
+    applied = changed.setdefault("applied", [])
+    for line in holds or []:
+        who, pieces = hold_pieces(line, cast)
+        if not who:
+            problems.append(f"'hold: {line}' names nobody on the sheet")
+            continue
+        p = state.person(who)
+        for piece in pieces:
+            rows = hold_restraints_of(piece)
+            if not rows:
+                problems.append(f"'{piece}' names no restraint, gag or seal")
+                continue
+            for canon, part, item, pos, anc, legs in rows:
+                key = next((k for k in p.hardware
+                            if k[1] == part and engine._same_thing(k[0], canon)), (canon, part))
+                old = p.hardware.get(key)
+                # One gag, not two: the bare word beside the thing it is made of, in one
+                # beat, is that thing -- the engine's own rule for prose.
+                if part == "mouth" and canon in engine._MOUTH_PIECES and old is None:
+                    twin = next((k for k, r in p.hardware.items() if k[1] == "mouth"
+                                 and k[0] in engine._MOUTH_PIECES and r.applied_in == shot),
+                                None)
+                    if twin is not None and item == "gag":
+                        continue
+                    if twin is not None and p.hardware[twin].item == "gag":
+                        _gone = p.hardware.pop(twin)
+                        applied[:] = [(w, r) for w, r in applied if r is not _gone]
+                if old is not None:
+                    if len(item) > len(old.item or ""):
+                        old.item = item
+                        old.rigid = old.rigid or engine._is_rigid(item)
+                    if pos and part in ("wrists", "arms"):
+                        old.position = pos
+                    if anc and part not in ("mouth", "eyes"):
+                        old.anchor = anc
+                    got.append((who, old, legs, False))
+                    continue
+                r = engine.Restraint(item, part, pos, anc, shot)
+                p.hardware[key] = r
+                applied.append((who, r))
+                got.append((who, r, legs, True))
+    return got, problems
+
+
+def held_piece_named(state, tokens):
+    """Does any `remove:` token name a piece the state holds on somebody? A hold: piece
+    is in the state whatever the prose said, so its own name has to release it."""
+    for q in getattr(state, "people", {}).values():
+        for k, r in q.hardware.items():
+            if any(names_any(r.item, [t]) or names_any(t, [k[0]]) for t in (tokens or [])):
+                return True
+    return False
+
+
+def removal_parts(token):
+    """The body parts a `remove:` token names, as the state files them: "duct tape over
+    her mouth" takes the tape off the mouth and leaves tape anywhere else on."""
+    rest = engine._HW_ONE.sub(" ", str(token or ""))       # "leg irons" names no part
+    return {_HOLD_PART_OF.get(p, p) for p, _at in engine.part_spans(rest)}
+
+
+def held_state(state, sealed=""):
+    """[(name, [(item, part, position, anchor)])] for everybody the state has in a piece,
+    plus ("", [(seal, "groin", "", "")]) for a seal no piece on a person carries."""
+    out = []
+    for n, q in getattr(state, "people", {}).items():
+        rows = [(r.item, r.part, r.position, r.anchor) for r in q.hardware.values()]
+        if rows:
+            out.append((n, rows))
+    if sealed and not any(pt == "groin" for _n, rows in out for _i, pt, _p, _a in rows):
+        out.append(("", [(sealed, "groin", "", "")]))
+    return out
+
+
+def held_report(rows):
+    """'shot 3: Mara -- handcuffs (wrists, behind the back), duct tape (mouth)' entries,
+    one per person per shot, from (shot, held_state) rows. Shots before the first piece
+    are left out; a shot after it with nothing on says so."""
+    out, started = [], False
+    for shot, people in rows:
+        if not people:
+            if started:
+                out.append(f"shot {shot}: nothing held")
+            continue
+        started = True
+        for name, pieces in people:
+            said = ", ".join(
+                f"{item} ({', '.join(x for x in (part, pos, ('fast to the ' + anc) if anc else '') if x)})"
+                for item, part, pos, anc in pieces)
+            out.append(f"shot {shot}: {name or 'sealed'} -- {said}")
+    return out
+
+
+_TIES_LIMB = re.compile(
+    r"\b(?:ties|tied|tying|binds|bound|binding|restrains|restrained|restraining)\s+"
+    r"(?:(?:her|his|their|him|them|[A-Z][\w'’-]*?(?:['’]s)?)\s+)?"
+    r"(?:(?:\w+\s+){0,2}?(wrists?|hands?|arms?|ankles?|feet|legs?|knees?)\b|(up)\b)", re.I)
+
+
+def unregistered_restraints(acted, state, changed):
+    """The restraint and gag words this beat names that registered nothing: not put on,
+    taken off or held on anybody once the beat is read. Reports; never acts."""
+    def _canon(item):
+        sp = engine.hardware_spans(str(item or ""))
+        return sp[0][0] if sp else str(item or "")
+
+    def _same(canon, part, k_canon, k_part):
+        return (k_canon == canon or engine._same_thing(k_canon, canon)
+                or (part in ("mouth", "eyes") and k_part == part))
+
+    keys = [(k[0], k[1]) for q in getattr(state, "people", {}).values() for k in q.hardware]
+    keys += [(_canon(r.item), r.part) for key in ("applied", "released")
+             for _w, r in (changed or {}).get(key) or [] if r is not None]
+    out = []
+    for canon, part, written, _at in engine.hardware_spans(acted or ""):
+        if not any(_same(canon, part, kc, kp) for kc, kp in keys):
+            word = written or canon
+            if word not in out:
+                out.append(word)
+    for m in _TIES_LIMB.finditer(acted or ""):
+        limb = (m.group(1) or "").lower()
+        group = (_HOLD_ARM_PARTS if re.match(r"wrist|hand|arm", limb)
+                 else _HOLD_LEG_PARTS if limb else _HOLD_ARM_PARTS + _HOLD_LEG_PARTS)
+        if not any(kp in group for _kc, kp in keys):
+            word = re.sub(r"\s+", " ", m.group(0)).strip().lower()
+            if word not in out:
+                out.append(word)
+    return out
 
 
 _PRINT_WORDS = re.compile(
@@ -9652,6 +10149,38 @@ def join_entry_parts(parts):
     for i, (sep, text) in enumerate(parts):
         out += (text if i == 0 else sep + text)
     return out.strip()
+
+
+# SOMETHING IN HER HANDS, while her wrists are held: "a phone in her hand", "holding a
+# mug". REPORTED as a sheet line asking for a hand-held thing beside "both arms are
+# behind the body" -- the model frees a hand to hold it.
+_HAND_HELD = re.compile(
+    r"\b(?:in\s+(?:her|his|their|one|each|both|either)\s+(?:\w+\s+)?hands?|in\s+hand|"
+    r"holding|holds|clutching|clutches|gripping|grips|carrying|carries|cradling|cradles|"
+    r"clasping|clasps|held\s+(?:in|up|out|against|in\s+front))\b", re.I)
+
+
+def hands_free_line(line):
+    """A sheet line without its hand-held things -- see _HAND_HELD. What it names as
+    worn stays; a fragment that also fastens something is left as written."""
+    head, sep, rest = str(line or "").partition(":")
+    if not sep or not _HAND_HELD.search(rest):
+        return line
+    stop = rest.rstrip().endswith(".")
+    kept = []
+    for frag in rest.rstrip().rstrip(".").split(","):
+        m = _HAND_HELD.search(frag)
+        if not m or engine.hardware_spans(frag):
+            kept.append(frag)
+            continue
+        # "grey sweater with a phone in her hand": the sweater stays.
+        cuts = list(re.finditer(r"\s+(?:with|and|while)\s+", frag[:m.start()]))
+        if cuts and engine.garments_in(frag[:cuts[-1].start()]):
+            kept.append(frag[:cuts[-1].start()])
+        tags = re.findall(r"<\s*picture\s+\d+\s*>", frag, re.I)
+        if tags:
+            kept.append(" " + " ".join(tags))
+    return head + sep + ",".join(kept).rstrip(", ") + ("." if stop else "")
 
 
 def scrub_removed(text, tokens):
@@ -9843,6 +10372,425 @@ def sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
     return out
 
 
+# --------------------------------------------------------------------------------------
+# POSE CONTROL. A second sampling pass, held to a skeleton video, on the shots where a
+# restrained person's limbs need holding: cuffed wrists that come out to catch a fall,
+# tied ankles that walk apart. pose_control.py holds the geometry, the detector and the
+# patch install; this is the per-shot decision and the two passes. See the README.
+# --------------------------------------------------------------------------------------
+POSE_SHOT_MODES = ("repair broken shots", "every restrained shot", "bound falls only")
+POSE_DRAWS = ("everyone", "everyone, thick lines", "bound person only")
+_POSE_MODE_KEY = {"repair broken shots": "repair", "every restrained shot": "every",
+                  "bound falls only": "falls"}
+# The limb positions the skeleton can hold. "out to the sides" and "ankles to the neck"
+# are left as pass 1 drew them.
+POSE_ARMS = tuple(getattr(pose_control, "ARMS_POSITIONS", None)
+                  or ("behind the back", "in front of the body", "at the waist",
+                      "above the head"))
+POSE_LEGS = tuple(getattr(pose_control, "LEGS_POSITIONS", None)
+                  or ("ankles together", "held apart", "ankles to the wrists"))
+POSE_DETECT_STRIDE = 2          # DWPose on every 2nd frame; the hint interpolates between
+# How far apart "ankles together" lets the ankles sit, in torso lengths: a chain, bar or
+# hobble between them holds them a stride's fraction apart; rope or tape holds them close.
+POSE_GAP_LINKED = 0.6
+POSE_GAP_TIED = 0.12
+_POSE_LINKED_LEGS = re.compile(r"iron|shackle|chain|manacle|hobble", re.I)
+# Latch mode, for a shot where a restraint goes on: the limbs it puts on are drawn as
+# detected until they settle into the held shape, then held. Applying wording closes the
+# piece by mid-shot, so the latch is searched from this share of the frames on.
+POSE_LATCH_FROM = 0.4
+POSE_LATCH_NEEDS_UPDATE = "latch mode needs the updated pose_control.py"
+
+
+def pose_wearer_facts(arms, legs, anchored=False, leg_items=(), fall=False, latch=()):
+    """One wearer's entry in Shot.bound_pose, from the planner's own words for the
+    position. A position fastened to an object (", at the headboard", or "at the pipe"
+    alone) is anchored; "at the waist" is a position, not an object. `latch` is the
+    limbs ("arms", "legs") this shot puts on them."""
+    where, point = limb_anchor_parts(arms)
+    return {"arms": where,
+            "legs": str(legs or "").strip(),
+            "ankle_gap": (POSE_GAP_LINKED
+                          if any(_POSE_LINKED_LEGS.search(str(i or "")) for i in leg_items or ())
+                          else POSE_GAP_TIED),
+            "anchored": bool(anchored or point),
+            "fall": bool(fall),
+            "latch_limbs": tuple(x for x in ("arms", "legs") if x in (latch or ()))}
+
+
+def pose_held_limbs(facts):
+    """The limbs of one bound_pose entry that the skeleton can hold."""
+    f = facts or {}
+    return tuple(x for x, ok in (("arms", f.get("arms") in POSE_ARMS),
+                                 ("legs", f.get("legs") in POSE_LEGS)) if ok)
+
+
+def restrains_in(beat, name):
+    """Is `name` the one putting a restraint on in this beat: the name in front of an
+    applying verb, in the -s forms restraint_going_on reads? Not a possessive ("Mara's
+    wrists")."""
+    if not name:
+        return False
+    b = _worn_masked(beat or "")
+    return bool(re.search(
+        r"\b" + re.escape(name) + r"\b(?!['’]s)" + _UP_TO_TWO_WORDS
+        + r"\s+(?:" + _APPLY_NOW.pattern + r"|" + _APPLY_PHRASE.pattern + r")", b, re.I))
+
+
+def pose_takes(fn_name, keyword):
+    """Does the loaded pose_control.<fn_name> take `keyword`? Read off its signature, so
+    an older pose_control.py is never called with a keyword it does not know."""
+    fn = getattr(pose_control, fn_name, None)
+    if fn is None:
+        return False
+    try:
+        return keyword in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def pose_latch_ready():
+    """Does the loaded pose_control.build_hint take latch_after?"""
+    return pose_takes("build_hint", "latch_after")
+
+
+def pose_describe(bound):
+    """'Mara: arms behind the back, ankles together' for info, per bound person."""
+    out = []
+    for nm in sorted(bound or {}):
+        b = bound[nm] or {}
+        bits = [f"arms {b['arms']}" if b.get("arms") in POSE_ARMS else "",
+                b.get("legs") if b.get("legs") in POSE_LEGS else "",
+                "falling" if b.get("fall") else ""]
+        out.append(f"{nm}: " + ", ".join(x for x in bits if x))
+    return "; ".join(out)
+
+
+def pose_candidate(shot, opening_cast, mode):
+    """(bound, why) for one planned shot. bound is {name: facts} for build_hint when the
+    shot gets pose control; otherwise {} and why it does not -- "" for a shot with no
+    held arm or leg position in it, which says nothing.
+
+    A shot whose limb hardware comes off is left alone: the limbs are free for part of
+    it. One where it goes on is a candidate in latch mode -- the limbs it puts on
+    (latch_limbs) are drawn as detected until they settle, then held; build_hint finds
+    that frame. Left alone too: a body fastened to an object (the skeleton cannot draw
+    it), a wearer the beat has doing the restraining (Shot.restrainers: the planner can
+    read the captor as the one cuffed when "her" fits two people), and a wearer who is
+    not in the opening frame (identification reads the first frames)."""
+    facts = getattr(shot, "bound_pose", None) or {}
+    held = {nm: dict(f) for nm, f in facts.items()
+            if pose_held_limbs(f) or (f or {}).get("anchored")}
+    if not held:
+        return {}, ""
+    if getattr(shot, "limbs_off", False):
+        return {}, "restraints come off in it"
+    held = {nm: f for nm, f in held.items() if not f.get("anchored")}
+    if not held:
+        return {}, "the restrained person is fastened to an object"
+    doers = set(getattr(shot, "restrainers", None) or ())
+    held = {nm: f for nm, f in held.items() if nm not in doers}
+    if not held:
+        return {}, "the one doing the restraining is read as the restrained person"
+    cast = [n for n in (opening_cast or []) if n]
+    if cast:
+        held = {nm: f for nm, f in held.items() if nm in cast}
+        if not held:
+            return {}, "the restrained person is not in the opening frame"
+    if _POSE_MODE_KEY.get(mode, "repair") == "falls" and not getattr(shot, "bound_fall", False):
+        return {}, "no bound fall in it"
+    for f in held.values():
+        f["latch_limbs"] = tuple(x for x in (f.get("latch_limbs") or ())
+                                 if x in pose_held_limbs(f))
+    if any(f["latch_limbs"] for f in held.values()) and not pose_latch_ready():
+        return {}, POSE_LATCH_NEEDS_UPDATE
+    return held, ""
+
+
+def pose_latched(bound):
+    """Does any bound person in this candidate latch?"""
+    return any((f or {}).get("latch_limbs") for f in (bound or {}).values())
+
+
+# comfy's KSampler.DISCARD_PENULTIMATE_SIGMA_SAMPLERS, for a comfy that does not say.
+_DISCARD_PENULTIMATE = ("dpm_2", "dpm_2_ancestral", "uni_pc", "uni_pc_bh2")
+
+
+def pose_shot_schedule(model, sigmas, scheduler, steps, sampler_name=None,
+                       soft_landing=False, shift_video=None, shift_audio=None):
+    """The sigmas of this shot's STEPS, the schedule pose_end is a share of: the wired (or
+    Hyperflow) schedule, else the scheduler's own -- built as sample_shot and
+    landing_schedule build it. None when none can be read.
+
+    The soft landing is left out on purpose. It splices one extra model call between the
+    last step and 0 (insert_audio_landing) and changes no sigma before it, so the window
+    read here holds at the same sigmas on the landed schedule. Counted on the landed
+    schedule instead, 0.6 of 8 steps came out as 6 of 9 calls -- one more than the "first
+    5 of 8 steps" info reports. At pose_end 1.0 the window has no lower bound, so the
+    landing call is held too.
+
+    A shot that goes through common_ksampler (no landing spliced in) runs on KSampler's
+    schedule, which for dpm_2 and uni_pc is built one step longer with the penultimate
+    sigma dropped (comfy/samplers.py, KSampler.calculate_sigmas); read the same way here,
+    or the window is a step off."""
+    if sigmas is not None and len(sigmas):
+        return sigmas
+    try:
+        import comfy.samplers as _cs
+        ms = model.get_model_object("model_sampling")
+        landed = bool(soft_landing) and landing_schedule(
+            model, scheduler, steps, shift_video, shift_audio) is not None
+        drop = set(getattr(getattr(_cs, "KSampler", None), "DISCARD_PENULTIMATE_SIGMA_SAMPLERS",
+                           None) or _DISCARD_PENULTIMATE)
+        if landed or str(sampler_name or "") not in drop:
+            return _cs.calculate_sigmas(ms, str(scheduler), int(steps))
+        sched = _cs.calculate_sigmas(ms, str(scheduler), int(steps) + 1)
+        return torch.cat([sched[:-2], sched[-1:]])
+    except Exception:
+        return None
+
+
+def _pose_latent_shape(latent):
+    """The VIDEO latent's shape (1, 24, T, h/16, w/16): the hint must encode to it."""
+    s = latent["samples"]
+    if getattr(s, "is_nested", False):
+        s = s.unbind()[0]
+    return tuple(int(x) for x in s.shape)
+
+
+def _pose_interrupted(e):
+    """comfy's interrupt is an Exception; it always propagates."""
+    return type(e).__name__ == "InterruptProcessingException"
+
+
+def _pose_device():
+    try:
+        return mm.get_torch_device()
+    except Exception:
+        return None
+
+
+def pose_sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
+                     scheduler, sigmas, shift_video, shift_audio, soft_landing, *,
+                     pose_cn, vae, detector, bound, mode, draw, strength, pose_end,
+                     frame_count, w, h, tiled, carry=None, cast_count=None,
+                     keep_decoded=False, audio_vae=None, latch_after=None,
+                     carry_appearance=None):
+    """(out, decoded pass-1 frames or None, report) for one candidate shot.
+
+    Pass 1 is sample_shot, as every shot runs. Its frames are decoded at the sampled size
+    and read by DWPose; build_hint finds the restrained person, rewrites their limbs into
+    the held shape in their own torso frame and draws everybody as a skeleton video;
+    pass 2 samples again with the same seed, conditioning and latent (so the same noise
+    field) on a clone carrying comfy's H3 Fun control patch, held to the skeleton for the
+    first pose_end of the steps.
+
+    Nothing after pass 1 ends a render except an interrupt: any failure keeps pass 1 and
+    says why. The decoded frames come back only when pass 1 is kept and `keep_decoded`,
+    so the caller can skip its own decode of the same latent.
+
+    `latch_after` (a frame index) is for a shot where a restraint goes on: build_hint
+    holds the limbs in each person's latch_limbs only from the first analysed frame at or
+    after it where they settle into the held shape. Passed only when set, so an older
+    build_hint is never handed a keyword it does not take. `carry_appearance` ({name:
+    appearance vector} from the shot before) is passed the same way, so a carried name
+    only lands on a person who looks like them.
+
+    report: {"outcome": "repaired" | "held" | "checked" | "skipped" | "oom" | "failed",
+    "why", "boxes" {name: torso box at the last analysed frame}, "broken", "window"
+    (s_start, s_end), "off" (True: stop pose control for the rest of the run), "notes",
+    "latched" {name: frame index or None}, "latch" (latch_after was given),
+    "appearance" {name: appearance vector at the last analysed frame}}."""
+    report = {"outcome": "skipped", "why": "", "boxes": {}, "broken": False,
+              "window": None, "off": False, "notes": [], "t_pass1": 0.0,
+              "latched": {}, "latch": latch_after is not None, "appearance": {}}
+    _t0 = time.perf_counter()
+    out = sample_shot(model, cond, negative, latent, seed, steps, cfg, sampler_name,
+                      scheduler, sigmas, shift_video, shift_audio, soft_landing)
+    report["t_pass1"] = time.perf_counter() - _t0
+    shot_model = None
+    try:
+        # A second pass may follow: the DiT's host copy and the audio VAE are kept, so
+        # the RAM guard frees them last, not first. The DiT may still leave the card for
+        # the decode, as at the shot's own decode -- it comes back from RAM, not disk.
+        ensure_host_ram(_decode_ram(vae, out, tiled), keep=(vae, audio_vae, model),
+                        what="the pose check's decode")
+        frames = _decode_video(vae, out, tiled, free_first=model, keep=(vae, audio_vae))
+        try:
+            det = detector.detect(frames, stride=POSE_DETECT_STRIDE)
+        except Exception as e:
+            if _pose_interrupted(e):
+                raise
+            report.update(off=True, why=f"the pose estimator failed ({type(e).__name__}: "
+                                        f"{e}); pose control is off for the rest of the run")
+            return out, (frames if keep_decoded else None), report
+        finally:
+            try:
+                detector.close()        # back to the CPU: the DiT needs the card again
+            except Exception:
+                pass
+        _kw = {"cast_count": cast_count}
+        if latch_after is not None:
+            _kw["latch_after"] = int(latch_after)
+        if carry_appearance and pose_takes("build_hint", "carry_appearance"):
+            _kw["carry_appearance"] = dict(carry_appearance)
+        try:
+            hint, rep = pose_control.build_hint(
+                det, int(frame_count), int(h), int(w), bound, carry=carry,
+                mode=_POSE_MODE_KEY.get(mode, "repair"), draw=draw, **_kw)
+        except TypeError as e:
+            if latch_after is None or "latch_after" not in str(e):
+                raise
+            report["why"] = POSE_LATCH_NEEDS_UPDATE
+            return out, (frames if keep_decoded else None), report
+        rep = rep or {}
+        report["boxes"] = dict(rep.get("boxes_last") or {})
+        report["broken"] = bool(rep.get("broken"))
+        report["notes"] = [str(n) for n in (rep.get("notes") or [])]
+        report["latched"] = dict(rep.get("latched") or {})
+        report["appearance"] = dict(rep.get("appearance_last") or {})
+        if hint is None:
+            if rep.get("skipped"):
+                report["why"] = str(rep["skipped"])
+            else:
+                report["outcome"] = "checked"
+            return out, (frames if keep_decoded else None), report
+        del frames
+        shape = _pose_latent_shape(latent)
+        hint_latent = pose_control.encode_hint(vae, hint, shape)
+        del hint
+        _deep_cleanup()
+        if hint_latent is None:
+            report["why"] = "the skeleton video did not encode to the shot's latent shape"
+            return out, None, report
+        sched = pose_shot_schedule(model, sigmas, scheduler, steps, sampler_name,
+                                   soft_landing, shift_video, shift_audio)
+        if sched is None or len(sched) < 2:
+            report["why"] = "the shot's sigma schedule could not be read"
+            return out, None, report
+        s_start, s_end = pose_control.pose_sigma_window(sched, pose_end)
+        report["window"] = (float(s_start), float(s_end))
+        # On a clone of the model as it stands here: after the schedule patch, the stamp
+        # and FastH3's VSA, so the Fun block patch wraps VSA's as `previous` (the other
+        # order lets VSA overwrite the control on those blocks).
+        shot_model = pose_control.install_pose_control(model, pose_cn, vae, hint_latent,
+                                                       shape, strength, s_start, s_end)
+        del hint_latent
+    except Exception as e:
+        if _pose_interrupted(e):
+            raise
+        _deep_cleanup()
+        report["why"] = ("ran out of memory building the skeleton video" if _is_oom(e)
+                         else f"pose control failed on this shot ({type(e).__name__}: {e})")
+        return out, None, report
+    failed, oom = "", False
+    try:
+        _evict_all_but(model, latent)
+        out2 = sample_shot(shot_model, cond, negative, latent, seed, steps, cfg,
+                           sampler_name, scheduler, sigmas, shift_video, shift_audio,
+                           soft_landing)
+    except Exception as e:
+        if _pose_interrupted(e):
+            raise
+        oom, failed = _is_oom(e), f"{type(e).__name__}: {e}"
+    finally:
+        shot_model = None
+    if failed:
+        # Cleaned up here, past the except: the exception's frames held the failed
+        # pass's tensors while it was alive.
+        if oom:
+            _pose_oom_cleanup()
+            report.update(outcome="oom", off=True,
+                          why="the pose pass ran out of VRAM; kept the uncontrolled "
+                              "render, and pose control is off for the rest of the run")
+        else:
+            _deep_cleanup()
+            report.update(outcome="failed", off=True,
+                          why=f"the pose pass failed ({failed}); kept the uncontrolled "
+                              f"render, and pose control is off for the rest of the run")
+        return out, None, report
+    _deep_cleanup()
+    report["outcome"] = "repaired" if report["broken"] else "held"
+    return out2, None, report
+
+
+def _pose_oom_cleanup():
+    """After an out-of-memory error in the pose pass, before the render goes on in the same
+    node run (comfy cleans up only when a node ends): what the failed pass left is
+    collected, then the CUDA caches go -- comfy's soft_empty_cache, via _deep_cleanup, the
+    node's cleanup after any OOM."""
+    import gc
+    gc.collect()
+    _deep_cleanup()
+
+
+def pose_handoff_boxes(detector, frame, boxes, w, h, appearance=None):
+    """{name: torso box} of the restrained people in the handoff frame -- the frame the
+    next shot opens on -- on the w x h grid the next shot is sampled on, or {}.
+
+    `boxes` are this shot's last analysed torso boxes by name; the handoff frame's people
+    are matched to them with the carry margins, so a name is carried only where it is
+    clear. `appearance` ({name: appearance vector}) also has to agree when the loaded
+    pose_control can compare it. One frame of DWPose."""
+    if detector is None or frame is None or not boxes:
+        return {}
+    try:
+        try:
+            det = detector.detect(frame, stride=1)
+        finally:
+            try:
+                detector.close()
+            except Exception:
+                pass
+        people = list(((det or {}).get("people") or [[]])[-1] or [])
+        fh, fw = int(frame.shape[1]), int(frame.shape[2])
+        if fw != int(w) or fh != int(h):
+            sx, sy = float(w) / max(1, fw), float(h) / max(1, fh)
+            scaled = []
+            for p in people:
+                q = p.copy()
+                q[:, 0] *= sx
+                q[:, 1] *= sy
+                scaled.append(q)
+            people = scaled
+        _kw = {}
+        looks = list(((det or {}).get("appearance") or [[]])[-1] or [])
+        if (appearance and looks and len(looks) == len(people)
+                and pose_takes("identify_by_boxes", "carry_appearance")):
+            _kw = {"appearance": looks, "carry_appearance": dict(appearance)}
+        ids = pose_control.identify_by_boxes(people, boxes, **_kw)
+        return dict(pose_control.torso_boxes(people, ids) or {})
+    except Exception as e:
+        if _pose_interrupted(e):
+            raise
+        return {}
+
+
+def pose_shot_line(n, report, bound):
+    """The info line for one analysed shot, with what the check saw after it -- which
+    limbs broke and in which frames, or how much of the shot held -- since every
+    threshold behind it is an estimate to be tuned on real renders."""
+    outcome, why = report.get("outcome"), report.get("why") or ""
+    seen = "; ".join(str(x) for x in (report.get("notes") or []) if x)
+    seen = f" -- {seen}" if seen else ""
+    latched = {nm: f for nm, f in (report.get("latched") or {}).items() if f is not None}
+    if outcome in ("repaired", "held") and report.get("latch") and latched:
+        at = (f"at frame {next(iter(latched.values()))}" if len(latched) == 1 else
+              "at frames " + ", ".join(f"{f} ({nm})" for nm, f in sorted(latched.items())))
+        return f"shot {n}: pose latched ({pose_describe(bound)}) {at}{seen}"
+    if outcome == "repaired":
+        return f"shot {n}: pose repaired ({pose_describe(bound)}){seen}"
+    if outcome == "held":
+        return f"shot {n}: pose held ({pose_describe(bound)}){seen}"
+    if outcome == "checked":
+        return f"shot {n}: pose checked, nothing broken{seen}"
+    if outcome == "oom":
+        return (f"shot {n}: pose pass ran out of VRAM, kept the uncontrolled render; pose "
+                f"control is off for the rest of the run")
+    return f"shot {n}: pose skipped -- {why or 'nothing to hold'}"
+
+
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -9861,6 +10809,8 @@ _WIDGET_RANGE = {
     "speech_lead_seconds": (0.5, 0.0, 2.0, float),
     "speech_tail_seconds": (2.0, 0.0, 10.0, float),
     "hold_levels": (0.8, 0.0, 1.0, float),
+    "pose_strength": (1.0, 0.0, 2.0, float),
+    "pose_end": (0.6, 0.1, 1.0, float),
 }
 
 
@@ -9988,7 +10938,18 @@ class H3LongVideos:
                                "Nothing reads it either, on purpose: a name in it puts nobody in "
                                "the shot, a garment in it removes nothing, and a door in it "
                                "stages no change. Write what must be SAID; let the beat stage "
-                               "what happens. `exactly:` and `verbatim:` do the same thing."}),
+                               "what happens. `exactly:` and `verbatim:` do the same thing.\n\n"
+                               "A RESTRAINT, GAG OR SEAL THAT MUST STAY ON goes on its own line "
+                               "under the beat that puts it on:\n"
+                               "  hold: Mara, handcuffs behind her back; duct tape over her mouth\n\n"
+                               "The person, then each piece with where it is, split by ';'. From "
+                               "that beat on each piece is registered on that person whatever "
+                               "the beat's wording: that shot is told it goes on, every later "
+                               "shot that it stays. 'remove: duct tape' under a later beat takes "
+                               "that piece off and leaves the rest on. With one person on the "
+                               "sheet the name can be left out. The line is read, never sent. "
+                               "info lists what is registered on each shot, and names any shot "
+                               "whose beat mentions a restraint or gag that registered nothing."}),
                 "resolution": (list(NATIVE_RES), {"default": "16:9",
                     "tooltip": "Aspect ratio. megapixels sets the size."}),
                 "megapixels": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
@@ -10095,7 +11056,10 @@ class H3LongVideos:
                                "The estimate leans short on purpose: a shot that ends before "
                                "its action does hands a mid-motion frame to the next shot, "
                                "which the chain continues from. A shot that outlasts its "
-                               "action has to invent the rest."}),
+                               "action has to invent the rest. Except a shot that puts a "
+                               "restraint, gag or seal on: it gets one more action's time "
+                               "and is not leaned short, because its last frame is what the "
+                               "next shot opens on and has to show the piece in place."}),
                 "auto_remove": ("BOOLEAN", {"default": True,
                     "tooltip": "Read removals out of the beat itself, so a garment comes "
                                "off without a 'remove:' line.\n\n"
@@ -10284,6 +11248,63 @@ class H3LongVideos:
                                "spatial."}),
                 # APPENDED. Saved workflows restore widget values by position.
                 # APPENDED. Saved workflows restore widget values by position.
+                # APPENDED: pose control. The socket takes no widget slot; the four
+                # widgets after it follow hold_levels in this order.
+                "pose_controlnet": ("MODEL_PATCH", {
+                    "tooltip": "Holds a restrained character's arms and legs in place with "
+                               "a skeleton. Wire a Load Model Patch node here with the "
+                               "MiniMax H3 Fun ControlNet "
+                               "(minimax_h3_fun_controlnet_union_pruned_int8_convrot, in "
+                               "models/model_patches). Unwired, nothing changes.\n\n"
+                               "It works only with the hybrid b25-49 checkpoint "
+                               "(minimax_h3_hybrid_fl2va_ref2va_b25-49): the controlnet is "
+                               "built for its 8-wide timestep table, and on any other base "
+                               "the node turns it off and says why in info. It also needs "
+                               "the DWPose files of comfyui_controlnet_aux, and "
+                               "hold_restraints on.\n\n"
+                               "On a shot where someone is restrained, the shot renders "
+                               "as usual, DWPose reads the people in it, the restrained "
+                               "person's elbows, wrists, knees and ankles are redrawn in "
+                               "the held position, and the shot renders a second time "
+                               "with the same seed, following that skeleton for its first "
+                               "steps. Only shots that render twice cost twice the "
+                               "time."}),
+                "pose_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0,
+                    "step": 0.05,
+                    "tooltip": "How strongly the second pass follows the skeleton. 1.0 is "
+                               "the controlnet's own scale; raise it if the arms keep "
+                               "moving, lower it if the body stiffens. 0 turns pose control "
+                               "off even with the controlnet wired."}),
+                "pose_end": ("FLOAT", {"default": 0.6, "min": 0.1, "max": 1.0,
+                    "step": 0.05,
+                    "tooltip": "The share of the steps that follow the skeleton, from the "
+                               "first: 0.6 of 8 steps is the first 5. The remaining steps "
+                               "run free, so hands, cuffs and faces get their detail from "
+                               "the model rather than from the stick figure. 1.0 holds "
+                               "every step."}),
+                "pose_shots": (list(POSE_SHOT_MODES), {"default": POSE_SHOT_MODES[0],
+                    "tooltip": "Which shots get the second pass.\n\n"
+                               "repair broken shots: every shot with a restrained person "
+                               "renders once and is checked. Only a shot where the held "
+                               "limbs come apart -- wrists out to catch a fall, a reach, "
+                               "ankles stepping apart -- or where a bound body falls, "
+                               "renders again with the skeleton. A shot that holds keeps "
+                               "its first render.\n\n"
+                               "every restrained shot: every such shot renders twice.\n\n"
+                               "bound falls only: only shots where a restrained body "
+                               "falls.\n\n"
+                               "Shots where the restraints go on or come off, and bodies "
+                               "fastened to an object, are left as rendered. info lists "
+                               "what happened on each shot."}),
+                "pose_draw": (list(POSE_DRAWS), {"default": POSE_DRAWS[0],
+                    "tooltip": "Who is drawn in the skeleton.\n\n"
+                               "everyone: the restrained person in the held position, and "
+                               "everyone else as the first render moved them, so the "
+                               "second render keeps their motion.\n\n"
+                               "everyone, thick lines: the same with heavier lines, for "
+                               "when the skeleton is followed too loosely.\n\n"
+                               "bound person only: only the restrained person; the others "
+                               "move freely."}),
             },
             "hidden": {"graph": "PROMPT"},
         }
@@ -10309,7 +11330,9 @@ class H3LongVideos:
             pace=1.0,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0,
-            hold_levels=0.8, graph=None, restart_after_removal=None,
+            hold_levels=0.8, pose_controlnet=None, pose_strength=1.0, pose_end=0.6,
+            pose_shots=POSE_SHOT_MODES[0], pose_draw=POSE_DRAWS[0],
+            graph=None, restart_after_removal=None,
             **_removed):
 
         self._frames = None
@@ -10334,7 +11357,9 @@ class H3LongVideos:
             pace=pace, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
             speech_tail_seconds=speech_tail_seconds,
-            hold_levels=hold_levels, graph=graph,
+            hold_levels=hold_levels, pose_controlnet=pose_controlnet,
+            pose_strength=pose_strength, pose_end=pose_end, pose_shots=pose_shots,
+            pose_draw=pose_draw, graph=graph,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             try:
@@ -10349,7 +11374,17 @@ class H3LongVideos:
                 raise
             finally:
                 self._frames = None
+                self._release_pose_detector()
         return prepared
+
+    def _release_pose_detector(self):
+        """Drop the DWPose models a render loaded, however the render ended."""
+        _d, self._pose_detector = getattr(self, "_pose_detector", None), None
+        if _d is not None:
+            try:
+                (getattr(_d, "release", None) or _d.close)()
+            except Exception:
+                pass                    # teardown must not mask what ended the render
 
     def _prepare(self, model, clip, vae, audio_vae, prompt, resolution, megapixels, shot_seconds,
             steps, sampler_name, scheduler, seed,
@@ -10363,14 +11398,15 @@ class H3LongVideos:
             pace=1.0,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0,
-            hold_levels=0.8, graph=None,
+            hold_levels=0.8, pose_controlnet=None, pose_strength=1.0, pose_end=0.6,
+            pose_shots=POSE_SHOT_MODES[0], pose_draw=POSE_DRAWS[0], graph=None,
             **_removed):
 
         notes = []
         _bad = misaligned_widgets(
             dict(resolution=resolution, sampler_name=sampler_name, scheduler=scheduler,
                  shot_length=shot_length, upscale=upscale, latent_upscale=latent_upscale,
-                 upscale_model=upscale_model),
+                 upscale_model=upscale_model, pose_shots=pose_shots, pose_draw=pose_draw),
             combo_options(self.INPUT_TYPES()))
         if _bad:
             raise RuntimeError(alignment_error(_bad))
@@ -10382,7 +11418,8 @@ class H3LongVideos:
             pace=pace,
             ambient_level=ambient_level, foley_level=foley_level,
             speech_lead_seconds=speech_lead_seconds,
-            speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels))
+            speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels,
+            pose_strength=pose_strength, pose_end=pose_end))
         megapixels, shot_seconds = _fixed["megapixels"], _fixed["shot_seconds"]
         steps = _fixed["steps"]
         shift_video, shift_audio = _fixed["shift_video"], _fixed["shift_audio"]
@@ -10394,6 +11431,7 @@ class H3LongVideos:
         speech_lead_seconds = _fixed["speech_lead_seconds"]
         speech_tail_seconds = _fixed["speech_tail_seconds"]
         hold_levels = _fixed["hold_levels"]
+        pose_strength, pose_end = _fixed["pose_strength"], _fixed["pose_end"]
         notes.extend(_fixnotes)
         # FASTH3: a distill runs as it was distilled. See fast_h3.
         _fast = fast_h3(model)
@@ -10494,6 +11532,37 @@ class H3LongVideos:
                 sampler_name = HYPERFLOW_SAMPLER
             _hyper["two_time"], _tt_said = hyperflow_two_time_plan(model, _hyper)
             notes.append(_tt_said)
+        # POSE CONTROL: whether it can run on this model at all, said here so plan_only
+        # says it too. Unwired or strength 0 is off and silent. See pose_status.
+        _pose_ok, _pose_note = False, ""
+        if pose_controlnet is not None and float(pose_strength) > 0.0:
+            if not hold_restraints:
+                _pose_note = ("pose control off: hold_restraints is off, so no restraint is "
+                              "held and there is no position to draw")
+            elif pose_control is None:
+                _pose_note = (f"pose control off: pose_control.py did not load "
+                              f"({_POSE_LOAD_ERROR})")
+            else:
+                try:
+                    _pose_ok, _pose_note = pose_control.pose_status(
+                        model, pose_controlnet, pose_strength,
+                        bool(_hyper and _hyper.get("two_time")))
+                except Exception as e:      # a setup check never takes a render down
+                    _pose_ok, _pose_note = False, (f"pose control off: the setup check "
+                                                   f"failed ({type(e).__name__}: {e})")
+        if _pose_ok:
+            # Counted as pose_shot_schedule counts: a wired (or Hyperflow) schedule's own
+            # steps, else the steps widget.
+            _pose_n = (len(sigmas) - 1 if (sigmas is not None and len(sigmas) > 1)
+                       else int(steps))
+            _pose_k = max(1, min(_pose_n,
+                                 int(math.ceil(float(pose_end) * _pose_n - 1e-9))))
+            notes.append(
+                f"pose control: on; strength {float(pose_strength):.2f}; the first {_pose_k} "
+                f"of {_pose_n} steps follow the skeleton; {pose_shots}; draw {pose_draw}"
+                + (f"; {_pose_note}" if _pose_note else ""))
+        elif _pose_note:
+            notes.append(_pose_note)
         # WIDGETS THAT WERE NOT CHOICES. Each of these had one right answer that the
         # node could reach and the reader could not, so each was a question whose
         # wrong answer only ever made the render worse.
@@ -10658,6 +11727,20 @@ class H3LongVideos:
         beats, sheet = pull_character_sheets(beats)
         _exact_all = [exact_lines(b) for b in beats]
         beats = [_EXACT_LINE.sub("", b).strip() for b in beats]
+        # hold: lines are read, never sent -- see register_holds. One under the scene
+        # paragraph belongs to the first beat, and a paragraph holding nothing else to
+        # the beat above it, so it never becomes an empty shot.
+        _hold_all = [hold_lines(b) for b in beats]
+        beats = [strip_hold_lines(b) if _h else b for b, _h in zip(beats, _hold_all)]
+        if hold_lines(scene) and _hold_all:
+            _hold_all[0] = hold_lines(scene) + _hold_all[0]
+            scene = strip_hold_lines(scene)
+        for _i in range(len(beats) - 1, -1, -1):
+            if _hold_all[_i] and not beats[_i] and not _exact_all[_i] and len(beats) > 1:
+                _to = _i - 1 if _i else 1
+                _hold_all[_to] = (_hold_all[_to] + _hold_all[_i] if _to < _i
+                                  else _hold_all[_i] + _hold_all[_to])
+                del beats[_i], _hold_all[_i], _exact_all[_i]
         sheet, _dupes = merge_sheets((character_memory or "").strip(), sheet)
         _minors = sorted({_n for _n, _ln in sheet_lines(sheet)
                           if _n and 0 < age_in(_ln) < ADULT_AGE})
@@ -10839,6 +11922,7 @@ class H3LongVideos:
         gag_shots = []            # shots told the gag stays over the mouth
         device_shots = []         # shots whose line belongs to a machine
         applied_shots = []        # shots that put the hardware on
+        applying_shots = set()    # 1-based shots sized for a piece going on -- see plan_lengths
         early_hardware = []       # ...where the sheet already claimed it
         tight_shots = []          # ...where the framing also crops it
         cropped_wardrobe = []     # garments a named close frame stopped describing
@@ -10862,6 +11946,8 @@ class H3LongVideos:
         frame_shots = []            # shots told what the frame holds
         legs_held = ""              # where a beat or the sheet fastened the legs
         arms_of, legs_of = {}, {}   # ...per wearer, from the beat that fastened them
+        _pose_limbs_had = {}        # name -> {"arms"/"legs": position held}, for pose control's latch
+        _pose_doubted = set()       # wearers read off a beat whose pronoun cannot be them
         limbs_freed = False         # the last piece on a limb came off -- see below
         arms_freed = legs_freed = False   # ...counted per pair of limbs
         stayed_on = []              # (shot, who) kept described because still in frame
@@ -10933,6 +12019,14 @@ class H3LongVideos:
             (ref_image_1, ref_image_2, ref_image_3, ref_image_4)) if _r is not None}
         _portrait_of = {_n for _n, _ln in sheet_lines(sheet)
                         if _n and (set(picture_tags(_ln)) & _have_slot)}
+        # Who is held as each shot opens, and from which shot -- see the end of the beat.
+        held_shots = {}             # 1-based shot -> {name: shot their restraint or gag went on}
+        held_items = {}             # 1-based shot -> {name: (items, where)} held through it
+        _held_since = {}            # name -> shot a beat first put something on them
+        _held_keys = None           # name -> what holds them after the last beat
+        _hold_by_beat = False       # the hold was registered by a beat, not a prop
+        _hold_named = []            # what those beats named it
+        _hold_was_on = False        # the hold's flag after the last beat
         _first_is_plate = False
         guard_words = beat_words = total_words = sound_words = 0
         _state = engine.SceneState(place=engine.place_in(scene or ""))
@@ -10942,6 +12036,10 @@ class H3LongVideos:
             [engine.acted_text(extract_directives(b)[0]) for b in beats])
         _sheet_hw = {c for c, _p, _w, _a in engine.hardware_spans(sheet or "")}
         _pron_of = {n: sheet_pronoun(ln) for n, ln in sheet_lines(sheet) if n}
+        _scene_hw = scene_restraints(static, [n for n, _ in sheet_lines(sheet) if n], _pron_of)
+        _hold_cast = [n for n, _ in sheet_lines(sheet) if n] or list(cast)
+        held_rows = []              # (shot, what the state holds on whom once it is read)
+        unheld_words = []           # (shot, restraint words its beat names that registered nothing)
         _static_wear = static_wardrobe(static, [n for n, _ in sheet_lines(sheet) if n])
         for b in beats:
             body, toks, adds = extract_directives(b)
@@ -10968,12 +12066,23 @@ class H3LongVideos:
                              if not names_any(g, [x for x in gone if x not in restored])]
                     _state.declare(_n, _line + "".join(f", {g}" for g in _wear),
                                    staged_later=_later_for_state)
+            # ...and a scene sentence that has somebody already in hardware, on them.
+            for _n, _s in _scene_hw:
+                if _n or not sheet_lines(sheet):
+                    _state.declare(_n, _s, staged_later=_later_for_state, hardware_only=True)
             # What was on BEFORE this beat, so a piece that goes on in it can be told
             # from one that was already there. See _new_on below.
             _hw_before = {(_n, _k) for _n, _q in _state.people.items()
                           for _k in _q.hardware}
             _ch = _state.read(_acted, cast=[n for n, _ in sheet_lines(sheet) if n],
                               shot=len(plan) + 1, pronouns=_pron_of)
+            _held_line, _hold_bad = register_holds(
+                _state, _ch, _hold_all[len(plan)] if len(plan) < len(_hold_all) else [],
+                _hold_cast, len(plan) + 1)
+            for _bad in _hold_bad:
+                notes.append(f"shot {len(plan) + 1}: a hold: line registered nothing -- "
+                             f"{_bad}. Write it as 'hold: Name, item and where it is; "
+                             f"next item'")
             if _ch.get("applied") or _ch.get("released"):
                 hardware_changed.add(len(plan) + 1)
             # Where the shot is comes before who is in it. The rules below keep a person
@@ -11021,6 +12130,9 @@ class H3LongVideos:
                                       [(_w, _r) for _w, _r in (_ch.get("applied") or [])
                                        if staged_on_now(_acted, getattr(_r, "item", ""))]
                                       + list(_ch.get("released") or []))]
+                _worked_on += [n for n in dict.fromkeys(_n for _n, _r, _l, _nw in _held_line
+                                                        if _nw)
+                               if n not in (active or []) and n not in _worked_on]
                 if _worked_on and not _leaves_room:
                     _keep = set(list(active or []) + _worked_on)
                     active = [n for n, _l in sheet_lines(sheet) if n in _keep]
@@ -11212,9 +12324,12 @@ class H3LongVideos:
             else:
                 shot_sheet = sheet
             _prev_stays = shot_frames.get(len(plan) - 1, ([], []))[1]
+            # Somebody held since an earlier shot is pictured by that frame as they are
+            # now, so their portrait is what gives way -- as at render.
             _no_carry = not _cond_module.may_carry_frame(
                 _prev_stays, active,
-                {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)})
+                {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}
+                - {n for n in _held_since if n in _prev_stays})
             _fresh = (_is_cut
                       or (restart_after_removal and (len(plan) - 1) in stripped_shots
                           and _no_carry)
@@ -11563,6 +12678,11 @@ class H3LongVideos:
                 _allow = [t for t in _toks_all
                           if not (_who and _gone_by_here.get(t) and _who not in
                                   {str(x).lower() for x in _gone_by_here[t]})]
+                # Nothing in the hands while the wrists are held -- see hands_free_line.
+                if any(_n.lower() == _who and any(r.part in ("wrists", "hands", "arms")
+                                                  for r in _q.hardware.values())
+                       for _n, _q in _state.people.items() if _n):
+                    _ln = hands_free_line(_ln)
                 _scrubbed.append(scrub_removed(_ln, _allow))
             shot_scene = "\n".join(p for p in _scrubbed if p.strip())
             _holds = frame_holds(anchor) or frame_holds(body)
@@ -11643,8 +12763,11 @@ class H3LongVideos:
                                                if n and n == _w))
                         for (_a, _w), _items in _by_agent.items()))
             _was_restrained = restrained
+            _shown_hw = {x for _c, _p, _w, _a in engine.hardware_spans(_scene_for_state)
+                         for x in (_c, _w)}
             if hold_restraints:
                 _clears = bool(names_any(RESTRAINT_HOLD_KEY, toks)
+                               or held_piece_named(_state, toks)
                                or any(restraint_present(t) for t in toks)
                                or (restraint_coming_off(_acted)
                                    and any(_RESTRAINT_WORD.match(str(t)) for t in toks)))
@@ -11663,8 +12786,10 @@ class H3LongVideos:
                             if _q is None:
                                 continue
                             for _k in [k for k, r in _q.hardware.items()
-                                       if _all or names_any(r.item, [_t])
-                                       or names_any(_t, [k[0]])]:
+                                       if (_all or names_any(r.item, [_t])
+                                           or names_any(_t, [k[0]]))
+                                       and (not removal_parts(_t)
+                                            or k[1] in removal_parts(_t))]:
                                 _ch.setdefault("released", []).append(
                                     (_n, _q.hardware.pop(_k)))
                                 hardware_changed.add(len(plan) + 1)
@@ -11693,7 +12818,20 @@ class H3LongVideos:
                     worn_item = ""
                     worn_items = []
                     restrained_who = set()
-                elif restraint_present(_acted) or restraint_present(_scene_for_state):
+                # ARMED BY A PIECE WITH A WEARER, which is what the state holds -- not by
+                # hardware words anywhere in the scene text. "A pair of handcuffs lies on
+                # the nightstand" and "keys clipped to his belt" held restraints on
+                # nobody, and "Dan cuffs Mara" registered on her and armed nothing.
+                # REPORTED. The beat's own words still arm it where the state has no
+                # piece to name, and so do the scene's ("hogtied", "restrained") where
+                # they name no piece at all. A piece only the sheet gives counts while
+                # the shot's text still shows it: one covered by a garment is held back.
+                elif (any(_r.applied_in or _r.item in _shown_hw or _k[0] in _shown_hw
+                          for _q in _state.people.values()
+                          for _k, _r in _q.hardware.items())
+                      or restraint_present(_acted)
+                      or ((not _shown_hw or any(not _n for _n, _s in _scene_hw))
+                          and restraint_present(_scene_for_state))):
                     restrained = True
                     if not _was_restrained or restraint_going_on(_acted):
                         _staged_here = (engine.applies_hardware(_acted)
@@ -11717,6 +12855,10 @@ class H3LongVideos:
             # only ever grew before, so one wrong guess -- the man doing the taping --
             # stayed "restrained" for the rest of the run, and the arms the pose placed
             # were his.
+            if hold_restraints and _held_line:
+                restrained = True
+                if any(_r.rigid for _n, _r, _l, _nw in _held_line):
+                    rigid_latched = True
             _state_held = {n for n, _q in _state.people.items() if _q.hardware}
             if restrained and _state_held:
                 restrained_who = set(_state_held)
@@ -11758,6 +12900,7 @@ class H3LongVideos:
                        if (_n, _k) not in _hw_before and _r.item
                        and not _possessed(_r.item)
                        and staged_on_now(_acted, _r.item)}
+            _new_on |= {(_n, _r.item) for _n, _r, _l, _nw in _held_line if _nw}
             if (not early_hardware and restraint_going_on(_acted)
                     and restraint_present(_scene_for_state)):
                 early_hardware.append(len(plan) + 1)
@@ -11774,9 +12917,21 @@ class H3LongVideos:
                 posed = False
             elif rigid_latched and forced_pose(f"{_acted} {shot_scene}"):
                 posed = True
+            # A SHOT THAT PUTS A PIECE ON IS SIZED FOR THE HOLD AFTER IT -- see
+            # plan_lengths. The same reading the applying wording comes from: the first
+            # restraint, a piece new to the state that this beat puts on, or a seal that
+            # was not there before. It is told when the piece goes on, so it is not also
+            # told to finish its action on the last frame.
+            _seal_going_on = bool(not _seal_off and not _sealed_before
+                                  and crotch_seal(_acted, worn_items))
+            if _applying or (restrained and _new_on) or _seal_going_on:
+                applying_shots.add(len(plan) + 1)
+            _applies_here = (len(plan) + 1) in applying_shots
             _have = plan_lengths([body], ceiling,
-                                 shot_length == "from the beat", pace)[0][0] / H3_FPS
-            _pace = pace_clause(beat_seconds(body), _have, beat=body)
+                                 shot_length == "from the beat", pace,
+                                 applying=(1,) if _applies_here else ())[0][0] / H3_FPS
+            _pace = ("" if _applies_here
+                     else pace_clause(beat_seconds(body), _have, beat=body))
             if _pace:
                 paced_shots.append(len(plan) + 1)
             _movers = movers_in(_acted, shot_sheet, active or [])
@@ -11918,6 +13073,15 @@ class H3LongVideos:
             _sealed_now = "" if _seal_off else crotch_seal(_acted, worn_items)
             if _sealed_now:
                 sealed = _sealed_now
+            for _n, _r, _l, _nw in _held_line:
+                if _r.part in ("wrists", "arms", "hands", "elbows") and _r.position:
+                    arms_of[_n] = _r.position
+                elif _r.part in ("ankles", "legs", "knees", "thighs", "feet") and _l:
+                    legs_of[_n] = _l
+            held_rows.append((len(plan) + 1, held_state(_state, sealed)))
+            _unheld = unregistered_restraints(_acted, _state, _ch)
+            if _unheld:
+                unheld_words.append((len(plan) + 1, _unheld))
             _holding = bool(restrained and anchored and not _anchor_now)
             if _holding:
                 anchored_shots.append(len(plan) + 1)
@@ -12038,7 +13202,19 @@ class H3LongVideos:
             if not _lying_now and restrained and not beat_said_posture:
                 _watch = restrained_who or set()
                 _free = (not any(n in poses for n in _watch)) if _watch else (not poses)
-                if _free and engine.posture_in(_scene_for_state) == "lying down":
+                # ONLY A PERSON LIES DOWN, and only where the scene paragraph says so: "a
+                # phone lies on the nightstand" and a sheet's "hair that lies loose" laid
+                # her down from the first shot while she stood. REPORTED.
+                _cast_rx = [re.escape(n) for n, _ in sheet_lines(sheet) if n]
+                _para = "\n".join(
+                    ln for ln in str(_scene_for_state or "").split("\n")
+                    if not (_cast_rx and re.match(r"\s*(?:" + "|".join(_cast_rx) + r")\s*:", ln)))
+                _names = ([n for n, _ in sheet_lines(sheet) if n]
+                          or sorted(n for n in _watch if n))
+                _down_here = (any(p == "lying down" for n, p in posture_in(_para, _names).items()
+                                  if not _watch or n in _watch)
+                              if _names else engine.posture_in(_para) == "lying down")
+                if _free and _down_here:
                     _lying_now = True
             # UNCUFFED IS UNCUFFED. Once the last piece on a limb comes off, the arms
             # are not "behind the body, wrists together" any more -- that was read off
@@ -12046,8 +13222,6 @@ class H3LongVideos:
             # piece goes on a limb.
             _LIMB = ("wrists", "ankles", "arms", "hands", "legs", "elbows", "knees",
                      "thighs", "feet")
-            _limb_now = any(r.part in _LIMB for _q in _state.people.values()
-                            for r in _q.hardware.values())
             # ...PER PAIR OF LIMBS. Counted over every limb at once, uncuffing her wrists
             # while her ankles stayed roped freed nothing, and every shot after went on
             # holding her uncuffed arms "behind the body, wrists together". The arms go
@@ -12061,6 +13235,21 @@ class H3LongVideos:
 
             def _changed(key, parts):
                 return any(getattr(r, "part", "") in parts for _n, r in (_ch.get(key) or []))
+
+            def _limb_of(part):
+                return "arms" if part in _ARM_PARTS else "legs" if part in _LEG_PARTS else ""
+            # For pose control: which limbs go ON whom in this shot, by the beat or by a
+            # hold: line, and whether limb hardware comes OFF. More is added below, once
+            # the beat's own limb positions and the held keys are read. See
+            # pose_candidate.
+            _limbs_on = {}
+            for _n, _r in (_ch.get("applied") or []):
+                if _limb_of(getattr(_r, "part", "")):
+                    _limbs_on.setdefault(_n, set()).add(_limb_of(_r.part))
+            for _n, _r, _l, _nw in _held_line:
+                if _nw and _limb_of(getattr(_r, "part", "")):
+                    _limbs_on.setdefault(_n, set()).add(_limb_of(_r.part))
+            _limbs_off = _changed("released", _ARM_PARTS + _LEG_PARTS)
             if _changed("released", _ARM_PARTS) and not _held_on(_ARM_PARTS):
                 arms_freed = True
             if _changed("applied", _ARM_PARTS):
@@ -12171,8 +13360,11 @@ class H3LongVideos:
             if _moved:
                 moved_shots.append(len(plan) + 1)
 
+            # ...and only somebody the state has in a piece: the sheet line that names
+            # a strap or a chain is not always one wearing it. See the latch above.
             _wearers = [n for n in restraint_wearers(shot_sheet)
-                        if not character_guard or n in active]
+                        if (not character_guard or n in active)
+                        and (not _hw_by_wearer or n in _hw_by_wearer)]
             _described = (active if character_guard else
                          [n for n, _ in sheet_lines(shot_sheet) if n])
             if extras_in(body, singular=False):
@@ -12299,9 +13491,13 @@ class H3LongVideos:
             _skip = set().union(*_skip_by.values()) if _skip_by else set()
 
             def _shown(items, who=None):
+                # One wearer's items and skips are the same raw names, so they match
+                # exactly: by substring, the duct tape on her mouth also took the tape
+                # on her wrists out of the hold. Reported as a restraint breaking.
                 _s = _skip if who is None else _skip_by.get(who, set())
                 return [i for i in (items or [])
-                        if not any(s == i or s in i or i in s for s in _s)]
+                        if not any(s == i or (who is None and (s in i or i in s))
+                                   for s in _s)]
             _hw_shown = {_n: _shown(_v, _n) for _n, _v in _hw_by_wearer.items()}
             if not _wearer_here:
                 hold = ""
@@ -12417,6 +13613,7 @@ class H3LongVideos:
             # people and lean on continuity for the other.
             _pose_known = bool(_arms_pos or _legs_pos)
             _held_here = [n for n in (_described or []) if n in (restrained_who or ())]
+            _bound_pose_now = {}        # name -> (arms, legs), on-screen wearers: pose control
             if _held_here and _wearer_here and (arms_of or legs_of):
                 # Each wearer's own arms and legs; never one body's pose said of two
                 # who differ. A wearer with no record of their own takes the shot's
@@ -12446,6 +13643,8 @@ class H3LongVideos:
                     if not _a and _l == "ankles to the wrists":
                         _a = "behind the back"
                     _groups.setdefault((_a, _l), []).append(_n)
+                    if _a or _l:
+                        _bound_pose_now[_n] = (_a, _l)
                 _pose = "".join(
                     pose_of(pose_clause(_a, lying=_lying_now, legs=_l, facing=facing),
                             _names, _described)
@@ -12453,6 +13652,8 @@ class H3LongVideos:
                 _pose_known = bool(_pose)
             elif _pose and restrained_who:
                 _pose = pose_of(_pose, _held_here, _described)
+                if _wearer_here and (_arms_pos or _legs_pos):
+                    _bound_pose_now = {_n: (_arms_pos, _legs_pos) for _n in _held_here}
             def _whose_in(_n):
                 """How a lead sentence says whose: nothing with one person in the
                 shot, a pronoun where only _n answers to it -- the pose sentence beside
@@ -12502,19 +13703,36 @@ class H3LongVideos:
             _fall_led = False
             _down = (fallers_in(_acted, _described, _pron_of)
                      if _bound_fall else set())
-            # ...and only a fall the bound body is IN: named, or the one person here.
-            if _bound_fall and (not _limb_now
-                                or (_down and not (_down & set(restrained_who or ())))
-                                or (not _down and not set(_described or [])
-                                    <= set(restrained_who or ()))):
+            # ...and only a fall the bound body is IN: named, or -- where the beat names
+            # nobody it can resolve -- the bound people here. NEVER THE FREE FALL FOR A
+            # BODY IN LIMB HARDWARE: "Mara slips and falls" beside Dan read as nobody,
+            # and the free sentence left her hands to catch the landing. REPORTED.
+            _limbed = {n for n, _q in _state.people.items()
+                       if any(r.part in _LIMB for r in _q.hardware.values())}
+            _bound_down = {n for n in (_down or set(_described or []) or set(restrained_who or ()))
+                           if n in (restrained_who or ()) and n in _limbed}
+            if _bound_fall and not _bound_down:
                 # A gag or a collar binds no limb: her hands are free, and a sentence
                 # keeping "the arms in the hold" puts them in one nobody fastened. And
                 # when the one falling is somebody else, the bound body is not falling.
                 fall, _bound_fall = FALL_HOLD_FREE, False
             if _bound_fall and _wearer_here:
-                _fallers = [n for n in (_described or []) if n in (restrained_who or ())]
+                _fallers = [n for n in (_described or []) if n in _bound_down] or sorted(_bound_down)
+                _arm_held = not arms_freed and any(
+                    r.part in _ARM_PARTS for _f in _fallers
+                    for r in (_state.people[_f].hardware.values()
+                              if _f in _state.people else ()))
+                _fall_arms = (arms_of.get(_fallers[0], "")
+                              if (_arm_held and len(_fallers) == 1) else "") or _arms_pos
+                # CUFFS WITH NO POSITION STILL PLACE THE HANDS for the fall: "the arms
+                # staying in the hold" placed nothing, and the hands went out to catch
+                # it. Behind the back, unless the beat puts them in front.
+                if not _fall_arms and _arm_held:
+                    _fall_arms = ("in front of the body"
+                                  if re.search(r"\bin\s+front\b", _acted or "", re.I)
+                                  else "behind the back")
                 fall = bound_fall_clause(
-                    _arms_pos, _legs_pos,
+                    _fall_arms, _legs_pos,
                     who=(_whose_in(_fallers[0]) if len(_fallers) == 1 else ""))
             # A BODY LEFT LYING, held down -- see lying_stays.
             _down_lead, _lying_led = "", set()
@@ -12621,9 +13839,14 @@ class H3LongVideos:
                     # Not the lying hold: it goes in the guard list, behind the
                     # beat's own words -- see lying_stays above. Nor the frame: see
                     # frame_hold.
-                    _lead = (_told + _entering
-                             + (_pose if _pose_known else "")
-                             + _fall_lead + _gag + _facing + _seal)
+                    # THE FALL BEFORE THE LANDING. On the shot that puts her down, the
+                    # lying sentence went ahead of the fall, so the shot opened on a body
+                    # already flat and the fall read as an afterthought. It follows it.
+                    _pose_lead, _lying_lead = (_pose if _pose_known else ""), ""
+                    if _fall_lead and _pose_lead:
+                        _pose_lead, _lying_lead = split_lying(_pose_lead)
+                    _lead = (_told + _entering + _pose_lead
+                             + _fall_lead + _lying_lead + _gag + _facing + _seal)
                     _told_led = bool(_told)
                     line = (line[:_cut] + _lead + line[_cut:]).strip()
                     _pose_led = _pose if _pose_known else ""
@@ -12673,6 +13896,13 @@ class H3LongVideos:
                                     and not _speaks
                                     and not _voiced and not _mouth_busy
                                     and not _MOUTH_EATS.search(_acted or "")) else ""
+            # A MOUTH HELD OPEN BY ITS GAG -- a ball, a bit, a ring, a stuffed cloth -- is
+            # not told to stay closed: the model can only do that by drawing no gag.
+            # REPORTED. Every other mouth in the shot keeps the line.
+            _held_open = [n for n, _it in _gag_on.items() if engine.mouth_held_open(_it)]
+            if _mouth and _held_open:
+                _mouth = mouths_closed_but(
+                    _held_open, [n for n in (_described or []) if n not in _held_open])
             _mouth_from_silence = bool(_mouth)
             _vocal_src = vocal_sources_in(body, shot_sheet) if _voiced else []
             if _voiced and not _vocal_src and _gag_second:
@@ -12706,7 +13936,9 @@ class H3LongVideos:
                     _silent = []        # "she moans" may be any of them -- see unpinned_vocal
                 _mouth = voice_sources(_talkers, _vocal_word, _voicers, _silent,
                                        pairs=_vocal_src,
-                                       rest=MOUTH_SILENT_REST if _mouth_busy else None)
+                                       rest=MOUTH_SILENT_REST if (
+                                           _mouth_busy or set(_silent) & set(_held_open))
+                                       else None)
                 for _n in _muffled & set(_talkers):
                     _mouth = _mouth.replace(
                         f"nly {_n} speaks",
@@ -12969,12 +14201,158 @@ class H3LongVideos:
             _events = (list(sounds_for(_acted, held=[_state_key(t)
                                                    for t, _ in _pairs]))
                        if auto_sound else [])
+            # WHO IS HELD, AND SINCE WHICH SHOT, for the pictures at render: a portrait
+            # or a frame from before a restraint or gag went on shows the person without
+            # it. Read from the state the hold reads, and from the hold itself where it
+            # registered a restraint from the beat that the state did not name -- such a
+            # shot changes what they wear as much as one the state saw. Reported as tape
+            # and cuffs gone in the shot after they went on.
+            _n_now = len(plan) + 1
+            _keys_now = {_nm: frozenset(_q.hardware) for _nm, _q in _state.people.items()
+                         if _q.hardware}
+            # ...the hold's own test for a beat adding wearers, so a prop the scene
+            # mentions is never a restraint put on anybody.
+            _hold_by_beat = bool(restrained and (_hold_by_beat or (
+                restraint_present(_acted)
+                and (not _hold_was_on or restraint_going_on(_acted)))))
+            _hold_was_on = restrained
+            _hold_named = (merge_hardware_names(_hold_named + [hardware_named(_acted)])
+                           if _hold_by_beat else [])
+            if _hold_by_beat:
+                for _nm in (restrained_who or ()):
+                    _keys_now.setdefault(_nm, frozenset({("held", "")}))
+            if _held_keys is None:
+                # On before the first beat: what the sheet declares, less what that
+                # beat itself stages.
+                _held_keys = {}
+                for _nm, _k in _hw_before:
+                    if _staged_at.get(_k[0] if isinstance(_k, tuple) else _k) != _n_now:
+                        _held_keys[_nm] = _held_keys.get(_nm, frozenset()) | {_k}
+            held_shots[_n_now] = dict(_held_since)
+            _key_moves = {}             # name -> (keys gained, keys lost): pose control
+            for _nm in set(_keys_now) | set(_held_keys):
+                _was_k = _held_keys.get(_nm, frozenset())
+                _now_k = _keys_now.get(_nm, frozenset())
+                if _now_k == _was_k:
+                    continue
+                _key_moves[_nm] = (_now_k - _was_k, _was_k - _now_k)
+                hardware_changed.add(_n_now)
+                if not _now_k:
+                    _held_since.pop(_nm, None)
+                elif _now_k - _was_k:
+                    _held_since.setdefault(_nm, _n_now)
+            _held_keys = _keys_now
+            held_items[_n_now] = {
+                _nm: ([_r.item for _r in _state.people[_nm].hardware.values()],
+                      hardware_where(list(_state.people[_nm].hardware.values())))
+                if _nm in _state.people and _state.people[_nm].hardware
+                else (list(_hold_named), {})
+                for _nm in held_shots[_n_now] if _nm in _keys_now}
             # Nobody described is nobody pictured: a recovered face is never taken from
             # a shot of the clock -- see _plain_people.
             plan.add(shot_text,
                      list(active) if (character_guard and not _plain_people) else [],
                      _speaks, (_own and not _mute_written) or _voiced,
                      _voiced and not _own, _events)
+            # What pose control needs to know about this shot -- see pose_candidate.
+            _pose_falls = bool(_bound_fall and _wearer_here)
+            _pose_fallers = list(_fallers) if _pose_falls else []
+            # Fastened TO an object: the point part of limb_anchor's phrase ("..., at the
+            # headboard", or "at the pipe" alone). A position by itself, "at the waist"
+            # included, is not an anchor.
+            _pose_anchor = bool(limb_anchor_parts(_pose_pos)[1])
+            # Who does the restraining in this beat is never the one held, and nor is a
+            # wearer recorded off a beat whose pronoun cannot be them ("Dan handcuffs
+            # her wrists" with two women in the sheet records the cuffs on Dan).
+            _going_on = bool(_ch.get("applied") or restraint_going_on(_acted)
+                             or any(_nw for _n, _r, _l, _nw in _held_line))
+            _doers = {_n for _n in _bound_pose_now
+                      if _going_on and restrains_in(_acted, _n)}
+            _beat_groups = {g for w, g in (("her", "she"), ("him", "he"), ("his", "he"),
+                                           ("them", "they"), ("their", "they"))
+                            if re.search(r"\b" + w + r"\b", _acted or "", re.I)}
+            for _n in _limbs_on:
+                if (restrains_in(_acted, _n) and _pron_of.get(_n) and _beat_groups
+                        and _pron_of[_n] not in _beat_groups
+                        and not re.search(r"\b(?:herself|himself|themselves|themself|own)\b"
+                                          r"|\b" + re.escape(_n) + r"['’]s\b", _acted or "",
+                                          re.I)):
+                    _pose_doubted.add(_n)
+            # Limbs going on by the word, with no piece for the state to record: "Dan
+            # hogties Mara" when she is already cuffed. The limbs the beat itself places,
+            # on the held people it names (all of them when it names none).
+            _words_on = set()
+            if restraint_going_on(_acted):
+                if limb_anchor_parts(_anchor_now)[0] or _legs_now == "ankles to the wrists":
+                    _words_on.add("arms")
+                if _legs_now:
+                    _words_on.add("legs")
+            _took = [_n for _n in _bound_pose_now if _n not in _doers]
+            _named = [_n for _n in _took if re.search(r"\b" + re.escape(_n) + r"\b",
+                                                      _acted or "")]
+            for _n in (_named or _took) if _words_on else ():
+                _limbs_on.setdefault(_n, set()).update(_words_on)
+            # ...and the held keys: a piece the sheet stages here, or the word-only hold
+            # going on or off.
+            for _n, (_gained, _lost) in _key_moves.items():
+                for _k in _gained:
+                    _pt = _k[1] if isinstance(_k, tuple) and len(_k) > 1 else ""
+                    if _limb_of(_pt):
+                        _limbs_on.setdefault(_n, set()).add(_limb_of(_pt))
+                    elif _k == ("held", "") or not _pt:
+                        _limbs_on.setdefault(_n, set()).update(_words_on or {"arms", "legs"})
+                for _k in _lost:
+                    _pt = _k[1] if isinstance(_k, tuple) and len(_k) > 1 else ""
+                    if _k == ("held", "") and _keys_now.get(_n):
+                        continue            # the word-only hold, now a piece the state names
+                    if _limb_of(_pt) or not _pt:
+                        _limbs_off = True
+            # A limb the shot puts on latches -- unless it was held already, in the same
+            # position, from an earlier shot.
+            def _latch_of(_n, _a, _l):
+                _had = _pose_limbs_had.get(_n, {})
+                _before = {_limb_of(_k[1]) for _nm, _k in _hw_before
+                           if _nm == _n and isinstance(_k, tuple) and len(_k) > 1}
+                _now = {"arms": limb_anchor_parts(_a)[0], "legs": str(_l or "").strip()}
+                return tuple(x for x in ("arms", "legs")
+                             if x in _limbs_on.get(_n, ()) and _now[x]
+                             and (_had.get(x, _now[x]) != _now[x]
+                                  or (x not in _had and x not in _before)))
+            plan.shots[-1].bound_pose = {
+                _n: pose_wearer_facts(
+                    _a, _l, anchored=_pose_anchor,
+                    leg_items=[_r.item for _r in (_state.people[_n].hardware.values()
+                                                  if _n in _state.people else ())
+                               if getattr(_r, "part", "") in _LEG_PARTS],
+                    fall=_pose_falls and (_n in _pose_fallers or not _pose_fallers),
+                    latch=_latch_of(_n, _a, _l))
+                for _n, (_a, _l) in _bound_pose_now.items()}
+            plan.shots[-1].bound_fall = _pose_falls
+            plan.shots[-1].fallers = _pose_fallers
+            plan.shots[-1].limbs_on = bool(any(_limbs_on.values()))
+            plan.shots[-1].limbs_off = bool(_limbs_off)
+            plan.shots[-1].restrainers = sorted(
+                _doers | {_n for _n in _bound_pose_now if _n in _pose_doubted})
+            # What each held person's limbs were in, for the next shot's latch.
+            for _n, _f in plan.shots[-1].bound_pose.items():
+                _d = _pose_limbs_had.setdefault(_n, {})
+                for _x in ("arms", "legs"):
+                    if _f[_x]:
+                        _d[_x] = _f[_x]
+            for _n, _r in (_ch.get("released") or []):
+                _x = _limb_of(getattr(_r, "part", ""))
+                if _x and _n in _pose_limbs_had and not any(
+                        _limb_of(_q.part) == _x
+                        for _q in getattr(_state.people.get(_n), "hardware", {}).values()):
+                    _pose_limbs_had[_n].pop(_x, None)
+            for _n in list(_pose_limbs_had):
+                if arms_freed:
+                    _pose_limbs_had[_n].pop("arms", None)
+                if legs_freed:
+                    _pose_limbs_had[_n].pop("legs", None)
+                if _n not in _keys_now or not _pose_limbs_had[_n]:
+                    _pose_limbs_had.pop(_n, None)
+            _pose_doubted &= set(_keys_now)
 
         if _returns:
             _lines = "; ".join(f"shot {n}: {', '.join(w)}" for n, w in _returns)
@@ -13056,7 +14434,8 @@ class H3LongVideos:
                   "'a chastity belt <Picture 2>' -- and it is sent only where that "
                   "thing is actually visible")
 
-        lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat", pace)
+        lens, len_note = plan_lengths(beats, ceiling, shot_length == "from the beat", pace,
+                                      applying=applying_shots)
         plan.set_frame_counts(lens)
         plan.validate()
         _tail = []
@@ -13090,6 +14469,9 @@ class H3LongVideos:
                                            "", _DIALOGUE_TAG.sub(
                                                " ", _QUOTED.sub(" ", b or "")))))
                                    if p and len(p.split()) >= 2])) for b in beats)
+        # ...and the hold an applying shot is sized for counts as one -- see plan_lengths.
+        if shot_length == "from the beat":
+            _clauses += len(applying_shots)
         if _clauses and lens:
             _per = sum(lens) / H3_FPS / _clauses
             notes.append(
@@ -13489,6 +14871,18 @@ class H3LongVideos:
                 f"still is -- which is the garment coming back looking like a "
                 f"different one. Putting it back ('pulls them back up') releases it, "
                 f"and a real removal or a `remove:` empties it for good")
+        _held_said = held_report(held_rows)
+        if _held_said:
+            notes.append(
+                "restraints registered per shot -- what the node holds on each person "
+                "once that shot's beat is read, from the beats, the sheet and any hold: "
+                "lines: " + "; ".join(_held_said)
+                + ". A piece missing here is not held by any shot's text; a hold: line "
+                  "under the beat that puts it on registers it")
+        for _n, _words in unheld_words:
+            _named = ", ".join(f"'{w}'" for w in _words)
+            notes.append(f"shot {_n} names {_named} but nothing was registered -- add a "
+                         f"hold: line if it should stay on")
         if named_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in named_shots)} name the hardware "
@@ -13930,6 +15324,8 @@ class H3LongVideos:
                        or any(picture_tags(s) for s in plan.prompts))
         _tagged_names = {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}
         _claimed_untagged, _held_untagged = [], []
+        _portrait_slots = {}        # 0-based shot -> {name: their pictures' places in it}
+        _slot_owner = {t: n for n, ln in sheet_lines(sheet) if n for t in picture_tags(ln)}
         if refs_all and not _tagged:
             notes.append(
                 f"{len(refs_all)} reference image(s) connected and no <Picture N> tag "
@@ -13958,11 +15354,18 @@ class H3LongVideos:
                 elif len(refs_all) == 1 and f"{_here[0]}:" in _s and len(_here) == 1:
                     plan.shots[_i].prompt = _s.replace(f"{_here[0]}:", f"{_here[0]}: <Picture 1>,", 1)
                     plan.shots[_i].refs = list(refs_all)
+                    _portrait_slots[_i] = {_here[0]: [1]}
                     _claimed_untagged.append(_i + 1)
                 else:
                     plan.shots[_i].refs = []
                     _held_untagged.append(_i + 1)
                 continue
+            # Whose portrait each of this shot's pictures is, by its place in the shot.
+            _live = [t for t in picture_tags(_s) if 1 <= t <= len(refs_all)]
+            for _k, _t in enumerate(_live, 1):
+                if _t in _slot_owner:
+                    _portrait_slots.setdefault(_i, {}).setdefault(
+                        _slot_owner[_t], []).append(_k)
             _s, _r, _missing = resolve_tags(_s, refs_all)
             plan.shots[_i].prompt = _s
             plan.shots[_i].refs = _r
@@ -14191,6 +15594,28 @@ class H3LongVideos:
                         f"talking into the seconds the line does not fill. The model chooses "
                         f"when to speak: if a last word is clipped, raise speech_tail_seconds")
                        if _tailpin else ""))
+        if _pose_ok:
+            # Which shots pose control will look at, and why the others are left alone.
+            _pose_plan = []
+            for _k, _shot in enumerate(plan.shots):
+                _c = [n for n in _shot.cast if n]
+                _bound, _why = pose_candidate(_shot, list(shot_frames.get(_k, (_c, _c))[0]),
+                                              pose_shots)
+                if _bound:
+                    _pose_plan.append(
+                        f"shot {_k + 1}: "
+                        + ("checked after its first render"
+                           if _POSE_MODE_KEY.get(pose_shots) == "repair"
+                           else "rendered a second time")
+                        + (", latched as the restraint goes on" if pose_latched(_bound)
+                           else "")
+                        + f" ({pose_describe(_bound)})")
+                elif _why:
+                    _pose_plan.append(f"shot {_k + 1}: pose skipped -- {_why}")
+            notes.append("pose control plan -- " + ("; ".join(_pose_plan) if _pose_plan
+                         else "no shot has a restrained person in a held position"))
+            if any(p.endswith(POSE_LATCH_NEEDS_UPDATE) for p in _pose_plan):
+                notes.append("pose control: " + POSE_LATCH_NEEDS_UPDATE)
         script = "\n---\n".join(f"[Shot {i}] {s}" for i, s in enumerate(plan.prompts, 1))
         info = " | ".join(notes)
         if plan_only:
@@ -14217,9 +15642,13 @@ class H3LongVideos:
             speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, cut_shots=cut_shots,
             shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
+            held_shots=held_shots, held_items=held_items, portrait_slots=_portrait_slots,
             reentry_shots=reentry_shots, own_grade_shots=own_grade_shots,
             refs_ok=not _fast, outdoor_shots=outdoor_shots,
             fast_h3=bool(_fast), hyperflow=_hyper,
+            pose_controlnet=pose_controlnet if _pose_ok else None, pose_ok=bool(_pose_ok),
+            pose_note=_pose_note, pose_strength=float(pose_strength),
+            pose_end=float(pose_end), pose_shots=pose_shots, pose_draw=pose_draw,
             upscale=upscale, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
         )
@@ -14241,6 +15670,9 @@ class H3LongVideos:
         refs_ok = prepared.refs_ok is not False
         outdoor_shots = prepared.outdoor_shots or set()
         hardware_changed = prepared.hardware_changed or set()
+        held_shots = prepared.held_shots or {}
+        held_items = prepared.held_items or {}
+        portrait_slots = prepared.portrait_slots or {}
         ambient_audio = prepared.ambient_audio
         ambient_level = prepared.ambient_level
         apply_model_sampling = prepared.apply_model_sampling
@@ -14291,6 +15723,21 @@ class H3LongVideos:
         upscale_target_short_edge = prepared.upscale_target_short_edge
         vae = prepared.vae
         w = prepared.w
+        # POSE CONTROL, per shot, on a clone made after the model prep below. See
+        # pose_sample_shot.
+        pose_cn = getattr(prepared, "pose_controlnet", None)
+        pose_on = bool(getattr(prepared, "pose_ok", False) and pose_cn is not None
+                       and pose_control is not None)
+        pose_mode = getattr(prepared, "pose_shots", POSE_SHOT_MODES[0])
+        pose_draw = getattr(prepared, "pose_draw", POSE_DRAWS[0])
+        pose_strength = float(getattr(prepared, "pose_strength", 1.0))
+        pose_end = float(getattr(prepared, "pose_end", 0.6))
+        _pose_lines = []            # one per shot pose control looked at
+        _pose_passes = 0            # second passes that ran
+        t_pose = 0.0                # pose time beyond pass 1, inside t_sample
+        _pose_boxes = {}            # name -> torso box at the last shot's last analysed frame
+        _pose_looks = {}            # name -> appearance vector there
+        self._release_pose_detector()
 
         def _frame_cast(k, last=False):
             _c = [n for n in plan.shots[k].cast if n]
@@ -14340,6 +15787,9 @@ class H3LongVideos:
         _untrimmed = []             # shots that opened on no keyframe, so kept frame one
         _plate_on = 0               # the shot whose first_frame rides as the SET
         _carried = []               # (shot, who was there, who joins) room carried on
+        _held_framed_at = []        # (shot, name) whose portrait gave way to the opening frame
+        _held_swapped = []          # (shot, name, source shot) given a frame of them held
+        _held_noted = []            # (shot, name) kept their portrait with a note of the hold
         shot_detail = []            # (detail, contrast) per shot, on its last frame
         _levels = HandoffLevels()
         _SILENCE_STATUS.update(asked=0, applied=0, why="")
@@ -14356,10 +15806,18 @@ class H3LongVideos:
             shot_handoff = handoff
             _handoff_ref = False
             _prev_people = _frame_cast(i - 1, last=True) if i else []
+            # A portrait of somebody whose restraint or gag went on in an earlier shot
+            # shows them before it. The last frame shows them as they are now, so where
+            # it pictures them it is their picture, a cut included, and the portrait
+            # gives way. Reported as tape and cuffs gone in the shot after.
+            _slots = portrait_slots.get(i) or {}
+            _held_in = {n for n in (held_shots.get(i + 1) or {}) if _slots.get(n)}
+            _held_framed = {n for n in _held_in if n in _prev_people}
             _carry_ok = bool(refs_ok and i and handoff is not None and i not in reentry_shots
                              and (_cond_module.may_carry_room if i in cut_shots
                                   else _cond_module.may_carry_frame)(
-                                 _prev_people, plan.shots[i].cast, _tagged_names))
+                                 _prev_people, plan.shots[i].cast,
+                                 set(_tagged_names or ()) - _held_framed))
             _carry_rooms = None
             if restart_after_removal and (i - 1) in stripped_shots:
                 if _carry_ok:
@@ -14386,15 +15844,42 @@ class H3LongVideos:
             # last frame carried -- REPORTED as angles changing between beats and beats
             # losing what was in the one before.
 
+            # ...and the portraits of the held. Opening on a frame of them, that frame is
+            # their picture. Otherwise a frame of them alone from after the change takes
+            # the portrait's place, and failing that the portrait stays with the hold
+            # named beside it.
+            _drop_slots, _note_for, _gave_way = [], [], set()
+            _refs_now = list(shot.refs)
+            for _n in sorted(_held_in):
+                _ks = list(_slots.get(_n) or [])
+                _since = held_shots[i + 1][_n]
+                if shot_handoff is not None and _n in _held_framed:
+                    _drop_slots += _ks
+                    _gave_way.add(_n)
+                    _held_framed_at.append((i + 1, _n))
+                elif (refs_ok and _captured.get(_n) is not None
+                        and _captured_gen.get(_n) == _wardrobe_gen
+                        and _captured_from.get(_n, 0) >= _since):
+                    _refs_now[_ks[0] - 1] = _captured[_n]
+                    _drop_slots += _ks[1:]
+                    _held_swapped.append((i + 1, _n, _captured_from.get(_n, 0)))
+                elif _n in (held_items.get(i + 1) or {}):
+                    _note_for.append((_n, _ks[0]))
+            if _drop_slots:
+                shot_prompt, _refs_now = drop_portraits(shot_prompt, _refs_now, _drop_slots)
+            for _n, _k in _note_for:
+                _k -= sum(1 for d in set(_drop_slots) if d < _k)
+                _items, _where = held_items[i + 1][_n]
+                _said = held_picture_note(_k, _n, _items, _where)
+                _at = re.search(r"<Picture " + str(_k) + r">[^.]*\.", shot_prompt)
+                shot_prompt = (shot_prompt[:_at.end()] + _said + shot_prompt[_at.end():]
+                               if _at else shot_prompt + _said)
+                _held_noted.append((i + 1, _n))
+            shot.refs = _refs_now
+
             _extra = []
             _evened_who = ""            # who the evening-up frame below pictures
             _cast = plan.shots[i].cast
-            # Below the safe aug the handoff goes into the reference rows the moment
-            # any reference rides, so a face added below would sit beside a second
-            # picture of the same person -- the demoted handoff -- exactly as it would
-            # beside a carried frame.
-            _demotes = bool(shot_handoff is not None and not (
-                ref_noise_aug is None or float(ref_noise_aug) >= KEYFRAME_SAFE_AUG))
             _returning = {w for n, ws in _returns if n == i + 1 for w in ws}
             _who = _cond_module.recoverable_subject(
                 _cast, _tagged_names, _returning,
@@ -14418,13 +15903,16 @@ class H3LongVideos:
                 else:
                     shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
             elif (refs_ok and _tagged_names and len(_cast) > 1
-                  and any(n in _tagged_names for n in _cast)):
+                  and any(n in _tagged_names and n not in _gave_way for n in _cast)):
                 _short = [n for n in _cast
                           if n and n not in _tagged_names
                           and _captured.get(n) is not None
                           and _captured_gen.get(n) == _wardrobe_gen]
+                # Not for anybody the shot opens on either, the recovered face's rule:
+                # a plain keyframe of them is a picture of them too, and the same frame
+                # went out twice -- once as the keyframe, once as their face.
                 if (len(_short) == 1 and f"{_short[0]}:" in shot_prompt
-                        and not ((_carry_rooms is not None or _handoff_ref or _demotes)
+                        and not (shot_handoff is not None
                                  and _short[0] in _prev_people)):
                     _extra = [_captured[_short[0]]]
                     _evened_who = _short[0]
@@ -14519,12 +16007,44 @@ class H3LongVideos:
                     f"first degrades while sampling. The handoff is riding as an extra "
                     f"reference instead: continuity is weaker but nothing is corrupted. "
                     f"Raise it to {KEYFRAME_SAFE_AUG:g}+ for a real keyframe")
+            _pose_bound, _pose_why = (pose_candidate(shot, _frame_cast(i), pose_mode)
+                                      if pose_on else ({}, ""))
+            _pose_rep, _pose_reuse = None, None
+            # The identity carried across the cut is good only where the shot opens on the
+            # very frame it was read from -- so the handoff frame is read here, once that
+            # is known, and not on a cut, a re-entry, a restart or a demoted keyframe.
+            _pose_keyed = bool(shot_handoff is not None and not _handoff_ref and not demoted)
             _evict_all_but(model, latent)
             try:
                 _t0 = time.perf_counter()
-                out = sample_shot(model, cond, negative, latent, seed, steps, cfg,
-                                  sampler_name, scheduler, sigmas,
-                                  shift_video, shift_audio, _soft_landing)
+                if _pose_bound:
+                    if getattr(self, "_pose_detector", None) is None:
+                        self._pose_detector = pose_control.PoseDetector(_pose_device())
+                    _pose_carry = (pose_handoff_boxes(self._pose_detector, shot_handoff,
+                                                      _pose_boxes, w, h,
+                                                      appearance=_pose_looks)
+                                   if (_pose_keyed and _pose_boxes) else {})
+                    out, _pose_reuse, _pose_rep = pose_sample_shot(
+                        model, cond, negative, latent, seed, steps, cfg, sampler_name,
+                        scheduler, sigmas, shift_video, shift_audio, _soft_landing,
+                        pose_cn=pose_cn, vae=vae, detector=self._pose_detector,
+                        bound=_pose_bound, mode=pose_mode, draw=pose_draw,
+                        strength=pose_strength, pose_end=pose_end, frame_count=fc,
+                        w=w, h=h, tiled=tiled_decode,
+                        carry=(dict(_pose_carry) if _pose_carry else None),
+                        cast_count=len(_frame_cast(i)) or None,
+                        keep_decoded=not (latent_upscale and latent_upscale != "off"),
+                        audio_vae=audio_vae,
+                        latch_after=(int(math.ceil(POSE_LATCH_FROM * int(fc)))
+                                     if pose_latched(_pose_bound) else None),
+                        carry_appearance=({n: v for n, v in _pose_looks.items()
+                                           if n in _pose_carry} if _pose_carry else None))
+                    t_pose += max(0.0, time.perf_counter() - _t0
+                                  - float(_pose_rep.get("t_pass1") or 0.0))
+                else:
+                    out = sample_shot(model, cond, negative, latent, seed, steps, cfg,
+                                      sampler_name, scheduler, sigmas,
+                                      shift_video, shift_audio, _soft_landing)
                 t_sample += time.perf_counter() - _t0
             except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                 if not _is_oom(e):
@@ -14532,6 +16052,14 @@ class H3LongVideos:
                 raise RuntimeError(
                     f"H3-LongVideos: shot {i + 1} of {len(plan)} ran out of VRAM while "
                     f"sampling. " + sampling_oom_help(w, h, fc, H3_FPS, megapixels)) from e
+            if _pose_rep is not None:
+                if _pose_rep.get("outcome") in ("repaired", "held"):
+                    _pose_passes += 1
+                if _pose_rep.get("off"):
+                    pose_on = False
+                _pose_lines.append(pose_shot_line(i + 1, _pose_rep, _pose_bound))
+            elif _pose_why:
+                _pose_lines.append(f"shot {i + 1}: pose skipped -- {_pose_why}")
 
             try:
                 parts = out["samples"].unbind() if hasattr(out["samples"], "unbind") else None
@@ -14555,10 +16083,14 @@ class H3LongVideos:
             # land in the headroom the weights left, and nothing between nodes runs to
             # give it back mid-chain -- see ensure_host_ram. The DiT and the text
             # encoder are done with until the next shot; the VAEs are next.
-            ensure_host_ram(_decode_ram(vae, out, shot_tiled), keep=(vae, audio_vae),
-                            what=f"shot {i + 1}'s decode")
-            imgs = _decode_video(vae, out, shot_tiled, free_first=model,
-                                 keep=(vae, audio_vae))
+            if _pose_reuse is not None and pre_up is None:
+                imgs = _pose_reuse      # pass 1 kept, and its frames were decoded already
+            else:
+                ensure_host_ram(_decode_ram(vae, out, shot_tiled), keep=(vae, audio_vae),
+                                what=f"shot {i + 1}'s decode")
+                imgs = _decode_video(vae, out, shot_tiled, free_first=model,
+                                     keep=(vae, audio_vae))
+            _pose_reuse = None
             wav = _decode_audio(audio_vae, out)
             t_decode += time.perf_counter() - _t0
             sr = wav["sample_rate"]
@@ -14604,6 +16136,11 @@ class H3LongVideos:
             except Exception:
                 pass
             handoff = hand_src[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True)
+            # Who is who at this shot's end, for the next shot to match in its opening
+            # frame (read there, when it is a candidate that opens on this frame).
+            _pose_boxes = (dict(_pose_rep["boxes"]) if (pose_on and _pose_rep is not None
+                                                         and _pose_rep.get("boxes")) else {})
+            _pose_looks = (dict(_pose_rep.get("appearance") or {}) if _pose_boxes else {})
             _n = i + 1
             _wardrobe_normal = not (i in stripped_shots
                                     or _n in moved_shots
@@ -14689,6 +16226,13 @@ class H3LongVideos:
             if cleanup_between_shots:
                 _deep_cleanup()
 
+        self._release_pose_detector()
+        if _pose_lines:
+            notes.extend(_pose_lines)
+        if getattr(prepared, "pose_ok", False):
+            notes.append(f"pose control: {_pose_passes} extra pass"
+                         f"{'' if _pose_passes == 1 else 'es'}, pose time {t_pose:.0f}s "
+                         f"(inside the sampling time below)")
         if _untrimmed:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in _untrimmed)} kept their FIRST frame "
@@ -14825,6 +16369,25 @@ class H3LongVideos:
                   "entry. Tagging them with a <Picture N> of their own does the same "
                   "thing from the first shot instead of the second"
             )
+        if _held_framed_at or _held_swapped or _held_noted:
+            _said = []
+            if _held_framed_at:
+                _said.append("left out where the shot opens on a frame that shows them: "
+                             + ", ".join(f"{who} on shot {n}" for n, who in _held_framed_at))
+            if _held_swapped:
+                _said.append("replaced by a frame of them alone from after it went on: "
+                             + ", ".join(f"{who} on shot {n}, from shot {src}"
+                                         for n, who, src in _held_swapped))
+            if _held_noted:
+                _said.append("kept with a sentence naming what is on them now, no frame "
+                             "of them since being available: "
+                             + ", ".join(f"{who} on shot {n}" for n, who in _held_noted))
+            notes.append(
+                "portraits of people whose restraint or gag went on in an earlier "
+                "shot -- " + "; ".join(_said) + ". The portrait shows them before it "
+                "went on, and a near-clean reference asks the model to draw what it "
+                "shows, so it put the free hands and the bare mouth back. Their face on "
+                "those shots comes from the frames this run rendered of them")
         if _soft_cuts:
             notes.append(
                 "carried the previous frame as a REFERENCE across a cut -- "

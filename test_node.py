@@ -2657,6 +2657,45 @@ def test_auto_length():
     check("...while a request never returns less", S.align_frame_count(180) == 192)
 
 
+def test_an_applying_beat_gets_one_more_action():
+    """REPORTED: restraints and tape gone in the next beat. An applying beat was sized
+    at the 73-frame floor and leaned short on purpose, so the frame the next shot is
+    pinned to was the act half done. Applying beats get one more action's time and are
+    not leaned short; every other beat is sized as before."""
+    print("\n=== an applying beat gets one more action ===")
+    beats = ["Dan handcuffs her wrists behind her back.",
+             "Dan presses duct tape over her mouth.",
+             "Dan pushes her down onto the bed.",
+             "Mara struggles.",
+             "Dan walks to the door."]
+    ceil = S.align_frame_count(10 * 24)
+    base, _ = S.plan_lengths(beats, ceil, True)
+    lens, note = S.plan_lengths(beats, ceil, True, applying={1, 2})
+    check("without applying shots every beat is at the floor",
+          base == [S.MIN_AUTO_FRAMES] * 5)
+    check("the applying shots get about two actions' time",
+          all(120 <= n <= 130 for n in lens[:2]) and lens[0] == lens[1] == 124)
+    check("...and the rest are sized exactly as before", lens[2:] == base[2:])
+    check("...on the 17k+5 grid", all(n % 17 == 5 for n in lens))
+    check("the run says why", "restraint, gag or seal" in note and "shot(s) 1, 2" in note)
+    two = "Dan pulls her wrists behind her back and handcuffs them."
+    check("a two-action applying beat gets one action more than it asks",
+          S.plan_lengths([two], ceil, True, applying={1})[0][0]
+          > S.plan_lengths([two], ceil, True)[0][0] + 40)
+    fast = S.plan_lengths(beats, ceil, True, 0.5, applying={1})[0]
+    check("a brisk pace does not lean an applying shot short",
+          fast[0] >= lens[0] and fast[1] == S.MIN_AUTO_FRAMES)
+    slow = S.plan_lengths(beats, ceil, True, 1.5, applying={1})[0]
+    check("...while a slow pace still lengthens it", slow[0] > lens[0])
+    tight = S.align_frame_count(4 * 24)
+    capped, cnote = S.plan_lengths(beats, tight, True, applying={1})
+    check("the ceiling still caps it, and says so",
+          capped[0] == tight and "stage more than shot_seconds allows" in cnote
+          and "restraint, gag or seal" not in cnote)
+    fixed, fnote = S.plan_lengths(beats, ceil, False, applying={1, 2})
+    check("fixed mode gives every shot the ceiling", fixed == [ceil] * 5 and fnote == "")
+
+
 def test_text_in_frame():
     print("\n=== watermarks and subtitles ===")
     src = open(os.path.join(_HERE, "sampler.py"), encoding="utf-8").read()
@@ -2704,6 +2743,45 @@ def test_reference_tags():
           S.resolve_tags("No tags here.", refs)[0] == "No tags here.")
     check("no refs connected drops every tag",
           S.resolve_tags("Kate, <Picture 1>, walks in.", [])[1] == [])
+
+
+def test_a_portrait_can_give_way():
+    """A portrait from before a restraint went on is taken out of a shot whose opening
+    frame pictures the person now. The tags left are renumbered and the text mended."""
+    print("\n=== a portrait gives way, and the tags follow ===")
+    text = ("Mara: she, 28, grey sweater, jeans. <Picture 1>.\n"
+            "Dan: <Picture 2>, he, 35, black jacket. Dan waits.")
+    out, refs = S.drop_portraits(text, ["M", "D"], [1])
+    check("her picture leaves and his stays", refs == ["D"])
+    check("...his tag renumbered to the place it now has",
+          "Dan: <Picture 1>, he, 35" in out and "<Picture 2>" not in out)
+    check("...and her line mended", "Mara: she, 28, grey sweater, jeans.\nDan:" in out)
+    out, refs = S.drop_portraits("Mara: <Picture 1>, she, 28.\nDan: <Picture 2>, he.",
+                                 ["M", "D"], [2])
+    check("a tag at the head of a line leaves cleanly",
+          out == "Mara: <Picture 1>, she, 28.\nDan: he." and refs == ["M"])
+    check("nothing to drop changes nothing",
+          S.drop_portraits(text, ["M", "D"], []) == (text, ["M", "D"]))
+
+
+def test_a_held_portrait_is_told_what_is_on_now():
+    print("\n=== a portrait kept for a held person names the hold ===")
+    _R = lambda item, part: types.SimpleNamespace(item=item, part=part, anchor="")
+    where = S.hardware_where([_R("handcuffs", "wrists"), _R("duct tape", "mouth")])
+    said = S.held_picture_note(1, "Mara", ["handcuffs", "duct tape"], where)
+    check("it says the picture shows who she is",
+          said.startswith(" <Picture 1> shows who Mara is;"))
+    check("...and names each piece where it is",
+          "the handcuffs on Mara's wrists" in said
+          and "the duct tape over Mara's mouth" in said and "are in place now." in said)
+    one = S.held_picture_note(2, "Mara", ["duct tape"], None)
+    check("one piece, said once and placed on her",
+          one == " <Picture 2> shows who Mara is; the duct tape is in place on Mara now.")
+    bare = S.held_picture_note(1, "Mara", [], None)
+    check("with nothing named, the restraints",
+          "the restraints are in place on Mara now." in bare)
+    check("positively worded",
+          not re.search(r"\b(?:still|not|no|never)\b", said + one + bare, re.I))
 
 
 def test_restraints_hold():
@@ -3014,6 +3092,81 @@ def test_the_shot_that_puts_hardware_on():
     # It must not claim the hardware is already fastened, which is the whole fault.
     check("...and does not assert it is already on",
           "still fastened at the last frame" not in cl)
+
+
+def test_the_applying_shot_closes_by_mid_shot():
+    """REPORTED: restraints breaking in the beat after they go on, and tape gone in the
+    next beat. Every applying clause put its deadline on the last frame, which is the
+    frame the next shot is pinned to, so that frame often showed the act half done.
+    The piece is on by the middle of the shot and held for the rest; at the last frame
+    it is in plain view and the hands that put it on are clear of it."""
+    print("\n=== the applying shot closes by mid-shot, hands clear at the end ===")
+    _neg = re.compile(r"\b(?:no|not|never|still)\b", re.I)
+    cl = S.RESTRAINT_GOING_ON
+    check("the hardware is off at the first frame", "off the body at the first frame" in cl)
+    check("...closed by the middle of the shot and for the rest of it",
+          "closed on the body by the middle of the shot and closed for the rest of it" in cl)
+    check("...in plain view at the end, the hands clear",
+          "in plain view" in cl and "have let go and are clear of it" in cl)
+    check("...the closing comes before the last frame",
+          cl.index("middle of the shot") < cl.index("last frame"))
+    check("...one positive sentence", cl.count(".") == 1 and not _neg.search(cl))
+
+    tape = S.gag_hold("duct tape", "her", new=True)
+    check("new tape goes on during the shot",
+          "duct tape goes across her mouth during this shot" in tape)
+    check("...on in the first half and stuck for the rest of it",
+          "on in the first half of the shot" in tape
+          and "stuck flat over the lips for the rest of it" in tape)
+    check("...across the mouth in plain view at the last frame, the hand clear",
+          "at the last frame it is across her mouth in plain view" in tape
+          and "has let go and is clear of the face" in tape)
+    check("...positively phrased", not _neg.search(tape))
+    ball = S.gag_hold("ball gag", "Mara", new=True, muffled=True)
+    check("a gag is fastened in place for the rest of the shot",
+          "over Mara's mouth during this shot" in ball
+          and "fastened in place for the rest of it" in ball
+          and "over Mara's mouth in plain view" in ball)
+    check("...and the muffled line follows it", "comes out muffled" in ball)
+    held = S.gag_hold("duct tape", "her")
+    check("the held form carries no applying timing",
+          "first half" not in held and "plain view" not in held)
+
+    rope = S.newly_on_clause(["rope"], who="")
+    check("a piece added later goes on during the shot",
+          rope.startswith(" The rope goes on during this shot:"))
+    check("...on and fastened by the middle of the shot",
+          "off the body at the first frame, on and fastened by the middle of the shot" in rope)
+    check("...fastened for the rest of it and in plain view, hands clear",
+          "it stays fastened for the rest of the shot" in rope and "in plain view" in rope
+          and "the hands that fastened it have let go and are clear of it" in rope)
+    cuffs = S.newly_on_clause(["steel handcuffs"])
+    check("plural pieces read as plural",
+          "they stay fastened" in cuffs and "clear of them" in cuffs)
+    check("...and keep what cuffs are", "a closed ring locked round each wrist" in cuffs)
+    chain = S.newly_on_clause(["chain"], posed=True)
+    check("a chain that fixes a position is drawn to its length once it closes",
+          "by the middle of the shot and drawn to its full length" in chain
+          and "the position that keeps" in chain)
+    for name, txt in (("rope", rope), ("cuffs", cuffs), ("chain", chain)):
+        check(f"...one positive sentence per piece ({name})",
+              txt.count(".") == 1 and not _neg.search(txt))
+
+    seal = S.SEALED_ON.format(item="duct tape")
+    check("a seal goes on during the shot, worded as it is applied",
+          "between the legs during this shot, covering the groin completely" in seal)
+    check("...on in the first half and sealing for the rest of the shot",
+          "on in the first half of the shot" in seal and "for the rest of the shot" in seal)
+    check("...in plain view at the last frame, hands clear",
+          "in plain view" in seal and "have let go and are clear of it" in seal)
+    check("...positively phrased", not _neg.search(seal))
+
+    ends = S.RESTRAINT_ENDS_AT.format(part="wrists", where="behind the back")
+    check("the limbs are placed when it closes, in the first half",
+          "when the hardware closes in the first half of the shot" in ends)
+    check("...and the sentence the next shot is pinned to is unchanged",
+          ends.endswith(" By the last frame the wrists are behind the back, and stay there."))
+    check("...positively phrased", not _neg.search(ends))
 
 
 def test_a_machines_line_is_not_the_actors_line():
@@ -4275,6 +4428,63 @@ def test_a_body_under_effort_has_a_voice():
           "restraints pulling taut" in S.sounds_for("Kate thrashes against the handcuffs."))
 
 
+def test_a_hold_line_is_read_and_never_sent():
+    print("\n=== a hold: line names its person and pieces, and is never sent ===")
+    beat = "Dan grabs her.\nhold: Mara, handcuffs behind her back; duct tape over her mouth"
+    check("the line is found", S.hold_lines(beat)
+          == ["Mara, handcuffs behind her back; duct tape over her mouth"])
+    check("...and taken out of the beat", S.strip_hold_lines(beat) == "Dan grabs her.")
+    check("...and out of what the directives hand on", S.extract_directives(beat)[0]
+          == "Dan grabs her.")
+    check("a paragraph of hold: lines is not a character sheet",
+          not S.is_character_sheet("hold: Mara, handcuffs behind her back"))
+    who, pieces = S.hold_pieces(S.hold_lines(beat)[0], ["Mara", "Dan"])
+    check("the person comes first", who == "Mara")
+    check("...then each piece, split by ';'",
+          pieces == ["handcuffs behind her back", "duct tape over her mouth"])
+    check("with one person on the sheet the name can be left out",
+          S.hold_pieces("a ball gag", ["Mara"]) == ("Mara", ["a ball gag"]))
+    check("...and with two it cannot", S.hold_pieces("a ball gag", ["Mara", "Dan"])[0] == "")
+    check("the piece keeps its part and position",
+          S.hold_restraints_of("handcuffs behind her back")
+          == [("handcuffs", "wrists", "handcuffs", "behind the back", "", "")])
+    check("...and the author's name for it",
+          S.hold_restraints_of("a ball gag")[0][1:3] == ("mouth", "ball gag"))
+    check("a part named in the piece wins over the default",
+          S.hold_restraints_of("leather cuffs on her ankles")[0][1] == "ankles")
+    check("...but never the item's own name: leg irons stay on the ankles",
+          S.hold_restraints_of("leg irons")[0][1] == "ankles")
+    check("what it is fastened to is kept",
+          S.hold_restraints_of("steel collar chained to the wall")[0][4] == "wall")
+    check("a piece with no hardware word goes on the part it names",
+          S.hold_restraints_of("a scarf over her eyes")[0][1:3] == ("eyes", "scarf"))
+    check("...and something that is no piece at all registers nothing",
+          S.hold_restraints_of("a sandwich") == [])
+    state = S.engine.SceneState()
+    changed = {"applied": [], "released": []}
+    got, bad = S.register_holds(state, changed, S.hold_lines(beat), ["Mara", "Dan"], 2)
+    check("each piece goes on its person, applied in that shot",
+          sorted(state.people["Mara"].hardware) == [("handcuffs", "wrists"), ("tape", "mouth")]
+          and all(r.applied_in == 2 for _w, r in changed["applied"]) and not bad)
+    again, _bad = S.register_holds(state, {"applied": []}, S.hold_lines(beat), ["Mara"], 3)
+    check("...and the same line again puts nothing on twice",
+          not any(new for _n, _r, _l, new in again)
+          and len(state.people["Mara"].hardware) == 2)
+    check("the registered state reads back per person",
+          S.held_report([(2, S.held_state(state))])
+          == ["shot 2: Mara -- handcuffs (wrists, behind the back), duct tape (mouth)"])
+    check("a remove: token naming a held piece is recognised",
+          S.held_piece_named(state, ["duct tape"]) and not S.held_piece_named(state, ["jacket"]))
+    check("...and one naming a part narrows it to that part",
+          S.removal_parts("duct tape over her mouth") == {"mouth"})
+    # The gag keeps its kind in the name it is reported by.
+    check("a restraint word that registered nothing is named",
+          S.unregistered_restraints("Dan puts a ball gag in her mouth.",
+                                    S.engine.SceneState(), {}) == ["ball gag"])
+    check("...but not one already held",
+          S.unregistered_restraints("Mara bites down on the tape.", state, {}) == [])
+
+
 def test_widget_values_are_usable():
     print("\n=== a widget value that is not a number ===")
     for _bad in (float("nan"), float("inf"), True, False, None, "", "abc"):
@@ -4329,14 +4539,19 @@ def test_schema():
     n_widgets = sum(1 for d in (req, opt) for k, v in d.items()
                     if not (len(v) > 1 and isinstance(v[1], dict) and v[1].get("forceInput"))
                     and (isinstance(v[0], list) or v[0] in ("INT", "FLOAT", "STRING", "BOOLEAN")))
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 28)
+    # 28 before pose control; its four widgets (pose_strength, pose_end, pose_shots,
+    # pose_draw) were asked for, and are the only ones added since.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 32)
     for _w in ("anchor", "character_memory"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-9:] == ["anchor", "character_memory", "pace",
-                             "ambient_audio", "ambient_level", "foley_level",
-                             "speech_lead_seconds", "speech_tail_seconds",
-                             "hold_levels"])
+          list(opt)[-14:] == ["anchor", "character_memory", "pace",
+                              "ambient_audio", "ambient_level", "foley_level",
+                              "speech_lead_seconds", "speech_tail_seconds",
+                              "hold_levels", "pose_controlnet", "pose_strength",
+                              "pose_end", "pose_shots", "pose_draw"])
+    check("pose_controlnet is a socket, so it takes no widget slot",
+          opt["pose_controlnet"][0] == "MODEL_PATCH")
     # SEVEN WIDGETS THAT WERE NOT CHOICES. Each had one right answer the node
     # could reach and the reader could not; each is now measured or pinned. They are
     # asserted GONE, the way reference_mode and save_defaults are, because a widget
@@ -4419,6 +4634,56 @@ def test_the_allocator_that_aborts_is_refused_before_sampling():
           and S.sparse_dit_patched(_alloc_model(_SPARSE_ON)) is True)
 
 
+class MiniMaxH3FunControlBlockPatch:
+    """Named as comfy names it: the node matches the Fun block patch by class name."""
+
+    def __init__(self, previous=None):
+        self.previous = previous
+
+
+def _dit(**slots):
+    return {"transformer_options": {"patches_replace": {"dit": dict(slots)}}}
+
+
+def test_a_fun_control_patch_is_not_sparse_attention():
+    """comfy's H3 Fun control block patch sits in the same dit replace slots sparse
+    attention uses. It is not sparse attention, so the allocator check does not refuse a
+    render carrying it alone. It still counts as a patch for FastH3: comfy's VSA
+    replaces every slot, so VSA put over an upstream Fun ControlNet drops its control."""
+    print("\n=== a Fun control patch is not sparse attention ===")
+    Fun = MiniMaxH3FunControlBlockPatch
+    vsa = object()
+    alone = _alloc_model(_dit(b0=Fun(), b10=Fun()))
+    over_vsa = _alloc_model(_dit(b0=Fun(previous=vsa), b5=vsa))
+    nested = _alloc_model(_dit(b0=Fun(previous=Fun())))
+    check("a Fun block patch alone is still a DiT patch, so FastH3 leaves VSA off",
+          S.sparse_dit_patched(alone) is True and S.sparse_dit_patched(nested) is True)
+    check("...but it is not sparse attention",
+          S.sparse_attention_patched(alone) is False)
+    check("...nor a chain of them", S.sparse_attention_patched(nested) is False)
+    check("a Fun block patch wrapping VSA's still shows the VSA under it",
+          S.sparse_attention_patched(over_vsa) is True)
+    check("...and so does a Fun block on one slot beside VSA on another",
+          S.sparse_attention_patched(_alloc_model(_dit(b0=Fun(), b5=vsa))) is True)
+    check("any other patch still counts",
+          S.sparse_attention_patched(_alloc_model(_SPARSE_ON)) is True)
+    check("absent and cannot-tell read as sparse_dit_patched reads them",
+          S.sparse_attention_patched(_alloc_model(_SPARSE_OFF)) is False
+          and S.sparse_attention_patched(_alloc_model()) is None)
+    saved = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+    try:
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "backend:cudaMallocAsync"
+        check("the allocator check does not refuse a model carrying only Fun control",
+              S.sparse_attention_allocator_abort(alone) == "")
+        check("...and still refuses Fun control over sparse attention",
+              "ABORT" in S.sparse_attention_allocator_abort(over_vsa))
+    finally:
+        if saved is None:
+            os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+        else:
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = saved
+
+
 def main():
     test_beats()
     test_verbatim()
@@ -4493,6 +4758,7 @@ def main():
     test_the_hold_needs_its_wearer_on_screen()
     test_the_hold_names_its_wearer_once()
     test_the_shot_that_puts_hardware_on()
+    test_the_applying_shot_closes_by_mid_shot()
     test_a_machines_line_is_not_the_actors_line()
     test_a_shifted_workflow_is_named_not_rendered()
     test_what_is_exposed_is_not_also_removed()
@@ -4518,8 +4784,11 @@ def main():
     test_thin_beats()
     test_a_function_word_is_never_a_character()
     test_auto_length()
+    test_an_applying_beat_gets_one_more_action()
     test_text_in_frame()
     test_reference_tags()
+    test_a_portrait_can_give_way()
+    test_a_held_portrait_is_told_what_is_on_now()
     test_sound_clause_closes_the_list()
     test_hardware_belongs_to_somebody()
     test_one_pronoun_is_one_person()
@@ -4542,8 +4811,10 @@ def main():
     test_the_chain_makes_room_for_its_own_frames()
     test_no_report_touches_weight_data()
     test_a_lora_that_does_not_fit_is_reported_not_silent()
+    test_a_hold_line_is_read_and_never_sent()
     test_widget_values_are_usable()
     test_the_allocator_that_aborts_is_refused_before_sampling()
+    test_a_fun_control_patch_is_not_sparse_attention()
     test_schema()
     print()
     if _fails:

@@ -94,6 +94,34 @@ Nothing reads it either, on purpose: a name in it puts nobody in the shot, a gar
 it removes nothing, and a door in it stages no change. Write what must be **said**, and
 let the beat stage what happens. `exactly:` and `verbatim:` do the same thing.
 
+### Keeping a restraint on: `hold:`
+
+The node reads restraints and gags out of the beat's wording, and a wording it does not
+know registers nothing, so no later shot holds it. A `hold:` line under the beat that
+puts something on registers it directly:
+
+```
+Dan pushes Mara against the wall.
+hold: Mara, handcuffs behind her back; duct tape over her mouth
+
+Mara struggles.
+
+remove: duct tape
+Dan looks at her.
+```
+
+The person comes first, then each piece with where it is, split by `;`. From that beat
+on each piece is on that person: the shot is told it goes on, and every later shot that
+it stays, whatever the beats say. Its body part and position come from your words
+(`cuffs on her ankles` is on the ankles; `behind her back` places the arms). `remove:`
+takes a piece off by name and leaves the rest on. With one person on the sheet the name
+can be left out. The line itself is read, never sent to the model.
+
+`info` lists what is registered on each shot (`shot 3: Mara -- handcuffs (wrists, behind
+the back), duct tape (mouth)`), and warns about any shot whose beat names a restraint or
+gag that registered nothing (`shot 2 names 'gag' but nothing was registered -- add a
+hold: line if it should stay on`).
+
 ### The character sheet
 
 A paragraph of `Name: attributes` lines, or the `character_memory` widget. Each shot is
@@ -243,6 +271,55 @@ tensors — a `hyperflow_endpoint_*.safetensors` beside the node, or the origina
 whether it is on. It needs a checkpoint **with a time embedder**: pruned curve-form
 builds (an `adaln_t_table` in its place) cannot load Hyperflow's time weights at all,
 and `info` says so.
+
+### Pose control for restrained characters
+
+The prompt and the keyframe can both say the wrists are cuffed behind the back, and the
+model can still bring the hands out to catch a fall or reach for a door. Pose control
+holds the limbs with a skeleton instead of words. On a shot where somebody is
+restrained, the shot renders as usual, DWPose reads the people in its frames, the
+restrained person's elbows, wrists, knees and ankles are redrawn in the held position
+(in that person's own torso frame, so kneeling, falling and lying down still happen),
+and the shot renders a second time with the same seed, following that skeleton for its
+first steps. Everybody else keeps the motion of the first render.
+
+To wire it:
+
+1. Put the MiniMax H3 Fun ControlNet where **Load Model Patch** can see it, e.g. a
+   symlink from `models/controlnet/` into `models/model_patches/`.
+2. Add a **Load Model Patch** node, pick the file, and wire it to `pose_controlnet`.
+3. Install `comfyui_controlnet_aux` with the two DWPose TorchScript files
+   (`yolox_l.torchscript.pt` and `dw-ll_ucoco_384_bs5.torchscript.pt` under its
+   `ckpts/hr16/`). The node never downloads them; `info` gives the paths if they are
+   missing.
+
+It runs only on the **hybrid b25-49** checkpoint
+(`minimax_h3_hybrid_fl2va_ref2va_b25-49`): the controlnet is built for its 8-wide
+timestep table. On any other base, with Hyperflow two-time, or with `hold_restraints`
+off, the node turns pose control off and `info` says why.
+
+| setting | what it does |
+|---|---|
+| `pose_strength` | how strongly the second render follows the skeleton; 1.0 default, 0 is off |
+| `pose_end` | the share of the steps that follow it, from the first: 0.6 of 8 steps is 5. The rest run free, so hands and cuffs keep their detail |
+| `pose_shots` | **repair broken shots** (default): every restrained shot is checked after its first render, and only one whose held limbs came apart, or where a bound body falls, renders again. **every restrained shot**: all of them render twice. **bound falls only**: only the falls |
+| `pose_draw` | **everyone**, **everyone, thick lines**, or **bound person only** |
+
+A shot where the restraints go on is held in latch mode, since that is where they
+most often break. The limbs that shot puts on are drawn as DWPose saw them until, from
+40% of the shot on, they settle into the held position for a few frames running; from
+there they are held. Limbs that were already held stay held from the first frame. If
+nothing settles and nothing else breaks, the shot keeps its first render. `info` gives
+the frame it latched at (`shot 2: pose latched (Mara: arms behind the back) at frame
+21`).
+
+Shots where the restraints come off, and bodies fastened to something, keep their first
+render. Whenever a shot is unclear -- who is restrained, how many people there are --
+it keeps its first render too, because a wrong guess would hold the captor's arms.
+`info` has one line per shot (`shot 4: pose repaired (Mara: arms behind the back)`,
+`shot 5: pose checked, nothing broken`, `shot 6: pose skipped -- ...`), and `plan_only`
+lists which shots will be looked at. Render time doubles only on the shots
+that render twice; a shot that passes the check costs one DWPose read.
 
 ## Settings
 

@@ -691,9 +691,10 @@ def test_only_a_real_release_takes_anything_off():
                  "Dan lets go of her.", "Dan takes her by the chin.", "Dan removes Ana's clothes.",
                  "Dan unlocks the door.", "Dan removes his belt."):
         check(f"nothing comes off: {beat!r}", left(beat) == everything, str(left(beat)))
-    for beat, gone in (("Dan removes her gag.", {"gag"}),
-                       ("Dan pulls the gag out of her mouth.", {"gag"}),
-                       ("Dan ungags her.", {"gag"}),
+    # The gag keeps its kind ("ball gag") -- see engine.mouth_held_open.
+    for beat, gone in (("Dan removes her gag.", {"ball gag"}),
+                       ("Dan pulls the gag out of her mouth.", {"ball gag"}),
+                       ("Dan ungags her.", {"ball gag"}),
                        ("Dan takes the collar off.", {"leather collar"}),
                        ("Dan unlocks Ana's collar.", {"leather collar"}),
                        ("Dan unlocks the cuffs.", {"cuffs", "steel handcuffs"}),
@@ -972,6 +973,87 @@ def test_a_named_object_is_not_a_state():
         check(f"{want}: {beat!r}", got == want, got)
 
 
+def test_a_tie_or_a_gag_in_any_wording_registers():
+    """REPORTED: restraints breaking when applied and gags gone in the next beat. These
+    wordings recorded nothing -- no piece, no wearer, no change -- so no later shot held
+    anything. A tie with nothing named is rope."""
+    print("\n=== a tie or a gag in any wording registers ===")
+    cases = (("Dan ties her hands behind her back.", [("rope", "wrists")]),
+             ("Dan ties her wrists together.", [("rope", "wrists")]),
+             ("Dan ties her ankles together.", [("rope", "ankles")]),
+             ("Dan binds her wrists and ankles.", [("rope", "ankles"), ("rope", "wrists")]),
+             ("Dan ties her wrists and ankles together with rope.",
+              [("rope", "ankles"), ("rope", "wrists")]),
+             ("Dan puts a gag in her mouth.", [("gag", "mouth")]),
+             ("Dan puts a ball gag in her mouth.", [("gag", "mouth")]),
+             ("Dan fits a gag in her mouth.", [("gag", "mouth")]),
+             ("Dan fits a ball gag in her mouth.", [("gag", "mouth")]),
+             ("Dan puts a ball gag in her mouth and buckles it.", [("gag", "mouth")]),
+             ("Dan cuffs Mara.", [("cuffs", "wrists")]),
+             ("Dan gagged her.", [("gag", "mouth")]))
+    for sheet in ("pronouns", "no pronouns"):
+        for beat, want in cases:
+            ch, left = _beats(["Mara stands by the window.", beat], sheet)
+            check(f"on her, on that part ({sheet}): {beat!r}",
+                  left == {"Mara": want} and bool(ch["applied"])
+                  and all(w == "Mara" for w, _r in ch["applied"]), str(left))
+    ch, _left = _beats(["Dan ties her hands behind her back."])
+    check("...and the hands tied behind the back are held there",
+          [r.position for _w, r in ch["applied"]] == ["behind the back"], str(ch["applied"]))
+    ch, _left = _beats(["Dan puts a ball gag in her mouth."])
+    check("...and the gag keeps its kind",
+          [r.item for _w, r in ch["applied"]] == ["ball gag"], str(ch["applied"]))
+    ch, left = _beats(["Dan binds her wrists and ankles with duct tape."])
+    check("...and a piece named with the verb is the one used",
+          left == {"Mara": [("tape", "ankles"), ("tape", "wrists")]}, str(left))
+    for text in ("her hands bound behind her back", "wrists tied behind her back"):
+        check(f"the state a tie leaves is a piece too: {text!r}",
+              [(c, p) for c, p, _w, _a in E.hardware_spans(text)] == [("rope", "wrists")],
+              str(E.hardware_spans(text)))
+    for text in ("Dan ties her hair back.", "Dan unties her wrists.", "Dan ties his shoes."):
+        check(f"...not a tie on a limb: {text!r}",
+              not [s for s in E.hardware_spans(text) if s[0] == "rope"],
+              str(E.hardware_spans(text)))
+
+
+def test_a_carried_thing_or_a_prop_holds_nobody():
+    """REPORTED: holds on the captor and holds before anything was applied. A strap, a
+    clip or a chain that carries a thing is not a restraint on its owner, a fastening verb
+    on a thing fastens nobody, and a thing that lies or sits puts nobody in a posture."""
+    print("\n=== a carried thing or a prop holds nobody ===")
+    for text in ("car keys clipped to his belt", "a knife strapped to his thigh",
+                 "a watch strapped to her wrist", "keys on a chain at his belt",
+                 "Dan tapes the box shut.", "Dan straps the bag to his back."):
+        check(f"no piece: {text!r}", not E.hardware_spans(text), str(E.hardware_spans(text)))
+        st = E.SceneState()
+        st.declare("Dan", "he, 40, black jacket, " + text)
+        check(f"...and nothing declared on its owner: {text!r}",
+              not st.people["Dan"].hardware, str(st.people["Dan"]))
+    check("...while a strap on a person still is one",
+          [c for c, _p, _w, _a in E.hardware_spans("wrists strapped to the chair")]
+          == ["straps"])
+    for text in ("A phone lies on the nightstand.", "Keys lie on the table.",
+                 "Mara: she, 28, long dark hair that lies loose over her shoulders.",
+                 "Her hair lies loose.", "A bag sits on the chair.",
+                 "A pair of handcuffs and a roll of duct tape lie on the nightstand."):
+        check(f"no posture from a thing: {text!r}", E.posture_in(text) == "",
+              E.posture_in(text))
+    for text, want in (("Mara lies on the bed.", "lying down"),
+                       ("Mara walks over and lies down.", "lying down"),
+                       ("Mara, cuffed, lies on the bed.", "lying down"),
+                       ("Dan pushes her down onto the bed.", "lying down"),
+                       ("The woman sits on the chair.", "sitting")):
+        check(f"...while a person still takes one: {text!r}", E.posture_in(text) == want,
+              E.posture_in(text))
+    for item, want in (("ball gag", True), ("red ball gag", True), ("bit gag", True),
+                       ("ring gag", True), ("stuffed cloth gag", True), ("duct tape", False),
+                       ("bandana gag", False), ("gag", False)):
+        check(f"mouth held open by {item!r}: {want}", E.mouth_held_open(item) == want)
+    check("a cloth stuffed in is named so",
+          [w for _c, _p, w, _a in E.hardware_spans("Dan stuffs a cloth into her mouth.")]
+          == ["stuffed cloth gag"])
+
+
 def test_lying_to_a_side_is_lying_down():
     """REPORTED: the lie-telling exclusions caught "lies to the side", "lies to his left"
     and "lies again on the floor", and the lying hold went with them."""
@@ -1049,6 +1131,8 @@ def main():
     test_a_piece_taken_off_stays_off()
     test_every_gag_wording_covers_the_mouth()
     test_a_named_object_is_not_a_state()
+    test_a_tie_or_a_gag_in_any_wording_registers()
+    test_a_carried_thing_or_a_prop_holds_nobody()
     test_lying_to_a_side_is_lying_down()
     test_the_applying_beat_records_the_piece()
     print()
