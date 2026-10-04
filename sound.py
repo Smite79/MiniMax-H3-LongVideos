@@ -9,7 +9,8 @@ MAX_SOUNDS = 3
 _ON = r"\s+(?:at\s+|on\s+|against\s+|in\s+|with\s+)?(?:[\w'’-]+\s+){0,3}?"
 _NAME = r"(?:her|him|them|(?-i:[A-Z][\w'’-]+))"
 _GARMENTS = (r"(?:coat|jacket|shirt|t-shirt|dress|skirt|shorts|trousers|pants|jeans|leggings|tights|socks|boots|"
-             r"shoes|gloves|top|vest|jumper|sweater|hoodie|blouse|cardigan|scarf|hat|belt)s?")
+             r"shoes|gloves|top|vest|jumper|sweater|hoodie|blouse|cardigan|scarf|hat|belt|bra|panties|knickers|"
+             r"underwear|briefs|boxers|thong|lingerie|stockings|bikini)s?")
 
 SOUND_CUE = re.compile(
     r"\b(?:sounds?|noises?|echo(?:e?s|ing)?|rattl(?:e|es|ing)|clank(?:s|ing)?|clink(?:s|ing)?|creak(?:s|ing)?|"

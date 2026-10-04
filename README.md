@@ -103,17 +103,31 @@ wraps duct tape around her mouth*), already on (*her wrists cuffed behind her ba
   Add a `hold:` line for those.
 - Each shot's line in `info` says what goes on, what is held, and what comes off.
 
+### Clothing
+
+The node reads clothes coming off and going back on (*Max takes off her jacket*,
+*Crystal pulls her thong down her legs*, *Crystal puts her jacket back on*). From the
+next shot on, a garment that came off is taken out of that person's description in
+the scene paragraph, the anchor and `character_memory`, so no shot asks for it again.
+It comes back once they put it on.
+
+- A garment belongs to the person its pronoun or name points to, or else to the one
+  person whose description mentions it.
+- When it cannot tell whose it is, the sentence is listed in `info`.
+
 ### Lines the node reads
 
 These lines are taken out of the text before the model sees it. `hold:` and `release:`
-correct the restraint reading: for the person they name, they replace whatever was read
-from that beat.
+correct the restraint reading, and `remove:` and `wear:` the clothing reading. For the
+person they name, they replace whatever was read from that beat.
 
 | line | what it does |
 |---|---|
 | `hold: Name, item; item` | Name is wearing or bound with these items. From the next shot on, every prompt states `Name: item; item.`, that it all stays on for the whole shot, and where held wrists or ankles stay, until the item comes off. |
 | `release: Name, item` | the item comes off in this shot. `release: Name` takes everything off Name. |
 | `seconds: 6` | this shot's length, whatever `shot_length` says. |
+| `remove: Name, garment` | the garment comes off in this shot and leaves Name's description from the next shot on. |
+| `wear: Name, garment` | the garment goes back on, and back into the description from the next shot on. |
 | `exit: Name` | Name leaves during this shot and is gone from the next. A named exit such as `Dan walks out` is read without it; use it for anything else, such as `He leaves.` |
 | `cut` | this shot starts fresh instead of on the previous shot's last frame. Use it for a new place or time. |
 

@@ -576,6 +576,45 @@ def test_reading():
           S.shot_line(bare))
 
 
+def test_wardrobe():
+    print("\n=== clothing coming off and going back on ===")
+    script = ("A bedroom. Crystal stands by the bed.\n\nMax takes off her jacket.\n\nCrystal sits on the bed.\n\n"
+              "Crystal puts her jacket back on.\n\nCrystal waits.")
+    memory = "Crystal: a slim woman in a red top and a black jacket.\nMax: a tall man in a grey suit."
+    shots = S.plan_shots(script, 10.0, [None] * 4, False, memory=memory)
+    line = lambda k: next(ln for ln in shots[k]["prompt"].splitlines() if ln.startswith("Crystal:"))
+    check("a garment taken off leaves her description from the next shot, and comes back after she puts it on",
+          [line(k) for k in range(4)] == ["Crystal: a slim woman in a red top and a black jacket.",
+                                          "Crystal: a slim woman in a red top.", "Crystal: a slim woman in a red top.",
+                                          "Crystal: a slim woman in a red top and a black jacket."]
+          and shots[0]["clothes_off"] == "Crystal: jacket." and shots[2]["clothes_on"] == "Crystal: jacket.",
+          [line(k) for k in range(4)])
+    people, gender = ["Crystal", "Max"], {"Crystal": "f"}
+    desc = {"Crystal": "Crystal: a slim woman in a red top and a black thong."}
+    read = lambda t: S.wrd.read(t, people, gender, desc)
+    check("underwear such as a thong is a garment, read off whoever it is on",
+          read("Max takes off her thong.")[0] == {"Crystal": ["thong"]}
+          and read("Crystal pulls her thong down her legs.")[0] == {"Crystal": ["thong"]}
+          and read("Crystal takes the thong off.")[0] == {"Crystal": ["thong"]}
+          and read("Max removes Crystal's bra.")[0] == {"Crystal": ["bra"]})
+    check("touching a garment is not taking it off", read("Max pulls her shirt.") == ({}, {}, []))
+    check("whose garment, when it cannot tell, is reported",
+          S.wrd.read("He takes off the hat.", people, {}, {})[2] == ["whose hat in 'He takes off the hat.'"])
+    told = S.plan_shots("A bedroom. Crystal waits.\n\nCrystal turns.\nremove: Crystal, black jacket\n\nCrystal sits."
+                        "\nwear: Crystal, black jacket\n\nCrystal stands.", 10.0, [None] * 4, False, memory=memory)
+    check("remove: and wear: lines take a garment off and put it back",
+          "black jacket" not in told[1]["prompt"] and "black jacket" in told[2]["prompt"], [t["prompt"][:120] for t in told])
+    strip = S.wrd.undress
+    check("the description reads cleanly after a garment comes off",
+          strip("Crystal lies on the bed. She wears only a black lace thong.", {"Crystal": ["thong"]}, people)
+          == "Crystal lies on the bed."
+          and strip("Crystal wears a black thong, a red top and boots.", {"Crystal": ["thong", "boots"]}, people)
+          == "Crystal wears a red top."
+          and strip("Crystal wears a jacket over her dress.", {"Crystal": ["jacket"]}, people) == "Crystal wears her dress."
+          and strip("Max: a tall man in a grey suit. Crystal wears a red dress.", {"Crystal": ["dress"]}, people)
+          == "Max: a tall man in a grey suit.")
+
+
 def test_scene_inputs():
     print("\n=== anchor and character memory ===")
     shots = S.plan_shots("Mara sits.\n\nMara stands.", 5.0, [None] * 4, False,
@@ -757,6 +796,7 @@ def main():
     test_quiet_mouths()
     test_directive_forms()
     test_reading()
+    test_wardrobe()
     test_mumble()
     test_sound_lines()
     test_ambient_bed()

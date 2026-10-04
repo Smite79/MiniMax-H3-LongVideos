@@ -35,6 +35,7 @@ cnd = _load_local("h3_conditioning", "conditioning.py")
 up = _load_local("h3_upscale", "upscale.py")
 snd = _load_local("h3_sound", "sound.py")
 rst = _load_local("h3_restraints", "restraints.py")
+wrd = _load_local("h3_wardrobe", "wardrobe.py")
 try:
     pose = _load_local("h3_pose_control", "pose_control.py")
     POSE_IMPORT_ERROR = ""
@@ -69,9 +70,9 @@ _HYPERFLOW_DELTAS = {}
 
 _PICTURE = re.compile(r"(\(\s*)?<\s*picture[\s_\-]*(\d+)\s*>(\s*\))?", re.I)
 _SPEECH = re.compile(r"\"[^\"]*\"|“[^”]*”|<\s*d\s*>.*?<\s*/\s*d\s*>", re.S | re.I)
-_DIRECTIVE = re.compile(r"^\s*(hold|release|seconds|exit)\s*:\s*(.*?)\s*$", re.I)
+_DIRECTIVE = re.compile(r"^\s*(hold|release|remove|wear|seconds|exit)\s*:\s*(.*?)\s*$", re.I)
 _CUT = re.compile(r"^\s*cut\s*:?\s*$", re.I)
-_INLINE = re.compile(r"(?<=[.!?\"”])\s+(?=(?:hold|release|seconds|exit)\s*:)", re.I)
+_INLINE = re.compile(r"(?<=[.!?\"”])\s+(?=(?:hold|release|remove|wear|seconds|exit)\s*:)", re.I)
 _WHO = re.compile(r"\s*([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)?)\s*(?:[,:–—-]\s*|\s+(?=[a-z])|$)(.*)$", re.S)
 _SHEET = re.compile(r"^\s*([A-Z][\w'’-]{0,24}(?:\s+[A-Z][\w'’-]{0,24}){0,2})\s*:\s*\S")
 _CLAIM = re.compile(r"\b([A-Z][\w'’-]{0,24})[\s,:(\[]*(?i:<\s*picture[\s_\-]*\d+\s*>)")
@@ -149,7 +150,8 @@ def shot_frames(text, ceiling, applying):
 
 
 def parse_paragraph(par):
-    out = {"lines": [], "hold": [], "release": [], "exit": [], "seconds": None, "cut": False, "unread": []}
+    out = {"lines": [], "hold": [], "release": [], "remove": [], "wear": [], "exit": [], "seconds": None, "cut": False,
+           "unread": []}
     for line in (piece for raw in par.splitlines() for piece in _INLINE.split(raw)):
         m = _DIRECTIVE.match(line)
         if m is None:
@@ -169,7 +171,7 @@ def parse_paragraph(par):
         else:
             who = _WHO.match(arg)
             items = [i.strip() for i in who.group(2).split(";") if i.strip()] if who else []
-            if who is None or (kind == "hold" and not items):
+            if who is None or (kind != "release" and not items):
                 out["unread"].append(line.strip())
             else:
                 out[kind].append((who.group(1).strip(), items))
@@ -186,12 +188,12 @@ def parse_script(text, all_beats=False):
     for p in map(parse_paragraph, paragraphs(text)):
         if p["text"]:
             for q in early:
-                for k in ("hold", "release", "exit", "unread"):
+                for k in ("hold", "release", "remove", "wear", "exit", "unread"):
                     p[k] = q[k] + p[k]
             p["cut"], early, cut_next = p["cut"] or cut_next, [], False
             merged.append(p)
-        elif merged and (p["hold"] or p["release"] or p["exit"] or p["unread"] or p["seconds"]):
-            for k in ("hold", "release", "exit", "unread"):
+        elif merged and any(p[k] for k in ("hold", "release", "remove", "wear", "exit", "unread", "seconds")):
+            for k in ("hold", "release", "remove", "wear", "exit", "unread"):
                 merged[-1][k] += p[k]
             merged[-1]["seconds"] = p["seconds"] or merged[-1]["seconds"]
             cut_next = cut_next or p["cut"]
@@ -376,6 +378,23 @@ def shot_pictures(text, refs, held_names):
     return text.strip(), [refs[n - 1] for n in live]
 
 
+def clothes(para, people, gender, described, undressed):
+    off, on, unclear = wrd.read(para["text"], people, gender, described)
+    told = {who for who, _ in para["remove"] + para["wear"]}
+    off = {w: g for w, g in off.items() if w not in told}
+    on = {w: g for w, g in on.items() if w not in told}
+    for who, items in para["remove"]:
+        off.setdefault(who, []).extend(i.lower() for i in items)
+    for who, items in para["wear"]:
+        on.setdefault(who, []).extend(i.lower() for i in items)
+    new = {k: list(v) for k, v in undressed.items()}
+    for who, gone in off.items():
+        new.setdefault(who, []).extend(g for g in gone if g not in new.get(who, []))
+    for who, back in on.items():
+        new[who] = [g for g in new.get(who, []) if g not in back]
+    return {k: v for k, v in new.items() if v}, off, on, unclear
+
+
 def with_reading(para, people, gender, held):
     holds, releases, unclear = rst.read(para["text"], people, gender, held)
     told = {who for who, _ in para["hold"] + para["release"]}
@@ -391,11 +410,13 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     texts = [p["text"] for p in lead + paras]
     people = list(dict.fromkeys(roster([], [], lead + paras) + rst.agents(texts, _COMMON_CAPS | _NOT_NAMES)))
     gender = rst.genders(people, texts)
-    state = {}
+    state, undressed = {}, {}
     for k, para in enumerate(lead):
         lead[k] = with_reading(para, _mentions(para["text"], people), gender, state)
         state, _, _ = apply_holds(state, lead[k])
+        undressed, _, _, _ = clothes(dict(lead[k], text=""), people, gender, {}, undressed)
     scene_text = "\n\n".join(p["text"] for p in lead if p["text"])
+    described = wrd.descriptions(scene_text, people)
     names = roster([p["text"] for p in lead[len(setting):]], [p["text"] for p in lead], lead + paras)
     present = _mentions(" ".join(p["text"] for p in setting), names)
     seen = _mentions(" ".join(p["text"] for p in lead), people)
@@ -403,6 +424,9 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     for i, para in enumerate(paras):
         seen = list(dict.fromkeys(seen + _mentions(para["text"], people)))
         para = with_reading(para, seen, gender, state)
+        dressed = wrd.undress(scene_text, undressed, people)
+        undressed, off, on, unclear = clothes(para, seen, gender, described, undressed)
+        para = dict(para, unread=para["unread"] + unclear)
         start = state
         state, released, added = apply_holds(start, para)
         during = {k: [it for it in v if it not in released.get(k, [])] for k, v in start.items()}
@@ -414,7 +438,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         absent = [n for n in names if n not in cast]
         recover = [n for n in cast if n in solo_seen] if not keyed else []
         speech = bool(_SPEECH.search(para["text"]))
-        text = "\n\n".join(x for x in (without_absent(scene_text, absent, names), para["text"]) if x)
+        text = "\n\n".join(x for x in (without_absent(dressed, absent, names), para["text"]) if x)
         drop = absent + (list(during) if keyed else []) + recover
         text, shot_refs = shot_pictures(text, refs, drop)
         sound_text, sounded = snd.sound_line(para["text"], scene_text, speech)
@@ -445,6 +469,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
                       "cut": para["cut"], "wordless": not speech, "sounded": sounded, "held": held_line(during),
                       "cast": cast, "solo": solo, "recover": recover, "bound": bound,
                       "added": held_line(added), "released": held_line(released),
+                      "clothes_off": held_line(off), "clothes_on": held_line(on),
                       "unread": para["unread"] + ([u for q in lead for u in q["unread"]] if i == 0 else []),
                       "latch_after": int(math.ceil(POSE_LATCH_FROM * frames)) if latch else None})
     return shots
@@ -808,6 +833,10 @@ def shot_line(shot):
         bits.append(f"goes on: {shot['added']}")
     if shot["released"]:
         bits.append(f"comes off: {shot['released']}")
+    if shot["clothes_off"]:
+        bits.append(f"clothes off: {shot['clothes_off']}")
+    if shot["clothes_on"]:
+        bits.append(f"clothes on: {shot['clothes_on']}")
     if shot["bound"]:
         mode = "latch" if shot["latch_after"] is not None else "repair"
         bits.append(f"pose {mode}: " + ", ".join(f"{k} {v['arms'] or ''} {v['legs'] or ''}".strip()
