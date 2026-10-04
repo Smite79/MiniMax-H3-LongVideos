@@ -47,6 +47,11 @@ SPEECH_LEAD = 0.5
 LEVELS = 0.8
 POSE_LATCH_FROM = 0.4
 HANDOFF_LATENT_TAIL = 8
+SHOT_LENGTHS = ["from the beat", "fixed"]
+BEAT_BASE_SEC = 0.8
+SECONDS_PER_ACTION = 2.2
+WORDS_PER_SEC = 2.5
+MIN_AUTO_FRAMES = 73
 
 FAST_H3_SHIFT_VIDEO = 10.0
 FAST_H3_VSA_KEEP = 0.10
@@ -64,6 +69,8 @@ _PICTURE = re.compile(r"(\(\s*)?<\s*picture[\s_\-]*(\d+)\s*>(\s*\))?", re.I)
 _SPEECH = re.compile(r"\"[^\"]*\"|“[^”]*”|<\s*d\s*>.*?<\s*/\s*d\s*>", re.S | re.I)
 _DIRECTIVE = re.compile(r"^\s*(hold|release|seconds)\s*:\s*(.*?)\s*$", re.I)
 _CUT = re.compile(r"^\s*cut\s*:?\s*$", re.I)
+_CLAUSE = re.compile(r"(?:[.!?;]+|,?\s+(?:and then|then|and|before|after|while|as|until)\s+"
+                     r"|,\s+(?=\w+(?:ing|es|s|ed)\b))")
 
 _ARM_POSITIONS = (("behind the back", r"behind\s+(?:her|his|their|the)\s+back"),
                   ("above the head", r"(?:above|over)\s+(?:her|his|their|the)\s+head"),
@@ -83,6 +90,27 @@ def frame_size(choice, megapixels):
         w = max(RES_MULTIPLE, int(round(w * s / RES_MULTIPLE)) * RES_MULTIPLE)
         h = max(RES_MULTIPLE, int(round(h * s / RES_MULTIPLE)) * RES_MULTIPLE)
     return w, h
+
+
+def align_nearest(n):
+    n = max(5, int(n))
+    lo = n - ((n - 5) % 17)
+    return min(rt.MAX_FRAMES, lo if (n - lo) <= (lo + 17 - n) else lo + 17)
+
+
+def beat_seconds(text):
+    spoken = sum(len(re.sub(r"</?\s*d\s*>|[\"“”]", " ", q).split()) for q in _SPEECH.findall(text))
+    clauses = [p for p in _CLAUSE.split(_SPEECH.sub(" ", text)) if p and len(p.split()) >= 2]
+    action = BEAT_BASE_SEC + SECONDS_PER_ACTION * len(clauses) if clauses else 0.0
+    return max(action, spoken / WORDS_PER_SEC + 1.0 if spoken else 0.0)
+
+
+def shot_frames(text, ceiling, applying):
+    need = beat_seconds(text)
+    if applying:
+        need = max(need, MIN_AUTO_FRAMES / rt.H3_FPS) + SECONDS_PER_ACTION
+    want = align_nearest(round(need * rt.H3_FPS)) if need else MIN_AUTO_FRAMES
+    return min(max(MIN_AUTO_FRAMES, want), ceiling)
 
 
 def parse_paragraph(par):
@@ -208,7 +236,7 @@ def shot_pictures(text, refs, held_names):
     return text.strip(), [refs[n - 1] for n in live]
 
 
-def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""):
+def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor="", from_beat=False):
     scene, paras = parse_script(prompt, all_beats=bool((anchor or "").strip()))
     lead = ([parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
             + [parse_paragraph(p) for p in paragraphs(memory)])
@@ -226,8 +254,9 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         held = held_line(during)
         text = "\n\n".join(x for x in (scene_text, para["text"], held) if x)
         text, shot_refs = shot_pictures(text, refs, list(during) if keyed else [])
-        seconds = para["seconds"] or shot_seconds
-        frames = rt.align_frame_count(round(seconds * rt.H3_FPS))
+        frames = rt.align_frame_count(round((para["seconds"] or shot_seconds) * rt.H3_FPS))
+        if from_beat and not para["seconds"]:
+            frames = shot_frames(para["text"], frames, bool(added))
         bound = pose_plan(during, released, added)
         latch = any(f["latch_limbs"] for f in bound.values())
         shots.append({"n": i + 1, "prompt": text, "refs": shot_refs, "frames": frames, "keyed": keyed,
@@ -627,6 +656,7 @@ class H3LongVideos:
                 "upscale": (up.FRAME_MODES, {"default": "off"}),
                 "upscale_model": (up.frame_models(), {"default": "none"}),
                 "upscale_target_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
+                "shot_length": (SHOT_LENGTHS, {"default": "from the beat"}),
             },
             "hidden": {"graph": "PROMPT"},
         }
@@ -641,12 +671,12 @@ class H3LongVideos:
             ref_image_4=None, sigmas=None, shift_video=12.0, shift_audio=3.0, silence_wordless=True,
             plan_only=False, pose_controlnet=None, pose_strength=1.0, pose_end=0.6, anchor="", character_memory="",
             latent_upscale="off", latent_upscale_scale=2.0, upscale="off", upscale_model="none",
-            upscale_target_short_edge=0, graph=None, **legacy):
+            upscale_target_short_edge=0, shot_length="from the beat", graph=None, **legacy):
         t0 = time.perf_counter()
         check_vaes(vae, audio_vae)
         w, h = frame_size(resolution, megapixels)
         shots = plan_shots(prompt, shot_seconds, [ref_image_1, ref_image_2, ref_image_3, ref_image_4],
-                           first_frame is not None, character_memory, anchor)
+                           first_frame is not None, character_memory, anchor, shot_length != "fixed")
         if not shots:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)

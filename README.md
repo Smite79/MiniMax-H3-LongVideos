@@ -97,7 +97,7 @@ guessed from your writing.
 |---|---|
 | `hold: Name, item; item` | Name is wearing or bound with these items. From the next shot on, every prompt ends with `Name: item; item.` until the item is released. |
 | `release: Name, item` | the item comes off in this shot. `release: Name` takes everything off Name. |
-| `seconds: 6` | this shot's length, instead of `shot_seconds`. |
+| `seconds: 6` | this shot's length, whatever `shot_length` says. |
 | `cut` | this shot starts fresh instead of on the previous shot's last frame. Use it for a new place or time. |
 
 A `hold:` line in the scene paragraph, the anchor or the character memory means the
@@ -190,7 +190,8 @@ restraint broke.
 | widget | |
 |---|---|
 | `resolution`, `megapixels` | aspect preset and size; at 1.0 each preset is its native size, 0 keeps it exactly |
-| `shot_seconds` | default shot length |
+| `shot_seconds` | the longest a shot may be, and every shot's length when `shot_length` is *fixed* |
+| `shot_length` | *from the beat* sizes each shot from its own beat: about 2.2s per action, or the spoken line, plus one action's time where something is put on, capped by `shot_seconds`. *fixed* gives every shot `shot_seconds` |
 | `steps`, `sampler_name`, `scheduler`, `seed` | as in KSampler; one seed for the whole video |
 | `first_frame` | the first shot starts on this picture |
 | `sigmas` | your own schedule (overrides Hyperflow's grid) |

@@ -179,7 +179,7 @@ class FakeDet:
 
 
 def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=False, lat_up=None, frames_up=None,
-           **run_kw):
+           seconds=2.0, **run_kw):
     calls = {"cond": [], "sample": [], "pose": [], "decode": [], "tail": [], "frames_up": []}
     saved = (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
              S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video)
@@ -229,7 +229,7 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     if frames_up is not None:
         S.up.upscale_frames = frames_fake
     try:
-        out = S.H3LongVideos().run("base", FakeClip(), "vae", "avae", script, "16:9", 0.01, 2.0, 8, "euler", "simple",
+        out = S.H3LongVideos().run("base", FakeClip(), "vae", "avae", script, "16:9", 0.01, seconds, 8, "euler", "simple",
                                    7, pose_controlnet=pose_cn, plan_only=plan_only, **run_kw)
     finally:
         (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
@@ -287,6 +287,27 @@ def test_render():
     out, calls = render(SCRIPT, plan_only=True)
     check("plan_only samples nothing and still returns the script", calls["sample"] == [] and out[3].count("[shot ") == 6
           and "pose latch: Mara behind the back" in out[2], out[2])
+
+
+def test_shot_length():
+    print("\n=== shot length ===")
+    script = ("A cell.\n\nMara sits on the cot.\n\nDan opens the door, walks in and sits down.\n\n"
+              "Dan says \"Not a sound, or you will regret it tonight.\"\n\n"
+              "Dan handcuffs her wrists behind her back.\nhold: Mara, handcuffs behind her back\n\n"
+              "Mara waits.\nseconds: 12")
+    twelve = S.rt.align_frame_count(288)
+    beat = [s["frames"] for s in S.plan_shots(script, 15.0, [None] * 4, False, from_beat=True)]
+    check("from the beat: one action, three actions, a spoken line, a restraint going on, an explicit length",
+          beat == [73, 175, 107, 124, twelve], beat)
+    capped = [s["frames"] for s in S.plan_shots(script, 5.0, [None] * 4, False, from_beat=True)]
+    check("shot_seconds caps every estimate and seconds: still wins", capped == [73, 124, 107, 124, twelve], capped)
+    fixed = [s["frames"] for s in S.plan_shots(script, 5.0, [None] * 4, False)]
+    check("fixed gives every shot shot_seconds", fixed == [124, 124, 124, 124, twelve], fixed)
+    check("a beat with nothing to stage gets one action's worth", S.shot_frames("Silence.", 362, False) == 73)
+    out, _ = render(script, plan_only=True, seconds=15.0)
+    fixed_out, _ = render(script, plan_only=True, seconds=15.0, shot_length="fixed")
+    check("the widget reaches the plan, from the beat by default",
+          "shot 2: 175 frames" in out[2] and "shot 2: 362 frames" in fixed_out[2], (out[2], fixed_out[2]))
 
 
 def test_scene_inputs():
@@ -464,6 +485,7 @@ def main():
     test_conditioning()
     test_helpers()
     test_render()
+    test_shot_length()
     test_scene_inputs()
     test_upscale_module()
     test_upscale_render()
