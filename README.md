@@ -37,7 +37,9 @@ Copy this folder into `ComfyUI/custom_nodes/` and restart the ComfyUI **server**
 Requires ComfyUI with native MiniMax-H3 support.
 
 **Updating from an earlier version:** the node's widgets have changed. Right-click the
-node → **Fix node (recreate)**, set your values again and save the workflow.
+node → **Fix node (recreate)**, set your values again and save the workflow. Inputs an
+old workflow still has linked that the node no longer uses are ignored and named in
+`info`.
 
 ## What to load
 
@@ -66,6 +68,11 @@ Paragraphs are separated by a blank line.
   are. It opens every shot, so keep actions out of it.
 - **Every paragraph after it is one shot**, sent word for word.
 - A prompt with a single paragraph is one shot.
+- **`anchor`** (optional) is framing for the whole film: look, camera, lighting,
+  location. It goes at the front of every shot. When it is filled in, every paragraph
+  of the prompt is a shot and there is no scene paragraph.
+- **`character_memory`** (optional) is who is in the film and what they wear. It
+  follows the scene in every shot.
 
 ```
 A dim cell with a cot. Mara <Picture 1> is a tall woman in a grey dress. Dan <Picture 2> is a guard in a dark uniform.
@@ -93,7 +100,8 @@ guessed from your writing.
 | `seconds: 6` | this shot's length, instead of `shot_seconds`. |
 | `cut` | this shot starts fresh instead of on the previous shot's last frame. Use it for a new place or time. |
 
-A `hold:` line in the scene paragraph means the person starts the video already held.
+A `hold:` line in the scene paragraph, the anchor or the character memory means the
+person starts the video already held.
 
 Write each item the way it should look: `handcuffs behind her back`,
 `wrists zip tied in front`, `rope around her ankles`, `duct tape over her mouth`.
@@ -149,6 +157,21 @@ restraint broke.
 - `info` has a line for every checked shot.
 - Each repaired shot costs one extra render.
 
+## Upscaling
+
+- **`latent_upscale`** samples each shot at `resolution` and enlarges it in latent space
+  before decoding, which is much cheaper than sampling large.
+  - It needs the Minimax H3 Latent Upscaler node pack, with its H3 model in
+    `models/latent_upscale_models`.
+  - `latent_upscale_scale` sets the factor.
+  - The next shot is still handed a frame at the sampled size.
+- **`upscale`** enlarges the finished video:
+  - `rtx`: NVIDIA RTX Video Super Resolution (needs the `comfyui_nvidia_rtx_nodes` pack)
+  - `model`: the model picked in `upscale_model`, from `models/upscale_models`
+  - `lanczos`: a plain resize
+- **`upscale_target_short_edge`** fits the result's short edge to that many pixels.
+  `lanczos` needs it; for `rtx` it also sets the factor.
+
 ## FastH3 and Hyperflow
 
 - **FastH3**, detected from the model, runs at shift 10/3 with the VSA attention it was
@@ -175,6 +198,10 @@ restraint broke.
 | `silence_wordless` | keep shots without a quoted line silent |
 | `plan_only` | report the shots and their text without rendering |
 | `pose_strength`, `pose_end` | how strongly, and for how much of the schedule, the skeleton holds |
+| `anchor` | framing at the front of every shot; filled in, every paragraph is a shot |
+| `character_memory` | who is in the film, after the scene in every shot |
+| `latent_upscale`, `latent_upscale_scale` | upscale each shot in latent space, and by how much |
+| `upscale`, `upscale_model`, `upscale_target_short_edge` | upscale the finished video |
 
 ## Outputs
 

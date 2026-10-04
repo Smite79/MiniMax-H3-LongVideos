@@ -11,6 +11,7 @@ sys.path[:0] = [HERE, os.path.normpath(os.path.join(HERE, "..", ".."))]
 import comfy.cli_args
 comfy.cli_args.args.cpu = True
 import torch
+import comfy.nested_tensor
 import sampler as S
 
 _fails = []
@@ -177,10 +178,11 @@ class FakeDet:
         self.released = True
 
 
-def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=False):
-    calls = {"cond": [], "sample": [], "pose": []}
+def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=False, lat_up=None, frames_up=None,
+           **run_kw):
+    calls = {"cond": [], "sample": [], "pose": [], "decode": [], "tail": [], "frames_up": []}
     saved = (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
-             S.rt._deep_cleanup, S.pose_pass, S.pose)
+             S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video)
     S.check_vaes = lambda v, a: None
     S.prepare_model = lambda m, st, sn, sc, sg, sv, sa, g: (m, st, sn, None, torch.linspace(1, 0, st + 1), False, ["prepared"])
 
@@ -192,29 +194,46 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
         calls["sample"].append({"model": model, "shot": latent["shot"], "seed": seed})
         if oom_pass2 and model == "patched":
             raise RuntimeError("CUDA out of memory")
-        return {"shot": latent["shot"], "fc": latent["fc"], "model": model}
+        lat = comfy.nested_tensor.NestedTensor((torch.zeros(1, 24, 4, 2, 2), torch.zeros(1, 32, 2, 8)))
+        return {"samples": lat, "shot": latent["shot"], "fc": latent["fc"], "model": model}
 
-    def decode(vae, avae, model, out):
+    def decode(vae, avae, model, out, tiled=False):
         fc, k = out["fc"], out["shot"]
-        imgs = torch.full((fc, 8, 8, 3), k / 10.0) + (torch.arange(fc).float() / 1e4).view(fc, 1, 1, 1)
+        lh, lw = out["samples"].unbind()[0].shape[-2:]
+        calls["decode"].append({"shot": k, "tiled": tiled, "size": (int(lh) * 4, int(lw) * 4)})
+        imgs = torch.full((fc, int(lh) * 4, int(lw) * 4, 3), k / 10.0) + (torch.arange(fc).float() / 1e4).view(fc, 1, 1, 1)
         if out["model"] == "patched":
             imgs += 0.05
         return imgs, {"waveform": torch.full((1, 2, round(fc * 1000 / 24)), float(k)), "sample_rate": 1000}
+
+    def tail(vae, out, tiled, **kw):
+        lat = out["samples"]
+        calls["tail"].append({"frames": int(lat.shape[2]), "tiled": tiled})
+        return torch.full((3, int(lat.shape[-2]) * 4, int(lat.shape[-1]) * 4, 3), 0.9)
 
     def pose_pass(det, imgs, shot, carry, model, cn, vae, latent, st, pe, window, w, h):
         calls["pose"].append({"shot": shot["n"], "carry": carry, "latch": shot["latch_after"]})
         return (pose_result or (lambda n: ("patched", {"broken": True, "boxes_last": {"Mara": n}})))(shot["n"])
 
+    def frames_fake(frames, mode, name, target):
+        calls["frames_up"].append({"mode": mode, "name": name, "target": target, "n": int(frames.shape[0])})
+        return frames_up(frames, mode, name, target)
+
     S.cnd.build_conditioning, S.sample, S.decode, S.pose_pass = build, sample, decode, pose_pass
     S.rt._evict_all_but = lambda *a, **k: None
     S.rt._deep_cleanup = lambda: None
+    S.rt._decode_video = tail
     S.pose = SimpleNamespace(pose_status=lambda m, cn, st, tt: (True, ""), PoseDetector=FakeDet)
+    if lat_up is not None:
+        S.up.upscale_latent = lat_up
+    if frames_up is not None:
+        S.up.upscale_frames = frames_fake
     try:
         out = S.H3LongVideos().run("base", FakeClip(), "vae", "avae", script, "16:9", 0.01, 2.0, 8, "euler", "simple",
-                                   7, pose_controlnet=pose_cn, plan_only=plan_only)
+                                   7, pose_controlnet=pose_cn, plan_only=plan_only, **run_kw)
     finally:
         (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
-         S.rt._deep_cleanup, S.pose_pass, S.pose) = saved
+         S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video) = saved
     return out, calls
 
 
@@ -270,12 +289,185 @@ def test_render():
           and "pose latch: Mara behind the back" in out[2], out[2])
 
 
+def test_scene_inputs():
+    print("\n=== anchor and character memory ===")
+    shots = S.plan_shots("Mara sits.\n\nMara stands.", 5.0, [None] * 4, False,
+                         memory="Mara: a tall woman in a grey dress.\nhold: Mara, handcuffs behind her back",
+                         anchor="Cinematic, 35mm, a dim cell.")
+    check("with an anchor every paragraph is a beat", len(shots) == 2 and "Mara sits." in shots[0]["prompt"])
+    check("the anchor leads, then the character memory, then the beat",
+          shots[0]["prompt"].startswith("Cinematic, 35mm, a dim cell.\n\nMara: a tall woman in a grey dress.\n\nMara sits."),
+          shots[0]["prompt"])
+    check("a hold: in the character memory is on from the first shot",
+          shots[0]["held"] == "Mara: handcuffs behind her back." and "hold:" not in shots[0]["prompt"], shots[0]["held"])
+    plain = S.plan_shots("A cell.\n\nMara sits.", 5.0, [None] * 4, False, memory="Dan: a guard.")
+    check("without an anchor the first paragraph is the scene, before the character memory",
+          len(plain) == 1 and plain[0]["prompt"] == "A cell.\n\nDan: a guard.\n\nMara sits.", plain[0]["prompt"])
+    out, _ = render(SCRIPT, plan_only=True, character_memory="Dan: a guard.", negative="x", ambient_level=0.2)
+    check("inputs left over from an older workflow are named in info, not a crash",
+          "ignored inputs from an older version of this node: ambient_level, negative" in out[2], out[2])
+    check("...and character_memory reaches every shot", out[3].count("Dan: a guard.") == 6, out[3])
+
+
+class V3Node:
+    @classmethod
+    def define_schema(cls):
+        return None
+
+    @classmethod
+    def execute(cls, **kw):
+        cls.seen.append(kw)
+        return SimpleNamespace(result=(cls.answer(kw),))
+
+
+def fake_v3(answer):
+    return type("FakeV3", (V3Node,), {"seen": [], "answer": staticmethod(answer)})
+
+
+class V1Node:
+    FUNCTION = "go"
+
+    def go(self, **kw):
+        return (kw["x"] * 2,)
+
+
+def test_upscale_module():
+    print("\n=== upscalers ===")
+    maps = S.up.nodes.NODE_CLASS_MAPPINGS
+    saved = dict(maps)
+    try:
+        check("a V1 node is called through its FUNCTION", S.up.run_node(V1Node, x=21) == 42)
+        lat = fake_v3(lambda kw: {"samples": torch.zeros(1, 24, 3, 8, 12)})
+        maps["MinimaxH3LatentUpscaler3D"] = lat
+        v = torch.zeros(1, 24, 3, 4, 6)
+        upv, note = S.up.upscale_latent(v, "minimax_h3_latent_upscaler_3d_fp32.pth", 2.0)
+        kw = lat.seen[-1] if lat.seen else {}
+        check("the latent upscaler gets its current inputs (mode, align, chunking, device, precision)",
+              upv.shape == (1, 24, 3, 8, 12) and note == "" and kw.get("enable_chunking") is True
+              and kw.get("mode") == {"mode": "scale by multiplier", "scale": 2.0} and kw.get("align") == 32
+              and kw.get("device") in ("cuda", "cpu") and kw.get("precision") in ("fp16", "fp32")
+              and kw.get("model_name") == "minimax_h3_latent_upscaler_3d_fp32.pth", kw)
+        check("off or a scale of 1 does nothing",
+              S.up.upscale_latent(v, "off", 2.0) == (v, "") and S.up.upscale_latent(v, "m", 1.0) == (v, ""))
+        maps["MinimaxH3LatentUpscaler3D"] = fake_v3(lambda kw: {"samples": torch.zeros(1, 24, 2, 8, 12)})
+        same, note = S.up.upscale_latent(v, "m", 2.0)
+        check("a changed frame count is refused", same is v and "unexpected shape" in note, note)
+        maps["MinimaxH3LatentUpscaler3D"] = fake_v3(lambda kw: 1 / 0)
+        same, note = S.up.upscale_latent(v, "m", 2.0)
+        check("a failing upscaler keeps the latent and says why", same is v and "ZeroDivisionError" in note, note)
+        del maps["MinimaxH3LatentUpscaler3D"]
+        same, note = S.up.upscale_latent(v, "m", 2.0)
+        check("without the pack the latent is kept and info says why", same is v and "node pack" in note, note)
+        frames = torch.rand(6, 32, 48, 3)
+        rtx = fake_v3(lambda kw: kw["images"].repeat_interleave(2, 1).repeat_interleave(2, 2))
+        maps["RTXVideoSuperResolution"] = rtx
+        out, note = S.up.upscale_frames(frames, "rtx", "none", 0)
+        check("RTX gets images, a scale-by resize and a quality, in batches",
+              out.shape == (6, 64, 96, 3) and len(rtx.seen) == 2 and rtx.seen[0]["quality"] == "ULTRA"
+              and rtx.seen[0]["resize_type"] == {"resize_type": "scale by multiplier", "scale": 2.0} and "RTX" in note,
+              (tuple(out.shape), note))
+        out, note = S.up.upscale_frames(frames, "rtx", "none", 128)
+        check("a target short edge picks the RTX factor and fits the result",
+              rtx.seen[-1]["resize_type"]["scale"] == 4.0 and out.shape[1:3] == (128, 192), (rtx.seen[-1], tuple(out.shape)))
+        loader = fake_v3(lambda kw: "model:" + kw["model_name"])
+        apply = fake_v3(lambda kw: kw["image"].repeat_interleave(2, 1).repeat_interleave(2, 2))
+        maps["UpscaleModelLoader"], maps["ImageUpscaleWithModel"] = loader, apply
+        out, note = S.up.upscale_frames(frames, "model", "RealESRGAN_x2.pth", 0)
+        check("an upscale model is loaded once and run in batches", out.shape == (6, 64, 96, 3) and len(loader.seen) == 1
+              and apply.seen[0]["upscale_model"] == "model:RealESRGAN_x2.pth" and "RealESRGAN_x2" in note, note)
+        out, note = S.up.upscale_frames(frames, "lanczos", "none", 64)
+        check("lanczos fits the short edge on the 32 grid", out.shape == (6, 64, 96, 3) and note == "short edge 64px", note)
+        del maps["RTXVideoSuperResolution"]
+        out, note = S.up.upscale_frames(frames, "rtx", "none", 64)
+        check("a missing RTX node still fits the target and says why", out.shape == (6, 64, 96, 3) and "not installed" in note,
+              note)
+        check("off does nothing", S.up.upscale_frames(frames, "off", "none", 64)[0] is frames)
+    finally:
+        maps.clear()
+        maps.update(saved)
+
+
+def test_upscale_render():
+    print("\n=== upscaling in the chain ===")
+    model = "minimax_h3_latent_upscaler_3d_fp32.pth"
+
+    def doubled(video, name, scale):
+        return torch.zeros(tuple(video.shape[:3]) + (video.shape[3] * 2, video.shape[4] * 2)), ""
+    out, calls = render(SCRIPT, lat_up=doubled, latent_upscale=model)
+    check("every shot is decoded from its upscaled latent, tiled",
+          len(calls["decode"]) == 6 and all(d["tiled"] and d["size"] == (16, 16) for d in calls["decode"]), calls["decode"][:2])
+    check("the video comes out at the upscaled size", tuple(out[0].shape[1:3]) == (16, 16), tuple(out[0].shape))
+    hand = calls["cond"][1]["handoff"]
+    check("the next shot opens on the last frame decoded at the sampled size",
+          len(calls["tail"]) == 6 and all(t["tiled"] for t in calls["tail"])
+          and tuple(hand.shape[1:3]) == (8, 8) and abs(float(hand.mean()) - 0.9) < 1e-6,
+          (calls["tail"][:1], None if hand is None else tuple(hand.shape)))
+    out, calls = render(SCRIPT, pose_cn="cn", lat_up=doubled, latent_upscale=model)
+    check("the pose check reads the sampled size and the kept shot is the upscaled one",
+          [d["size"] for d in calls["decode"] if d["shot"] == 3] == [(8, 8), (16, 16)]
+          and tuple(out[0].shape[1:3]) == (16, 16), [d for d in calls["decode"] if d["shot"] == 3])
+
+    def flaky(video, name, scale):
+        flaky.n += 1
+        return (doubled(video, name, scale) if flaky.n <= 2 else (video, "latent upscale failed (RuntimeError: boom)"))
+    flaky.n = 0
+    out, calls = render(SCRIPT, lat_up=flaky, latent_upscale=model)
+    check("a shot whose upscale fails is fitted to the others' size, and info says so once",
+          tuple(out[0].shape[1:3]) == (16, 16) and out[2].count("latent upscale failed") == 1, out[2])
+    out, calls = render(SCRIPT, frames_up=lambda f, m, n, t: (f[:, ::2, ::2], "frames note"),
+                        upscale="lanczos", upscale_target_short_edge=4)
+    check("the finished video goes through the frame upscaler once, with its settings",
+          len(calls["frames_up"]) == 1 and calls["frames_up"][0]["mode"] == "lanczos"
+          and calls["frames_up"][0]["target"] == 4 and "frames note" in out[2] and tuple(out[0].shape[1:3]) == (4, 4),
+          (calls["frames_up"], tuple(out[0].shape)))
+
+
+def test_upscalers_real():
+    print("\n=== the installed upscalers on the CPU (optional) ===")
+    root = os.path.normpath(os.path.join(HERE, "..", ".."))
+    maps = S.up.nodes.NODE_CLASS_MAPPINGS
+    saved = dict(maps)
+    try:
+        try:
+            import importlib.util
+            path = os.path.join(root, "custom_nodes", "Comfyui_Minimax_h3_latent_Upscaler", "nodes",
+                                "minimax_h3_latent_upscaler_3d.py")
+            spec = importlib.util.spec_from_file_location("h3_latent_upscaler_3d", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            maps.update(mod.NODE_CLASS_MAPPINGS)
+            name = next(n for n in S.up.latent_models() if n != "off")
+        except Exception as e:
+            print(f"  NOTE  the latent upscaler pack or its model is not available ({type(e).__name__}: {e}); skipped")
+        else:
+            upv, note = S.up.upscale_latent(torch.randn(1, 24, 2, 6, 8), name, 2.0)
+            check(f"the installed latent upscaler runs with {name}", tuple(upv.shape) == (1, 24, 2, 12, 16) and note == "",
+                  (tuple(upv.shape), note))
+        try:
+            import comfy_extras.nodes_upscale_model as U
+            maps["UpscaleModelLoader"], maps["ImageUpscaleWithModel"] = U.UpscaleModelLoader, U.ImageUpscaleWithModel
+            name = next(n for n in S.up.frame_models() if "x2" in n.lower())
+        except Exception as e:
+            print(f"  NOTE  ComfyUI's upscale-model nodes or an x2 model are not available ({type(e).__name__}: {e}); skipped")
+        else:
+            out, note = S.up.upscale_frames(torch.rand(2, 32, 48, 3), "model", name, 0)
+            check(f"ComfyUI's upscale-model nodes run with {name}", tuple(out.shape) == (2, 64, 96, 3) and "failed" not in note,
+                  (tuple(out.shape), note))
+    finally:
+        maps.clear()
+        maps.update(saved)
+
+
 def main():
     test_plan()
     test_pose_plan()
     test_conditioning()
     test_helpers()
     test_render()
+    test_scene_inputs()
+    test_upscale_module()
+    test_upscale_render()
+    test_upscalers_real()
     print("\nRESULT: " + ("ALL PASSED" if not _fails else f"{len(_fails)} FAILURE(S): " + "; ".join(_fails)))
     sys.exit(1 if _fails else 0)
 

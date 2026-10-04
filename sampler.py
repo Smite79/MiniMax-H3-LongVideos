@@ -17,6 +17,7 @@ import time
 import torch
 import nodes
 import comfy.samplers
+import comfy.nested_tensor
 import comfy.model_management as mm
 
 
@@ -31,6 +32,7 @@ def _load_local(name, filename):
 rt = _load_local("h3_runtime", "runtime.py")
 _load_local("h3_audio", "audio.py")
 cnd = _load_local("h3_conditioning", "conditioning.py")
+up = _load_local("h3_upscale", "upscale.py")
 try:
     pose = _load_local("h3_pose_control", "pose_control.py")
     POSE_IMPORT_ERROR = ""
@@ -44,6 +46,7 @@ RES_MULTIPLE = 32
 SPEECH_LEAD = 0.5
 LEVELS = 0.8
 POSE_LATCH_FROM = 0.4
+HANDOFF_LATENT_TAIL = 8
 
 FAST_H3_SHIFT_VIDEO = 10.0
 FAST_H3_VSA_KEEP = 0.10
@@ -106,11 +109,15 @@ def parse_paragraph(par):
     return out
 
 
-def parse_script(text):
-    paras = [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip()) if p.strip()]
+def paragraphs(text):
+    return [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip()) if p.strip()]
+
+
+def parse_script(text, all_beats=False):
+    paras = paragraphs(text)
     if not paras:
         return None, []
-    scene = parse_paragraph(paras.pop(0)) if len(paras) > 1 else None
+    scene = parse_paragraph(paras.pop(0)) if len(paras) > 1 and not all_beats else None
     return scene, [parse_paragraph(p) for p in paras]
 
 
@@ -201,11 +208,14 @@ def shot_pictures(text, refs, held_names):
     return text.strip(), [refs[n - 1] for n in live]
 
 
-def plan_shots(prompt, shot_seconds, refs, has_first_frame):
-    scene, paras = parse_script(prompt)
+def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""):
+    scene, paras = parse_script(prompt, all_beats=bool((anchor or "").strip()))
+    lead = ([parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
+            + [parse_paragraph(p) for p in paragraphs(memory)])
     state = {}
-    if scene is not None:
-        state, _, _ = apply_holds(state, scene)
+    for para in lead:
+        state, _, _ = apply_holds(state, para)
+    scene_text = "\n\n".join(p["text"] for p in lead if p["text"])
     shots = []
     for i, para in enumerate(paras):
         start = state
@@ -214,7 +224,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame):
         during = {k: v for k, v in during.items() if v}
         keyed = (i > 0 and not para["cut"]) or (i == 0 and has_first_frame)
         held = held_line(during)
-        text = "\n\n".join(x for x in ((scene or {}).get("text", ""), para["text"], held) if x)
+        text = "\n\n".join(x for x in (scene_text, para["text"], held) if x)
         text, shot_refs = shot_pictures(text, refs, list(during) if keyed else [])
         seconds = para["seconds"] or shot_seconds
         frames = rt.align_frame_count(round(seconds * rt.H3_FPS))
@@ -525,13 +535,13 @@ def sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, 
                                      latent, denoise=1.0)[0]
 
 
-def decode(vae, audio_vae, model, out):
+def decode(vae, audio_vae, model, out, tiled=False):
     keep = (vae, audio_vae)
     try:
-        rt.ensure_host_ram(rt._decode_ram(vae, out, False), keep=keep, what="the decode")
-        imgs = rt._decode_video(vae, out, False, free_first=model, keep=keep)
+        rt.ensure_host_ram(rt._decode_ram(vae, out, tiled), keep=keep, what="the decode")
+        imgs = rt._decode_video(vae, out, tiled, free_first=model, keep=keep)
     except Exception as e:
-        if not rt._is_oom(e):
+        if tiled or not rt._is_oom(e):
             raise
         rt._deep_cleanup()
         imgs = rt._decode_video(vae, out, True, free_first=model, keep=keep)
@@ -610,6 +620,13 @@ class H3LongVideos:
                 "pose_controlnet": ("MODEL_PATCH",),
                 "pose_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05}),
                 "pose_end": ("FLOAT", {"default": 0.6, "min": 0.1, "max": 1.0, "step": 0.05}),
+                "anchor": ("STRING", {"multiline": True, "default": ""}),
+                "character_memory": ("STRING", {"multiline": True, "default": ""}),
+                "latent_upscale": (up.latent_models(), {"default": "off"}),
+                "latent_upscale_scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.05}),
+                "upscale": (up.FRAME_MODES, {"default": "off"}),
+                "upscale_model": (up.frame_models(), {"default": "none"}),
+                "upscale_target_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
             },
             "hidden": {"graph": "PROMPT"},
         }
@@ -622,16 +639,20 @@ class H3LongVideos:
     def run(self, model, clip, vae, audio_vae, prompt, resolution, megapixels, shot_seconds, steps, sampler_name,
             scheduler, seed, first_frame=None, ref_image_1=None, ref_image_2=None, ref_image_3=None,
             ref_image_4=None, sigmas=None, shift_video=12.0, shift_audio=3.0, silence_wordless=True,
-            plan_only=False, pose_controlnet=None, pose_strength=1.0, pose_end=0.6, graph=None):
+            plan_only=False, pose_controlnet=None, pose_strength=1.0, pose_end=0.6, anchor="", character_memory="",
+            latent_upscale="off", latent_upscale_scale=2.0, upscale="off", upscale_model="none",
+            upscale_target_short_edge=0, graph=None, **legacy):
         t0 = time.perf_counter()
         check_vaes(vae, audio_vae)
         w, h = frame_size(resolution, megapixels)
         shots = plan_shots(prompt, shot_seconds, [ref_image_1, ref_image_2, ref_image_3, ref_image_4],
-                           first_frame is not None)
+                           first_frame is not None, character_memory, anchor)
         if not shots:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
         info = [f"{w}x{h}, {len(shots)} shots"]
+        if legacy:
+            info.append("ignored inputs from an older version of this node: " + ", ".join(sorted(legacy)))
         if plan_only:
             info += [shot_line(s) for s in shots]
             return (torch.zeros((1, h, w, 3)), {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100},
@@ -652,7 +673,7 @@ class H3LongVideos:
         acc = rt.FrameAccumulator(sum(s["frames"] for s in shots), rt._image_out_dtype(), True)
         audio_parts, sr = [], 44100
         handoff = first_frame[:1] if first_frame is not None else None
-        detector, carry = None, None
+        detector, carry, size = None, None, None
         try:
             for i, shot in enumerate(shots):
                 given = handoff if shot["keyed"] else None
@@ -692,13 +713,32 @@ class H3LongVideos:
                         patched = None
                     line += f", pose {verdict}"
                 info.append(line)
+                pre = None
+                if latent_upscale != "off" and float(latent_upscale_scale) > 1.0:
+                    video_lat, audio_lat = out["samples"].unbind()
+                    upv, note = up.upscale_latent(video_lat, latent_upscale, latent_upscale_scale)
+                    if note and note not in info:
+                        info.append(note)
+                    if upv is not video_lat:
+                        pre, imgs = video_lat, None
+                        out = dict(out, samples=comfy.nested_tensor.NestedTensor((upv, audio_lat)))
                 if imgs is None:
-                    imgs, wav = decode(vae, audio_vae, model, out)
+                    imgs, wav = decode(vae, audio_vae, model, out, tiled=pre is not None)
                 del out
-                grade = rt.shot_grade(given, imgs[0], imgs[-1], LEVELS) if imgs.shape[0] > 1 else None
+                hand = imgs[-1:]
+                if pre is not None:
+                    tail = rt._decode_video(vae, {"samples": pre[:, :, -HANDOFF_LATENT_TAIL:].contiguous()}, True)
+                    hand = tail[-1:]
+                    del tail
+                size = size or (int(imgs.shape[2]), int(imgs.shape[1]))
+                imgs = up.fit(imgs, *size)
+                grade = rt.shot_grade(given, imgs[0], imgs[-1], LEVELS,
+                                      pipe=(imgs[-1], hand[-1]) if pre is not None else None) if imgs.shape[0] > 1 else None
                 if grade is not None:
                     rt.grade_frames(imgs, *grade)
-                handoff = imgs[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True)
+                    if pre is not None:
+                        hand = rt.grade_frames(hand.clone(), grade[1], grade[1])
+                handoff = (hand if pre is not None else imgs[-1:]).detach().clamp(0.0, 1.0).to("cpu", copy=True)
                 sr = wav["sample_rate"]
                 wave = wav["waveform"]
                 if given is not None and i > 0:
@@ -720,6 +760,9 @@ class H3LongVideos:
             if detector is not None:
                 detector.release()
         video = acc.finish()
+        video, note = up.upscale_frames(video, upscale, upscale_model, upscale_target_short_edge)
+        if note:
+            info.append(note)
         total = int(video.shape[0])
         info.append(f"{total} frames, {total / rt.H3_FPS:.1f}s, rendered in {time.perf_counter() - t0:.0f}s")
         return (video, {"waveform": torch.cat(audio_parts, dim=-1), "sample_rate": sr}, " | ".join(info), script,
