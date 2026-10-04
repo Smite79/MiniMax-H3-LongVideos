@@ -64,8 +64,9 @@ Turn on **`plan_only`** to see the exact text every shot will get, without rende
 
 Paragraphs are separated by a blank line.
 
-- The **first paragraph is the scene**: who is there, what they look like, where they
-  are. It opens every shot, so keep actions out of it.
+- The **first paragraph is the scene**: where it takes place, who the characters are
+  and what they look like. It opens every shot, so keep actions out of it. It does not
+  put anyone in a shot: the beats do.
 - **Every paragraph after it is one shot**, sent word for word.
 - A prompt with a single paragraph is one shot.
 - **`anchor`** (optional) is framing for the whole film: look, camera, lighting,
@@ -101,7 +102,12 @@ wraps duct tape around her mouth*), already on (*her wrists cuffed behind her ba
   *Dan gags her* the gag goes on Mara.
 - When it cannot tell who is meant, it lists the sentence in `info` instead of guessing.
   Add a `hold:` line for those.
+- Something comes off only when a beat takes it off directly (*removes the tape*,
+  *peels the tape off her hips*). Mentioning it, or cutting more tape, does not count.
+  When more than one piece could be meant, the sentence is listed in `info` instead.
 - Each shot's line in `info` says what goes on, what is held, and what comes off.
+- Tape or rope around the hips or waist, or between the legs, is carried as you wrote
+  it and gets no pose; legs tied together count as the ankles.
 
 ### Clothing
 
@@ -151,8 +157,11 @@ The node keeps track of who is present, so people appear only when they should.
 - A character is anyone with a line in `character_memory` (`Mara: a tall woman`), a
   name written right before a picture tag (`Mara <Picture 1>`), or a name on a `hold:`
   or `exit:` line.
-- Anyone named in the scene paragraph or the anchor starts the video present.
-- Anyone named in a beat is present from that shot on, until they leave.
+- Anyone named in a beat is present from that shot on, until they leave. So is someone
+  a beat calls *her* or *him*, when they are the only woman or man among the characters.
+- The scene paragraph and the anchor describe people but do not put them in a shot.
+- A beat with nobody in it (*The camera pans across the empty bathroom*) says that nobody
+  is in the shot.
 - After a `cut`, only the people that beat names are present.
 
 For someone who is not present:

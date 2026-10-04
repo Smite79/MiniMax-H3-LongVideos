@@ -303,6 +303,26 @@ def _mentions(text, names):
     return [n for n in names if re.search(rf"\b{re.escape(n)}\b", text or "")]
 
 
+_PEOPLE = re.compile(r"\b(?:she|he|they|her|him|his|their|them|herself|himself|themselves|man|woman|men|women|girl|boy|"
+                     r"child|kid|person|people|figure|someone|somebody|anyone|everyone|crowd|guards?|nurse|doctor|officer|"
+                     r"cop|maid|waiter|waitress|driver|stranger|intruder|visitor)s?\b", re.I)
+
+
+def referred(text, names, gender, around=()):
+    out = []
+    for m in re.finditer(r"\b(she|her|herself|he|him|his|himself)\b", text or "", re.I):
+        g = "f" if m.group(1).lower() in ("she", "her", "herself") else "m"
+        hits = [n for n in names if gender.get(n) == g] or [n for n in around if gender.get(n, g) == g]
+        if len(hits) == 1 and hits[0] not in out:
+            out.append(hits[0])
+    return out
+
+
+def nobody(text, names):
+    return not (_PEOPLE.search(text or "") or extras_in(text or "")
+                or set(_CAPS.findall(text or "")) - set(names) - _COMMON_CAPS)
+
+
 def roster(sheets, texts, paras):
     names = [m.group(1) for t in sheets for m in map(_SHEET.match, t.splitlines()) if m]
     names += [n for t in texts for n in _CLAIM.findall(t)]
@@ -418,7 +438,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     scene_text = "\n\n".join(p["text"] for p in lead if p["text"])
     described = wrd.descriptions(scene_text, people)
     names = roster([p["text"] for p in lead[len(setting):]], [p["text"] for p in lead], lead + paras)
-    present = _mentions(" ".join(p["text"] for p in setting), names)
+    around, present = _mentions(" ".join(p["text"] for p in setting), names), []
     seen = _mentions(" ".join(p["text"] for p in lead), people)
     solo_seen, shots = set(), []
     for i, para in enumerate(paras):
@@ -432,7 +452,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         during = {k: [it for it in v if it not in released.get(k, [])] for k, v in start.items()}
         during = {k: v for k, v in during.items() if v}
         keyed = (i > 0 and not para["cut"]) or (i == 0 and has_first_frame)
-        named = list(dict.fromkeys(_mentions(para["text"], names) + [who for who, _ in para["hold"]]))
+        named = list(dict.fromkeys(_mentions(para["text"], names) + [who for who, _ in para["hold"]]
+                                   + referred(para["text"], names, gender, around)))
         cast = (named or present) if para["cut"] else list(dict.fromkeys(present + named))
         present = [n for n in cast if n not in leavers(para["text"], names) + para["exit"]]
         absent = [n for n in names if n not in cast]
@@ -442,13 +463,16 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         drop = absent + (list(during) if keyed else []) + recover
         text, shot_refs = shot_pictures(text, refs, drop)
         sound_text, sounded = snd.sound_line(para["text"], scene_text, speech)
-        notes = held_notes(during)
+        notes = held_notes({who: items for who, items in during.items() if who in cast or who not in names})
         notes += [f"By the last frame, {who} has {' and '.join(items)} in plain view, and whoever put it on has let go."
                   for who, items in added.items()]
         if speech or snd.vocal(para["text"]):
             notes += [snd.muffled(who, snd.mouth_item(during.get(who, []))) for who in cast
                       if snd.mouth_item(during.get(who, []))]
-        if not speech and not snd.vocal(para["text"]):
+        empty = not cast and nobody(para["text"], names)
+        if empty:
+            notes.append("Nobody is in the shot.")
+        elif not speech and not snd.vocal(para["text"]):
             gags = [snd.mouth_item(during.get(who, [])) for who in cast]
             notes.append("Nobody speaks." if any(snd.held_open(g) for g in gags) else
                          "Nobody speaks, and every mouth stays closed.")

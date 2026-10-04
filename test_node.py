@@ -73,7 +73,8 @@ def test_plan():
           and "Mara <Picture 1>" in p[1] and "Dan <Picture 2>" in p[1])
     check("a held person's portrait is dropped on a continued shot and the rest renumbered",
           shots[2]["refs"] == [IMG2] and "Mara is a tall woman" in p[2] and "Dan <Picture 1>" in p[2], p[2])
-    check("after a cut the portrait rides again", shots[4]["refs"] == [IMG1, IMG2])
+    check("after a cut, someone last seen alone gets that look and the other portrait rides again",
+          shots[4]["recover"] == ["Mara"] and shots[4]["refs"] == [IMG2], (shots[4]["recover"], len(shots[4]["refs"])))
     one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
     check("a single paragraph is one shot, keyed on a first frame", len(one) == 1 and one[0]["keyed"]
           and one[0]["prompt"].startswith("Mara waves.\n\n"), one[0]["prompt"])
@@ -336,7 +337,7 @@ def test_presence():
               "Mara waits.\n\ncut\nA garden. Mara walks along the path.")
     shots = S.plan_shots(script, 10.0, [IMG1, IMG2, None, None], False, memory="Mara: a tall woman.\nDan: a guard.\nSetting: a prison.")
     check("a named exit, a return when named, an exit: line, and a cut",
-          [s["cast"] for s in shots] == [["Mara", "Dan"], ["Mara"], ["Mara", "Dan"], ["Mara", "Dan"], ["Mara"], ["Mara"]],
+          [s["cast"] for s in shots] == [["Dan"], ["Mara"], ["Mara", "Dan"], ["Mara", "Dan"], ["Mara"], ["Mara"]],
           [s["cast"] for s in shots])
     p = shots[1]["prompt"]
     check("an absent person's picture, character line and scene sentence stay out",
@@ -370,6 +371,29 @@ def test_presence():
     check("no head count when the beat brings in other people", "There is one person" not in crowd[0]["prompt"])
     odd = S.plan_shots("She is <Picture 1>. Style: noir.\n\nShe waits.", 5.0, [IMG1, None, None, None], False)
     check("pronouns and labels are not taken for characters", odd[0]["cast"] == [] and odd[0]["refs"] == [IMG1], odd[0])
+
+
+def test_beats_decide_presence():
+    print("\n=== only the beat puts people in a shot ===")
+    memory = "Dan: a tall man.\nCrystal: a slim woman."
+    script = ("A bathroom in a small apartment. Dan and Crystal live here.\n\n"
+              "The camera views the interior of the bathroom. It pans over to the door, where it opens to the inside.\n\n"
+              "Dan walks in.\n\nCrystal follows him.")
+    shots = S.plan_shots(script, 10.0, [None] * 4, False, memory=memory)
+    check("an empty establishing beat puts nobody in the shot and says so",
+          shots[0]["cast"] == [] and shots[0]["prompt"] == "A bathroom in a small apartment.\n\nThe camera views the interior "
+          "of the bathroom. It pans over to the door, where it opens to the inside.\n\nNobody is in the shot.", shots[0]["prompt"])
+    check("people join from the beat that brings them in, not from the scene paragraph",
+          [x["cast"] for x in shots] == [[], ["Dan"], ["Dan", "Crystal"]] and "There is one person" in shots[1]["prompt"],
+          [x["cast"] for x in shots])
+    unnamed = S.plan_shots("A bathroom.\n\nA man opens the door.", 5.0, [None] * 4, False, memory=memory)
+    check("a beat with someone in it, named or not, is not called empty", "Nobody is in the shot" not in unnamed[0]["prompt"])
+    loose = S.plan_shots("A bathroom. Crystal is inside.\n\nShe looks at the mirror.", 5.0, [None] * 4, False)[0]["prompt"]
+    known = S.plan_shots("A bathroom. Crystal is inside.\n\nShe looks at the mirror.", 5.0, [None] * 4, False,
+                         memory="Crystal: a slim woman.")[0]
+    check("a beat that says she is not empty, and she is the declared woman when there is one",
+          "Nobody is in the shot" not in loose and "Crystal is inside." in loose and known["cast"] == ["Crystal"]
+          and "Crystal: a slim woman." in known["prompt"], (loose, known["cast"]))
 
 
 def test_continuity_lines():
@@ -615,6 +639,59 @@ def test_wardrobe():
           == "Max: a tall man in a grey suit.")
 
 
+def test_hips():
+    print("\n=== tape around the hips ===")
+    people, gender = ["Crystal", "Dan"], {"Crystal": "f", "Dan": "m"}
+    read = lambda t: S.rst.read(t, people, gender, {})[0]
+    check("tape around the hips and between the legs is its own part, never the ankles",
+          read("Dan wraps duct tape around her hips and between her legs.")
+          == {"Crystal": ["duct tape around her hips and between her legs"]}
+          and read("Crystal: a slim woman with duct tape wound around her waist and between her legs.")
+          == {"Crystal": ["duct tape around her waist and between her legs"]})
+    check("legs tied together are still the ankles, and a wrist position at the waist stays a position",
+          read("Dan ties her legs together.") == {"Crystal": ["rope around her ankles"]}
+          and read("Dan ties her wrists at her waist.") == {"Crystal": ["rope around her wrists at her waist"]})
+    check("tape around the hips gets no pose", S.limb_facts("duct tape around her hips and between her legs")[:2] == ("", ""))
+    memory = "Dan: a tall man.\nCrystal: a slim woman with duct tape wound around her hips and between her legs."
+    shots = S.plan_shots("A bedroom. Dan stands by the bed.\n\nDan looks down at her.\n\nCrystal turns her head.\n\n"
+                         "Dan peels the tape off her hips.", 10.0, [None] * 4, False, memory=memory)
+    check("on from the first shot as written, nothing on her ankles, and off when it is peeled off",
+          shots[0]["held"] == "Crystal: duct tape around her hips and between her legs." and shots[0]["bound"] == {}
+          and shots[2]["released"] == "Crystal: duct tape around her hips and between her legs.", [S.shot_line(x) for x in shots])
+    check("a person referred to as her is in the shot when she is the only woman", shots[0]["cast"] == ["Dan", "Crystal"],
+          shots[0]["cast"])
+    away = S.plan_shots("A hallway. Dan waits.\nhold: Crystal, duct tape over her mouth\n\nDan walks.", 5.0, [None] * 4, False,
+                        memory="Dan: a tall man.\nCrystal: a slim woman.")
+    check("what someone wears is stated only while they are in the shot",
+          away[0]["cast"] == ["Dan"] and "duct tape" not in away[0]["prompt"], away[0]["prompt"])
+
+
+def test_no_false_removal():
+    print("\n=== nothing comes off unless the beat takes it off ===")
+    people, gender = ["Crystal", "Dan"], {"Crystal": "f", "Dan": "m"}
+    hips = {"Crystal": ["duct tape around her hips and between her legs"]}
+    both = {"Crystal": ["duct tape around her hips and between her legs", "duct tape over her mouth"]}
+    off = lambda t, held: S.rst.read(t, people, gender, held)[1]
+    check("tape stays on when the beat only mentions it, cuts more of it, or puts more on",
+          all(off(t, hips) == {} for t in ("Dan removes her shirt and checks the tape.", "Dan cuts a strip of tape.",
+                                            "Dan tears off a piece of tape and presses it over her mouth.")))
+    check("tape coming off somewhere else does not take the hips tape",
+          off("Dan rips the tape off her face.", hips) == {} and off("Dan rips the tape off her mouth.", both)
+          == {"Crystal": ["duct tape over her mouth"]})
+    check("taking it off by name or place takes off exactly that piece",
+          off("Dan peels the tape off her hips.", both) == {"Crystal": ["duct tape around her hips and between her legs"]}
+          and off("Dan removes the tape.", hips) == {"Crystal": ["duct tape around her hips and between her legs"]})
+    unclear = S.rst.read("Dan pulls the tape off.", people, gender, both)
+    check("with two pieces on and no place named, it asks instead of taking both",
+          unclear[1] == {} and "which duct tape comes off" in unclear[2][0], unclear)
+    script = ("A bedroom.\nhold: Crystal, duct tape around her hips and between her legs\n\nDan removes her shirt.\n\n"
+              "Dan cuts a strip of tape.\n\nCrystal waits.")
+    shots = S.plan_shots(script, 10.0, [None] * 4, False, memory="Crystal: a slim woman.\nDan: a tall man.")
+    check("across a whole scene the tape stays held until something takes it off",
+          all(x["held"] == "Crystal: duct tape around her hips and between her legs." and not x["released"] for x in shots),
+          [S.shot_line(x) for x in shots])
+
+
 def test_scene_inputs():
     print("\n=== anchor and character memory ===")
     shots = S.plan_shots("Mara sits.\n\nMara stands.", 5.0, [None] * 4, False,
@@ -632,7 +709,8 @@ def test_scene_inputs():
     out, _ = render(SCRIPT, plan_only=True, character_memory="Dan: a guard.", negative="x", foley_level=0.2)
     check("inputs left over from an older workflow are named in info, not a crash",
           "ignored inputs from an older version of this node: foley_level, negative" in out[2], out[2])
-    check("...and character_memory reaches every shot", out[3].count("Dan: a guard.") == 6, out[3])
+    check("...and character_memory reaches every shot its person is in", out[3].count("Dan: a guard.") == 5
+          and "Dan: a guard." not in out[3].split("[shot 2]")[0], out[3])
 
 
 class V3Node:
@@ -792,11 +870,14 @@ def main():
     test_render()
     test_shot_length()
     test_presence()
+    test_beats_decide_presence()
     test_continuity_lines()
     test_quiet_mouths()
     test_directive_forms()
     test_reading()
     test_wardrobe()
+    test_hips()
+    test_no_false_removal()
     test_mumble()
     test_sound_lines()
     test_ambient_bed()
