@@ -153,12 +153,18 @@ unless a later frame of them stands in for it.
 
 - **Speech:** a shot with a quoted line (`"…"` or `<d>…</d>`) speaks. Its first half
   second is held quiet so the line does not start on the cut.
-- **Foley and ambience:** a shot without a line keeps the sounds its beat brings
-  (footsteps, a door, cuffs closing, tape tearing) and the ambience of the scene (rain,
-  traffic, a quiet house), and the prompt names them as the only sounds. A beat that
-  describes its own sounds keeps those.
-- **Silence:** a shot with nothing to hear is held silent so no voice is invented. Turn
-  `silence_wordless` off to let the model add sound there.
+- **No talking without a line:** every shot without a quoted line renders its picture
+  with the audio held silent and says that nobody speaks and every mouth stays closed,
+  so nobody's mouth moves to mumbling. The closed-mouth wording is left out when the beat
+  has its own vocal sound (*screams*, *gasps*) or a gag holds a mouth open.
+- **Foley and ambience:** such a shot keeps the sounds its beat brings (footsteps, a
+  door, cuffs closing, tape tearing) and the ambience of the scene (rain, traffic, a
+  quiet house). Its sound is made in a second, audio-only pass over the finished
+  picture, so the sound follows what is on screen and has no moving mouths to put a
+  voice to. That pass costs about one extra render of the shot. A beat that describes
+  its own sounds keeps those.
+- **Silence:** a shot with nothing to hear stays silent. Turn `silence_wordless` off to
+  render every shot in one pass with free audio instead.
 - **Gagged speech:** a gagged person in a shot with speech or vocal sounds is muffled.
   Their lips stay shut under tape, or the mouth stays held open around a ball or ring
   gag.

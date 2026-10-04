@@ -39,6 +39,7 @@ VOCALS = (
     (r"\bgrunt(?:s|ing|ed)?\b", "grunting"),
     (r"\bsigh(?:s|ing|ed)?\b", "sighing"),
     (r"\bgasp(?:s|ing|ed)?\b", "gasping"),
+    (r"\bpant(?:s|ing|ed)?\b", "panting"),
 )
 _VOCAL_NAMES = {phrase for _, phrase in VOCALS}
 
@@ -176,6 +177,10 @@ def sound_line(beat, scene, speech):
     return f"The only sound{'s are' if len(heard) > 1 else ' is'} {_join(heard)}.", True
 
 
+def held_open(item):
+    return bool(_HELD_OPEN.search(item or ""))
+
+
 def mouth_item(items):
     return next((it for it in items if _MOUTH.search(it)), "")
 
@@ -183,6 +188,6 @@ def mouth_item(items):
 def muffled(who, item):
     m = _GAG_NOUN.search(item)
     noun = m.group(1).lower() if m else "gag"
-    if _HELD_OPEN.search(item):
+    if held_open(item):
         return f"Every sound from {who} comes out muffled, the mouth held open around the {noun}."
     return f"Every sound from {who} comes out muffled, the lips held shut under the {noun}."

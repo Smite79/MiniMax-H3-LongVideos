@@ -347,6 +347,10 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         if speech or snd.vocal(para["text"]):
             notes += [snd.muffled(who, snd.mouth_item(during.get(who, []))) for who in cast
                       if snd.mouth_item(during.get(who, []))]
+        if not speech and not snd.vocal(para["text"]):
+            gags = [snd.mouth_item(during.get(who, [])) for who in cast]
+            notes.append("Nobody speaks." if any(snd.held_open(g) for g in gags) else
+                         "Nobody speaks, and every mouth stays closed.")
         notes += [sound_text, cast_line(cast, para["text"]) if names else ""]
         if keyed:
             notes.append(f"<Picture {len(shot_refs) + 1}> is the frame this shot opens on: the same place and the same "
@@ -666,6 +670,13 @@ def sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, 
                                      latent, denoise=1.0)[0]
 
 
+def foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas):
+    video, audio = out["samples"].unbind()
+    lat = dict(latent, samples=comfy.nested_tensor.NestedTensor((video, torch.zeros_like(audio))),
+               noise_mask=comfy.nested_tensor.NestedTensor((torch.zeros_like(video[:, :1]), torch.ones_like(audio[:, :1]))))
+    return sample(model, cond, negative, lat, seed, steps, sampler_name, scheduler, sigmas)
+
+
 def decode(vae, audio_vae, model, out, tiled=False):
     keep = (vae, audio_vae)
     try:
@@ -817,7 +828,7 @@ class H3LongVideos:
                 refs = shot["refs"] + [captured[n] for n in shot["recover"] if n in captured]
                 cond, latent, fc, _ = cnd.build_conditioning(
                     clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
-                    silent=shot["wordless"] and not shot["sounded"] and silence_wordless,
+                    silent=shot["wordless"] and silence_wordless,
                     lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD)
                 rt._evict_all_but(model, latent)
                 out = sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas)
@@ -851,6 +862,11 @@ class H3LongVideos:
                             verdict = f"second pass failed ({type(e).__name__}); kept the first; pose control off"
                         patched = None
                     line += f", pose {verdict}"
+                if shot["wordless"] and shot["sounded"] and silence_wordless:
+                    rt._evict_all_but(model, latent)
+                    out = foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas)
+                    wav = None
+                    line += ", sound made for the finished picture"
                 info.append(line)
                 pre = None
                 if latent_upscale != "off" and float(latent_upscale_scale) > 1.0:
@@ -863,6 +879,8 @@ class H3LongVideos:
                         out = dict(out, samples=comfy.nested_tensor.NestedTensor((upv, audio_lat)))
                 if imgs is None:
                     imgs, wav = decode(vae, audio_vae, model, out, tiled=pre is not None)
+                elif wav is None:
+                    wav = rt._decode_audio(audio_vae, out)
                 del out
                 hand = imgs[-1:]
                 if pre is not None:

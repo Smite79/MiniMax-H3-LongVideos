@@ -183,7 +183,8 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
            seconds=2.0, **run_kw):
     calls = {"cond": [], "sample": [], "pose": [], "decode": [], "tail": [], "frames_up": []}
     saved = (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
-             S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video)
+             S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video,
+             S.rt._decode_audio)
     S.check_vaes = lambda v, a: None
     S.prepare_model = lambda m, st, sn, sc, sg, sv, sa, g: (m, st, sn, None, torch.linspace(1, 0, st + 1), False, ["prepared"])
 
@@ -193,10 +194,18 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
         return "cond", {"shot": len(calls["cond"]), "fc": length}, length, silent
 
     def sample(model, cond, neg, latent, seed, steps, sn, sc, sg):
-        calls["sample"].append({"model": model, "shot": latent["shot"], "seed": seed})
+        mask = latent.get("noise_mask")
+        calls["sample"].append({"model": model, "shot": latent["shot"], "seed": seed, "foley": mask is not None,
+                                "mask": None if mask is None else [float(m.max()) for m in mask.unbind()]})
         if oom_pass2 and model == "patched":
             raise RuntimeError("CUDA out of memory")
-        lat = comfy.nested_tensor.NestedTensor((torch.zeros(1, 24, 4, 2, 2), torch.zeros(1, 32, 2, 8)))
+        if mask is not None:
+            video = latent["samples"].unbind()[0]
+            lat = comfy.nested_tensor.NestedTensor((video, torch.zeros(1, 32, 2, 8)))
+            return {"samples": lat, "shot": latent["shot"], "fc": latent["fc"],
+                    "model": "patched" if float(video.mean()) == 1.0 else "base"}
+        video = torch.full((1, 24, 4, 2, 2), 1.0 if model == "patched" else 0.0)
+        lat = comfy.nested_tensor.NestedTensor((video, torch.zeros(1, 32, 2, 8)))
         return {"samples": lat, "shot": latent["shot"], "fc": latent["fc"], "model": model}
 
     def decode(vae, avae, model, out, tiled=False):
@@ -225,6 +234,8 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     S.rt._evict_all_but = lambda *a, **k: None
     S.rt._deep_cleanup = lambda: None
     S.rt._decode_video = tail
+    S.rt._decode_audio = lambda avae, out: {"waveform": torch.full((1, 2, round(out["fc"] * 1000 / 24)), 9.0),
+                                            "sample_rate": 1000}
     S.pose = SimpleNamespace(pose_status=lambda m, cn, st, tt: (True, ""), PoseDetector=FakeDet)
     if lat_up is not None:
         S.up.upscale_latent = lat_up
@@ -235,7 +246,8 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
                                    7, pose_controlnet=pose_cn, plan_only=plan_only, **run_kw)
     finally:
         (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
-         S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video) = saved
+         S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video,
+         S.rt._decode_audio) = saved
     return out, calls
 
 
@@ -245,8 +257,12 @@ def test_render():
     video, audio, info = out[0], out[1], out[2]
     fc = [S.rt.align_frame_count(48)] * 2 + [S.rt.align_frame_count(144)] + [S.rt.align_frame_count(48)] * 3
     keyed_after_first = 4
-    check("every shot sampled once with the node's seed", [c["shot"] for c in calls["sample"]] == [1, 2, 3, 4, 5, 6]
-          and all(c["seed"] == 7 for c in calls["sample"]))
+    check("every shot sampled once with the node's seed",
+          [c["shot"] for c in calls["sample"] if not c["foley"]] == [1, 2, 3, 4, 5, 6] and all(c["seed"] == 7 for c in calls["sample"]))
+    foley = [c for c in calls["sample"] if c["foley"]]
+    check("a shot without dialogue but with sounds gets its sound made for the finished picture: video kept, audio made",
+          [c["shot"] for c in foley] == [2, 3, 5, 6] and all(c["mask"] == [0.0, 1.0] and c["model"] == "base" for c in foley)
+          and "sound made for the finished picture" in info, [(c["shot"], c["mask"]) for c in foley])
     check("frame one of each continued shot is trimmed", int(video.shape[0]) == sum(fc) - keyed_after_first,
           (int(video.shape[0]), sum(fc)))
     check("audio matches the picture", abs(int(audio["waveform"].shape[-1]) - int(video.shape[0]) * 1000 / 24) <= 6,
@@ -255,8 +271,8 @@ def test_render():
     check("each continued shot opens on the last frame of the one before", hand[0] is None and hand[4] is None
           and abs(float(hand[1].mean()) - (0.1 + (fc[0] - 1) / 1e4)) < 1e-4
           and abs(float(hand[5].mean()) - (0.5 + (fc[4] - 1) / 1e4)) < 1e-4, [None if x is None else float(x.mean()) for x in hand])
-    check("a wordless shot with nothing to hear is silenced; foley shots are not; the spoken one holds its lead",
-          [c["silent"] for c in calls["cond"]] == [True, False, False, False, False, False] and calls["cond"][3]["lead"] == 0.5,
+    check("every shot without dialogue renders its picture silent; the spoken one holds its lead",
+          [c["silent"] for c in calls["cond"]] == [True, True, True, False, True, True] and calls["cond"][3]["lead"] == 0.5,
           [c["silent"] for c in calls["cond"]])
     check("no pose without the controlnet", calls["pose"] == [] and FakeDet.made == 0)
     check("info has a line per shot and the totals", sum(1 for x in info.split(" | ") if x.startswith("shot ")) == 6
@@ -271,7 +287,7 @@ def test_render():
     check("who is who carries across continued shots and stops at a cut",
           [c["carry"] for c in calls["pose"]] == [None, ({"Mara": 2}, None), ({"Mara": 3}, None), None, ({"Mara": 5}, None)],
           [c["carry"] for c in calls["pose"]])
-    passes = [(c["shot"], c["model"]) for c in calls["sample"]]
+    passes = [(c["shot"], c["model"]) for c in calls["sample"] if not c["foley"]]
     check("a repaired shot samples a second time on the patched model, same seed",
           passes.count((3, "patched")) == 1 and passes.count((3, "base")) == 1 and all(c["seed"] == 7 for c in calls["sample"]))
     check("the repaired frames are the ones kept", abs(float(out[0][0].mean()) - 0.1) < 1e-3
@@ -358,6 +374,39 @@ def test_continuity_lines():
           "By the last frame, Mara has handcuffs behind her back, in plain view, with no one's hands in the way." in shots[1]["prompt"])
     one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
     check("a first frame is claimed too", f"<Picture 1> {claim}" in one[0]["prompt"], one[0]["prompt"])
+
+
+def test_quiet_mouths():
+    print("\n=== no talking where nobody talks ===")
+    shots = S.plan_shots(SCRIPT, 10.0, [None] * 4, False)
+    line = "Nobody speaks, and every mouth stays closed."
+    check("a shot without dialogue says nobody speaks and mouths stay closed",
+          all(line in shots[k]["prompt"] for k in (0, 1, 2, 4, 5)) and line not in shots[3]["prompt"])
+    ball = S.plan_shots("A room.\nhold: Mara, ball gag in her mouth\n\nMara waits.", 5.0, [None] * 4, False)
+    check("a gag that holds the mouth open keeps it open", "Nobody speaks." in ball[0]["prompt"] and line not in ball[0]["prompt"],
+          ball[0]["prompt"])
+    loud = S.plan_shots("A room.\n\nMara screams.", 5.0, [None] * 4, False)
+    pant = S.plan_shots("A room.\n\nMara pants.", 5.0, [None] * 4, False)
+    check("a beat with its own vocal sound is not told to keep quiet",
+          "Nobody speaks" not in loud[0]["prompt"] and "Nobody speaks" not in pant[0]["prompt"])
+    video, audio = torch.ones(1, 24, 4, 2, 2), torch.ones(1, 32, 2, 8)
+    seen = {}
+
+    def fake_sample(model, cond, neg, latent, seed, steps, sn, sc, sg):
+        seen.update(latent)
+        return "out"
+    saved = S.sample
+    S.sample = fake_sample
+    try:
+        res = S.foley_pass("m", "c", "n", {"shot": 1, "noise_mask": "old"},
+                           {"samples": comfy.nested_tensor.NestedTensor((video, audio))}, 7, 8, "euler", "simple", None)
+    finally:
+        S.sample = saved
+    v, a = seen["samples"].unbind()
+    mv, ma = seen["noise_mask"].unbind()
+    check("the sound pass keeps the finished video and makes only the audio",
+          res == "out" and bool((v == 1).all()) and float(a.abs().max()) == 0.0 and float(mv.max()) == 0.0
+          and float(ma.min()) == 1.0 and seen["shot"] == 1)
 
 
 def test_mumble():
@@ -594,6 +643,7 @@ def main():
     test_shot_length()
     test_presence()
     test_continuity_lines()
+    test_quiet_mouths()
     test_mumble()
     test_sound_lines()
     test_ambient_bed()
