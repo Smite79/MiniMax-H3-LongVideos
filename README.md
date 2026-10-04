@@ -88,13 +88,30 @@ hold: Mara, duct tape over her mouth
 Dan says "Not a sound." He walks out.
 ```
 
+### Restraints
+
+The node reads restraints and gags from your beats and carries them from shot to shot:
+handcuffs, zip ties, rope, chains, shackles, duct tape, gags and ball gags, blindfolds and
+collars. It reads them being put on (*Dan handcuffs her wrists behind her back*, *Dan
+wraps duct tape around her mouth*), already on (*her wrists cuffed behind her back*,
+*Mara sits with duct tape over her mouth*), and coming off (*Dan pulls the tape off*,
+*Dan unlocks the cuffs*).
+
+- A pronoun is read as the one other person present, never the one doing it, so in
+  *Dan gags her* the gag goes on Mara.
+- When it cannot tell who is meant, it lists the sentence in `info` instead of guessing.
+  Add a `hold:` line for those.
+- Each shot's line in `info` says what goes on, what is held, and what comes off.
+
 ### Lines the node reads
 
-These lines are taken out of the text before the model sees it.
+These lines are taken out of the text before the model sees it. `hold:` and `release:`
+correct the restraint reading: for the person they name, they replace whatever was read
+from that beat.
 
 | line | what it does |
 |---|---|
-| `hold: Name, item; item` | Name is wearing or bound with these items. From the next shot on, every prompt ends with `Name: item; item.` until the item is released. |
+| `hold: Name, item; item` | Name is wearing or bound with these items. From the next shot on, every prompt states `Name: item; item.`, that it all stays on for the whole shot, and where held wrists or ankles stay, until the item comes off. |
 | `release: Name, item` | the item comes off in this shot. `release: Name` takes everything off Name. |
 | `seconds: 6` | this shot's length, whatever `shot_length` says. |
 | `exit: Name` | Name leaves during this shot and is gone from the next. A named exit such as `Dan walks out` is read without it; use it for anything else, such as `He leaves.` |
@@ -103,7 +120,11 @@ These lines are taken out of the text before the model sees it.
 A `hold:` line in the scene paragraph, the anchor or the character memory means the
 person starts the video already held.
 
-Write each item the way it should look: `handcuffs behind her back`,
+The node also reads these lines when they are written on the same line as the
+sentence, as their own paragraph, with a dash or colon after the name, or without the
+comma. A line it still cannot read, such as a hold with no name, is listed in `info`.
+
+In a `hold:` line, write each item the way it should look: `handcuffs behind her back`,
 `wrists zip tied in front`, `rope around her ankles`, `duct tape over her mouth`.
 The shot where an item goes on is described by your own sentence, and it closes with
 the item in plain view at its last frame. The item joins the held line from the shot
@@ -126,8 +147,11 @@ For someone who is not present:
 - their `character_memory` line is left out
 - any scene sentence that is only about them is left out
 
-A shot with one or two people also says how many people are in it, unless the beat
-brings in others (*a crowd*, *a guard*).
+When everyone in a shot is a declared character, a shot with one or two people also
+says how many are in it. The count is left out whenever someone else might be there:
+a name that is not declared, or *a guard*, *the man*, *a crowd*. Declare every
+character, with a `character_memory` line or a picture tag, so the guarding covers
+them all.
 
 ### Continuity
 

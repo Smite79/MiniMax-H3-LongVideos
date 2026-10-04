@@ -357,6 +357,15 @@ def test_presence():
           and S.leavers("Dan walks away from the bed.", ["Mara", "Dan"]) == []
           and S.leavers("Mara slips out of her cuffs.", ["Mara", "Dan"]) == []
           and S.leavers("Dan left the keys on the table.", ["Mara", "Dan"]) == [])
+    taping = ("A dim room. Mara lies on the bed. Dan stands beside her.\n\n"
+              "Dan wraps duct tape around her mouth.\nhold: Mara, duct tape over her mouth")
+    loose = S.plan_shots(taping, 5.0, [None] * 4, False)[0]["prompt"]
+    known = S.plan_shots(taping, 5.0, [None] * 4, False, memory="Mara: a woman.\nDan: a man.")[0]["prompt"]
+    check("no head count while someone in the shot is not a declared character",
+          "one person" not in loose and "two people" not in loose and "There are two people in the shot" in known, (loose, known))
+    check("a person described as 'a tall woman' is not an extra; a man walking in is",
+          not S.extras_in("Mara is a tall woman.") and not S.extras_in("Dan: a man.") and not S.extras_in("Mara, a nurse, waits.")
+          and S.extras_in("A man walks in.") and S.extras_in("The guard watches.") and S.extras_in("Her boyfriend calls."))
     crowd = S.plan_shots("A street.\n\nMara walks past a crowd.", 5.0, [None] * 4, False, memory="Mara: a woman.")
     check("no head count when the beat brings in other people", "There is one person" not in crowd[0]["prompt"])
     odd = S.plan_shots("She is <Picture 1>. Style: noir.\n\nShe waits.", 5.0, [IMG1, None, None, None], False)
@@ -371,7 +380,17 @@ def test_continuity_lines():
           f"<Picture 3> {claim}" in shots[1]["prompt"] and f"<Picture 2> {claim}" in shots[2]["prompt"]
           and claim not in shots[0]["prompt"] and claim not in shots[4]["prompt"], shots[2]["prompt"])
     check("a shot where something goes on ends with it in plain view",
-          "By the last frame, Mara has handcuffs behind her back, in plain view, with no one's hands in the way." in shots[1]["prompt"])
+          "By the last frame, Mara has handcuffs behind her back in plain view, and whoever put it on has let go."
+          in shots[1]["prompt"], shots[1]["prompt"])
+    check("what is held stays on for the whole shot, wrists in place, when the next thing goes on",
+          "Mara: handcuffs behind her back. All of it stays on for the whole shot. Mara's wrists stay locked behind the back "
+          "the whole time. By the last frame, Mara has duct tape over her mouth in plain view" in shots[2]["prompt"], shots[2]["prompt"])
+    legs = S.plan_shots("A room.\nhold: Mara, wrists zip tied in front; rope around her ankles; cuffs to the bed rail\n\nMara waits.",
+                        5.0, [None] * 4, False)
+    check("held wrists in front and ankles get their own line; a restraint fastened to an object adds none",
+          "Mara's wrists stay bound in front the whole time." in legs[0]["prompt"]
+          and "Mara's ankles stay bound together the whole time." in legs[0]["prompt"]
+          and legs[0]["prompt"].count("the whole time.") == 2, legs[0]["prompt"])
     one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
     check("a first frame is claimed too", f"<Picture 1> {claim}" in one[0]["prompt"], one[0]["prompt"])
 
@@ -407,6 +426,31 @@ def test_quiet_mouths():
     check("the sound pass keeps the finished video and makes only the audio",
           res == "out" and bool((v == 1).all()) and float(a.abs().max()) == 0.0 and float(mv.max()) == 0.0
           and float(ma.min()) == 1.0 and seen["shot"] == 1)
+
+
+def test_directive_forms():
+    print("\n=== hold lines written in other ways ===")
+    tail = "\n\nDan wraps duct tape around her mouth."
+    forms = {
+        "no comma": "A room. Mara lies on the bed.\n\nDan handcuffs her wrists behind her back.\nhold: Mara handcuffs behind her back",
+        "a dash": "A room. Mara lies on the bed.\n\nDan handcuffs her wrists behind her back.\nHold: Mara - handcuffs behind her back",
+        "same line": "A room. Mara lies on the bed.\n\nDan handcuffs her wrists behind her back. hold: Mara, handcuffs behind her back",
+        "own paragraph": "A room. Mara lies on the bed.\n\nDan handcuffs her wrists behind her back.\n\nhold: Mara, handcuffs behind her back",
+    }
+    for label, script in forms.items():
+        shots = S.plan_shots(script + tail, 5.0, [None] * 4, False)
+        check(f"a hold line with {label} is read and carried to the next shot",
+              len(shots) == 2 and shots[1]["held"] == "Mara: handcuffs behind her back."
+              and "hold" not in shots[0]["prompt"].lower().replace("whole", ""), [(s["held"], s["prompt"]) for s in shots])
+    cut = S.plan_shots("A room.\n\nMara sits.\n\ncut\n\nA garden. Mara walks.", 5.0, [None] * 4, False)
+    check("a cut written as its own paragraph cuts the next shot", [s["cut"] for s in cut] == [False, True], [s["cut"] for s in cut])
+    early = S.plan_shots("hold: Mara, rope around her ankles\n\nA room. Mara sits.\n\nMara waits.", 5.0, [None] * 4, False)
+    check("a hold before the scene is on from the first shot", len(early) == 1 and early[0]["held"] == "Mara: rope around her ankles.",
+          [(s["held"], s["prompt"]) for s in early])
+    out, _ = render("A room. Mara lies on the bed.\n\nDan cuffs her.\nhold: handcuffs behind her back\n\nMara waits.",
+                    plan_only=True)
+    check("a hold line with no name is reported, not silently dropped",
+          "not read (write a hold:" in out[2] and "hold: handcuffs behind her back" in out[2], out[2])
 
 
 def test_mumble():
@@ -463,6 +507,62 @@ def test_recovered_look_render():
           len(calls["cond"]) == 2 and calls["cond"][1]["handoff"] is None and len(calls["cond"][1]["refs"]) == 1
           and abs(float(calls["cond"][1]["refs"][0].mean()) - (0.1 + (S.rt.align_frame_count(48) - 1) / 1e4)) < 1e-4,
           [(c["handoff"] is None, len(c["refs"])) for c in calls["cond"]])
+
+
+def test_reading():
+    print("\n=== restraints read from the beats ===")
+    script = ("A dim room. Mara lies on the bed. Dan stands beside her.\n\nDan handcuffs her wrists behind her back.\n\n"
+              "Dan wraps duct tape around her mouth.\n\nDan sits down and watches her.\n\nDan pulls the tape off.")
+    shots = S.plan_shots(script, 10.0, [None] * 4, False)
+    check("cuffs go on, then stay on while the tape goes on, with no hold lines",
+          shots[0]["added"] == "Mara: handcuffs behind her back." and shots[1]["held"] == "Mara: handcuffs behind her back."
+          and shots[1]["added"] == "Mara: duct tape over her mouth."
+          and "Mara's wrists stay locked behind the back the whole time." in shots[1]["prompt"], [S.shot_line(x) for x in shots])
+    check("pose control latches the cuffs as they go on and holds them after",
+          shots[0]["bound"]["Mara"]["latch_limbs"] == ("arms",) and shots[1]["bound"]["Mara"]["latch_limbs"] == ()
+          and all(x["bound"].get("Mara", {}).get("arms") == "behind the back" for x in shots[1:]))
+    check("the tape comes off and the cuffs stay", shots[3]["released"] == "Mara: duct tape over her mouth."
+          and shots[3]["held"] == "Mara: handcuffs behind her back.", S.shot_line(shots[3]))
+    people, gender = ["Mara", "Dan"], {"Mara": "f", "Dan": "m"}
+    read = lambda t, held=None: S.rst.read(t, people, gender, held or {})[0]
+    expect = {
+        "Dan cuffs Mara.": {"Mara": ["handcuffs on her wrists"]},
+        "Dan snaps the handcuffs on her wrists.": {"Mara": ["handcuffs on her wrists"]},
+        "Dan tapes her wrists and ankles together.": {"Mara": ["duct tape around her wrists", "duct tape around her ankles"]},
+        "Dan ties her ankles together with rope.": {"Mara": ["rope around her ankles"]},
+        "Dan puts a ball gag in her mouth.": {"Mara": ["a ball gag in her mouth"]},
+        "Dan gags her.": {"Mara": ["a gag in her mouth"]},
+        "Dan blindfolds her.": {"Mara": ["a blindfold over her eyes"]},
+        "Dan locks a collar around her neck.": {"Mara": ["a collar around her neck"]},
+        "Dan chains her ankles to the bed frame.": {"Mara": ["chains on her ankles to the bed frame"]},
+        "Dan zip ties her wrists in front of her.": {"Mara": ["zip ties on her wrists in front of her"]},
+        "Mara lies on the bed, her wrists cuffed behind her back.": {"Mara": ["handcuffs behind her back"]},
+        "Mara sits with duct tape over her mouth.": {"Mara": ["duct tape over her mouth"]},
+        "He cuffs her.": {"Mara": ["handcuffs on her wrists"]},
+    }
+    got = {t: read(t) for t in expect}
+    check("common restraint wording is read onto the right person", got == expect,
+          {t: g for t, g in got.items() if g != expect[t]})
+    check("whoever does the restraining is never the one restrained",
+          all("Dan" not in read(t) for t in expect))
+    quiet = ["Dan ties his shoes.", "Dan tapes the box shut.", "Mara gags at the smell.", "Dan grabs her by the collar."]
+    check("wording that only sounds like a restraint is left alone", all(read(t) == {} for t in quiet),
+          {t: read(t) for t in quiet})
+    held = {"Mara": ["duct tape over her mouth", "duct tape around her wrists", "handcuffs behind her back"]}
+    off = S.rst.read("Dan removes the tape from her mouth.", people, gender, held)[1]
+    state, _, _ = S.apply_holds(held, {"release": [(w, i) for w, i in off.items()], "hold": []})
+    check("taking the tape off her mouth leaves the tape on her wrists",
+          state["Mara"] == ["duct tape around her wrists", "handcuffs behind her back"], state)
+    three = S.rst.read("Dan cuffs her.", ["Mara", "Ana", "Dan"], {"Mara": "f", "Ana": "f", "Dan": "m"}, {})
+    check("when it cannot tell who, it says so instead of guessing", three[0] == {} and "who wears the handcuffs" in three[2][0],
+          three)
+    told = S.plan_shots("A room. Mara sits. Dan stands.\n\nDan cuffs her.\nhold: Mara, handcuffs in front of her\n\nMara waits.",
+                        5.0, [None] * 4, False)
+    check("a hold: line overrides what was read for that person", told[1]["held"] == "Mara: handcuffs in front of her.",
+          told[1]["held"])
+    check("genders come from descriptions and a following she or he",
+          S.rst.genders(["Mara", "Dan"], ["Mara is a tall woman. Dan stands beside her.", "Dan grabs the keys. He leaves."])
+          == {"Mara": "f", "Dan": "m"})
 
 
 def test_scene_inputs():
@@ -644,6 +744,8 @@ def main():
     test_presence()
     test_continuity_lines()
     test_quiet_mouths()
+    test_directive_forms()
+    test_reading()
     test_mumble()
     test_sound_lines()
     test_ambient_bed()
