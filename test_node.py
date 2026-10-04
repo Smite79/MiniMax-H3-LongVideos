@@ -560,9 +560,20 @@ def test_reading():
                         5.0, [None] * 4, False)
     check("a hold: line overrides what was read for that person", told[1]["held"] == "Mara: handcuffs in front of her.",
           told[1]["held"])
-    check("genders come from descriptions and a following she or he",
+    check("genders come only from descriptions and reflexives, not from a pronoun in the next sentence",
           S.rst.genders(["Mara", "Dan"], ["Mara is a tall woman. Dan stands beside her.", "Dan grabs the keys. He leaves."])
-          == {"Mara": "f", "Dan": "m"})
+          == {"Mara": "f"} and S.rst.genders(["Dan"], ["Dan steadies himself."]) == {"Dan": "m"})
+    crystal = ("A dim room. Crystal lies on the bed. Max stands beside her.\n\nMax handcuffs her wrists behind her back.\n\n"
+               "Max wraps duct tape around Crystal's mouth, his hands pressing it flat.")
+    last = S.plan_shots(crystal, 10.0, [None] * 4, False)[-1]
+    check("her tape is over her mouth: the possessive follows her own cuffs, not the hands of the man taping it",
+          last["added"] == "Crystal: duct tape over her mouth." and last["held"] == "Crystal: handcuffs behind her back.",
+          S.shot_line(last))
+    bare = S.plan_shots("A room. Crystal lies on the bed.\n\nMax cuffs Crystal.\n\nMax tapes Crystal's mouth shut.",
+                        10.0, [None] * 4, False)[-1]
+    check("with no pronoun anywhere the item uses her name, never a guess",
+          bare["added"] == "Crystal: duct tape over Crystal's mouth." and bare["held"] == "Crystal: handcuffs on Crystal's wrists.",
+          S.shot_line(bare))
 
 
 def test_scene_inputs():

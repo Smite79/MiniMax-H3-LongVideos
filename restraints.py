@@ -48,7 +48,6 @@ def agents(texts, stop):
 def genders(names, texts):
     out = {}
     for t in texts:
-        prev = None
         for s in sentences(t):
             named = [n for n in names if re.search(rf"\b{re.escape(n)}\b", s)]
             for n in named:
@@ -60,11 +59,12 @@ def genders(names, texts):
                 out.setdefault(named[0], "f")
             if len(named) == 1 and re.search(r"\bhimself\b", s, re.I):
                 out.setdefault(named[0], "m")
-            lead = re.match(r"\s*(She|He)\b", s)
-            if lead and prev:
-                out.setdefault(prev, "f" if lead.group(1) == "She" else "m")
-            prev = named[0] if len(named) == 1 else (None if named else prev)
     return out
+
+
+def owner(items):
+    found = [m.group(1).lower() for it in items for m in re.finditer(r"\b(her|his)\b", it, re.I)]
+    return found[0] if found and all(f == found[0] for f in found) else ""
 
 
 def tokens(text, people):
@@ -155,16 +155,22 @@ def read(text, people, gender, held):
                     unclear.append(f"who wears the {kind} in '{sentence.strip()}'")
                     continue
                 pos, anchor = _POS.search(after) or _POS.search(sentence), _ANCHOR.search(after)
-                own = re.search(r"\b(her|his|their)\s+(?:\w+\s+)?(?:wrists?|hands|arms|ankles?|feet|legs|knees|mouth|lips|eyes|"
-                                r"neck|throat)\b", after if mode != "state" else m.group(0), re.I)
-                poss = own.group(1).lower() if own else said or {"f": "her", "m": "his"}.get(gender.get(who), "their")
-                scope = m.group(0) if mode == "state" else re.split(r"[,;]\s+(?:then|and then|while|as)\b", after)[0]
-                for part in [n for n, rx in PARTS if re.search(rf"\b(?:{rx})\b", scope, re.I)] or [default]:
+                scope = m.group(0) if mode == "state" else \
+                    re.split(r"[,;]\s+(?=(?:then|and then|while|as|his|her|their|he|she|they|[A-Z][a-z]+)\b)", after)[0]
+                known = owner(held.get(who, []) + holds.get(who, [])) or {"f": "her", "m": "his"}.get(gender.get(who), "")
+                for part, rx in [(n, rx) for n, rx in PARTS if re.search(rf"\b(?:{rx})\b", scope, re.I)] or \
+                        [(default, dict(PARTS)[default])]:
                     have = held.get(who, []) + holds.get(who, [])
                     if any(key in h.lower() and (part in h.lower() or kind == "handcuffs") for h in have):
                         continue
-                    holds.setdefault(who, []).append(phrase(kind, part, pos.group(0) if pos else "", poss,
-                                                            anchor.group(0) if anchor else ""))
+                    own = re.search(rf"\b(her|his|their)\s+(?:\w+\s+)?(?:{rx})\b", scope, re.I)
+                    if own and (said or known) and own.group(1).lower() != (said or known):
+                        continue
+                    poss = own.group(1).lower() if own else said or known or f"{who}'s"
+                    item = phrase(kind, part, pos.group(0) if pos else "", poss, anchor.group(0) if anchor else "")
+                    holds.setdefault(who, []).append(item)
+                    if owner([item]) and who not in gender:
+                        gender[who] = "f" if owner([item]) == "her" else "m"
         for kind, noun, _verb, _default, key in KINDS:
             undo = [w for w, k in UNDO if k == kind]
             pats = [rf"\b(?:{REMOVE})\b[^.;!?]*?\b(?:{noun})\b", rf"\b{STRIP}\s+(?:[\w'’-]+\s+){{0,3}}?(?:{noun})\s+(?:off|away|loose|free)\b",
