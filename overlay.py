@@ -2,27 +2,10 @@
 # Copyright (c) 2026 Smite79. All rights reserved.
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
-"""
-PIL text overlays for H3-LongVideos -- watermark and intro title.
-
-Text is COMPOSITED onto the decoded frames, never asked of the model. H3 (like
-every video diffusion model) renders text as plausible-looking letterforms that
-drift, warp and re-spell themselves frame to frame; a watermark that changes
-shape every frame is worse than none. Compositing gives pixel-identical text on
-every frame at zero sampling cost, and keeps the words out of the prompt where
-they would otherwise steal conditioning from the actual shot.
-
-Both overlays are WHITE text drawn on a fully transparent RGBA layer, then
-alpha-blended over the video -- so only the glyphs themselves land on the frame
-and the picture shows through everywhere else.
-
-Everything here is best-effort: any failure returns the frames untouched with a
-note, because a cosmetic overlay must never lose a finished render.
-"""
 
 import torch
 
-BLEND_CHUNK = 64          # frames blended per slice -- bounds peak RAM on long chains
+BLEND_CHUNK = 64
 
 MIN_FONT_PX = 8
 FIT_SHRINK = 0.92
@@ -43,8 +26,6 @@ POSITIONS = {
 
 
 def _load_font(name, px):
-    """A truetype font at px, falling back through the known-present faces and
-    finally to PIL's bitmap default (which ignores size -- ugly, but never fatal)."""
     from PIL import ImageFont
     px = max(8, int(px))
     for cand in ([name] if name else []) + list(FONT_FALLBACKS):
@@ -56,17 +37,14 @@ def _load_font(name, px):
 
 
 def _measure(draw, text, font, stroke_px, spacing):
-    """(x0, y0, x1, y1) of a multi-line block, tolerant of older Pillow builds."""
     try:
         return draw.multiline_textbbox((0, 0), text, font=font, align="center",
                                        stroke_width=stroke_px, spacing=spacing)
-    except TypeError:                      # older Pillow: no stroke/spacing kwargs
+    except TypeError:
         return draw.multiline_textbbox((0, 0), text, font=font, align="center")
 
 
 def _wrap(draw, text, font, max_w, stroke_px, spacing):
-    """Greedy word-wrap every hard line to max_w. A single word wider than the
-    frame cannot be broken -- the shrink loop in render_text_layer handles that."""
     out = []
     for hard in text.split("\n"):
         words = hard.split()
@@ -87,13 +65,6 @@ def _wrap(draw, text, font, max_w, stroke_px, spacing):
 
 
 def _fit(draw, text, font_name, px, max_w, max_h, stroke_px, line_spacing, wrap=True):
-    """Largest size at or below px whose wrapped block fits (max_w, max_h).
-
-    Without this, a title is drawn at the requested size and whatever runs past the
-    frame is simply CLIPPED by PIL -- silently, with no error and no note. That is
-    the whole "overlays don't work at other resolutions" failure: the size is a
-    percentage, so the same text that fits 1344x768 overflows a 512-wide portrait
-    canvas and loses its outer characters."""
     px = max(MIN_FONT_PX, int(px))
     for _ in range(FIT_STEPS):
         font = _load_font(font_name, px)
@@ -109,16 +80,6 @@ def _fit(draw, text, font_name, px, max_w, max_h, stroke_px, line_spacing, wrap=
 def render_text_layer(width, height, text, font_px, position="bottom-right",
                       margin_pct=3.0, font_name="", stroke_px=0, line_spacing=1.15,
                       wrap=True):
-    """White text on a transparent RGBA canvas the size of one frame.
-
-    The block is WRAPPED and SHRUNK until it fits inside the margins, so the same
-    settings render legibly on every supported preset -- portrait canvases and the
-    512 tier included -- instead of being clipped at the frame edge.
-
-    Returns (rgb, alpha, bbox): rgb [H,W,3] float 0..1, alpha [H,W,1] float 0..1
-    (zero everywhere except the glyphs and their optional stroke), and the tight
-    (x0, y0, x1, y1) box of non-transparent pixels so the blend only has to touch
-    the region the text actually occupies. None when there is nothing to draw."""
     from PIL import Image, ImageDraw
     import numpy as np
 
@@ -152,7 +113,7 @@ def render_text_layer(width, height, text, font_px, position="bottom-right",
     except TypeError:
         draw.multiline_text((x, y), text, **kwargs)
 
-    arr = np.asarray(img, dtype=np.float32) / 255.0        # [H, W, 4]
+    arr = np.asarray(img, dtype=np.float32) / 255.0
     alpha = arr[..., 3:4]
     if not alpha.any():
         return None
@@ -164,11 +125,6 @@ def render_text_layer(width, height, text, font_px, position="bottom-right",
 
 
 def blend_layer(frames, layer, frame_alpha=None, opacity=1.0):
-    """Alpha-composite a rendered layer over frames [N,H,W,3] in 0..1, in place.
-
-    frame_alpha is an optional per-frame multiplier (length N) -- that is what
-    makes an intro title hold and then fade instead of sitting on the whole
-    video. Frames whose multiplier is 0 are skipped entirely."""
     if layer is None:
         return frames
     rgb, alpha, (x0, y0, x1, y1) = layer
@@ -190,8 +146,6 @@ def blend_layer(frames, layer, frame_alpha=None, opacity=1.0):
 
 
 def hold_fade_alpha(total_frames, hold_frames, fade_frames):
-    """Per-frame opacity for an intro: full through hold_frames, then a linear
-    ramp to zero over fade_frames, then nothing. Returns a length-N tensor."""
     a = torch.zeros(int(total_frames), dtype=torch.float32)
     hold = max(0, min(int(hold_frames), int(total_frames)))
     a[:hold] = 1.0
@@ -205,9 +159,6 @@ def apply_overlays(frames, fps, watermark="", wm_position="bottom-right", wm_siz
                    wm_opacity=0.75, wm_margin_pct=3.0, intro="", intro_seconds=3.0,
                    intro_fade=0.6, intro_size_pct=9.0, intro_position="center",
                    font_name="", stroke_px=0):
-    """Composite the watermark (every frame) and the intro title (first seconds
-    only, then faded out). Returns (frames, note). Never raises -- a cosmetic
-    overlay must not be able to destroy a finished render."""
     notes = []
     if frames is None or frames.ndim != 4 or frames.shape[0] == 0:
         return frames, ""
@@ -301,7 +252,6 @@ class H3Overlay:
             watermark_size=4.0, watermark_opacity=0.75, watermark_margin=3.0,
             intro_text="", intro_position="center", intro_seconds=3.0, intro_fade=0.6,
             intro_size=9.0, overlay_font="arial.ttf", overlay_stroke=0):
-        # Compositing is in-place, so copy only when there is something to draw.
         wanted = bool((watermark_text or "").strip() or (intro_text or "").strip())
         if not wanted:
             return (images.detach().cpu(),

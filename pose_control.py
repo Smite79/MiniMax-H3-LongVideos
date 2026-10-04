@@ -2,43 +2,6 @@
 # Copyright (c) 2026 Smite79. All rights reserved.
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
-"""
-Pose control for restrained characters -- a second pass held to a skeleton video.
-
-What was reported: a character whose wrists are cuffed behind the back still
-catches a fall with both hands, reaches for a door or spreads the arms, and tied
-ankles walk apart. The prompt and the keyframe both say the limbs are held; the
-model draws the motion of the beat and lets the limbs go with it. Words alone do
-not hold them.
-
-The answer here is geometry. Pass 1 renders the shot as today. DWPose reads the
-people in its frames. The restrained person is identified, and their elbows,
-wrists, knees and ankles are rewritten into the restrained shape in that person's
-OWN torso frame, frame by frame -- so a body that kneels, falls or lies face down
-carries its arms with it, and the beat's motion still happens. Everyone else keeps
-their pass-1 skeleton. The result is drawn as an OpenPose skeleton video, VAE-
-encoded once, and given to comfy's MiniMax H3 Fun ControlNet patch for pass 2,
-which runs with the same seed and conditioning and is held to the skeleton for
-the first steps only.
-
-Everything below is plain geometry on (18, 3) COCO-18 keypoint arrays (x_px, y_px,
-conf) in DWPose's own order, except the detector wrapper, the VAE encode and the
-patch install, which import their heavy dependencies lazily so the geometry can be
-tested without comfy or model files. Every threshold is a named module constant:
-all of them are estimates from body proportions and synthetic skeletons, to be
-tuned on real DWPose output.
-
-Never guess who is restrained: a wrong pick holds the captor's arms instead. Every
-doubt is a skip with a reason, and the shot keeps pass 1.
-
-Geometry cannot tell two people apart once they touch, swap places or one replaces the
-other, so the detector also reads each person's appearance from the pixels (colour
-histograms of torso, head and hair, upper legs). Wherever identity could jump -- a track
-going on after a missed frame, a person taken up again after being lost, two people
-parting after contact -- the person must look like the bound person; two who look too
-alike to keep apart skip the shot. Without appearance (a caller's own detections),
-stricter geometry stands in.
-"""
 
 import bisect
 import contextlib
@@ -57,20 +20,11 @@ import torch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-# --------------------------------------------------------------------------------------
-# Where the pose estimator lives. custom_hf_download DOWNLOADS silently when a file is
-# missing and the machine is online, and creates folders inside the aux repo while doing
-# it -- so nothing here calls from_pretrained before both files are seen on disk.
-# --------------------------------------------------------------------------------------
 AUX_SRC = os.path.normpath(os.path.join(_HERE, "..", "comfyui_controlnet_aux", "src"))
 AUX_CKPTS_DEFAULT = os.path.normpath(os.path.join(_HERE, "..", "comfyui_controlnet_aux", "ckpts"))
 DWPOSE_DET = ("hr16/yolox-onnx", "yolox_l.torchscript.pt")
 DWPOSE_POSE = ("hr16/DWPose-TorchScript-BatchSize5", "dw-ll_ucoco_384_bs5.torchscript.pt")
 
-# --------------------------------------------------------------------------------------
-# COCO-18 body order, as DWPose returns it (wholebody.py reorders to OpenPose-18; the
-# neck is the shoulder midpoint). There are no foot points: a drawing ends at the ankles.
-# --------------------------------------------------------------------------------------
 NOSE, NECK = 0, 1
 RSHO, RELB, RWRI = 2, 3, 4
 LSHO, LELB, LWRI = 5, 6, 7
@@ -85,87 +39,75 @@ LEGS_POSITIONS = ("ankles together", "held apart", "ankles to the wrists")
 MODES = ("repair", "every", "falls")
 DRAWS = ("everyone", "everyone, thick lines", "bound person only")
 
-# --------------------------------------------------------------------------------------
-# Thresholds. Lengths are in torso lengths T (neck to mid-hip in the image) unless noted.
-# --------------------------------------------------------------------------------------
-POSE_CONF = 0.3                 # DWPose's own cut: below it a point is None in its output
+POSE_CONF = 0.3
 
-# identification (design 6.1)
-POSE_ID_FRAMES = 6              # first analysed frames aggregated (median) to identify
-POSE_CARRY_IOU_MIN = 0.5        # carry across the cut: best torso-box IoU at least this
-POSE_CARRY_IOU_LEAD = 0.25      # ...and ahead of the next by at least this
-POSE_FIT_MAX = 0.35             # template fit: the k-th bound person at most this
-POSE_FIT_LEAD = 0.15            # ...and ahead of the (k+1)-th / any other assignment by this
-POSE_CAST_TOLERANCE = 1         # detected people within +-1 of the planned cast
-POSE_ID_MAX_PEOPLE = 8          # more candidates than this is a crowd: skip, never guess
-POSE_CONTACT_GAP = 0.5          # torso boxes overlapping or nearer than this many T: in contact
+POSE_ID_FRAMES = 6
+POSE_CARRY_IOU_MIN = 0.5
+POSE_CARRY_IOU_LEAD = 0.25
+POSE_FIT_MAX = 0.35
+POSE_FIT_LEAD = 0.15
+POSE_CAST_TOLERANCE = 1
+POSE_ID_MAX_PEOPLE = 8
+POSE_CONTACT_GAP = 0.5
 
-# tracking (6.2): one global assignment per analysed frame
-POSE_TRACK_HOLD = 6             # missed analysed frames a track survives
-POSE_TRACK_MISS_MAX = 0.25      # bound skeleton missing in more than this share: skip
-POSE_TRACK_GATE = 1.0           # torso centre this far (T) from its constant-velocity prediction...
-POSE_TRACK_GATE_GROW = 0.15     # ...plus this per missed analysed frame; beyond it: no match
-POSE_TRACK_STALE_COST = 0.15    # a held track pays this per missed analysed frame
-POSE_TRACK_NEW_COST = 2.0       # a person left unmatched starts a new track at this cost
-POSE_TRACK_POSE_W = 0.3         # weight of the posture change (points about the torso centre)
-POSE_TRACK_SCALE_W = 0.5        # weight of |log| of the torso-length change
-POSE_TRACK_VEL_POINTS = 3       # velocity: least squares over this many last sightings
-POSE_TRACK_T_SMOOTH = 0.5       # running torso length: weight of each new sighting
-POSE_TRACK_EXACT_MAX = 12       # without scipy: exact search up to this many people a frame
-POSE_SIG_W = 1.0                # weight of the body-proportion signature in every track cost
-POSE_SIG_FRAMES = 6             # a track's signature: mean over this many sightings
-POSE_SIG_SMOOTH = 0.3           # running signature: weight of each new sighting
-POSE_SIG_TOL = 0.12             # re-acquired track: every proportion within this of the lost one
-POSE_CROSS_MARGIN = 0.3         # kept identities must beat a swap by this (motion + signature, T)
-POSE_REACQ_RADIUS = 0.5         # re-acquired track starts this near (T) the predicted spot...
-POSE_REACQ_GROW = 0.15          # ...plus this per missed analysed frame
-POSE_GAP_MAX = 3                # bound skeleton interpolated across at most this many missed frames
-POSE_CONTACT_FILL_MAX = 1       # ...but at most this many where frames were dropped at a contact
-POSE_BOX_PAD = 0.15             # torso box padding, share of its larger side (profile boxes are thin)
-POSE_CROSS_SIG_MARGIN = 0.06    # no appearance: a separation after contact must also beat a swap
-                                # by this on the body-proportion signature alone
+POSE_TRACK_HOLD = 6
+POSE_TRACK_MISS_MAX = 0.25
+POSE_TRACK_GATE = 1.0
+POSE_TRACK_GATE_GROW = 0.15
+POSE_TRACK_STALE_COST = 0.15
+POSE_TRACK_NEW_COST = 2.0
+POSE_TRACK_POSE_W = 0.3
+POSE_TRACK_SCALE_W = 0.5
+POSE_TRACK_VEL_POINTS = 3
+POSE_TRACK_T_SMOOTH = 0.5
+POSE_TRACK_EXACT_MAX = 12
+POSE_SIG_W = 1.0
+POSE_SIG_FRAMES = 6
+POSE_SIG_SMOOTH = 0.3
+POSE_SIG_TOL = 0.12
+POSE_CROSS_MARGIN = 0.3
+POSE_REACQ_RADIUS = 0.5
+POSE_REACQ_GROW = 0.15
+POSE_GAP_MAX = 3
+POSE_CONTACT_FILL_MAX = 1
+POSE_BOX_PAD = 0.15
+POSE_CROSS_SIG_MARGIN = 0.06
 
-# appearance (identity from the pixels): colour histograms of the torso, the head and hair
-# and the upper legs, compared region by region with the Hellinger distance
-POSE_APP_HUE_BINS = 12          # coloured pixels: hue bins...
-POSE_APP_SAT_BINS = 2           # ...times saturation bins
-POSE_APP_VAL_BINS = 3           # grey pixels: dark, mid, bright
-POSE_APP_SAT_MIN = 0.25         # below this saturation a pixel is grey (its hue says nothing)
-POSE_APP_VAL_MIN = 0.15         # ...and below this value too
+POSE_APP_HUE_BINS = 12
+POSE_APP_SAT_BINS = 2
+POSE_APP_VAL_BINS = 3
+POSE_APP_SAT_MIN = 0.25
+POSE_APP_VAL_MIN = 0.15
 POSE_APP_REGIONS = ("torso", "head", "legs")
 POSE_APP_WEIGHTS = (0.5, 0.25, 0.25)
-POSE_APP_MIN_SHARED = 0.5       # a distance needs regions worth this much weight seen in both
-POSE_APP_MIN_PIXELS = 24        # a region with fewer pixels inside the frame is not seen
-POSE_APP_MAX_PIXELS = 4096      # past this a region is sampled on a coarser grid
-POSE_APP_TORSO_A = (0.15, 0.85) # torso: this span of the spine (share of T)...
-POSE_APP_TORSO_SHRINK = 0.6     # ...this share of the half shoulder width either side...
-POSE_APP_TORSO_MIN = 0.10       # ...never narrower than this (T, profile)...
-POSE_APP_TORSO_MAX = 0.30       # ...nor wider
-POSE_APP_HEAD_R = 0.15          # head and hair: a disc of this radius (T) on the head points,...
-POSE_APP_HEAD_UP = 0.10         # ...moved this far (T) toward the crown, so hair outweighs the face
-POSE_APP_LEG_A = (0.15, 0.70)   # upper legs: this span of hip to knee...
-POSE_APP_LEG_HALF = 0.07        # ...this half width (T)
-POSE_APP_MATCH_MAX = 0.35       # one person: descriptors at most this far apart
-POSE_APP_DISTINCT_MIN = 0.35    # two people who touch must be at least this far apart
-POSE_APP_MARGIN = 0.15          # who is who: the other assignment dearer by at least this
-POSE_APP_FRAMES = 6             # a stretch's appearance: mean of this many clean frames
-POSE_APP_CLEAN_PAD = 0.25       # clean frame: nobody else's points within this (T) of one's regions
-POSE_APP_W = 1.0                # weight of the appearance distance in a track cost
+POSE_APP_MIN_SHARED = 0.5
+POSE_APP_MIN_PIXELS = 24
+POSE_APP_MAX_PIXELS = 4096
+POSE_APP_TORSO_A = (0.15, 0.85)
+POSE_APP_TORSO_SHRINK = 0.6
+POSE_APP_TORSO_MIN = 0.10
+POSE_APP_TORSO_MAX = 0.30
+POSE_APP_HEAD_R = 0.15
+POSE_APP_HEAD_UP = 0.10
+POSE_APP_LEG_A = (0.15, 0.70)
+POSE_APP_LEG_HALF = 0.07
+POSE_APP_MATCH_MAX = 0.35
+POSE_APP_DISTINCT_MIN = 0.35
+POSE_APP_MARGIN = 0.15
+POSE_APP_FRAMES = 6
+POSE_APP_CLEAN_PAD = 0.25
+POSE_APP_W = 1.0
 
-# torso frame (6.3)
-POSE_T_MEDIAN = 3               # T is a median over +-3 analysed frames
-POSE_SMOOTH = 2                 # N, u, w and shoulder offsets: moving average over +-2
-POSE_VIEW_R0 = 0.20             # w = clamp((r - R0) / SPAN): r = shoulder width / T
+POSE_T_MEDIAN = 3
+POSE_SMOOTH = 2
+POSE_VIEW_R0 = 0.20
 POSE_VIEW_SPAN = 0.45
-POSE_FACING_FRAMES = 12         # facing and profile direction: majority over +-12 output frames
-POSE_FORWARD_DEADBAND = 0.02    # a face point this close to the spine line says nothing
-POSE_HALF_SHOULDER = 0.39       # assumed half shoulder width when no shoulder is ever seen
-POSE_PROFILE_WRISTS_W = 0.5     # behind the back: wrists are drawn below this view weight
-POSE_FACING_NEED_W = 0.7        # below this view weight the facing must be known
+POSE_FACING_FRAMES = 12
+POSE_FORWARD_DEADBAND = 0.02
+POSE_HALF_SHOULDER = 0.39
+POSE_PROFILE_WRISTS_W = 0.5
+POSE_FACING_NEED_W = 0.7
 
-# arm templates (6.4): (a, b). a runs down the spine from the neck in T. Frontal b is a
-# multiple of THAT side's signed shoulder offset; profile b is in T, positive toward the
-# back (away from the face), negative toward the front. The two are blended by w.
 ARM_FRONT = {
     "behind the back":      {"elbow": (0.55, 1.05), "wrist": (0.90, 0.06)},
     "in front of the body": {"elbow": (0.55, 0.95), "wrist": (0.95, 0.10)},
@@ -174,83 +116,67 @@ ARM_FRONT = {
 }
 ARM_PROFILE = {
     "behind the back":      {"elbow": (0.55, 0.28), "wrist": (0.92, 0.22)},
-    # The design gives only the profile WRIST for the next two; these elbows hang under
-    # the shoulder (in front) and sit just behind the side (hands at the waist).
     "in front of the body": {"elbow": (0.55, 0.00), "wrist": (0.95, -0.30)},
     "at the waist":         {"elbow": (0.50, 0.15), "wrist": (0.85, -0.15)},
     "above the head":       {"elbow": (-0.45, -0.10), "wrist": (-0.95, -0.05)},
 }
-POSE_BLEND_FIT = 0.35           # frame 0 fits worse: blend pass 1 into the template...
-POSE_BLEND_FRAMES = 8           # ...over this many output frames
+POSE_BLEND_FIT = 0.35
+POSE_BLEND_FRAMES = 8
 
-# hard rules of the fit: a frame that breaks one fits at POSE_FIT_VIOLATION
 POSE_FIT_VIOLATION = 1.0
-POSE_FIT_SQUARE_W = 0.9         # square views (front or back) from this view weight up
-POSE_FIT_PROFILE_W = 0.25       # profile views up to this view weight
-POSE_FIT_TOGETHER = 0.35        # both wrists seen: together when closer than this (T)...
-POSE_FIT_BAND = 1.0             # ...and each within this many shoulder offsets of the spine
-POSE_FIT_WAIST_ELBOW = 1.35     # at the waist: elbows within this many shoulder offsets (not akimbo)
-POSE_FIT_WAIST_APART = 0.6      # at the waist: both wrists seen no farther apart than this (T)
-POSE_FIT_PROFILE_SIDE = 0.05    # profile, behind the back: a seen wrist this far (T) behind the spine
+POSE_FIT_SQUARE_W = 0.9
+POSE_FIT_PROFILE_W = 0.25
+POSE_FIT_TOGETHER = 0.35
+POSE_FIT_BAND = 1.0
+POSE_FIT_WAIST_ELBOW = 1.35
+POSE_FIT_WAIST_APART = 0.6
+POSE_FIT_PROFILE_SIDE = 0.05
 
-# latch mode: a restraint that goes on during the shot
-POSE_LATCH_RUN = 3              # held from the first run of this many fitting analysed frames
-POSE_LATCH_LEG_FIT = 0.25       # legs fit for the latch: leg fit at most this (T)
-POSE_LATCH_PRESET_SHARE = 0.8   # in the held shape on this share of the frames before latch_after
-                                # (at least POSE_LATCH_RUN of them): posed from the start, not latching
-POSE_LATCH_NEAR_GAP = 1.0       # with two or more people, the one a restraint closes on came this
-                                # near someone (torso-box gap, T) before their latch run ended
+POSE_LATCH_RUN = 3
+POSE_LATCH_LEG_FIT = 0.25
+POSE_LATCH_PRESET_SHARE = 0.8
+POSE_LATCH_NEAR_GAP = 1.0
 
-# legs (6.5)
-POSE_ANKLE_GAP = 0.12           # default ankle gap when the caller gives none
-POSE_APART_MIN = 0.8            # held apart: separation clamped to [MIN, MAX] T
+POSE_ANKLE_GAP = 0.12
+POSE_APART_MIN = 0.8
 POSE_APART_MAX = 1.2
-POSE_HOGTIE_BACK = 0.15         # ankles: profile wrist point plus this toward the back
-POSE_LIMB_DEFAULT = 0.85        # thigh and shin when pass 1 never shows them
+POSE_HOGTIE_BACK = 0.15
+POSE_LIMB_DEFAULT = 0.85
 
-# repair check (6.6), run on pass 1
-POSE_BREAK_WRIST = 0.6          # visible wrist farther than this from its template wrist
-POSE_BREAK_RAISED_A = 0.45      # ...or higher than this far down the spine
-POSE_BREAK_SIDE = 1.5           # ...or farther out than this many shoulder offsets
-POSE_BREAK_SIDE_MIN_W = 0.5     # the side rule needs a view this square (profile s is ~0)
-POSE_BREAK_SIDE_NOISE = 0.1     # ...past that limit by this much (T): 3/4 views sit ~0.1 inside it
-POSE_BREAK_SIDE_RUN = 2         # ...in this many analysed frames in a row...
-POSE_BREAK_SIDE_CLEAR = 0.25    # ...unless one frame is past the limit by this much (T)
-POSE_BREAK_ELBOW = 0.45         # visible elbow farther than this from its template elbow
-POSE_BREAK_WRISTS_APART = 0.5   # both wrists visible and farther apart than this
-POSE_BREAK_ANKLES_EXTRA = 0.25  # ankle separation over ankle_gap + this
-POSE_BREAK_RUN = 3              # broken shot: this many consecutive breaking frames...
-POSE_BREAK_SHARE = 0.08         # ...or this share of the analysed frames
+POSE_BREAK_WRIST = 0.6
+POSE_BREAK_RAISED_A = 0.45
+POSE_BREAK_SIDE = 1.5
+POSE_BREAK_SIDE_MIN_W = 0.5
+POSE_BREAK_SIDE_NOISE = 0.1
+POSE_BREAK_SIDE_RUN = 2
+POSE_BREAK_SIDE_CLEAR = 0.25
+POSE_BREAK_ELBOW = 0.45
+POSE_BREAK_WRISTS_APART = 0.5
+POSE_BREAK_ANKLES_EXTRA = 0.25
+POSE_BREAK_RUN = 3
+POSE_BREAK_SHARE = 0.08
 
-# fall settle (6.7) -- new and unverified
 POSE_FALL_SETTLE = True
-POSE_FALL_WRIST_FLOOR = 0.35    # support: a wrist this close to the floor line...
-POSE_FALL_WRIST_BELOW = 0.6     # ...this far below the shoulders...
-POSE_FALL_TILT_DEG = 45.0       # ...with the torso tilted more than this
-POSE_FALL_NECK_ABOVE = 0.15     # the neck settles this far above the floor line
-POSE_FALL_RAMP = 6              # output frames to ramp the settle in, and out
-POSE_FALL_LEAVE_RUN = 3         # non-support analysed frames in a row that end support
+POSE_FALL_WRIST_FLOOR = 0.35
+POSE_FALL_WRIST_BELOW = 0.6
+POSE_FALL_TILT_DEG = 45.0
+POSE_FALL_NECK_ABOVE = 0.15
+POSE_FALL_RAMP = 6
+POSE_FALL_LEAVE_RUN = 3
 
-# other people (6.8)
-POSE_CAPTOR_NEAR = 0.3          # another wrist this close to the bound pass-1 wrist...
-POSE_CAPTOR_MOVED = 0.4         # ...where the rewrite moved that wrist this far: remove it
+POSE_CAPTOR_NEAR = 0.3
+POSE_CAPTOR_MOVED = 0.4
 
-# hint tensor and sigma window
 POSE_HINT_DTYPE = torch.float32
 POSE_SIGMA_START_PAD = 1e-3
-POSE_END_DEFAULT = 0.6          # pose_end when the one given is not a number
+POSE_END_DEFAULT = 0.6
 
-_KP = namedtuple("_KP", "x y score id")     # what aux draw_bodypose reads (.x, .y)
+_KP = namedtuple("_KP", "x y score id")
 _DRAW_FN = None
 _PRESET_CLS = None
 
 
-# ======================================================================================
-# Small helpers
-# ======================================================================================
-
 def _person(a):
-    """An (18, 3) float64 array from whatever a caller hands in; None if it is not one."""
     if a is None:
         return None
     try:
@@ -271,7 +197,6 @@ def _person(a):
 
 
 def _seq(x):
-    """A list from a list, tuple, ndarray or tensor; [] for None or a scalar."""
     if x is None:
         return []
     if torch.is_tensor(x):
@@ -331,7 +256,6 @@ def _torso_len(kp):
 
 
 def _torso_box(kp):
-    """[x0, y0, x1, y1] round the visible neck, shoulders and hips, padded."""
     if kp is None:
         return None
     pts = [kp[i, :2] for i in TORSO_POINTS if kp[i, 2] >= POSE_CONF]
@@ -376,13 +300,12 @@ def _runs(flags):
 
 
 def _spans(frames):
-    """[3, 4, 5, 9] -> "3-5, 9"."""
     frames = sorted(set(int(f) for f in frames))
     if not frames:
         return ""
     out, start, prev = [], frames[0], frames[0]
     for f in frames[1:] + [None]:
-        if f is not None and f <= prev + 2:     # stride-2 neighbours read as one span
+        if f is not None and f <= prev + 2:
             prev = f
             continue
         out.append(f"{start}-{prev}" if prev != start else f"{start}")
@@ -403,31 +326,12 @@ def _free_cuda():
         pass
 
 
-# ======================================================================================
-# Torso frame (design 6.3)
-# ======================================================================================
-
 class _Geom:
-    """Per-frame torso frame of one person over a run of analysed frames."""
     __slots__ = ("N", "u", "p", "T", "sR", "sL", "w", "front", "back", "idx", "forward_known",
                  "facing_unknown")
 
 
 def _geometry(kps, idx):
-    """Torso frame for one person's skeletons `kps` at output frames `idx`. None if the
-    torso is never seen.
-
-    N is the neck (DWPose's neck IS the shoulder midpoint), H the mid-hip or the one hip
-    there is; a frame missing either takes the last good frame's neck-to-hip vector. u
-    points from N to H, T = |NH| (median over +-3), p is u turned 90 degrees, and the
-    signed shoulder offsets along p give the view weight w (1 square to camera, 0
-    profile). A point is P = N + a*T*u + b*p, so a kneeling, falling or face-down body
-    needs no special case: the frame turns with the torso.
-
-    The back side along p comes from the face points within +-12 output frames; with
-    none there, from the frames of this track nearest to it that have one, in any
-    posture (lying is not assumed to be face down); with none in the whole track it is
-    unknown (facing_unknown)."""
     n = len(kps)
     if n == 0:
         return None
@@ -467,7 +371,7 @@ def _geometry(kps, idx):
         if l is None and r is not None:
             l = -r
         if r is not None:
-            sR[i], sL[i] = r / T_raw[i], l / T_raw[i]      # held as a share of T
+            sR[i], sL[i] = r / T_raw[i], l / T_raw[i]
     known = np.where(np.isfinite(sR))[0]
     for i in range(n):
         if not np.isfinite(sR[i]):
@@ -496,9 +400,7 @@ def _geometry(kps, idx):
     g.sR = _window_avg(sR, POSE_SMOOTH)
     g.sL = _window_avg(sL, POSE_SMOOTH)
 
-    # Facing: front when the nose or an eye is seen, majority over +-12 output frames.
     face = np.array([any(_vis(k, j) for j in (NOSE, REYE, LEYE)) for k in kps])
-    # Profile direction: the face side along p is forward, the back is the other side.
     fwd = np.zeros(n)
     for i, kp in enumerate(kps):
         pts = [j for j in (NOSE,) if _vis(kp, j)] or [j for j in (REYE, LEYE) if _vis(kp, j)] \
@@ -525,7 +427,6 @@ def _geometry(kps, idx):
         elif fwd[i] != 0:
             f = fwd[i]
         elif len(knownf):
-            # The nearest frames of this track that showed the face, carried over.
             j = knownf[np.argmin(np.abs(knownf - i))]
             near = knownf[np.abs(iarr[knownf] - iarr[j]) <= POSE_FACING_FRAMES]
             s2 = float(fwd[near].sum())
@@ -542,7 +443,6 @@ def _point(g, i, a, b_pix):
 
 
 def _arm_points(g, i, arms):
-    """{joint: (x, y)} for both elbows and wrists, and whether the wrists are drawn."""
     w, T, back = float(g.w[i]), float(g.T[i]), float(g.back[i])
     out = {}
     for part, joints in (("elbow", (RELB, LELB)), ("wrist", (RWRI, LWRI))):
@@ -554,8 +454,6 @@ def _arm_points(g, i, arms):
             out[j] = _point(g, i, a, b)
     drawn = True
     if arms == "behind the back":
-        # From the front the hands are behind the body: leave them out, the pinned elbow
-        # is what stops a reach. From behind, or near profile, they are seen.
         drawn = (not bool(g.front[i])) or w < POSE_PROFILE_WRISTS_W
     return out, drawn
 
@@ -566,10 +464,6 @@ def _hogtie_ankle(g, i):
     return _point(g, i, ap, (bp + POSE_HOGTIE_BACK) * T * back)
 
 
-# ======================================================================================
-# Fit, check and rewrite for one person
-# ======================================================================================
-
 def _spec(raw):
     raw = raw or {}
     arms = str(raw.get("arms") or "").strip()
@@ -577,7 +471,7 @@ def _spec(raw):
     arms = arms if arms in ARMS_POSITIONS else ""
     legs = legs if legs in LEGS_POSITIONS else ""
     if legs == "ankles to the wrists" and not arms:
-        arms = "behind the back"            # the wrists the ankles go to are behind the back
+        arms = "behind the back"
     try:
         gap = float(raw.get("ankle_gap") or POSE_ANKLE_GAP)
     except (TypeError, ValueError):
@@ -596,13 +490,6 @@ def _spec(raw):
 
 
 def _arm_rule_broken(kp, g, i, arms):
-    """Does frame i break a hard rule of the arm position? Square to the camera, wrists
-    that are seen must be together and inside the shoulders for behind the back, in
-    front of the body and above the head (hanging at the sides or holding something
-    apart is free), and at the waist the elbows must not flare out (hands on hips) nor
-    the wrists sit apart. In profile, a seen wrist behind the back must be behind the
-    spine. Three-quarter views have no hard rule. (Which side of the body two wrists seen
-    together are on is not ruled on: DWPose often scores hidden wrists over its cut.)"""
     w, T, N, p = float(g.w[i]), float(g.T[i]), g.N[i], g.p[i]
     wr = [j for j in (RWRI, LWRI) if _vis(kp, j)]
     if w >= POSE_FIT_SQUARE_W:
@@ -629,10 +516,6 @@ def _arm_rule_broken(kp, g, i, arms):
 
 
 def _frame_fit(kp, g, i, spec):
-    """Mean distance in T of the visible elbows and wrists from the template; a hidden or
-    low-confidence wrist counts as consistent (0). A frame that breaks a hard rule of the
-    position (_arm_rule_broken) fits at POSE_FIT_VIOLATION. None when nothing can be
-    measured."""
     T = float(g.T[i])
     if spec["arms"]:
         pts, _ = _arm_points(g, i, spec["arms"])
@@ -652,7 +535,6 @@ def _frame_fit(kp, g, i, spec):
         if _arm_rule_broken(kp, g, i, spec["arms"]):
             return POSE_FIT_VIOLATION
         return float(np.mean(ds))
-    # Legs only: measured on the ankles; a hidden ankle says nothing.
     if not (_vis(kp, RANK) and _vis(kp, LANK)):
         return None
     sep = float(np.linalg.norm(_xy(kp, RANK) - _xy(kp, LANK))) / T
@@ -662,18 +544,14 @@ def _frame_fit(kp, g, i, spec):
 
 
 def _facing_needed(g, i, spec):
-    """Frame i needs a facing the track never shows: arms on the template, near profile."""
     return bool(spec["arms"]) and bool(g.facing_unknown[i]) and float(g.w[i]) < POSE_FACING_NEED_W
 
 
 def _limb_spec(spec, limb):
-    """The spec with only one limb ("arms" or "legs") held."""
     return {**spec, "legs": ""} if limb == "arms" else {**spec, "arms": ""}
 
 
 def _latch_fits(kp, g, i, spec):
-    """Do the latch limbs of `spec` sit in the held shape in frame i? Unmeasurable, or a
-    facing that is needed and unknown, is not."""
     for limb in spec["latch_limbs"]:
         sub = _limb_spec(spec, limb)
         if limb == "arms" and _facing_needed(g, i, sub):
@@ -685,9 +563,6 @@ def _latch_fits(kp, g, i, spec):
 
 
 def _latch_start(kps, idx, ps, g, spec, after):
-    """Index into kps of the first frame at or after output frame `after` that starts a
-    run of POSE_LATCH_RUN fitting frames on consecutive analysed positions `ps`; None
-    when the latch limbs never settle."""
     if not spec["latch_limbs"] or g is None:
         return None
     fits = [_latch_fits(k, g, i, spec) for i, k in enumerate(kps)]
@@ -702,10 +577,6 @@ def _latch_start(kps, idx, ps, g, spec, after):
 
 
 def _posed_before(kps, idx, g, spec, after):
-    """Were the latch limbs of `spec` already in the held shape before output frame
-    `after`, on POSE_LATCH_PRESET_SHARE of the analysed frames there (at least
-    POSE_LATCH_RUN)? The person a restraint goes on has free limbs before it closes;
-    someone posed so from the start (a guard with hands clasped behind) is not them."""
     if not spec["latch_limbs"] or g is None:
         return False
     early = [i for i in range(len(kps)) if idx[i] < after]
@@ -716,9 +587,6 @@ def _posed_before(kps, idx, g, spec, after):
 
 
 def _touched_before(ti, upto, tracks, people):
-    """Did track ti come within POSE_LATCH_NEAR_GAP of anyone else at an analysed position
-    before `upto`? (Looser than contact: a captor half hidden behind them is often only
-    seen on the way in.)"""
     me = tracks[ti]["pos"]
     for tj, t in enumerate(tracks):
         if tj == ti:
@@ -731,7 +599,6 @@ def _touched_before(ti, upto, tracks, people):
 
 
 def _held_from(latch, limb):
-    """Output frame from which a limb is held: 0 unless it latches (None: never)."""
     if not latch or limb not in latch:
         return 0
     return latch[limb]
@@ -743,8 +610,6 @@ def _is_held(latch, limb, t):
 
 
 def _track_fit_why(kps, idx, spec):
-    """(median frame fit or None, why there is none). Frames whose facing is unknown where
-    it matters are left out."""
     g = _geometry(kps, idx)
     if g is None:
         return None, "torso not fully visible"
@@ -762,8 +627,6 @@ def _track_fit_why(kps, idx, spec):
 
 
 def _frame_breaks(kp, g, i, spec):
-    """(reasons, side_clear): why this pass-1 frame breaks the restraint (a set of short
-    reasons), and whether "hands out to the sides" clears POSE_BREAK_SIDE_CLEAR alone."""
     why = set()
     side_clear = False
     T, N, u, p, w = float(g.T[i]), g.N[i], g.u[i], g.p[i], float(g.w[i])
@@ -800,11 +663,6 @@ _LEG_BREAKS = frozenset({"ankles apart"})
 
 
 def _check(kps, idx, g, spec, latch=None):
-    """(broken, breaking output frames, reasons, held share) for one person's pass 1.
-    "Hands out to the sides" counts only in a run of POSE_BREAK_SIDE_RUN frames, or in a
-    frame past POSE_BREAK_SIDE_CLEAR: in three-quarter views a held wrist sits near it.
-    `latch` {limb: output frame or None}: a latch limb's breaks count only from its
-    latch frame on (never when it does not latch)."""
     per = []
     for i, kp in enumerate(kps):
         why, clear = _frame_breaks(kp, g, i, spec)
@@ -839,14 +697,6 @@ def _check(kps, idx, g, spec, latch=None):
 
 
 def _fall_settle(kps, idx):
-    """(settled skeletons, applied). Bound falls only, behind POSE_FALL_SETTLE.
-
-    A pass-1 fall caught on the hands leaves the torso propped up; once the arms are
-    rewritten behind the back, that torso floats with nothing under it. From the first
-    support frame (a wrist on the floor line, well below the shoulders, torso tilted past
-    45 degrees) the neck, shoulders and head are turned about the mid-hip down to the
-    floor line, ramped in over a few frames and held; the arms are then re-derived from
-    the turned torso by the caller. New and unverified."""
     out = [k.copy() for k in kps]
     n = len(kps)
     floor = -math.inf
@@ -922,8 +772,6 @@ def _fall_settle(kps, idx):
 
 
 def _two_bone(hip, ankle, l1, l2, u):
-    """Knee for a hip-knee-ankle chain; of the two solutions, the one past the hips
-    along u (a knee pointing at the head is not a knee)."""
     d_vec = ankle - hip
     d = float(np.linalg.norm(d_vec))
     if d < 1e-6:
@@ -944,7 +792,6 @@ def _two_bone(hip, ankle, l1, l2, u):
 
 
 def _limb_ratios(kps, g):
-    """Median thigh and shin lengths in T from pass 1, per side."""
     out = {}
     for side, (h, k, a) in (("R", (RHIP, RKNE, RANK)), ("L", (LHIP, LKNE, LANK))):
         th, sh = [], []
@@ -1003,9 +850,6 @@ def _rewrite_legs(out, kp, g, i, spec, limbs, apart):
 
 
 def _rewrite(kps1, kps, idx, g, spec, blend, latch=None):
-    """The restrained skeletons: arms on the template, legs per the leg position. With
-    `latch` {limb: output frame or None}, a latch limb stays as pass 1 drew it before its
-    latch frame (all through when it never latches)."""
     limbs = _limb_ratios(kps, g)
     apart = _apart_ratio(kps, g)
     out = []
@@ -1036,19 +880,13 @@ def _rewrite(kps1, kps, idx, g, spec, blend, latch=None):
     return out
 
 
-# ======================================================================================
-# Appearance: who is who from the pixels
-# ======================================================================================
-
 _APP_K = POSE_APP_HUE_BINS * POSE_APP_SAT_BINS + POSE_APP_VAL_BINS
 _APP_R = len(POSE_APP_REGIONS)
-POSE_APP_SIZE = _APP_R * _APP_K     # length of one appearance vector
+POSE_APP_SIZE = _APP_R * _APP_K
 _HEAD_POINTS = (NOSE, REYE, LEYE, REAR, LEAR)
 
 
 def _rgb_u8(image):
-    """An (H, W, 3) uint8 RGB array from a uint8 or 0..1 float array or tensor; None if
-    it is not one."""
     try:
         if torch.is_tensor(image):
             image = image.detach().cpu()
@@ -1085,7 +923,6 @@ def _grid_counts(na, nb):
 
 
 def _sample_band(img, p0, p1, half):
-    """Pixels of the rectangle along p0-p1, `half` pixels either side of it."""
     d = p1 - p0
     L = float(np.linalg.norm(d))
     if L < 1.0 or half < 0.5:
@@ -1110,9 +947,6 @@ def _sample_disc(img, c, r):
 
 
 def _colour_hist(px):
-    """Normalised histogram of RGB pixels: coloured pixels by hue and saturation (soft
-    bins; their brightness is left out, so light and shade say little), grey pixels by a
-    coarse value."""
     rgb = px.astype(np.float64) / 255.0
     r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
     v = rgb.max(axis=1)
@@ -1160,12 +994,6 @@ def _colour_hist(px):
 
 
 def person_appearance(image, keypoints):
-    """A compact appearance vector (float32, POSE_APP_SIZE) for one person in one frame,
-    or None when no region of them can be read. Three blocks, one per POSE_APP_REGIONS:
-    the torso (neck to hips, shrunk inward so the background stays out), the head and
-    hair (a disc on the head points, nearer the crown: hair shows from every side) and
-    the upper legs (hips to knees). A block whose
-    region is not visible is NaN. Numpy only."""
     kp = _person(keypoints)
     img = _rgb_u8(image)
     if kp is None or img is None:
@@ -1176,7 +1004,6 @@ def person_appearance(image, keypoints):
         return None
     u = (Hm - N) / T
     regions = []
-    # torso
     if _vis(kp, RSHO) and _vis(kp, LSHO):
         half_sh = float(np.linalg.norm(_xy(kp, RSHO) - _xy(kp, LSHO))) / 2.0
     elif _vis(kp, RSHO) or _vis(kp, LSHO):
@@ -1185,11 +1012,9 @@ def person_appearance(image, keypoints):
         half_sh = POSE_HALF_SHOULDER * T
     half = min(max(POSE_APP_TORSO_SHRINK * half_sh, POSE_APP_TORSO_MIN * T), POSE_APP_TORSO_MAX * T)
     regions.append(_sample_band(img, N + POSE_APP_TORSO_A[0] * T * u, N + POSE_APP_TORSO_A[1] * T * u, half))
-    # head and hair
     hp = [_xy(kp, j) for j in _HEAD_POINTS if _vis(kp, j)]
     regions.append(_sample_disc(img, np.mean(hp, axis=0) - POSE_APP_HEAD_UP * T * u, POSE_APP_HEAD_R * T)
                    if hp else None)
-    # upper legs
     legs = []
     for h_j, k_j in ((RHIP, RKNE), (LHIP, LKNE)):
         if _vis(kp, h_j) and _vis(kp, k_j):
@@ -1207,7 +1032,6 @@ def person_appearance(image, keypoints):
 
 
 def _app_vec(x):
-    """A float64 appearance vector from what a caller hands in; None if it is not one."""
     if x is None:
         return None
     try:
@@ -1222,10 +1046,6 @@ def _app_vec(x):
 
 
 def appearance_distance(a, b):
-    """Distance between two appearance vectors in 0..1: the Hellinger distance of each
-    region both show, weighted by POSE_APP_WEIGHTS. None when they share regions worth
-    less than POSE_APP_MIN_SHARED (or either is missing). The same person stays within
-    POSE_APP_MATCH_MAX; two people who touch must be POSE_APP_DISTINCT_MIN apart."""
     a, b = _app_vec(a), _app_vec(b)
     if a is None or b is None:
         return None
@@ -1259,7 +1079,6 @@ def _app_add(acc, v):
 
 
 def _app_mean(acc):
-    """Mean appearance vector of an accumulator, NaN for unseen regions; None if empty."""
     if acc is None or not (acc[1] > 0).any():
         return None
     out = np.full((_APP_R, _APP_K), np.nan)
@@ -1277,8 +1096,6 @@ def _app_mean_of(vecs):
 
 
 def _region_box(kp):
-    """Box round the points the appearance regions are read from, padded by
-    POSE_APP_CLEAN_PAD torso lengths; None when too little is seen."""
     T = _torso_len(kp)
     pts = [kp[j, :2] for j in (NECK, RSHO, LSHO, RHIP, LHIP, RKNE, LKNE) + _HEAD_POINTS
            if kp[j, 2] >= POSE_CONF]
@@ -1291,8 +1108,6 @@ def _region_box(kp):
 
 
 def _clean_flags(plist):
-    """Per person of one frame: True when nobody else's visible points come near the
-    regions their appearance is read from (so it is their own pixels)."""
     boxes = [_region_box(k) for k in plist]
     pboxes = [_point_box(k) for k in plist]
     out = []
@@ -1309,8 +1124,6 @@ def _clean_flags(plist):
 
 
 class _Scene:
-    """The analysed frames of one shot: skeletons, output frame numbers, appearance
-    vectors (None throughout when the detections carry none) and clean flags."""
     __slots__ = ("people", "index", "app", "clean", "has_app")
 
     def __init__(self, people, index, app=None):
@@ -1328,9 +1141,6 @@ class _Scene:
         return self.desc(p, pi) if self.has_app and self.clean[p][pi] else None
 
     def mean(self, pmap, lo=None, hi=None, count=None, from_end=False, clean=True):
-        """Mean appearance of {pos: person index} over positions lo..hi: clean frames
-        only (or, with clean=False, clean ones when there are any, else every frame
-        with a vector), the first or last `count` of them."""
         if not self.has_app:
             return None
         ps = [p for p in sorted(pmap) if (lo is None or p >= lo) and (hi is None or p <= hi)]
@@ -1343,20 +1153,11 @@ class _Scene:
         return _app_mean_of(vecs)
 
 
-# ======================================================================================
-# Tracking and identification (6.1, 6.2)
-# ======================================================================================
-
 def _centre(kp):
-    """Torso centre: midway from the neck to the mid-hip, else the torso box centre, else
-    the mean of the visible points. None when nothing is visible."""
     return _centre_q(kp)[0]
 
 
 def _centre_q(kp):
-    """(torso centre or None, measured): measured when both the neck and the mid-hip are
-    seen. An occluded body's box centre can sit most of a torso away, so only measured
-    centres drive a velocity while there are any."""
     n, h = _neck(kp), _midhip(kp)
     if n is not None and h is not None and float(np.linalg.norm(h - n)) > 1.0:
         return (n + h) / 2.0, True
@@ -1370,7 +1171,6 @@ def _centre_q(kp):
 
 
 def _signature(kp):
-    """Body proportions in T: shoulder width, upper arm, thigh. NaN where not seen."""
     out = np.full(3, np.nan)
     n, h = _neck(kp), _midhip(kp)
     if n is None or h is None:
@@ -1401,8 +1201,6 @@ def _sig_mean(sigs):
 
 
 def _sig_dist(a, b, worst=False):
-    """Mean (or, with `worst`, largest) difference of the proportions both signatures
-    have; None when none is shared."""
     if a is None or b is None:
         return None
     m = np.isfinite(a) & np.isfinite(b)
@@ -1413,8 +1211,6 @@ def _sig_dist(a, b, worst=False):
 
 
 def _posture_dist(a, b, T):
-    """Mean change in T of the points both skeletons show, about their torso centres;
-    capped at 1 (a fast arm is not another person)."""
     ca, cb = _centre(a), _centre(b)
     m = (a[:, 2] >= POSE_CONF) & (b[:, 2] >= POSE_CONF)
     if ca is None or cb is None or not m.any():
@@ -1424,8 +1220,6 @@ def _posture_dist(a, b, T):
 
 
 def _predict(hist, t):
-    """Constant-velocity torso centre at output frame t from [(frame, centre)] sightings:
-    least squares over the last POSE_TRACK_VEL_POINTS of them."""
     hist = hist[-POSE_TRACK_VEL_POINTS:]
     if len(hist) == 1:
         return np.asarray(hist[0][1], dtype=np.float64)
@@ -1440,12 +1234,10 @@ def _predict(hist, t):
 
 
 def _reach(gap):
-    """How far (T) a torso may land from its prediction `gap` analysed frames on."""
     return POSE_TRACK_GATE + POSE_TRACK_GATE_GROW * max(0, gap - 1)
 
 
 def _point_box(kp):
-    """[x0, y0, x1, y1] round every visible point; None with fewer than two."""
     pts = kp[kp[:, 2] >= POSE_CONF, :2]
     if len(pts) < 2:
         return None
@@ -1454,8 +1246,6 @@ def _point_box(kp):
 
 
 def _in_contact(a, b, box=None, gap=None):
-    """Torso boxes (or the given box function's) overlapping, or nearer than `gap`
-    (default POSE_CONTACT_GAP) torso lengths."""
     box = box or _torso_box
     gap = POSE_CONTACT_GAP if gap is None else gap
     ba, bb = box(a), box(b)
@@ -1478,9 +1268,6 @@ def _lsa():
 
 
 def _match_exact(w):
-    """Least-total pairs of a weight matrix (negative = worth pairing), every row and
-    column used at most once: exact over subsets of columns, greedy past
-    POSE_TRACK_EXACT_MAX columns."""
     R, C = w.shape
     if C > POSE_TRACK_EXACT_MAX:
         pairs, ur, uc = [], set(), set()
@@ -1510,9 +1297,6 @@ def _match_exact(w):
 
 
 def _match(cost, new_cost):
-    """[(row, col)]: tracks (rows) to people (columns) at the least total cost, where a
-    person left unmatched costs new_cost and a track nothing. One global assignment for
-    the frame: scipy's linear_sum_assignment, or an exact search without it."""
     R, C = cost.shape
     if R == 0 or C == 0:
         return []
@@ -1532,15 +1316,11 @@ def _new_track():
 
 
 def _track_hist(hist):
-    """The [(frame, centre)] a prediction is made from: the last measured centres when
-    there are any among the recent sightings, else the last sightings."""
     good = [(f, c) for f, c, ok in hist if ok]
     return (good or [(f, c) for f, c, _ok in hist])[-POSE_TRACK_VEL_POINTS:]
 
 
 def _extend(t, pos, pi, kp, frame=None, desc=None):
-    """Add skeleton kp (person pi at analysed position pos) to track t; `desc` is its
-    appearance vector when the frame is clean (it then joins the running mean)."""
     t["pos"][pos] = pi
     t["last"] = pos
     t["kp"] = kp
@@ -1565,11 +1345,6 @@ def _extend(t, pos, pi, kp, frame=None, desc=None):
 
 
 def _track_cost(t, kp, pos, frame, desc=None):
-    """Cost of extending track t with skeleton kp at analysed position pos: distance in T
-    from the constant-velocity prediction (inf past the gap-scaled reach), plus the held
-    frames, the posture and scale change and the body-proportion signature. `desc` is the
-    skeleton's appearance vector in a clean frame: against the track's running mean it
-    is a hard gate (inf past POSE_APP_MATCH_MAX) and a cost."""
     c = _centre(kp)
     if c is None or not t["hist"]:
         return math.inf
@@ -1597,12 +1372,6 @@ def _track_cost(t, kp, pos, frame, desc=None):
 
 
 def _build_tracks(people, index=None, scene=None):
-    """Tracks over every detected person. Each analysed frame is one global assignment of
-    the people to the live tracks (_track_cost), so a held track never takes a person a
-    live track explains better. Each track is a dict whose "pos" is {pos: person index};
-    a track survives POSE_TRACK_HOLD missed analysed frames. `index` gives the output frame
-    of each analysed frame (for the velocity); by default the positions themselves. With
-    a `scene` carrying appearance, a clean detection must also look like the track."""
     index = list(range(len(people))) if index is None else list(index)
     tracks = []
 
@@ -1629,8 +1398,6 @@ def _build_tracks(people, index=None, scene=None):
 
 
 def _sightings(pos_map, people, index, measured=True):
-    """[(pos, frame, centre, T, signature)] for {pos: person index}, in order: the
-    measured torso centres when there are any (and `measured`), else every centre seen."""
     out, good = [], []
     for p in sorted(pos_map):
         kp = people[p][pos_map[p]]
@@ -1643,13 +1410,10 @@ def _sightings(pos_map, people, index, measured=True):
 
 
 def _motion_cost(seq, start, gate, count=POSE_TRACK_VEL_POINTS):
-    """Constant-velocity residual (T) of the sightings seq[start : start + count], each
-    predicted from the sightings before it. With `gate`, inf past the reach."""
     return _motion_terms(seq, start, gate, count)[0]
 
 
 def _motion_terms(seq, start, gate, count=POSE_TRACK_VEL_POINTS):
-    """(the _motion_cost, how many residuals it summed)."""
     tot, terms = 0.0, 0
     for i in range(max(1, start), min(len(seq), start + count)):
         hist = seq[max(0, i - POSE_TRACK_VEL_POINTS):i]
@@ -1664,10 +1428,6 @@ def _motion_terms(seq, start, gate, count=POSE_TRACK_VEL_POINTS):
 
 
 def _swap_terms(A, B, k):
-    """(motion, signature): how much dearer swapping the tails of sightings A and B at
-    analysed position k is than keeping them, on the constant-velocity motion (T) and on
-    the body-proportion signature, apart. None when the swap cannot be posed (A must run
-    across k); (inf, inf) when the swap is out of reach."""
     Ah, At = [s for s in A if s[0] < k], [s for s in A if s[0] >= k]
     Bh, Bt = [s for s in B if s[0] < k], [s for s in B if s[0] >= k]
     if not Ah or not At or not (Bh or Bt):
@@ -1690,9 +1450,6 @@ def _swap_terms(A, B, k):
 
 
 def _swap_margin(A, B, k):
-    """How much dearer swapping the tails of sightings A and B at analysed position k is
-    than keeping them, on motion plus signature. None when the swap cannot be posed (A
-    must run across k), inf when the swap is out of reach."""
     t = _swap_terms(A, B, k)
     if t is None:
         return None
@@ -1702,18 +1459,16 @@ def _swap_margin(A, B, k):
 
 
 def _exchange_margin(A, B, k):
-    """How much dearer exchanging the sightings of A and B at analysed position k alone is
-    than keeping them, on motion plus signature; None unless both are seen at k."""
     ia = next((i for i, s in enumerate(A) if s[0] == k), None)
     ib = next((i for i, s in enumerate(B) if s[0] == k), None)
     if ia is None or ib is None:
         return None
     A2 = A[:ia] + [B[ib]] + A[ia + 1:]
     B2 = B[:ib] + [A[ia]] + B[ib + 1:]
-    n = POSE_TRACK_VEL_POINTS + 1           # the sighting itself and the predictions using it
+    n = POSE_TRACK_VEL_POINTS + 1
     (sa, ta), (sb, tb) = _motion_terms(A2, ia, True, n), _motion_terms(B2, ib, True, n)
     if not ta and not tb:
-        return None                         # no other sighting to weigh it against
+        return None
     swap = sa + sb
     if not math.isfinite(swap):
         return math.inf
@@ -1734,16 +1489,13 @@ def _exchange_margin(A, B, k):
 
 
 def _exchanges(pa, pb, people, index):
-    """Analysed positions where two people ({pos: person index}) could be exchanged for
-    that frame alone: a partly hidden body (no neck or mid-hip) touching the other, or an
-    exchange not dearer than keeping them by POSE_CROSS_MARGIN (two torsos on one spot)."""
     A = _sightings(pa, people, index, measured=False)
     B = _sightings(pb, people, index, measured=False)
     out = []
     for k in sorted(set(pa) & set(pb)):
         ka, kb = people[k][pa[k]], people[k][pb[k]]
         if not _in_contact(ka, kb, _point_box):
-            continue                        # apart: not one spot
+            continue
         if not (_centre_q(ka)[1] and _centre_q(kb)[1]):
             out.append(k)
             continue
@@ -1754,9 +1506,6 @@ def _exchanges(pa, pb, people, index):
 
 
 def _crossing(A, B):
-    """First analysed position where tracks A and B (sightings) could have swapped: a
-    swap of their tails there is not dearer than keeping them by POSE_CROSS_MARGIN.
-    Only positions where B is seen within the hold of k are posed. None when decisive."""
     if not A or not B:
         return None
     bpos = [s[0] for s in B]
@@ -1789,9 +1538,6 @@ def _fit_why(track, people, index, spec, positions):
 
 
 def _assign(names, cands, fits, specs):
-    """Best injective assignment of `names` to candidate tracks by template fit, or a
-    reason. People sharing one (arms, legs) need no assignment among themselves, so
-    assignments that differ only by such a swap count as the same answer."""
     k = len(names)
     if len(cands) < k:
         return None, f"found {len(cands)} people for {k} restrained"
@@ -1823,24 +1569,12 @@ def _assign(names, cands, fits, specs):
 
 
 def _has_torso(track, people, positions):
-    """At least two torso points seen in one of these analysed frames."""
     return any(sum(people[p][pi][j, 2] >= POSE_CONF for j in TORSO_POINTS) >= 2
                for p, pi in track["pos"].items() if p in positions)
 
 
 def _identify(tracks, people, index, specs, carry, notes, scene=None, carry_app=None,
               windows=None):
-    """{name: track number} or (None, reason). Carry across the cut first (torso-box IoU
-    against the boxes stored from the previous shot's handoff frame; when the carried
-    appearance and the detections' appearance are both there, the box's person must also
-    look like the one carried), then template fit over the first POSE_ID_FRAMES analysed
-    frames -- or, for a name in `windows` ({name: {track: positions}}, a latch shot),
-    over each track's own positions there (a track not in it never fits).
-
-    With no carry and two or more people, fit is trusted only when exactly the named
-    people fit their templates, by the margin, every other person's fit can be measured,
-    and nobody else is in contact with them (the captor behind or beside: fit cannot tell
-    a bound person reaching from a guard standing still). Alone, fit within POSE_FIT_MAX."""
     window = set(range(min(POSE_ID_FRAMES, len(people))))
     windows = windows or {}
 
@@ -1873,8 +1607,6 @@ def _identify(tracks, people, index, specs, carry, notes, scene=None, carry_app=
                     seen = scene.mean({p: pi for p, pi in t["pos"].items() if p in window}, clean=False)
                     d = appearance_distance(want, seen)
                     if d is not None and d > POSE_APP_MATCH_MAX:
-                        # The cut says who stands there and their look says otherwise:
-                        # neither can be trusted, and fit is not asked instead.
                         notes.append(f"the carried box is on someone who does not look like {nm}")
                         return None, (f"the carried box is on someone who does not look like "
                                       f"{nm}; not guessing")
@@ -1882,7 +1614,7 @@ def _identify(tracks, people, index, specs, carry, notes, scene=None, carry_app=
                         notes.append(f"too little of {nm} seen to compare looks; carried by place")
                 found[nm] = best[1]
         taken = list(found.values())
-        if len(set(taken)) != len(taken):          # two names on one body: trust neither
+        if len(set(taken)) != len(taken):
             found = {}
             notes.append("carried identity was contradictory; identified by pose instead")
         elif found:
@@ -1895,7 +1627,7 @@ def _identify(tracks, people, index, specs, carry, notes, scene=None, carry_app=
     for nm in rest:
         for ti in free:
             if nm in windows and ti not in windows[nm]:
-                fits[nm][ti] = math.inf             # never settles into the restraint
+                fits[nm][ti] = math.inf
                 continue
             f, why = _fit_why(tracks[ti], people, index, specs[nm], win(nm, ti))
             fits[nm][ti] = f
@@ -1942,11 +1674,6 @@ def _identify(tracks, people, index, specs, carry, notes, scene=None, carry_app=
 
 
 def _reappear_ok(pre, post, people, index, spec, scene):
-    """May the stretch `post` ({pos: person index}) continue the person seen in `pre`
-    after missed frames? With appearance on both sides they must look alike
-    (POSE_APP_MATCH_MAX). Without it, every body proportion within POSE_SIG_TOL and the
-    template fit of `spec` over the first POSE_ID_FRAMES of `post` within POSE_FIT_MAX
-    (nothing to fit: no)."""
     if scene is not None and scene.has_app:
         d = appearance_distance(scene.mean(pre), scene.mean(post, count=POSE_APP_FRAMES))
         if d is not None:
@@ -1964,9 +1691,6 @@ def _reappear_ok(pre, post, people, index, spec, scene):
 
 
 def _cut_at_gaps(ti, tracks, people, index, spec_at, scene):
-    """Cut track ti at the first missed frame whose reappearance fails _reappear_ok
-    (spec_at(position) is the spec held there); the rest becomes a track of its own --
-    someone else, or nobody proven. True when it cut."""
     t = tracks[ti]
     ps = sorted(t["pos"])
     for k in range(1, len(ps)):
@@ -1987,13 +1711,6 @@ def _cut_at_gaps(ti, tracks, people, index, spec_at, scene):
 
 
 def _follow(track_no, tracks, people, index, spec, taken, scene=None, spec_at=None):
-    """(positions, tracks used, ambiguous) for a bound person: their track up to the first
-    missed frame whose reappearance fails _reappear_ok, and, once it ends, a later track
-    taken as them only when it starts within the gap-scaled reach of where they were last
-    seen (predicted forward), every body proportion is within POSE_SIG_TOL of theirs, and
-    it looks like them -- or, without appearance, fits the template -- even when it is the
-    only one. Nobody qualifying: the person is not followed further. Two people near the
-    spot that both qualify: ambiguous."""
     spec_at = spec_at or (lambda p: spec)
     _cut_at_gaps(track_no, tracks, people, index, spec_at, scene)
     pos = dict((p, (track_no, pi)) for p, pi in tracks[track_no]["pos"].items())
@@ -2052,16 +1769,7 @@ def _follow(track_no, tracks, people, index, spec, taken, scene=None, spec_at=No
     return pos, used, False
 
 
-# --------------------------------------------------------------------------------------
-# Who is who where two people touch
-# --------------------------------------------------------------------------------------
-
 def _episodes(pa, pb, people):
-    """[(first, last)] analysed positions of each stretch where people pa and pb
-    ({pos: person index}) are in contact: both seen with their torsos touching, or one
-    missed while the other touches where they were last or are next seen (hidden
-    behind them, or one taken for the other). A frame where both are seen apart ends
-    one."""
     contact = {k for k in set(pa) & set(pb) if _in_contact(people[k][pa[k]], people[k][pb[k]])}
     for X, Y in ((pa, pb), (pb, pa)):
         xs = sorted(X)
@@ -2087,11 +1795,6 @@ def _episodes(pa, pb, people):
 
 
 def _app_pick(mX, mY, a, b):
-    """Which of the vectors a (X's) and b (Y's) is X, from the appearance means mX and
-    mY (mY may be None): "keep" or "swap" when one clearly looks like X (within
-    POSE_APP_MATCH_MAX, the other dearer by POSE_APP_MARGIN), "both" when both look like
-    X and nothing tells them apart (one hidden behind the other mixes their pixels),
-    None when neither does."""
     dXa, dXb = appearance_distance(mX, a), appearance_distance(mX, b)
     if dXa is None and dXb is None:
         return None
@@ -2131,8 +1834,6 @@ _UNCLEAR_AFTER = "could not tell who is who after two people met"
 
 
 def _settle_by_app(scene, X, Y, s, e, mX, mY, postX, postY, extra, swapped, dropped):
-    """One contact (positions s..e) told by appearance; see _settle_pair. (reason or "",
-    decisive: no frame where both looked like X)."""
     for a, b in ((mX, mY), (postX, postY)):
         d = appearance_distance(a, b)
         if d is not None and d < POSE_APP_DISTINCT_MIN:
@@ -2150,8 +1851,6 @@ def _settle_by_app(scene, X, Y, s, e, mX, mY, postX, postY, extra, swapped, drop
                 dropped.add(scene.index[k])
             elif pick == "both":
                 unclear.append(k)
-    # Both look like X there: the tracker's pick stands unless the two could be exchanged
-    # for that frame alone (two torsos on one spot).
     if unclear:
         for k in _exchanges(dict(X), dict(Y), scene.people, scene.index):
             if k in unclear:
@@ -2168,7 +1867,7 @@ def _settle_by_app(scene, X, Y, s, e, mX, mY, postX, postY, extra, swapped, drop
     elif postX is not None:
         dX, dY = appearance_distance(mX, postX), appearance_distance(mY, postX)
         if dX is None or dX > POSE_APP_MATCH_MAX or (dY is not None and dY + POSE_APP_MARGIN <= dX):
-            extra.append(_cut_tail(X, e))           # not them after the contact
+            extra.append(_cut_tail(X, e))
         elif dY is not None and dX + POSE_APP_MARGIN > dY:
             return _UNCLEAR_AFTER, False
     elif postY is not None:
@@ -2180,7 +1879,6 @@ def _settle_by_app(scene, X, Y, s, e, mX, mY, postX, postY, extra, swapped, drop
 
 
 def _settle_by_motion(scene, X, Y, s, e, name, spec_at, extra):
-    """One contact (positions s..e) without appearance; see _settle_pair."""
     people, index = scene.people, scene.index
     tx = sorted(p for p in X if p > e)
     ty = [p for p in Y if p > e]
@@ -2205,22 +1903,6 @@ def _settle_by_motion(scene, X, Y, s, e, name, spec_at, extra):
 
 
 def _settle_pair(scene, X, Y, name, carried, spec_at, swapped, dropped):
-    """Who is who wherever bound person X and person Y ({pos: person index}, both changed
-    in place) are in contact. (reason to skip or "", settled by appearance throughout,
-    stretches cut off X as not them).
-
-    With appearance -- X's own clean frames before the contact, else the appearance
-    carried across the cut: two people who look too alike skip the shot; inside the
-    contact each frame goes to whoever clearly looks like X, a frame where neither does is
-    left to the frames around it, and where both do (one hidden behind the other mixes
-    their pixels) the tracker's pick stands unless two torsos sit on one spot -- and the
-    pair is then not settled by appearance, so the geometric checks run too; after it,
-    the stretches that follow are assigned by appearance, and one that looks like neither
-    is cut off X.
-    Without appearance: when both go on after the contact, keeping them must beat a swap
-    by POSE_CROSS_MARGIN on motion and by POSE_CROSS_SIG_MARGIN on the signature at every
-    point of it, else the shot is skipped; when only X goes on, it must pass the
-    reappearance gates."""
     cursor, by_app, any_ep, extra = -1, True, False, []
     while X:
         eps = [ep for ep in _episodes(X, Y, scene.people) if ep[0] > cursor]
@@ -2245,14 +1927,7 @@ def _settle_pair(scene, X, Y, name, carried, spec_at, swapped, dropped):
     return "", any_ep and by_app, extra
 
 
-# ======================================================================================
-# Frames, drawing
-# ======================================================================================
-
 def _fill(frames, index, t, hold_ends):
-    """One person's skeleton at output frame t from their analysed-frame skeletons
-    {pos: (18, 3)}: exact, linear between the neighbours that both have a point, or held
-    past the ends (unlimited when hold_ends is None)."""
     if not frames:
         return None
     ps = sorted(frames)
@@ -2276,12 +1951,6 @@ def _fill(frames, index, t, hold_ends):
 
 
 def _fill_bound(frames, index, t, dropped=None):
-    """A bound person's skeleton at output frame t: as _fill, but interpolated only across
-    at most POSE_GAP_MAX missed analysed frames (POSE_CONTACT_FILL_MAX when the gap holds
-    a position in `dropped`, frames left out at a contact: a turn there is not a line).
-    Inside a longer gap, and past a track end that is not the shot's own, the skeleton is
-    held up to the first missed analysed frame and nobody is drawn after it -- a guess
-    there would land on whoever hid them."""
     if not frames:
         return None
     ps = sorted(frames)
@@ -2303,8 +1972,6 @@ def _fill_bound(frames, index, t, dropped=None):
 
 
 def _ensure_aux_path():
-    """custom_controlnet_aux importable? Found as installed first, else from the aux
-    node's own src folder -- custom-node load order is not something to rely on."""
     try:
         if importlib.util.find_spec("custom_controlnet_aux") is not None:
             return True
@@ -2320,10 +1987,6 @@ def _ensure_aux_path():
 
 
 def _draw_bodypose_port(canvas, keypoints, xinsr_stick_scaling=False):
-    """custom_controlnet_aux.dwpose.util.draw_bodypose, line for line (pixel input), for
-    when aux cannot be imported. The colours and limb order are the OpenPose-18 ones the
-    union controlnet's training controls used; they are the only thing that tells a
-    left arm from a right, so they must not drift."""
     import cv2
     CH, CW, _ = canvas.shape
     stickwidth = 4
@@ -2378,16 +2041,12 @@ def _draw_person(canvas, kp, thick):
         else:
             pts.append(None)
     seen = [k for k in pts if k is not None]
-    # aux reads a skeleton whose every point is within [0, 1] as NORMALISED; in pixels
-    # that is a person squeezed into the top-left pixel -- nothing to draw.
     if not seen or all(abs(k.x) <= 1 and abs(k.y) <= 1 for k in seen):
         return canvas
     return _drawer()(canvas, pts, xinsr_stick_scaling=bool(thick))
 
 
 def render_skeletons(skeletons_per_frame, height, width, thick=False):
-    """[F, H, W, 3] float tensor in 0..1: each frame's list of (18, 3) skeletons drawn
-    OpenPose-style on black."""
     F = len(skeletons_per_frame)
     hint = torch.zeros((F, int(height), int(width), 3), dtype=POSE_HINT_DTYPE)
     for t, people in enumerate(skeletons_per_frame):
@@ -2401,13 +2060,7 @@ def render_skeletons(skeletons_per_frame, height, width, thick=False):
     return hint
 
 
-# ======================================================================================
-# Public: carry helpers
-# ======================================================================================
-
 def torso_boxes(people_one_frame, identified):
-    """{name: torso box} for the identified people of one frame, stored so the next shot
-    can carry identity across the cut. `identified` is {name: person index or None}."""
     out = {}
     people_one_frame = list(people_one_frame or [])
     for name, i in (identified or {}).items():
@@ -2426,15 +2079,6 @@ def torso_boxes(people_one_frame, identified):
 
 
 def identify_by_boxes(people_one_frame, boxes, *, appearance=None, carry_appearance=None):
-    """{name: person index or None}: match stored torso boxes to one frame's people with
-    the carry margins (best IoU >= POSE_CARRY_IOU_MIN, ahead of the next by
-    POSE_CARRY_IOU_LEAD). For the handoff frame: identify_by_boxes(people,
-    report["boxes_last"]) then torso_boxes(people, that).
-
-    With `appearance` (one vector per person of this frame, as detect() returns it) and
-    `carry_appearance` ({name: vector}, the previous report["appearance_last"]), a carried
-    name is matched only to a person whose appearance agrees (POSE_APP_MATCH_MAX); a
-    person with no vector does not agree."""
     kps = [_person(p) for p in (people_one_frame or [])]
     apps = _seq(appearance) if appearance is not None else None
     carried = carry_appearance if hasattr(carry_appearance, "get") else None
@@ -2459,15 +2103,7 @@ def identify_by_boxes(people_one_frame, boxes, *, appearance=None, carry_appeara
     return out
 
 
-# ======================================================================================
-# Public: the hint
-# ======================================================================================
-
 def _parse_detections(det, frame_count):
-    """(index, people, appearance or None) from detect()'s dict, sorted by frame, a
-    repeated frame number's first entry kept. Unreadable skeletons become invisible ones
-    rather than being dropped, so a person index stays an index into the caller's list;
-    appearance vectors stay aligned with them (None where missing or unreadable)."""
     pairs, seen_t = [], set()
     apps_in = _seq(det.get("appearance"))
     for j, (t, plist) in enumerate(zip(_seq(det.get("index")), _seq(det.get("people")))):
@@ -2498,9 +2134,6 @@ def _parse_detections(det, frame_count):
 
 def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, mode="repair",
                     draw="everyone", cast_count=None, carry_appearance=None, latch_after=None):
-    """(skeletons per output frame, report, thick) -- build_hint up to the drawing. The
-    skeletons are None exactly when build_hint's hint is None; otherwise a list, per
-    output frame, of the (18, 3) arrays to draw (bound people first)."""
     report = {"identified": {nm: None for nm in (bound or {})}, "identified_frame": None,
               "identified_first": {nm: None for nm in (bound or {})}, "broken": False,
               "broken_frames": [], "skipped": "", "boxes_last": {}, "appearance_last": {},
@@ -2556,12 +2189,6 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
 
     tracks = _build_tracks(people, index, scene)
 
-    # A latch shot is identified where the restraint has closed: each track's own first
-    # run on the template at or after latch_after. With others in the shot, only by
-    # someone who was not already posed so before it and whom somebody came near before
-    # it closed (a guard who stands apart with his hands behind him is neither). A name
-    # whose restraint never closes on anybody is identified by its other held limbs, if
-    # it has any.
     windows, id_specs = {}, dict(specs)
     if latch_on:
         crowd = count > 1
@@ -2604,8 +2231,6 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
         return skip(why)
 
     def gate_spec(s):
-        """The spec a reappearance is fitted to at a position: latch limbs are not held
-        before latch_after."""
         if not latch_on or not s["latch_limbs"]:
             return lambda p: s
         early = {**s, **{limb: "" for limb in s["latch_limbs"]}}
@@ -2624,11 +2249,6 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
         bound_tracks |= used
         taken |= used
 
-    # Identities through contact, against anyone else (another bound person sharing the
-    # pose aside): by appearance where it is there, else motion and signature must both
-    # be clear (_settle_pair). Where no appearance settled a pair, a frame where the two
-    # could be exchanged for that frame alone (two torsos on one spot) is dropped from
-    # both, and a swap of the rest of the shot must be clearly dearer than what was kept.
     chains = {nm: {p: pi for p, (_t, pi) in bound_pos[nm].items()} for nm in found}
     rivals = [dict(t["pos"]) for ti, t in enumerate(tracks) if ti not in bound_tracks and t["pos"]]
     group = {nm: (specs[nm]["arms"], specs[nm]["legs"]) for nm in found}
@@ -2689,9 +2309,6 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
         if miss > POSE_TRACK_MISS_MAX:
             return skip(f"lost track of {nm} in {miss * 100:.0f}% of frames")
 
-    # The carry contract: indices into the last analysed frame (the handoff frame), whose
-    # torso boxes are boxes_last; appearance_last is each bound person's clean appearance
-    # over their last frames.
     last = n - 1
     report["identified_frame"] = index[last]
     for nm in sorted(found):
@@ -2704,9 +2321,8 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
             report["appearance_last"][nm] = v.astype(np.float32)
     report["boxes_last"] = torso_boxes(people[last], report["identified"])
 
-    # Per bound person: pass-1 check, settle, rewrite.
-    final = {}          # name -> {pos: skeleton}
-    pass1 = {}          # name -> {pos: skeleton}
+    final = {}
+    pass1 = {}
     broken_frames = set()
     any_fall = False
     for nm in sorted(found):
@@ -2763,7 +2379,6 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
     if mode == "falls" and not any_fall:
         return skip("no bound fall in this shot")
 
-    # Other people, from pass 1, minus an arm that grabs at a wrist the rewrite moved.
     others = {}
     if draw != "bound person only":
         T_of = {}
@@ -2785,7 +2400,6 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
                         if not _vis(pass1[nm][p], bw):
                             continue
                         old = _xy(pass1[nm][p], bw)
-                        # a wrist left out of the drawing still has its template position
                         if np.linalg.norm(final[nm][p][bw, :2] - old) <= POSE_CAPTOR_MOVED * T:
                             continue
                         for ow, oe in ((RWRI, RELB), (LWRI, LELB)):
@@ -2816,38 +2430,6 @@ def _hint_skeletons(detections, frame_count, height, width, bound, carry=None, m
 
 def build_hint(detections, frame_count, height, width, bound, carry=None, mode="repair",
                draw="everyone", *, cast_count=None, carry_appearance=None, latch_after=None):
-    """(hint, report) for one shot from pass-1 detections.
-
-    hint: [frame_count, height, width, 3] float tensor in 0..1 (OpenPose skeletons on
-    black, every frame filled by interpolation), or None when skipped -- or, in repair
-    mode, when nothing broke and no bound person falls. report: {"identified": {name:
-    person index in the LAST analysed frame (the handoff frame), or None when they are not
-    in it}, "identified_frame": that frame's output index, "identified_first": {name:
-    person index in the first analysed frame, or None}, "broken": bool, "broken_frames":
-    [output frames], "skipped": "" or why, "boxes_last": {name: torso box},
-    "appearance_last": {name: float32 appearance vector over their last clean frames},
-    "latched": {name: output frame the latch limbs are held from, or None}, "notes":
-    [...]}. boxes_last == torso_boxes(people of the handoff frame, identified); the next
-    shot's carry should be report["boxes_last"], its carry_appearance
-    report["appearance_last"].
-
-    detections: detect()'s {"index", "people"} and, when it read the pixels,
-    "appearance" (per analysed frame, one vector or None per person). With appearance,
-    identity never jumps to someone who does not look like the person (after a missed
-    frame, on re-acquisition, after contact); without it, stricter geometry rules apply.
-
-    bound: {name: {"arms", "legs", "ankle_gap", "anchored", "fall", "latch_limbs"}};
-    carry: {name: torso box} from the previous shot's handoff frame, given only when the
-    shot opens on it. mode: "repair" | "every" | "falls"; draw: "everyone" | "everyone,
-    thick lines" | "bound person only". Keyword only: `cast_count`, the planned on-screen
-    cast at the opening frame (the detected count must be within POSE_CAST_TOLERANCE of
-    it); `carry_appearance` {name: vector}, with which a carried box counts only on a
-    person who looks like them; `latch_after`, an output frame index for a shot where a
-    restraint goes on: the limbs in a person's latch_limbs are drawn as detected until
-    the first analysed frame at or after it that starts POSE_LATCH_RUN frames on the
-    template in a row, and held from there (other limbs from frame 0); identification
-    reads the frames from that run on (a carry still comes first). When no limb ever
-    latches and nothing else needs repair, the shot is skipped."""
     frames, report, thick = _hint_skeletons(detections, frame_count, height, width, bound,
                                             carry=carry, mode=mode, draw=draw,
                                             cast_count=cast_count,
@@ -2857,10 +2439,6 @@ def build_hint(detections, frame_count, height, width, bound, carry=None, mode="
         return None, report
     return render_skeletons(frames, int(height), int(width), thick=thick), report
 
-
-# ======================================================================================
-# Public: setup check
-# ======================================================================================
 
 def _dig(obj, path):
     try:
@@ -2898,13 +2476,11 @@ def _aux_ckpts_dir():
 
 
 def dwpose_paths():
-    """The two DWPose TorchScript files, where custom_controlnet_aux looks for them."""
     ck = _aux_ckpts_dir()
     return tuple(os.path.join(ck, repo, fn) for repo, fn in (DWPOSE_DET, DWPOSE_POSE))
 
 
 def dwpose_status():
-    """(ok, note): aux importable and both DWPose files on disk. Never downloads."""
     if not _ensure_aux_path():
         return False, ("pose control off: comfyui_controlnet_aux (custom_controlnet_aux) cannot "
                        "be imported; install it under custom_nodes for the DWPose estimator")
@@ -2939,13 +2515,6 @@ def _fun_patch_on(model):
 
 
 def pose_status(model, pose_cn, strength, hyperflow_two_time_on):
-    """(ok, note) for pose control on this run, in the design's order. Never raises.
-
-    Unwired or strength 0 is off and silent. Otherwise every refusal names its reason:
-    not an H3 Fun patch, an adaln width that cannot run (comfy's init_stream raises at the
-    first controlled step of shot 1 otherwise), Hyperflow two-time, no aux or no DWPose
-    files, or comfy's own Fun control already upstream (which replays one clip from frame
-    0 in every shot). Widths that cannot be read are "cannot tell": ok, with a note."""
     try:
         try:
             st = float(strength or 0.0)
@@ -2982,18 +2551,12 @@ def pose_status(model, pose_cn, strength, hyperflow_two_time_on):
                            "control replays one clip from frame 0 every shot. Remove that node to "
                            "use pose_controlnet")
         return True, "; ".join(notes)
-    except Exception as e:      # a setup check never takes a render down
+    except Exception as e:
         return False, f"pose control off: the setup check failed ({type(e).__name__}: {e})"
 
 
-# ======================================================================================
-# Public: detector
-# ======================================================================================
-
 @contextlib.contextmanager
 def _hf_offline():
-    """HF offline for the one from_pretrained call. The file check before it is the real
-    guard; this is belt and braces against a silent download."""
     old = os.environ.get("HF_HUB_OFFLINE")
     os.environ["HF_HUB_OFFLINE"] = "1"
     consts, old_c = None, None
@@ -3018,16 +2581,6 @@ def _hf_offline():
 
 
 class PoseDetector:
-    """DWPose (YOLOX + RTMPose TorchScript) body keypoints, loaded lazily once.
-
-    detect() returns {"index": analysed frame numbers, "people": per analysed frame a
-    list of (18, 3) arrays (x_px, y_px, conf), "appearance": per analysed frame one
-    person_appearance vector (float32) or None per person, aligned with "people"} with
-    the REAL scores (the aux JSON output flattens them to 0/1). The last frame is always
-    analysed, whatever the stride, so
-    build_hint's handoff frame is the shot's last frame. close() moves the TorchScript
-    modules to the CPU and empties the CUDA cache, so the DiT can come back; the next
-    detect() moves them back."""
 
     def __init__(self, device=None):
         self.device = device
@@ -3089,14 +2642,14 @@ class PoseDetector:
         stride = max(1, int(stride))
         index = list(range(0, F, stride))
         if F and index[-1] != F - 1:
-            index.append(F - 1)             # the last frame is always read: no extrapolation
+            index.append(F - 1)
         people, appearance = [], []
         with torch.no_grad():
             for i in index:
                 img = frames[i, ..., :3].detach().to(torch.float32).clamp(0, 1).mul(255.0) \
                     .round().to(torch.uint8).cpu().numpy()
                 img = np.ascontiguousarray(img)
-                with contextlib.redirect_stdout(io.StringIO()):     # it prints per frame
+                with contextlib.redirect_stdout(io.StringIO()):
                     info = est(img)
                 if info is None:
                     people.append([])
@@ -3117,21 +2670,12 @@ class PoseDetector:
         _free_cuda()
 
     def release(self):
-        """End of render: drop the models entirely (aux keeps a module-level cache)."""
         self.close()
         self._drop()
         _free_cuda()
 
 
-# ======================================================================================
-# Public: encode, install, window
-# ======================================================================================
-
 def encode_hint(vae, hint, latent_shape):
-    """The hint's latent, or None. None, with no exception, when the encoded shape is not
-    `latent_shape` (1, 24, T, h, w): comfy's patch would otherwise try to encode its own
-    control_video at the first controlled step, find None there, and crash mid-render.
-    vae.encode first, vae.encode_tiled on OOM."""
     if vae is None or hint is None:
         return None
     try:
@@ -3158,11 +2702,6 @@ def encode_hint(vae, hint, latent_shape):
 
 
 def _preset_patch_class():
-    """comfy's MiniMaxH3FunControlPatch, with a control latent that survives cleanup().
-
-    ModelPatcher.cleanup() after sampling clears control_latent; with no control_video
-    a second sampling run on the same clone (a retry) would then hand init_stream None.
-    The preset copy stays on the CPU; the GPU copy is still dropped."""
     global _PRESET_CLS
     if _PRESET_CLS is None:
         from comfy_extras.nodes_minimax_h3 import MiniMaxH3FunControlPatch
@@ -3181,10 +2720,6 @@ def _preset_patch_class():
 
 
 def install_pose_control(model, pose_cn, vae, hint_latent, latent_shape, strength, s_start, s_end):
-    """A clone of `model` carrying comfy's H3 Fun control patch, with the control latent
-    preset so the patch never VAE-encodes during sampling (which would happen with the
-    DiT resident, then reload it). Install AFTER FastH3 VSA: the Fun block patch wraps
-    VSA's as `previous`; the other order drops the control silently."""
     cls = _preset_patch_class()
     shape = tuple(int(x) for x in latent_shape)
     patch = cls(pose_cn, vae, None, None, None, float(strength), float(s_start), float(s_end))
@@ -3198,11 +2733,6 @@ def install_pose_control(model, pose_cn, vae, hint_latent, latent_shape, strengt
 
 
 def pose_sigma_window(sched, pose_end):
-    """(s_start, s_end) holding control for the first ceil(pose_end * steps) model calls of
-    this schedule. Percentages are not used: percent_to_sigma at shift 12 puts end 0.5 at
-    sigma 0.923, step 4 of 8. s_end sits midway between the last controlled sigma and the
-    first free one; -1 when every call is controlled. A pose_end that is not a finite
-    number (None, NaN) is POSE_END_DEFAULT."""
     vals = sched.tolist() if hasattr(sched, "tolist") else list(sched)
     vals = [float(v) for v in vals]
     if not vals:

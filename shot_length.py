@@ -2,26 +2,6 @@
 # Copyright (c) 2026 Smite79. All rights reserved.
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
-"""
-H3 Shot Length  (single model-free source for shot length)
-==========================================================
-Holds ONE shot-length value and emits it as both seconds and a grid-aligned
-H3 frame count. Because it never reads the model, it can sit upstream of
-Kijai's Model Preview Override without creating a cycle -- unlike the preview
-node or the sampler, which read the model to compute their frame counts and so
-cannot feed anything that produces the model.
-
-Wire:
-  H3 Shot Length (seconds) -> H3-LongVideos FL2VA (shot_seconds)
-  H3 Shot Length (frames)  -> Model Preview Override (preview_frames)
-
-One value, entered once here, drives both -- no manual re-entry, no cycle.
-
-Note: this is a FIXED shot length you choose. The sampler's *auto* (VRAM-
-picked) length can't be used for preview_frames, because computing it requires
-reading the model, which is the very dependency that creates the loop. Set the
-sampler's shot_seconds from this node's `seconds` output so the two agree.
-"""
 
 H3_MAX_FRAMES = 362
 

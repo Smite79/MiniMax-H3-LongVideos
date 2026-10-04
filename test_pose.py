@@ -1,28 +1,11 @@
-"""Tests for pose control (pose_control.py).
-
-The reports behind it: a character cuffed behind the back catches a fall with both
-hands, reaches for a door, spreads the arms; tied ankles walk apart. Pass 2 is held
-to a skeleton in which the restrained person's limbs are rewritten into the held
-shape, so the geometry that builds that skeleton is the specification here: the
-torso frame, the arm templates in every view, the legs, the repair check, who is
-identified as restrained (and that an unclear case is skipped, never guessed), the
-tracking, the frame filling and the drawing.
-
-Everything runs on synthetic keypoints on the CPU. No model is loaded, except one
-optional check that the DWPose files load and run on a synthetic image when they are
-installed.
-
-Run: python test_pose.py
-"""
-
 import io
 import math
 import os
 import sys
 from types import SimpleNamespace
 
-os.environ["CUDA_VISIBLE_DEVICES"] = ""      # CPU only, whatever the machine has
-os.environ["HF_HUB_OFFLINE"] = "1"           # never a download from a test
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
@@ -42,18 +25,8 @@ def check(label, ok, extra=""):
         _fails.append(label)
 
 
-# --------------------------------------------------------------------------------------
-# Synthetic skeletons
-# --------------------------------------------------------------------------------------
-
 def body(neck=(300.0, 120.0), T=100.0, phi=90.0, width=0.78, view="front", fwd=1.0,
          arms=None, legs=None):
-    """A COCO-18 (18, 3) skeleton. Local coordinates (a, b) are in T: a runs down the
-    spine from the neck, b along p = u turned 90 degrees (image left for an upright
-    body). phi is the angle of u (neck to hip) in the image: 90 is upright, 0 lies with
-    the head on the left. view: front | back | profile; fwd: the face side along p in
-    profile. arms / legs: {joint: (a, b) or None (hidden)} overriding the defaults
-    (arms hanging at the sides, legs standing)."""
     u = np.array([math.cos(math.radians(phi)), math.sin(math.radians(phi))])
     p = np.array([-u[1], u[0]])
     N = np.array(neck, dtype=float)
@@ -68,7 +41,7 @@ def body(neck=(300.0, 120.0), T=100.0, phi=90.0, width=0.78, view="front", fwd=1
         kp[i, 2] = c
 
     hs = width / 2.0
-    sg = -1.0 if view == "back" else 1.0          # from behind, right and left swap sides
+    sg = -1.0 if view == "back" else 1.0
     hh = max(hs * 0.55, 0.03)
     put(P.NECK, (0.0, 0.0))
     put(P.RSHO, (0.0, sg * hs))
@@ -128,21 +101,16 @@ def close(a, b, tol=1.0):
     return float(np.linalg.norm(np.asarray(a) - np.asarray(b))) <= tol
 
 
-# --------------------------------------------------------------------------------------
-# Painted figures: the pixels the appearance vectors are read from
-# --------------------------------------------------------------------------------------
-
 SKIN = (225, 180, 150)
-DRESS = {                         # top, trousers, hair
+DRESS = {
     "B": ((205, 60, 40), (40, 50, 110), (70, 40, 20)),
     "F": ((40, 150, 60), (125, 125, 125), (20, 20, 20)),
     "G": ((50, 90, 210), (25, 25, 25), (210, 180, 90)),
-    "twin": ((205, 60, 40), (40, 50, 110), (70, 40, 20)),     # dressed as B
+    "twin": ((205, 60, 40), (40, 50, 110), (70, 40, 20)),
 }
 
 
 def _seg(img, a, b, half, colour):
-    """Paint the segment a-b, `half` pixels either side of it (a disc when a == b)."""
     H, W = img.shape[:2]
     a, b = np.asarray(a, float), np.asarray(b, float)
     x0, y0 = np.floor(np.minimum(a, b) - half).astype(int)
@@ -160,8 +128,6 @@ def _seg(img, a, b, half, colour):
 
 
 def paint(people, roles, H, W, light=1.0, dress=None):
-    """An (H, W, 3) uint8 frame: each skeleton painted as a simple figure in its role's
-    clothes, in list order (the last is in front). Numpy only."""
     dress = dress or DRESS
     yy = np.linspace(0, 1, H)[:, None, None]
     img = (85 + 50 * yy + np.zeros((H, W, 3))).astype(float)
@@ -188,9 +154,6 @@ def paint(people, roles, H, W, light=1.0, dress=None):
 
 
 def with_appearance(frames, roles, H, W, stride=2, dress=None, light=None, depth=None):
-    """dets() of the frames plus the appearance vectors read from them painted: in the
-    order of depth[role] (smallest first, so behind), else in list order (the last in
-    front). light(i) scales frame i's brightness."""
     d = dets(frames, stride)
     apps = []
     for i, (fr, rl) in enumerate(zip(frames, roles)):
@@ -202,13 +165,7 @@ def with_appearance(frames, roles, H, W, stride=2, dress=None, light=None, depth
     return d
 
 
-# --------------------------------------------------------------------------------------
-# Torso frame
-# --------------------------------------------------------------------------------------
-
 def test_torso_frame():
-    """The frame every template is built in: N at the neck, u down the spine, T its
-    length, the view weight from the shoulder width, and which way the person faces."""
     print("\n=== torso frame ===")
     g, _ = geom(body())
     check("upright front: T is the neck-to-hip length", abs(g.T[0] - 100.0) < 1e-6, g.T[0])
@@ -229,7 +186,6 @@ def test_torso_frame():
     check("three-quarter (r = 0.425): view weight 0.5", abs(g.w[0] - 0.5) < 1e-6, g.w[0])
     g, _ = geom(body(phi=0.0, view="profile", width=0.1, fwd=1.0))
     check("lying (head left): u runs along the image x axis", close(g.u[0], (1, 0), 1e-6), g.u[0])
-    # A missing hip pair takes the last good frame's spine
     seq = [body() for _ in range(4)]
     seq[2][P.RHIP, 2] = 0.0
     seq[2][P.LHIP, 2] = 0.0
@@ -243,18 +199,11 @@ def test_torso_frame():
     check("no torso at all: no frame", P._geometry([np.zeros((18, 3))], [0]) is None)
 
 
-# --------------------------------------------------------------------------------------
-# Arm templates
-# --------------------------------------------------------------------------------------
-
 def test_arm_templates_front_and_back():
-    """Square to camera, each arm position lands where the design's table says: in
-    torso lengths down the spine and in shoulder offsets out to the side."""
     print("\n=== arm templates: front and back ===")
     kp = body(neck=(500.0, 300.0), T=200.0)
     out, g = rewrite([kp] * 6, {"arms": "behind the back"})
     o = out[0]
-    # N=(500,300), T=200, u=(0,1), p=(-1,0), sR=+78 px: elbow R at (500-1.05*78, 410)
     check("behind the back, front: right elbow at (0.55, 1.05 s)",
           close(img(o, P.RELB), (500 - 1.05 * 78, 410)), img(o, P.RELB))
     check("behind the back, front: left elbow mirrored",
@@ -293,8 +242,6 @@ def test_arm_templates_front_and_back():
 
 
 def test_arm_templates_profile_and_blend():
-    """In profile the arms go to the back -- the side away from the face -- and a
-    three-quarter view is the blend of the two tables."""
     print("\n=== arm templates: profile and blend ===")
     for fwd, label in ((1.0, "facing image left"), (-1.0, "facing image right")):
         kp = body(neck=(500.0, 300.0), T=200.0, view="profile", width=0.1, fwd=fwd)
@@ -318,7 +265,6 @@ def test_arm_templates_profile_and_blend():
     out, _ = rewrite([kp] * 6, {"arms": "above the head"})
     check("profile, above the head: wrists above the neck",
           out[0][P.RWRI, 1] < 300 - 0.9 * 200, img(out[0], P.RWRI))
-    # three-quarter: halfway between the two tables
     kp = body(neck=(500.0, 300.0), T=200.0, width=0.425, view="front")
     out, g = rewrite([kp] * 6, {"arms": "behind the back"})
     s = g.sR[0]
@@ -330,8 +276,6 @@ def test_arm_templates_profile_and_blend():
 
 
 def test_arm_templates_postures():
-    """Kneeling, lying face down from the side and from overhead need no special case:
-    the frame is the torso's."""
     print("\n=== arm templates: kneeling and lying ===")
     stand = body(neck=(500.0, 300.0), T=200.0)
     kneel = body(neck=(500.0, 300.0), T=200.0,
@@ -340,7 +284,6 @@ def test_arm_templates_postures():
     b, _ = rewrite([kneel] * 6, {"arms": "behind the back"})
     check("kneeling: the arms sit where they do standing",
           np.allclose(a[0][[P.RELB, P.LELB, P.RWRI, P.LWRI]], b[0][[P.RELB, P.LELB, P.RWRI, P.LWRI]]))
-    # Face down seen from the side: head on the left, torso along x, nose to the floor.
     down = body(neck=(300.0, 500.0), T=200.0, phi=0.0, view="profile", width=0.1, fwd=1.0)
     check("(the synthetic face-down body has its nose toward the floor)", down[P.NOSE, 1] > 500)
     out, g = rewrite([down] * 6, {"arms": "behind the back"})
@@ -351,7 +294,6 @@ def test_arm_templates_postures():
     check("face down, side: wrists drawn on the back near the hips",
           o[P.RWRI, 2] >= P.POSE_CONF and o[P.RWRI, 1] < 500 and abs(o[P.RWRI, 0] - 484) < 1.0,
           img(o, P.RWRI))
-    # Face down from overhead reads as a back view.
     over = body(neck=(300.0, 500.0), T=200.0, phi=0.0, view="back")
     out, g = rewrite([over] * 6, {"arms": "behind the back"})
     o = out[0]
@@ -359,15 +301,10 @@ def test_arm_templates_postures():
     check("face down, overhead: wrists drawn together on the spine",
           o[P.RWRI, 2] >= P.POSE_CONF and abs(o[P.RWRI, 1] - 500) < 10 and abs(o[P.RWRI, 0] - 480) < 1.0,
           img(o, P.RWRI))
-    # Face up, cuffed behind: a front view with the wrists left out.
     up = body(neck=(300.0, 500.0), T=200.0, phi=0.0, view="front")
     out, _ = rewrite([up] * 6, {"arms": "behind the back"})
     check("face up, behind the back: wrists left out", out[0][P.RWRI, 2] < P.POSE_CONF)
 
-
-# --------------------------------------------------------------------------------------
-# Legs
-# --------------------------------------------------------------------------------------
 
 def test_legs():
     print("\n=== legs ===")
@@ -382,7 +319,7 @@ def test_legs():
     corr = img(o, P.RANK) - img(kp, P.RANK)
     check("ankles together: each knee moves half its ankle's correction",
           close(img(o, P.RKNE) - img(kp, P.RKNE), corr / 2, 1e-6))
-    near = body(neck=(500.0, 300.0), T=200.0)       # standing: ankles 0.43 T apart
+    near = body(neck=(500.0, 300.0), T=200.0)
     out, _ = rewrite([near] * 6, {"legs": "ankles together", "ankle_gap": 0.6})
     check("ankles already within a chain's gap are left alone",
           np.allclose(out[0][[P.RANK, P.LANK, P.RKNE, P.LKNE]], near[[P.RANK, P.LANK, P.RKNE, P.LKNE]]))
@@ -397,7 +334,6 @@ def test_legs():
         out, _ = rewrite([kp] * 6, {"legs": "held apart"})
         sep = np.linalg.norm(img(out[0], P.RANK) - img(out[0], P.LANK)) / 200
         check(f"held apart: pass-1 {2 * legs[P.RANK][1]:.1f} T becomes {want:.1f} T", abs(sep - want) < 1e-6, sep)
-    # Hogtie, face down from the side
     down = body(neck=(300.0, 500.0), T=200.0, phi=0.0, view="profile", width=0.1, fwd=1.0,
                 arms=ARMS_OUT)
     out, g = rewrite([down] * 6, {"arms": "behind the back", "legs": "ankles to the wrists"})
@@ -421,10 +357,6 @@ def test_legs():
           np.allclose(out[0], kp))
 
 
-# --------------------------------------------------------------------------------------
-# Repair check
-# --------------------------------------------------------------------------------------
-
 def _run_check(base, bad, frames_bad, spec, n=24):
     seq = [bad.copy() if i in frames_bad else base.copy() for i in range(n)]
     idx = list(range(0, 2 * n, 2))
@@ -433,8 +365,6 @@ def _run_check(base, bad, frames_bad, spec, n=24):
 
 
 def test_repair_check():
-    """Pass 1 is kept when the limbs hold; a reach, a spread, a catch or a step breaks it.
-    A hidden wrist is the normal look of hands cuffed behind the back -- never a break."""
     print("\n=== repair check ===")
     spec = {"arms": "behind the back"}
     ok = body(arms=BEHIND_FRONT)
@@ -479,10 +409,6 @@ def test_repair_check():
     check("profile, arms behind the back: not broken (no side rule at w = 0)", not broken, why)
 
 
-# --------------------------------------------------------------------------------------
-# Identification and tracking
-# --------------------------------------------------------------------------------------
-
 BOUND = {"Mara": {"arms": "behind the back", "legs": "", "ankle_gap": 0.12, "anchored": False, "fall": False}}
 
 
@@ -497,8 +423,6 @@ def two_people(n=12, bound_arms=BEHIND_FRONT, free_arms=ARMS_OUT, order=(0, 1), 
 
 
 def test_identification():
-    """The bound person is the one whose arms fit their own template; an unclear case
-    is skipped with the fits, because a wrong pick holds the captor's arms instead."""
     print("\n=== identification ===")
     for order in ((0, 1), (1, 0)):
         hint, rep = P.build_hint(dets(two_people(order=order)), 23, 300, 600, BOUND, mode="every")
@@ -506,8 +430,6 @@ def test_identification():
         check(f"wrists behind vs arms out (bound listed {want + 1}{'st' if want == 0 else 'nd'}): "
               f"the bound person is found", rep["identified"].get("Mara") == want and hint is not None,
               (rep["identified"], rep["skipped"]))
-    # Arms hanging at the sides, both wrists seen about shoulder-width apart, are free:
-    # they do not fit "behind the back", so the bound person is found without a carry.
     hint, rep = P.build_hint(dets(two_people(free_arms=None)), 23, 300, 600, BOUND, mode="every")
     check("wrists behind vs arms hanging at the sides: hanging arms do not fit, bound person found",
           rep["identified"].get("Mara") == 0 and hint is not None, (rep["identified"], rep["skipped"]))
@@ -543,7 +465,6 @@ def test_identification():
     anchored = {"Mara": {**BOUND["Mara"], "anchored": True}}
     hint, rep = P.build_hint(dets(two_people()), 23, 300, 600, anchored, mode="every")
     check("fastened to an object: skipped", hint is None and "fastened" in rep["skipped"], rep["skipped"])
-    # Two bound people
     front = {"arms": "in front of the body", "legs": "", "ankle_gap": 0.12}
     cuffed_front = {P.RELB: (0.55, 0.37), P.LELB: (0.55, -0.37), P.RWRI: (0.95, 0.04), P.LWRI: (0.95, -0.04)}
     frames = []
@@ -552,8 +473,6 @@ def test_identification():
                        body(neck=(300.0, 100.0), arms=cuffed_front),
                        body(neck=(500.0, 100.0), arms=BEHIND_FRONT)])
     hint, rep = P.build_hint(dets(frames), 19, 300, 640, {"Mara": BOUND["Mara"], "Ines": front}, mode="every")
-    # From the front, cuffed in front and cuffed behind (wrists hidden, so "consistent")
-    # differ only by a tenth of a shoulder at the elbows: the fit cannot tell them apart.
     check("two bound, cuffed in front vs behind seen from the front: skipped, not guessed",
           hint is None and rep["skipped"].startswith("could not tell"), (rep["identified"], rep["skipped"]))
     up = {"arms": "above the head", "legs": "", "ankle_gap": 0.12}
@@ -612,21 +531,12 @@ def test_carry_helpers():
     check("identify_by_boxes: no overlap, no identity", ident == {"Mara": None}, ident)
 
 
-# --------------------------------------------------------------------------------------
-# Tracking through crossings, re-acquisition, identification by contact, carry contract,
-# facing without a face (review fixes)
-# --------------------------------------------------------------------------------------
-
 PROF_BEHIND = {P.RELB: (0.55, 0.28), P.LELB: (0.55, 0.28), P.RWRI: (0.92, 0.22), P.LWRI: (0.92, 0.22)}
 PROF_REACH = {P.RELB: (0.3, -0.4), P.LELB: (0.3, -0.4), P.RWRI: (0.2, -0.9), P.LWRI: (0.2, -0.9)}
 
 
 def walkers(n, xb, vb, xf, vf, bound_arms=None, free_arms=None, hide=None, shuffle=True,
             bound_kw=None, free_kw=None):
-    """Two people walking in profile (T = 100): the bound one faces image right (fwd -1,
-    so behind the back is image left), the free one faces left. Returns (frames, roles);
-    every third frame lists them in the other order, as DWPose does. hide(i, xb, xf) ->
-    True drops the bound person from that frame."""
     frames, roles = [], []
     for i in range(n):
         b = body(neck=(xb + vb * i, 150.0), view="profile", width=0.1, fwd=-1.0,
@@ -649,7 +559,6 @@ def track_roles(tracks, roles, n):
 
 
 def rewritten_inputs(fn):
-    """Run fn() and return the pass-1 skeletons _rewrite was given, as [(frame, kp)]."""
     seen, orig = [], P._rewrite
 
     def cap(kps1, kps, idx, g, spec, blend, *a, **kw):
@@ -664,8 +573,6 @@ def rewritten_inputs(fn):
 
 
 def rewrote_only(seen, frames, roles, role="B", stride=2):
-    """Every skeleton handed to the rewrite is a detection of a person whose role is in
-    `role`."""
     for t, kp in seen:
         i = t // stride
         mine = [k for k, r in zip(frames[i], roles[i]) if r in role]
@@ -675,8 +582,6 @@ def rewrote_only(seen, frames, roles, role="B", stride=2):
 
 
 def test_track_assignment():
-    """People crossing: one global assignment per frame with a constant-velocity
-    prediction, never greedy, and a held track cannot take a person a live track explains."""
     print("\n=== tracking: global assignment through crossings ===")
     rng = np.random.default_rng(3)
     same = True
@@ -693,7 +598,7 @@ def test_track_assignment():
     check("the exact search is global, not greedy (greedy takes -1.9 and leaves -0.1)",
           sorted(P._match_exact(w)) == [(0, 1), (1, 0)], P._match_exact(w))
     n = 24
-    frames, roles = walkers(n, 100.0, 20.0, 560.0, -20.0)          # cross at frame 11.5
+    frames, roles = walkers(n, 100.0, 20.0, 560.0, -20.0)
     people = [[P._person(k) for k in f] for f in frames]
     idx = list(range(0, 2 * n, 2))
     got = track_roles(P._build_tracks(people, idx), roles, n)
@@ -706,15 +611,11 @@ def test_track_assignment():
     finally:
         P._lsa = saved
     check("...the same without scipy (exact search)", got2 == got, got2)
-    # The bound person is hidden while the other passes over where they stood: the held
-    # track must not take the other person, who stands where it was.
     frames, roles = walkers(30, 100.0, 12.0, 500.0, -12.0, hide=lambda i, xb, xf: abs(xb - xf) < 40)
     people = [[P._person(k) for k in f] for f in frames]
     got = track_roles(P._build_tracks(people, list(range(0, 60, 2))), roles, 30)
     check("a held (hidden) track never takes the person passing over its spot",
           all(set(s) <= {"B", "."} or set(s) <= {"F", "."} for s in got) and len(got) == 2, got)
-    # Without appearance a person passing over the hidden bound person is a contact the
-    # signature cannot settle (same build): skipped. With it, read from the pixels.
     carry = {"Mara": P._torso_box(frames[0][0])}
     (skel, rep, _t), seen = rewritten_inputs(lambda: P._hint_skeletons(
         dets(frames), 59, 460, 700, BOUND, carry=carry, mode="every"))
@@ -727,9 +628,6 @@ def test_track_assignment():
         d, 59, 460, 700, BOUND, carry=carry, mode="every"))
     check("...with appearance: built, and the rewrite only ever reads the bound person's own skeleton",
           skel is not None and seen and rewrote_only(seen, frames, roles), rep["skipped"])
-    # Fast crossing, the bound person's arms break after the opening. Without appearance
-    # the same build cannot be told apart after it: skipped. With appearance: rewritten,
-    # never the free person; at frame 11 both torsos sit on one spot.
     frames, roles = walkers(n, 100.0, 20.0, 540.0, -20.0, free_arms=PROF_BEHIND,
                             bound_arms=lambda i: PROF_BEHIND if i < 6 else PROF_REACH)
     carry = {"Mara": P._torso_box(frames[0][0])}
@@ -753,10 +651,9 @@ def test_track_assignment():
         any(np.allclose(d_[:, :2], k[:, :2]) for d_ in skel[2 * i])
         for i in range(n) if 2 * i not in (20, 22, 24) for k, r in zip(frames[i], roles[i]) if r == "F")
     check("...and the free person is drawn as detected", free_kept)
-    # Two people who look the same crossing slowly: who is who afterwards cannot be told.
     frames, roles = walkers(24, 280.0, 2.0, 326.0, -2.0, free_arms=PROF_BEHIND,
                             free_kw={}, bound_kw={})
-    for i in range(24):                    # same facing: nothing tells them apart
+    for i in range(24):
         for j, r in enumerate(roles[i]):
             if r == "F":
                 frames[i][j] = body(neck=(326.0 - 2.0 * i, 150.0), view="profile", width=0.1,
@@ -777,8 +674,6 @@ def test_track_assignment():
 
 
 def test_reacquire():
-    """After the bound track is lost, a later track is them only if it starts near the
-    predicted spot, matches their body proportions and fits the template."""
     print("\n=== re-acquiring the bound person ===")
 
     def scene(n, leave, back, x_back=None, arms_back=BEHIND_FRONT, width_back=0.78,
@@ -799,8 +694,6 @@ def test_reacquire():
             roles.append(r)
         return frames, roles
 
-    # Within the hold a body at the predicted spot is the same person (that is what the
-    # repair is for); these cases are past it, or out of a held track's reach.
     frames, roles = scene(44, 36, 38, x_back=400.0)
     (skel, rep, _t), seen = rewritten_inputs(lambda: P._hint_skeletons(
         dets(frames), 87, 300, 800, BOUND, mode="every"))
@@ -830,7 +723,6 @@ def test_reacquire():
     hint, rep = P.build_hint(dets(frames), 87, 300, 700, BOUND, mode="every")
     check("two people come back near the spot and both fit: skipped",
           hint is None and rep["skipped"] == "could not tell who came back as Mara", rep["skipped"])
-    # The 25% rule still stands when the person never comes back.
     frames, roles = scene(40, 20, 26, x_back=400.0)
     hint, rep = P.build_hint(dets(frames), 79, 300, 800, BOUND, mode="every")
     check("left at frame 20 of 40, someone else 2.2 T away at 26: skipped (50% missing)",
@@ -838,8 +730,6 @@ def test_reacquire():
 
 
 def test_identification_contact():
-    """Without a carried identity, fit is trusted only for exactly one fitting person who
-    is in contact with nobody else."""
     print("\n=== identification: contact and the carried identity ===")
     raised = {P.RELB: (-0.2, 0.6), P.LELB: (-0.2, -0.6), P.RWRI: (-0.6, 0.5), P.LWRI: (-0.6, -0.5)}
 
@@ -870,11 +760,9 @@ def test_identification_contact():
 
 
 def test_carry_contract():
-    """report["identified"] indexes the last analysed frame, so the contract's
-    torso_boxes(handoff people, identified) is boxes_last; detect() always reads it."""
     print("\n=== carry contract ===")
     frames = two_people(n=12)
-    frames[-1] = frames[-1][::-1]                  # DWPose's order changes at the handoff
+    frames[-1] = frames[-1][::-1]
     hint, rep = P.build_hint(dets(frames), 23, 300, 600, BOUND, mode="every")
     check("identified is the index in the last analysed frame", rep["identified"] == {"Mara": 1}, rep["identified"])
     check("identified_first is the index in the first", rep["identified_first"] == {"Mara": 0},
@@ -905,16 +793,12 @@ def test_carry_contract():
 
 
 def test_facing_without_face():
-    """No face cue: lying, the back is image up; upright, the nearest frame of the track
-    that showed the face; never shown, the shot is skipped."""
     print("\n=== facing without a face cue ===")
 
     def faceless(kp):
         kp = kp.copy()
         kp[[P.NOSE, P.REYE, P.LEYE, P.REAR, P.LEAR], 2] = 0.0
         return kp
-    # Lying with no face cue anywhere in the track: face up and face down look the same,
-    # so the back is never assumed to be image up -- the shot is skipped.
     for phi, label in ((0.0, "head left"), (180.0, "head right")):
         kp = faceless(body(neck=(500.0, 400.0), T=150.0, phi=phi, view="profile", width=0.1,
                            arms={P.RELB: (0.55, 0.28), P.LELB: (0.55, 0.28),
@@ -926,8 +810,6 @@ def test_facing_without_face():
         hint, rep = P.build_hint(dets([[kp]] * 10), 19, 800, 1000, BOUND, carry=carry, mode="every")
         check(f"...and the shot is skipped: 'could not tell which way they face' ({label})",
               hint is None and rep["skipped"] == "could not tell which way they face", rep["skipped"])
-    # The face seen earlier in the same track, then lying with none (the face turned into
-    # the floor, or a hood pulled up): the facing carries over -- either way up.
     for fwd, want_up, label in ((1.0, True, "face down"), (-1.0, False, "face up")):
         lying = body(neck=(500.0, 400.0), T=150.0, phi=0.0, view="profile", width=0.1, fwd=fwd)
         seq = [lying.copy() for _ in range(4)] + [faceless(lying) for _ in range(14)]
@@ -938,7 +820,7 @@ def test_facing_without_face():
               and not g.facing_unknown.any(), (img(out[-1], P.RELB), g.back[-1]))
     seq = [body(view="profile", width=0.1, fwd=1.0) for _ in range(3)] + \
           [faceless(body(view="profile", width=0.1, fwd=1.0)) for _ in range(12)]
-    g = P._geometry(seq, list(range(0, 60, 4)))      # 4 apart: the last frames are past +-12
+    g = P._geometry(seq, list(range(0, 60, 4)))
     check("upright, the face seen early in the track only: its facing is kept",
           bool(np.all(g.back < 0)) and not g.facing_unknown.any(), g.back)
     prof = [faceless(body(view="profile", width=0.1, fwd=1.0, arms=PROF_BEHIND)) for _ in range(10)]
@@ -961,10 +843,10 @@ def test_review_low_items():
     a = body(neck=(100.0, 100.0))
     b = body(neck=(200.0, 100.0))
     index = list(range(0, 40, 2))
-    frames = {0: a, 4: b}                              # 3 missed analysed frames
+    frames = {0: a, 4: b}
     check("a 3-frame gap is interpolated", P._fill_bound(frames, index, 4) is not None
           and np.allclose(P._fill_bound(frames, index, 4)[P.NECK, :2], (150.0, 100.0)))
-    frames = {0: a, 5: b}                              # 4 missed
+    frames = {0: a, 5: b}
     check("a 4-frame gap: held up to the first missed analysed frame, then nobody",
           P._fill_bound(frames, index, 1) is a and P._fill_bound(frames, index, 2) is None
           and P._fill_bound(frames, index, 6) is None and P._fill_bound(frames, index, 9) is b)
@@ -980,13 +862,11 @@ def test_review_low_items():
     mid = [t for t in range(16, 25) if near(t)]
     check("through the pipeline: the middle of a 5-frame gap draws nobody for them",
           skel is not None and mid == [] and near(15) and near(25), mid)
-    # Three-quarter view (w = 0.78, side limit 1.5 x 0.275 T): a wrist past it in one frame
-    # is noise.
     spec = {"arms": "behind the back"}
     elb = {P.RELB: (0.55, 0.29), P.LELB: (0.55, -0.29)}
     base = body(width=0.55, arms={**elb, P.RWRI: None, P.LWRI: None})
-    out1 = body(width=0.55, arms={**elb, P.RWRI: (0.9, 0.54), P.LWRI: None})    # 0.13 T past the limit
-    far = body(width=0.55, arms={**elb, P.RWRI: (0.9, 0.70), P.LWRI: None})     # 0.29 T past it
+    out1 = body(width=0.55, arms={**elb, P.RWRI: (0.9, 0.54), P.LWRI: None})
+    far = body(width=0.55, arms={**elb, P.RWRI: (0.9, 0.70), P.LWRI: None})
     _b, f1, why1, _h = _run_check(base, out1, {5, 15}, spec, n=40)
     check("3/4 view: 'hands out to the sides' in single frames does not count", not f1, (f1, why1))
     _b, f2, why2, _h = _run_check(base, out1, {5, 6}, spec, n=40)
@@ -994,11 +874,10 @@ def test_review_low_items():
     _b, f3, why3, _h = _run_check(base, far, {9}, spec, n=40)
     check("...and one frame past the noise margin does", f3 == [18] and "hands out to the sides" in why3,
           (f3, why3))
-    # Cropped torsos
     waist_up = body(arms=BEHIND_FRONT)
     waist_up[[P.RHIP, P.LHIP, P.RKNE, P.LKNE, P.RANK, P.LANK], 2] = 0.0
     off_edge = body(arms=BEHIND_FRONT)
-    off_edge[[P.NECK, P.LSHO], 2] = 0.0                # DWPose drops the neck with a shoulder
+    off_edge[[P.NECK, P.LSHO], 2] = 0.0
     top_cut = body(arms=BEHIND_FRONT)
     top_cut[[P.NOSE, P.NECK, P.RSHO, P.LSHO, P.REYE, P.LEYE, P.REAR, P.LEAR], 2] = 0.0
     for kp, label in ((waist_up, "waist-up framing"), (off_edge, "a shoulder off the edge"),
@@ -1006,7 +885,6 @@ def test_review_low_items():
         _h, rep = P.build_hint(dets([[kp]] * 10), 19, 300, 600, BOUND, mode="every")
         check(f"{label}: skipped as 'torso not fully visible'", rep["skipped"] == "torso not fully visible",
               rep["skipped"])
-    # Input types
     d = dets(two_people(n=9))
     for label, ix in (("a tensor", torch.tensor(d["index"])), ("an ndarray", np.asarray(d["index"]))):
         try:
@@ -1032,13 +910,7 @@ def test_review_low_items():
         check(f"pose_sigma_window with pose_end {bad!r}: the default 0.6", got == want, got)
 
 
-# --------------------------------------------------------------------------------------
-# Appearance: the vectors, the hard gates, carrying them across a cut
-# --------------------------------------------------------------------------------------
-
 def test_appearance_vectors():
-    """One vector per person from the pixels: torso, head and hair, upper legs. Light and
-    shade move it little; other clothes move it far."""
     print("\n=== appearance vectors ===")
     H, W = 460, 700
     b, f = body(neck=(200.0, 150.0)), body(neck=(480.0, 150.0), arms=ARMS_OUT)
@@ -1084,7 +956,6 @@ def test_appearance_vectors():
           and P.appearance_distance(out["appearance"][0][0], vb) < 1e-3
           and P.appearance_distance(out["appearance"][1][1], vf) < 1e-3)
     check("detect() returns appearance per analysed frame, aligned with the people", ok)
-    # The running mean of a stretch is built from its clean frames only.
     people = [[b, f], [b, over], [b, f]]
     scene = P._Scene(people, [0, 2, 4], [[vb, vf], [vf, vf], [vb, vf]])
     m = scene.mean({0: 0, 1: 0, 2: 0})
@@ -1099,10 +970,6 @@ PROF_HANG = {P.RELB: (0.55, 0.0), P.LELB: (0.55, 0.0), P.RWRI: (1.05, -0.06), P.
 
 
 def bouncers(n=24, k=10, v=20.0, free_arms=PROF_HANG, x0=150.0, x1=550.0):
-    """Two people (same build, T = 100) walk toward each other in profile, meet where
-    their images overlap at frame k and both turn back: the bound one (arms behind the
-    back) and another whose arms hang (`free_arms`, given as for facing image right).
-    Every third frame lists them in the other order."""
     frames, roles = [], []
     for i in range(n):
         s = v * min(i, k) - v * max(0, i - k)
@@ -1120,9 +987,6 @@ def bouncers(n=24, k=10, v=20.0, free_arms=PROF_HANG, x0=150.0, x1=550.0):
 
 
 def test_appearance_gates():
-    """Wherever identity could jump -- a track going on after a missed frame, a track
-    taken up again after the person was lost, two people parting after contact -- the
-    person must look like the bound person; without appearance, stricter geometry."""
     print("\n=== appearance as a hard gate ===")
     H, W = 460, 700
 
@@ -1140,7 +1004,6 @@ def test_appearance_gates():
             roles.append(r)
         return frames, roles
 
-    # Within the track hold: someone else, same build and pose, other clothes.
     frames, roles = stay_and_swap(30, 15, 18)
     d = with_appearance(frames, roles, H, W)
     (skel, rep, _t), seen = rewritten_inputs(lambda: P._hint_skeletons(d, 59, H, W, BOUND, mode="every"))
@@ -1149,13 +1012,11 @@ def test_appearance_gates():
           (rep["skipped"], sorted(t for t, _k in seen)[-3:]))
     check("...and with half the shot gone the shot is skipped", skel is None and "lost track of Mara" in rep["skipped"],
           rep["skipped"])
-    # The same person back after the missed frames (hidden behind something): kept.
     frames, roles = stay_and_swap(30, 15, 18, newcomer="B")
     d = with_appearance(frames, roles, H, W)
     (skel, rep, _t), seen = rewritten_inputs(lambda: P._hint_skeletons(d, 59, H, W, BOUND, mode="every"))
     check("the bound person back in their own clothes after missed frames: followed on",
           skel is not None and any(t >= 36 for t, _k in seen) and rewrote_only(seen, frames, roles), rep["skipped"])
-    # Re-acquisition after a loss longer than the hold.
     frames, roles = stay_and_swap(44, 24, 33)
     d = with_appearance(frames, roles, H, W)
     hint, rep = P.build_hint(d, 87, H, W, BOUND, mode="every")
@@ -1166,7 +1027,6 @@ def test_appearance_gates():
     (skel, rep, _t), seen = rewritten_inputs(lambda: P._hint_skeletons(d, 87, H, W, BOUND, mode="every"))
     check("...and the bound person themself coming back there is taken up again",
           skel is not None and any(t >= 66 for t, _k in seen), rep["skipped"])
-    # Two people meet where their images overlap and both turn back.
     frames, roles = bouncers()
     carry = {"Mara": P._torso_box(frames[0][roles[0].index("B")])}
     for c, lab in ((None, "no carry"), (carry, "carried")):
@@ -1192,9 +1052,6 @@ def test_appearance_gates():
 
 
 def test_strict_geometry_without_appearance():
-    """Detections without appearance (fake detectors): a reappearance after any missed
-    frame must pass the signature and template-fit gates, and a separation after contact
-    must be clear on motion and signature both."""
     print("\n=== strict geometry without appearance ===")
     frames, roles = [], []
     for i in range(30):
@@ -1228,9 +1085,6 @@ def test_strict_geometry_without_appearance():
 
 
 def test_identification_apart():
-    """Two people apart, the bound one on the template at the opening: identified again
-    when the other's arms hang, sit on the hips or hold something apart -- from the front
-    and from behind. Only a pose that truly fits (hands behind the back too) is a skip."""
     print("\n=== identification: two people apart ===")
     hang = None
     hips = {P.RELB: (0.5, 0.75), P.LELB: (0.5, -0.75), P.RWRI: (0.95, 0.35), P.LWRI: (0.95, -0.35)}
@@ -1255,7 +1109,6 @@ def test_identification_apart():
     hint, rep = P.build_hint(dets(frames), 19, 300, 600, BOUND, mode="every")
     check("both with the hands behind the back: still skipped", hint is None and
           rep["skipped"].startswith("could not tell who is bound"), rep["skipped"])
-    # The rules one by one, on single frames.
     def broken(arms, kp):
         g, _s = geom(kp)
         return P._arm_rule_broken(kp, g, 0, arms)
@@ -1283,8 +1136,6 @@ def test_identification_apart():
 
 
 def test_carry_appearance():
-    """report["appearance_last"] carries how the bound person looks; with it, a carried
-    box counts only on someone who looks like them, in build_hint and identify_by_boxes."""
     print("\n=== carrying appearance across a cut ===")
     H, W = 300, 600
     frames = two_people(n=12)
@@ -1297,8 +1148,6 @@ def test_carry_appearance():
           and P.appearance_distance(v, d["appearance"][-1][1]) > P.POSE_APP_DISTINCT_MIN, rep["skipped"])
     check("...and no appearance in, none out", P.build_hint(dets(frames), 23, H, W, BOUND, mode="every")[1]
           ["appearance_last"] == {})
-    # Next shot: both stand still; the bound person's arms are off the template at the
-    # opening (fit alone would not find her).
     raised = {P.RELB: (-0.2, 0.6), P.LELB: (-0.2, -0.6), P.RWRI: (-0.6, 0.5), P.LWRI: (-0.6, -0.5)}
     shot2 = [[body(neck=(180.0, 100.0), arms=raised), body(neck=(440.0, 100.0), arms=ARMS_OUT)] for _ in range(10)]
     d2 = with_appearance(shot2, [["B", "F"]] * 10, H, W)
@@ -1306,7 +1155,7 @@ def test_carry_appearance():
     _h, rep2 = P.build_hint(d2, 19, H, W, BOUND, carry=box, carry_appearance=rep["appearance_last"], mode="every")
     check("carried box and appearance agree: identified across the cut",
           rep2["identified"]["Mara"] == 0 and any("across the cut" in x for x in rep2["notes"]), rep2["skipped"])
-    d3 = with_appearance(shot2, [["G", "F"]] * 10, H, W)       # someone else now stands there
+    d3 = with_appearance(shot2, [["G", "F"]] * 10, H, W)
     _h, rep3 = P.build_hint(d3, 19, H, W, BOUND, carry=box, carry_appearance=rep["appearance_last"], mode="every")
     check("the carried box now holds someone who looks different: not identified across the cut",
           not any("identified across the cut" in x for x in rep3["notes"]) and rep3["identified"]["Mara"] is None
@@ -1314,8 +1163,6 @@ def test_carry_appearance():
     check("...and the shot skips rather than asking fit instead",
           _h is None and rep3["skipped"] == "the carried box is on someone who does not look like Mara; "
                                             "not guessing", rep3["skipped"])
-    # The one in the carried box looks different AND sits on the template, while the
-    # bound person stands apart with raised arms: fit alone would pick the wrong one.
     shot4 = [[body(neck=(180.0, 100.0), arms=BEHIND_FRONT), body(neck=(440.0, 100.0), arms=raised)]
              for _ in range(10)]
     d4 = with_appearance(shot4, [["G", "B"]] * 10, H, W)
@@ -1345,16 +1192,10 @@ def test_carry_appearance():
 
 
 def test_latch():
-    """A restraint that goes on during the shot: the latch limbs are drawn as detected
-    until the first run of POSE_LATCH_RUN fitting frames at or after latch_after, then
-    held; identification reads from there; nothing latched and nothing else to repair
-    skips the shot."""
     print("\n=== latch mode ===")
     latch = {"Mara": {**BOUND["Mara"], "latch_limbs": ("arms",)}}
     free = {P.RELB: (0.5, 0.9), P.LELB: (0.5, -0.9), P.RWRI: (0.3, 1.4), P.LWRI: (0.3, -1.4)}
 
-    # The other person walks up to her (frames 4-7) and back before her arms settle:
-    # with others in the shot, the one a restraint closes on was come near.
     near_x = [440, 440, 400, 350, 300, 300, 300, 300, 350, 400]
 
     def shot(n=24, on=10, off=None, near=True):
@@ -1377,7 +1218,6 @@ def test_latch():
     check("...from it they are held (wrists left out from the front, elbows on the template)",
           skel is not None and bound_at(30)[P.RWRI, 2] < P.POSE_CONF
           and close(img(bound_at(30), P.RELB), (180 - 1.05 * 39, 155), 1.0), img(bound_at(30), P.RELB))
-    # Repair mode counts breaks only from the latch frame on.
     hint, rep = P.build_hint(dets(frames), 47, 300, 600, latch, mode="repair", latch_after=12)
     check("repair mode: free arms before the latch are not a break (nothing to repair)",
           hint is None and not rep["broken"] and rep["skipped"] == "" and rep["latched"] == {"Mara": 20}, rep)
@@ -1386,7 +1226,6 @@ def test_latch():
     check("...a break after the latch is repaired, its frames from the latch on only",
           hint is not None and rep["broken"] and rep["broken_frames"] and min(rep["broken_frames"]) >= 20,
           (rep["broken_frames"], rep["skipped"]))
-    # Never latches.
     frames = shot(on=99)
     carry = {"Mara": P._torso_box(frames[0][0])}
     for c, lab in ((carry, "carried"), (None, "no carry")):
@@ -1394,12 +1233,10 @@ def test_latch():
         check(f"the restraint never closes ({lab}): skipped, 'the restraint never closed in the first pass'",
               hint is None and rep["skipped"] == "the restraint never closed in the first pass",
               (rep["skipped"], rep["latched"]))
-    # A latch before latch_after does not count: the run must start at or after it.
     frames = shot(on=4, off=(14, 30))
     hint, rep = P.build_hint(dets(frames), 47, 300, 600, latch, carry=carry, mode="every", latch_after=28)
     check("a run on the template only before latch_after does not latch",
           hint is None and rep["skipped"] == "the restraint never closed in the first pass", rep["skipped"])
-    # Limbs not in latch_limbs are held from frame 0.
     both = {"Mara": {**BOUND["Mara"], "legs": "ankles together", "latch_limbs": ("arms",)}}
     apart = {P.RANK: (2.7, 0.4), P.LANK: (2.7, -0.4)}
     frames = [[body(neck=(180.0, 100.0), arms=BEHIND_FRONT if i >= 10 else free, legs=apart),
@@ -1409,24 +1246,18 @@ def test_latch():
     check("legs not in latch_limbs are held from frame 0, the latch arms drawn as detected there",
           k0 is not None and abs(np.linalg.norm(img(k0, P.RANK) - img(k0, P.LANK)) - 12.0) < 1e-6
           and np.allclose(k0[P.RWRI, :2], frames[0][0][P.RWRI, :2]), rep["skipped"])
-    # Someone posed on the template from the start (a guard, hands clasped behind) is not
-    # the one the restraint goes on, whether or not the bound person's restraint closes.
     guard = BEHIND_FRONT
     frames = [[body(neck=(180.0, 100.0), arms=free), body(neck=(440.0, 100.0), arms=guard)] for _ in range(24)]
     hint, rep = P.build_hint(dets(frames), 47, 300, 600, latch, mode="every", latch_after=12)
     check("a guard posed from the start, the bound person never latching: skipped, nothing drawn on the guard",
           hint is None and rep["skipped"] == "the restraint never closed in the first pass"
           and any("from the start" in x for x in rep["notes"]), (rep["skipped"], rep["notes"]))
-    # A guard who puts his hands behind him mid-shot, standing apart, while the bound
-    # person's restraint never closes: nobody touched him, so he is not taken either.
     frames = [[body(neck=(180.0, 100.0), arms=free),
                body(neck=(440.0, 100.0), arms=guard if i >= 4 else ARMS_OUT)] for i in range(24)]
     hint, rep = P.build_hint(dets(frames), 47, 300, 600, latch, mode="every", latch_after=12)
     check("a guard settling into the pose mid-shot, apart from everyone: skipped, nothing drawn on him",
           hint is None and rep["skipped"] == "the restraint never closed in the first pass"
           and any("nobody near them" in x for x in rep["notes"]), (rep["skipped"], rep["notes"]))
-    # The captor walks up, puts the restraint on and steps back; a guard stands posed from
-    # the start. The one touched before her pose settled is identified.
     cap_x = [380, 380, 330, 280, 230, 230, 230, 230, 300, 380] + [380] * 14
     frames = [[body(neck=(150.0, 100.0), arms=BEHIND_FRONT if i >= 10 else free),
                body(neck=(float(cap_x[i]), 100.0), arms=ARMS_OUT),
@@ -1435,13 +1266,11 @@ def test_latch():
     check("...the bound person, come near by her captor before her pose settled: she is the one identified",
           skel is not None and rep["identified"]["Mara"] == 0 and rep["latched"] == {"Mara": 20},
           (rep["skipped"], rep["identified"], rep["latched"], rep["notes"]))
-    # Alone, someone posed from the start is the bound person (cuffs described as on).
     frames = [[body(neck=(180.0, 100.0), arms=BEHIND_FRONT)] for _ in range(24)]
     skel, rep, _t = P._hint_skeletons(dets(frames), 47, 300, 600, latch, mode="every", latch_after=12)
     check("alone and posed from the start: identified, latched at the first run from latch_after",
           skel is not None and rep["identified"]["Mara"] == 0 and rep["latched"] == {"Mara": 12},
           (rep["skipped"], rep["identified"], rep["latched"]))
-    # Without latch_after the latch limbs are ordinary held limbs.
     frames = shot(on=0, near=False)
     hint, rep = P.build_hint(dets(frames), 47, 300, 600, latch, mode="every")
     check("latch_limbs without latch_after: held from frame 0, latched reported as None",
@@ -1449,10 +1278,6 @@ def test_latch():
 
 
 def _real_frame_people():
-    """Two real people in one frame: the aux package's test photo, and beside it a mirror
-    copy whose shirt and hair are recoloured red (a differently dressed person); plus the
-    same pair with the copy only darker (the same person in other light). None when the
-    photo is not there."""
     path = os.path.join(_COMFY_ROOT, "custom_nodes", "comfyui_controlnet_aux", "tests", "pose.png")
     try:
         from PIL import Image
@@ -1470,10 +1295,6 @@ def _real_frame_people():
     pad = np.full((photo.shape[0], 60, 3), 90, np.uint8)
     return [np.concatenate([pad, photo, pad, other[:, ::-1], pad], axis=1) for other in (red, darker)]
 
-
-# --------------------------------------------------------------------------------------
-# Hint frames and drawing
-# --------------------------------------------------------------------------------------
 
 def test_frames_and_interpolation():
     print("\n=== hint frames and interpolation ===")
@@ -1494,12 +1315,10 @@ def test_frames_and_interpolation():
           and float(hint.min()) >= 0.0 and float(hint.max()) <= 1.0)
     check("every frame is drawn (none left black)",
           hint is not None and all(float(hint[t].max()) > 0 for t in range(17)))
-    # Detections on a stride of 3 that miss the last frame: the end is held.
     d = {"index": [0, 3, 6, 9], "people": [two_people(n=1)[0]] * 4}
     hint, rep = P.build_hint(d, 12, 300, 600, BOUND, mode="every")
     check("frames after the last analysed one are filled too",
           hint is not None and float(hint[11].max()) > 0)
-    # repair mode on a held pose: nothing to do
     hint, rep = P.build_hint(dets(two_people(n=9)), 17, 300, 600, BOUND, mode="repair")
     check("repair mode, pose held: no hint, nothing skipped", hint is None and not rep["broken"]
           and rep["skipped"] == "", rep)
@@ -1532,7 +1351,6 @@ def test_draw_options():
     lit = lambda h: int((h.amax(dim=-1) > 0).sum())
     check("thick lines draw wider sticks (600 px wide: xinsr scale 2)", lit(thick) > 1.3 * lit(everyone),
           (lit(thick), lit(everyone)))
-    # The OpenPose convention: joints in their own colours, limbs at 60%.
     kp = body(neck=(150.0, 60.0))
     canvas = P._draw_bodypose_port(np.zeros((300, 300, 3), np.uint8),
                                    [P._KP(float(x), float(y), 1.0, i) for i, (x, y, _c) in enumerate(kp)])
@@ -1558,14 +1376,7 @@ def test_draw_options():
     check("build_hint draws with aux's own draw_bodypose", P._drawer() is draw_bodypose)
 
 
-# --------------------------------------------------------------------------------------
-# Fall settle, blend-in, captor arms
-# --------------------------------------------------------------------------------------
-
 def fall_frame(f):
-    """A bound fall caught on the hands, the hips fixed. f = 0 is upright; f = 1 has the
-    torso pitched to 20 degrees from horizontal with the wrists on the floor line under
-    the shoulders. In between, the keypoints move linearly (a fall over a few frames)."""
     up = body(neck=(500.0, 460.0), T=100.0)
     up[P.RKNE, :2], up[P.LKNE, :2] = (520.0, 645.0), (480.0, 645.0)
     up[P.RANK, :2], up[P.LANK, :2] = (520.0, 660.0), (480.0, 660.0)
@@ -1577,7 +1388,7 @@ def fall_frame(f):
     return (1 - f) * up + f * down
 
 
-FALL = [0.0, 0.0, 0.0, 0.25, 0.5, 0.75] + [1.0] * 10       # down by analysed frame 6
+FALL = [0.0, 0.0, 0.0, 0.25, 0.5, 0.75] + [1.0] * 10
 
 
 def test_fall_settle():
@@ -1601,8 +1412,6 @@ def test_fall_settle():
     check("when pass 1 leaves support it ramps back out", np.allclose(out2[-1], seq2[-1]))
     fall = {"Mara": {"arms": "behind the back", "legs": "", "fall": True}}
     frames = [[k] for k in seq]
-    # Pass 1's arms hang free from the opening, which no longer fits the restraint: the
-    # identity comes across the cut, as it does in a render.
     carry = {"Mara": P._torso_box(seq[0])}
     skel, rep, _t = P._hint_skeletons(dets(frames), 2 * len(frames) - 1, 720, 800, fall, carry=carry,
                                       mode="repair")
@@ -1634,8 +1443,6 @@ def test_blend_in():
 
 
 def test_captor_arm_removed():
-    """Another person's hand on the bound person's pass-1 wrist grabs empty air once the
-    rewrite moves that wrist; the hand and its elbow are taken out for those frames."""
     print("\n=== captor arm removed ===")
     n = 12
     reach = {P.RELB: (0.55, 1.05 * 0.39), P.LELB: (0.3, -0.9), P.RWRI: None, P.LWRI: (0.3, -1.6)}
@@ -1649,7 +1456,6 @@ def test_captor_arm_removed():
             other[P.RWRI, :2] = grab + (5.0, 0.0)
             other[P.RELB, :2] = (other[P.RSHO, :2] + grab) / 2
         frames.append([a, other])
-    # The other person's hanging arms also fit the template: identity comes across the cut.
     carry = {"Mara": P._torso_box(frames[0][0])}
     skel, rep, _t = P._hint_skeletons(dets(frames), 23, 300, 600, BOUND, carry=carry, mode="every")
     check("hint built", skel is not None, rep["skipped"])
@@ -1664,13 +1470,9 @@ def test_captor_arm_removed():
     check("their other arm stays", o[P.LWRI, 2] >= P.POSE_CONF)
 
 
-# --------------------------------------------------------------------------------------
-# Sigma window, setup check, encode, install
-# --------------------------------------------------------------------------------------
-
 def test_sigma_window():
     print("\n=== sigma window ===")
-    sched8 = [1.0, 0.988, 0.973, 0.952, 0.923, 0.878, 0.8, 0.632, 0.0]      # 8 steps, 9 points
+    sched8 = [1.0, 0.988, 0.973, 0.952, 0.923, 0.878, 0.8, 0.632, 0.0]
     s0, s1 = P.pose_sigma_window(sched8, 0.6)
     check("8 steps, pose_end 0.6: starts just above the first sigma", abs(s0 - 1.001) < 1e-9, s0)
     check("8 steps, pose_end 0.6: ends between 0.923 and 0.878", abs(s1 - 0.9005) < 1e-9, s1)
@@ -1681,7 +1483,7 @@ def test_sigma_window():
     check("8 steps, pose_end 1.0: every call (s_end -1)", P.pose_sigma_window(sched8, 1.0)[1] == -1.0)
     check("8 steps, pose_end 0.1: at least one call",
           sum(1 for s in sched8[:-1] if P.pose_sigma_window(sched8, 0.1)[1] <= s) == 1)
-    landed = [1.0, 0.988, 0.973, 0.952, 0.923, 0.878, 0.8, 0.632, 0.3, 0.0]  # 9 steps, 10 points
+    landed = [1.0, 0.988, 0.973, 0.952, 0.923, 0.878, 0.8, 0.632, 0.3, 0.0]
     s0, s1 = P.pose_sigma_window(landed, 0.6)
     check("a 10-point (9-step, landing) schedule, pose_end 0.6: first 6 calls",
           abs(s1 - (0.878 + 0.8) / 2) < 1e-9 and sum(1 for s in landed[:-1] if s1 <= s) == 6, s1)
@@ -1692,7 +1494,7 @@ def test_sigma_window():
     check("a tensor schedule works the same", abs(s1 - 0.9005) < 1e-6, s1)
 
 
-class MiniMaxH3FunControlBlockPatch:          # matched by class name, as comfy's is
+class MiniMaxH3FunControlBlockPatch:
     def __init__(self, previous=None):
         self.previous = previous
 
@@ -1832,7 +1634,6 @@ class _FakePatcher:
         self.cloned_from = None
 
     def clone(self):
-        # comfy's clone copies the nested patch dicts (create_model_options_clone)
         c = _FakePatcher()
         to = dict(self.model_options["transformer_options"])
         to["patches_replace"] = {k: dict(v) for k, v in to.get("patches_replace", {}).items()}
@@ -1861,7 +1662,7 @@ def test_install_pose_control():
         print(f"  NOTE  comfy not importable here ({type(e).__name__}: {e}); install test skipped")
         return
     base = _FakePatcher()
-    base.set_model_patch_replace(_OtherPatch(), "dit", "double_block", 0)      # VSA-like, before
+    base.set_model_patch_replace(_OtherPatch(), "dit", "double_block", 0)
     cn = SimpleNamespace(model=SimpleNamespace(injection_layers=(0, 10, 20, 30, 40)))
     shape = (1, 24, 5, 4, 6)
     lat = torch.ones(shape)
@@ -1886,10 +1687,6 @@ def test_install_pose_control():
     check("after cleanup the preset is still there for a retry",
           patch.control_latent is not None and patch.control_latent_shape == shape)
 
-
-# --------------------------------------------------------------------------------------
-# Optional: the real DWPose files on the CPU
-# --------------------------------------------------------------------------------------
 
 def test_detector_optional():
     print("\n=== DWPose on the CPU (optional) ===")

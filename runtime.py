@@ -2,14 +2,12 @@
 # Copyright (c) 2026 Smite79. All rights reserved.
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
-"""Sampling, decoding, resizing, memory handling, and frame assembly."""
 
 import logging
 import math
 import time
 
 import torch
-import nodes
 import comfy.utils
 import comfy.sample
 import comfy.samplers
@@ -19,7 +17,6 @@ import latent_preview
 
 
 class FrameAccumulator:
-    """Build the final frame tensor once, retaining overflow only when necessary."""
 
     def __init__(self, capacity, dtype, store_on_cpu):
         self.capacity = int(capacity)
@@ -45,13 +42,6 @@ class FrameAccumulator:
                              if self.store_on_cpu else frames)
 
     def release(self):
-        """Drop every tensor held, now, rather than whenever the collector gets to it.
-
-        On an interrupt the render unwinds through frames the collector tears down in
-        its own order, and a large video buffer freed after the models it was sized
-        against have already gone is a free the allocator cannot explain. Deliberately
-        does NOT empty the cache: that is another CUDA call, and if the context is
-        already in a sticky error state it is one more thing to abort inside."""
         self.tensor = None
         self.overflow = []
         self.used = 0
@@ -60,12 +50,6 @@ class FrameAccumulator:
         if not self.overflow:
             if self.tensor is None:
                 return torch.cat(self.overflow, dim=0)
-            # A VIEW, NOT A COPY. trim_seam drops frame one of every shot after the
-            # first, so `used` falls short of capacity on nearly every real run -- and
-            # this allocated the whole chain a second time to copy it into, both live
-            # at once, at the end of the run when RAM is fullest. The unused tail was
-            # never written, so its pages were never committed: dropping the copy
-            # gives up nothing.
             out = self.tensor if self.used == self.tensor.shape[0] else self.tensor[:self.used]
             self.tensor = None
             return out
@@ -85,27 +69,20 @@ class FrameAccumulator:
         self.tensor = None
         return out
 
+H3_FPS = 24
 
-H3_FPS = 24                    # H3 renders 24 fps, always
+AUDIO_LATENT_FPS = 40
 
+AUTO_TILE_T = 8
 
-AUDIO_LATENT_FPS = 40          # audio latent frames per second
-
-
-AUTO_TILE_T = 8                # temporal chunk for a tiled decode
-
-
-MAX_FRAMES = 362               # H3's own ceiling (~15s)
-
+MAX_FRAMES = 362
 
 CANVAS_MULTIPLE = 32
-
 
 REF_IMAGE_SHORT_EDGE = 2048
 
 
 def align_frame_count(n):
-    """Up to the next valid H3 frame count. The grid is 17k+5."""
     n = max(5, int(n))
     while n % 17 != 5:
         n += 1
@@ -117,22 +94,11 @@ def video_latent_t(fc):
 
 
 def temporal_shape(length, fps=H3_FPS):
-    """(frame count, video latent frames, audio latent frames) for a shot.
-
-    `fps` is accepted but deliberately IGNORED: the audio latent has to line up
-    with 24 fps video or the shot's sound is stretched against its picture."""
     fc = align_frame_count(length)
     return fc, video_latent_t(fc), round(fc / H3_FPS * AUDIO_LATENT_FPS)
 
 
 def ref_image_canvas(w, h, gen_w, gen_h, mode="match"):
-    """Pure: the (width, height) a reference image is encoded at.
-
-    'match' scales it (DOWN only, aspect kept) to the generation's pixel area, so a
-    reference costs about as much as one frame of the shot. 'max' goes to the
-    reference pipeline's 2048 short edge for the best identity fidelity, which on a
-    long chain is several times slower because the rows are re-attended every step
-    of every shot. Never upscales: a small reference stays small."""
     w, h = max(1, int(w)), max(1, int(h))
     if mode == "max":
         scale = min(1.0, REF_IMAGE_SHORT_EDGE / min(w, h))
@@ -156,14 +122,6 @@ def _empty_av_latent(width, height, length, fps, batch_size=1):
 
 
 def _auto_tile_t(n_latent_frames, requested=None):
-    """Temporal tile for a tiled decode. An explicit value wins.
-
-    The decode_tile_frames widget is gone, so this is where the value comes from
-    now. It has to come from somewhere: ComfyUI's decode_tiled_3d defaults tile_t
-    to 999, i.e. SPATIAL tiles only, and expanding the whole clip's time axis at
-    once is the single largest allocation in a run. A "tiled" decode that keeps the
-    full temporal extent barely lowers the peak, so the OOM retry that switches
-    tiling on was, without this, retrying with almost the same footprint."""
     if requested:
         return int(requested)
     n = int(n_latent_frames or 0)
@@ -172,35 +130,6 @@ def _auto_tile_t(n_latent_frames, requested=None):
 
 def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=None,
                   keep=()):
-    """Decode the video latent.
-
-    `free_first` is the diffusion model: sampling is finished, and the video VAE
-    needs the room for THIS decode -- the free runs immediately before it, not to
-    make room for the next shot. On a card where the DiT is most of the VRAM, the
-    decode does not fit until it goes.
-
-    `keep` is what must NOT be evicted on the way. It was `keep_loaded=[]`, which
-    unloaded every resident model -- including the video VAE, which ComfyUI then
-    reloaded three lines later to run the decode. An evict-and-reload of the thing
-    about to be used, once per shot, on every card. Peak VRAM is identical either
-    way, since the VAE has to be resident to decode; the round trip was pure cost.
-
-    memory_required is ASKED FOR HONESTLY, which it was not. It was 1e30, and
-    free_memory computes `memory_to_free = memory_required - get_free_memory(device)`
-    (model_management.py:887), so 1e30 means "unload everything not in keep_loaded",
-    every shot, in full -- skipping partially_unload entirely.
-
-    What that evicts is the DiT, three lines before the next shot needs it again. On
-    a machine whose RAM is already full of finished frames there is nowhere for it to
-    go but disk, so the reload is a read from the drive, once per shot. Reported as
-    thrashing that slows the preload, and it is exactly that: the same weights being
-    read back at every boundary.
-
-    The VAE knows what its own decode costs -- ComfyUI sizes it with
-    memory_used_decode and uses that number everywhere else. Asked for that instead,
-    a card with headroom frees NOTHING and the DiT simply stays. A card without
-    headroom frees what it needs and no more, which is what partially_unload is for.
-    1e30 remains the fallback for a VAE that cannot estimate itself."""
     latent = out_latent["samples"]
     if latent.is_nested:
         latent = latent.unbind()[0]
@@ -224,7 +153,7 @@ def _decode_video(vae, out_latent, tiled, free_first=None, tile_t=None, tile_xy=
         try:
             imgs = vae.decode_tiled(latent, **args) if args else vae.decode_tiled(latent)
         except TypeError:
-            imgs = vae.decode_tiled(latent)      # older signature without tile_t
+            imgs = vae.decode_tiled(latent)
     else:
         imgs = vae.decode(latent)
     if len(imgs.shape) == 5:
@@ -236,21 +165,11 @@ def _vae_owns_tiling(vae):
     return bool(getattr(vae, "handles_tiling", False) and getattr(
         getattr(vae, "first_stage_model", None), "comfy_has_chunked_io", False))
 
-
-DECODE_RAM_COPIES = 2       # the decode's output, and its copy into the frame buffer
-TILED_DECODE_RAM_COPIES = 4 # ...plus the tiler's float32 canvas, its divisor, and the cast
+DECODE_RAM_COPIES = 2
+TILED_DECODE_RAM_COPIES = 4
 
 
 def _decode_ram(vae, out_latent, tiled):
-    """Host RAM one shot's video decode takes before its output is dropped. 0 if unknown.
-
-    One decoded shot is frames x H x W x 3 in the dtype the chain is built in, and it
-    is held twice: the decode's own output, then its copy in the frame buffer, both
-    live until `imgs` goes. ComfyUI's tiler (decode_tiled_3d -> tiled_scale_multidim)
-    builds its canvas in FLOAT32 on the output device with a divisor beside it, then
-    casts -- about twice again at fp16. A VAE that tiles itself preallocates its
-    output in the final dtype, like an untiled decode. Sized from the latent through
-    the VAE's own upscale_ratio, which is what ComfyUI sizes the output from."""
     try:
         latent = out_latent["samples"]
         if getattr(latent, "is_nested", False):
@@ -284,13 +203,6 @@ def _is_oom(e):
 
 
 def _deep_cleanup():
-    """Release cached VRAM between shots so a long chain does not accumulate and OOM.
-
-    It unloads NOTHING. soft_empty_cache(force) ignores `force` in current ComfyUI
-    (model_management.py:2050) -- the body only reaches empty_cache() and
-    ipc_collect() -- so this drops cached blocks, not models. The `True` is kept
-    only for older builds that read it; the older comment here claimed this took an
-    unload_all_models path, and it does not."""
     try:
         mm.soft_empty_cache(True)
     except TypeError:
@@ -302,24 +214,12 @@ def _deep_cleanup():
     except Exception:
         pass
 
+DECODE_HEADROOM = 1.25
 
-DECODE_HEADROOM = 1.25          # over ComfyUI's own estimate, for working allocations
-
-
-SAMPLE_HEADROOM = 1.35          # likewise for sampling, which is the longer stretch
+SAMPLE_HEADROOM = 1.35
 
 
 def _decode_headroom(vae, latent):
-    """VRAM this decode actually needs, by the VAE's own estimate. 1e30 if unknown.
-
-    ComfyUI sizes every VAE with memory_used_decode and uses that number itself, so
-    it is the honest figure to hand free_memory. The alternative -- and what was here
-    -- is 1e30, which means "unload everything" and evicts the DiT before every
-    decode, three lines before the next shot reloads it.
-
-    1e30 on failure rather than 0: a bad estimate that frees too little turns a slow
-    render into an OOM, and a wrong guess should fall back to the behaviour that has
-    been running, not to no freeing at all."""
     try:
         dtype = getattr(vae, "vae_dtype", None) or latent.dtype
         need = float(vae.memory_used_decode(tuple(latent.shape), dtype))
@@ -331,17 +231,6 @@ def _decode_headroom(vae, latent):
 
 
 def _resident(models):
-    """The LoadedModel entries ComfyUI currently holds for `models`.
-
-    That is the form free_memory's keep_loaded wants: it compares against the
-    entries in current_loaded_models, not against the ModelPatcher objects a node
-    is holding. Anything not matched is simply not kept, so a model that is not
-    resident costs nothing here.
-
-    A VAE or a CLIP is not what ComfyUI holds -- it holds their `.patcher`. Matched
-    on the wrapper alone, and with no `.model` on a VAE either, keep=(vae, audio_vae)
-    resolved to NOTHING on a real install: the decode's free_memory and the RAM
-    guard protected neither VAE they were told to."""
     out = []
     for lm in list(getattr(mm, "current_loaded_models", [])):
         for m in models or ():
@@ -359,27 +248,6 @@ def _resident(models):
 
 
 def _image_out_dtype():
-    """The dtype ComfyUI itself hands between nodes on THIS install.
-
-    The join used to end in a hard-coded .float(), commented "back to what every
-    downstream node expects". That was true when it was written and is not a
-    constant: ComfyUI has --fp16-intermediates, and on an install running it the
-    VAE's own decode already returns fp16 -- VAE.vae_output_dtype() IS
-    model_management.intermediate_dtype() (comfy/sd.py) -- as do EmptyLatentImage
-    and the rest of nodes.py. So on that install the node was taking frames the
-    VAE handed it in fp16, widening them to fp32 nothing had asked for, and
-    handing them to nodes whose own convention is fp16.
-
-    It is the largest thing this node holds, so the widening is not free: the
-    2580-frame chain costed at the join is 9.3GB as fp16 and 18.5GB as fp32,
-    against 44.6GB of staged weights on a 62GB machine -- which is the difference
-    between the render finishing and the OOM killer taking the server. Reported as
-    exactly that, twice.
-
-    Asked, not assumed, and never widened: whatever ComfyUI says it wants between
-    nodes is what the chain is built in. An install with the flag off is told
-    float32 and gets float32, byte for byte what it got before. Older builds have
-    no intermediate_dtype at all, so the fallback is the old constant."""
     try:
         return mm.intermediate_dtype()
     except Exception:
@@ -387,36 +255,6 @@ def _image_out_dtype():
 
 
 def _evict_all_but(keep_model, latent=None):
-    """Unload every model EXCEPT the diffusion model from the GPU, and make it room in
-    pinned RAM.
-
-    This is the fix for VRAM ratcheting across a long chain. soft_empty_cache()
-    only drops the CUDA allocator's cached blocks -- it does NOT unload models, so
-    ComfyUI keeps the Qwen3-VL text encoder (~14.6GB) and both VAEs resident in
-    current_loaded_models alongside the DiT. Each shot re-encodes the prompt
-    (text encoder), encodes the handoff keyframe (video VAE), then samples (DiT),
-    so all three compete for the card.
-
-    ComfyUI does free ahead of each load -- load_models_gpu() calls free_memory()
-    for what it is about to need (model_management.py:975), so the weight path is
-    not purely reactive. What it cannot size for is a long chain's ACTIVATIONS on
-    a card where the DiT is most of the VRAM. Freeing explicitly, right after
-    conditioning is built and before sampling, keeps only what the sampler needs.
-
-    ASKED FOR HONESTLY, and this is the expensive one. free_memory computes
-    `memory_to_free = memory_required - get_free_memory(device)`, so 1e30 meant
-    "unload everything but the DiT" on every shot, unconditionally -- on a 48GB card
-    with room for all of it as readily as on a 16GB one. What it unloads is the
-    ~14.6GB text encoder and both VAEs, and the next shot re-encodes the prompt and
-    the handoff keyframe, so all three come straight back. On a machine whose RAM is
-    already full of finished frames they come back from DISK, once per shot, which is
-    the thrashing this was reported as.
-
-    The DiT can size its own activations -- memory_required(shape) is what ComfyUI
-    itself calls before a load -- so ask for that. A card with room frees nothing and
-    keeps the encoder resident; a card without frees exactly as much as it must.
-    1e30 stays the fallback, because a bad estimate that frees too little turns a
-    slow render into an OOM."""
     need = 1e30
     try:
         if latent is not None:
@@ -434,53 +272,25 @@ def _evict_all_but(keep_model, latent=None):
             mm.soft_empty_cache(True)
         except Exception:
             pass
-    # ...AND THE PINNED RAM EVERY OTHER MODEL HOLDS, which nothing else here can free.
-    #
-    # Under --enable-dynamic-vram whatever part of the DiT does not fit the card
-    # streams from PINNED host RAM on every step. ComfyUI lets another model's pins go
-    # only once that model is idle, and a model is marked idle only BETWEEN nodes
-    # (reset_cast_buffers, after each node in execution.py). This node encodes and
-    # samples inside one node, so the text encoder is still "active" when the DiT
-    # starts, and its pins are never evicted for it -- free_memory's pins_required
-    # included, which evicts only idle models. Read off a real render: a 25 GB text
-    # encoder and a 32 GB DiT against a 49.6 GB pin limit on a 62 GB machine. The DiT
-    # could not pin the rest of itself, so what did not fit the card was read from
-    # pageable RAM or disk on every step. Reported as every step at 87 s, where only
-    # the first used to be slow.
-    #
-    # ONLY AS MUCH AS THE DiT IS SHORT, THOUGH. This used to drop every other model's
-    # pins outright, every shot -- and what goes unpinned is read back from its model
-    # file the next time it runs. The text encoder runs at every shot's encode, so all
-    # 25 GB of it came off the drive at every beat, and both VAEs with it at every
-    # decode. Reported as the ComfyUI drive reading on every beat, which it had not
-    # done before this. What the DiT is actually short is a fraction of that, and
-    # nothing at all when RAM allows -- which is the render that never touched the
-    # drive. See _release_pins_for. A ComfyUI without dynamic VRAM has no pins to
-    # measure, and nothing is released.
     try:
         _release_pins_for(keep_model, keep)
     except Exception:
         pass
 
-
 _PIN_SUBSETS = ("weights", "patches", "weights-loaded", "patches-loaded")
 
 
 def _pinned_bytes(patcher):
-    """What a dynamic-VRAM model already holds in pinned host RAM, in bytes."""
     state = patcher.model.dynamic_pins[patcher.load_device]
     return sum(int(state[s][3][0]) for s in _PIN_SUBSETS if s in state)
 
 
 def _ram_available():
-    """Host RAM free for pinning, measured the way ComfyUI measures it."""
     import comfy.system_memory
     return int(comfy.system_memory.virtual_memory_available())
 
 
 def _ram_headroom():
-    """The free RAM ComfyUI keeps in hand when it pins: half the --cache-ram headroom,
-    and never under 2 GB. ensure_pin_budget's own figure."""
     try:
         import comfy.memory_management as _cmm
         return max(_cmm.RAM_CACHE_HEADROOM / 2, 2048 * 1024 ** 2)
@@ -489,10 +299,6 @@ def _ram_headroom():
 
 
 def _pin_shortfall(keep_model):
-    """Bytes of pinned RAM the DiT still needs and cannot get. 0 when it fits.
-
-    The two limits ComfyUI's own ensure_pin_budget applies: the RAM actually
-    available less a headroom, and the pin cap."""
     want = int(keep_model.model_size()) - _pinned_bytes(keep_model)
     if want <= 0:
         return 0
@@ -504,12 +310,6 @@ def _pin_shortfall(keep_model):
 
 
 def _release_pins_for(keep_model, keep):
-    """Free the other models' pinned RAM until the DiT fits, largest first. Bytes freed.
-
-    ComfyUI's own ensure_pin_budget cannot be asked: with evict_active it may take the
-    pins back off the DiT itself, which is active too. So the same measure, applied
-    here to everything but the DiT -- the biggest holder first, which is the text
-    encoder, so the VAEs about to decode keep theirs whenever it covers the gap."""
     short = _pin_shortfall(keep_model)
     if short <= 0:
         return 0
@@ -520,14 +320,6 @@ def _release_pins_for(keep_model, keep):
     others.sort(key=_pinned_bytes, reverse=True)
     if not others:
         return 0
-    # NOTHING MAY STILL BE READING WHAT IS ABOUT TO BE FREED. The text encoder ran a
-    # moment ago, and its weights reach the card by NON-BLOCKING copies out of these
-    # very pins -- the CPU is back here while the GPU may still be reading them.
-    # Freeing and unregistering them under it is an illegal memory access, and CUDA
-    # makes that sticky: the render dies at the next allocation or free, reported as
-    # "CUDA error: an illegal memory access" from cuMemFreeAsync once the prompt had
-    # finished. ComfyUI itself only lets a model's pins go inside reset_cast_buffers,
-    # after synchronising every stream -- so the same wait comes first here.
     _sync = getattr(mm, "synchronize", None)
     if _sync is not None:
         _sync()
@@ -542,12 +334,6 @@ def _release_pins_for(keep_model, keep):
 
 
 def _host_bytes(patcher):
-    """Host RAM a dynamic-VRAM model's weight buffers hold, pinned or not, in bytes.
-
-    Not _pinned_bytes. A pin is a registration ON one of these buffers, and a buffer
-    stays committed after its registration goes (unregister_inactive_pins keeps the
-    RAM), so the buffer's size is what the kernel charges the process. The pinned
-    count stands in for a pin state with no buffer object."""
     state = patcher.model.dynamic_pins[patcher.load_device]
     total = 0
     for s in _PIN_SUBSETS:
@@ -558,29 +344,6 @@ def _host_bytes(patcher):
 
 
 def ensure_host_ram(need, keep=(), what="an allocation"):
-    """Free host RAM for `need` bytes the node is about to allocate. Bytes freed.
-
-    THIS IS WHAT THE KERNEL WAS KILLING THE SERVER FOR. Read off the OOM reports: a
-    python at 50-60 GB anon-rss on a 62 GB machine, killed at the audio decode of the
-    third or fourth shot, every time. Under --enable-dynamic-vram the text encoder
-    (25 GB) and the DiT (32 GB) keep their weights in host buffers, and ComfyUI grows
-    those only while ensure_pin_budget sees its headroom free -- then never shrinks
-    them for anything but another pin. It gives RAM back under pressure only BETWEEN
-    nodes (execution.py, after each node), and this node runs the whole chain inside
-    one. So each shot's frames were written into the same few GB of headroom the
-    weights had left, the decode's own transient on top, and by shot three or four
-    there was none left. Weight buffers are page-locked, the kernel cannot swap them
-    out, and the OOM killer takes the process.
-
-    The same step ComfyUI takes between nodes, taken here before the allocation that
-    needs it: cached outputs of older prompts first, then weight RAM -- only the
-    shortfall, largest holder first, the models in `keep` last. What is released
-    streams back from its model file the next time it runs, which is a read, not a
-    crash. The GPU is waited for first: a model that just ran may still be reading
-    these buffers through non-blocking copies (see _release_pins_for).
-
-    Nothing is released while RAM allows, and a ComfyUI with nothing to measure or no
-    dynamic VRAM is left alone."""
     try:
         headroom = int(_ram_headroom())
         short = int(need) + headroom - _ram_available()
@@ -624,7 +387,7 @@ def ensure_host_ram(need, keep=(), what="an allocation"):
             except Exception:
                 continue
         if freed > 64 * 1024 ** 2:
-            time.sleep(0.05)        # ComfyUI's own pause: a decommit can outrun psutil
+            time.sleep(0.05)
     try:
         left = int(need) + headroom - _ram_available()
     except Exception:
@@ -641,23 +404,6 @@ def ensure_host_ram(need, keep=(), what="an allocation"):
 
 
 def chain_noise(latent_image, seed, noise_inds=None, fallback=None):
-    """One seed's noise, laid out TIME-FIRST, so a frame's noise does not depend on
-    how long its shot is.
-
-    ComfyUI's prepare_noise draws the whole latent in memory order from one
-    generator -- channel, then time, then space, and the audio after the video. So
-    the noise at any frame depends on the shot's LENGTH: a 4-second shot and a
-    6-second one, on the same seed, share nothing, not even their first frame. With
-    shot_length 'from the beat' every shot is a different length, so the one seed
-    was a different noise field at every beat and the surface detail -- the weave,
-    the print, the small things on a garment -- was redrawn at every cut. Reported
-    as the seed changing drastically each beat and the clothes not staying the same.
-
-    Drawn one frame at a time instead, frame t gets the same noise in every shot,
-    whatever its length. Video and audio each get their own generator, so the audio
-    does not shift with the video's length either. Anything that is not H3's
-    [B, C, T, H, W] video and [B, C, 2, T] audio -- or a batch_index, which asks for
-    ComfyUI's own per-item draw -- gets ComfyUI's noise, unchanged."""
     parts = latent_image.unbind() if latent_image.is_nested else [latent_image]
     if noise_inds is not None or not parts or any(p.ndim not in (4, 5) for p in parts):
         return (fallback or comfy.sample.prepare_noise)(latent_image, seed, noise_inds)
@@ -677,8 +423,6 @@ def chain_noise(latent_image, seed, noise_inds=None, fallback=None):
 
 
 class _ChainNoise:
-    """While sampling, ComfyUI's noise is chain_noise. common_ksampler draws its own
-    through comfy.sample.prepare_noise, so that is what is swapped, and put back."""
 
     def __enter__(self):
         self._was = getattr(comfy.sample, "prepare_noise", None)
@@ -695,17 +439,6 @@ class _ChainNoise:
 
 
 def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent, sigmas):
-    """common_ksampler, driven by an EXTERNAL sigma schedule.
-
-    common_ksampler derives its sigmas from (sampler_name, scheduler, steps, denoise)
-    and takes no schedule argument, so a schedule computed anywhere else cannot
-    reach it. Under PDD that is fatal rather than merely inconvenient: the heads
-    accept only their nine trained boundaries, and re-deriving the grid from
-    widgets means hitting it by coincidence and losing it again the moment a step
-    count changes.
-
-    Mirrors nodes.common_ksampler's noise / mask / callback handling exactly -- the
-    only substitution is comfy.sample.sample_custom for comfy.sample.sample."""
     latent_image = latent["samples"]
     latent_image = comfy.sample.fix_empty_latent_channels(
         model, latent_image,
@@ -724,224 +457,10 @@ def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent
     out["samples"] = samples
     return out
 
-
-RESIZE_CHUNK = 32
-
-
-def _stream_chunks(total):
-    """A collector that writes upscaled chunks into ONE destination as they land.
-
-    Both chunk loops in _upscale_frames used `out.append(...)` then
-    `frames = torch.cat(out, dim=0)`. That is the shape the finished-chain join was
-    rebuilt to stop, at a LARGER size: the list holds the whole upscaled chain and
-    the cat allocates a second one, both live at the cat, and `out` is a local that
-    is never cleared -- so it survives the cat, survives the trailing resize, and is
-    still bound at the return. Meanwhile the CALLER's pre-upscale chain cannot be
-    dropped either, because `part = frames[s:s+batch]` is a view into it.
-
-    At 2580 frames of 1056x608 that is 9.26GB per copy per doubling: 37GB x2 at 2x,
-    and 148GB x2 with the RealESRGAN_x4plus that is sitting in models/upscale_models.
-    Preallocating from the first chunk and copying into it removes exactly one of
-    those two, and drops the list at the same time.
-
-    The destination is sized from the FIRST chunk, so the model's scale factor does
-    not have to be known in advance, and the frame count is the caller's own -- an
-    upscaler changes width and height, never the number of frames."""
-    state = {"dst": None, "at": 0}
-
-    def put(piece):
-        if state["dst"] is None:
-            if piece.device.type == "cpu" and piece.shape[0]:
-                ensure_host_ram(int(total) * (piece.nbytes // int(piece.shape[0])),
-                                what="the upscaled chain")
-            state["dst"] = torch.empty((int(total),) + tuple(piece.shape[1:]),
-                                       dtype=piece.dtype, device=piece.device)
-        k = int(piece.shape[0])
-        end = min(state["at"] + k, state["dst"].shape[0])
-        if end > state["at"]:
-            state["dst"][state["at"]:end].copy_(piece[:end - state["at"]])
-        state["at"] = end
-
-    def done():
-        d, at = state["dst"], state["at"]
-        if d is None:
-            return None
-        return d if at == d.shape[0] else d[:at]
-
-    return put, done
-
-
-def _resize_short_edge(frames, target, method="lanczos", chunk=0):
-    """Resize a [B,H,W,C] frame batch so its short edge == target (keeping aspect,
-    snapped to /32). Plain high-quality resize -- enlarges, doesn't add detail.
-
-    IN CHUNKS, BECAUSE LANCZOS IS FOUR FULL-LENGTH COPIES. The whole chain went
-    into one common_upscale call, and comfy.utils.lanczos is three successive list
-    comprehensions over every frame at once:
-
-        images = [Image.fromarray(...) for image in samples]        # N at source size
-        images = [image.resize(...) for image in images]            # N at target size
-        images = [torch.from_numpy(np.array(im).astype(np.float32)/255.) ...]
-        result = torch.stack(images)
-        return result.to(samples.device, samples.dtype)
-
-    A comprehension builds the new list completely before rebinding the name, so at
-    each rebind BOTH are live; then torch.stack allocates a full copy while its list
-    still exists, and .to() allocates the result while the stack still exists. Note
-    the astype(np.float32): the input is fp16 but the two largest transients are at
-    DOUBLE its width. At 2580 frames to a 1080 short edge that peaked around 147GB
-    to produce a 29GB result, and it fires on a DOWNSCALE too.
-
-    Chunked, the peak is the result plus one chunk's worth of that machinery. It is
-    bit-identical: PIL resizes each frame independently, so per-chunk and per-chain
-    give the same pixels. The early return for an already-correct size is kept, so
-    the common no-op case still allocates nothing."""
-    b, h, w, c = frames.shape
-    if min(h, w) == target:
-        return frames
-    if h <= w:
-        nh = target; nw = max(32, int(round(target * w / h / 32) * 32))
-    else:
-        nw = target; nh = max(32, int(round(target * h / w / 32) * 32))
-    step = max(1, int(chunk) or RESIZE_CHUNK)
-    if frames.device.type == "cpu":
-        ensure_host_ram(b * nh * nw * c * frames.element_size(), what="the resized chain")
-    out = torch.empty((b, nh, nw, c), dtype=frames.dtype, device=frames.device)
-    for i in range(0, b, step):
-        part = comfy.utils.common_upscale(
-            frames[i:i + step].movedim(-1, 1), nw, nh, method, "disabled")
-        out[i:i + step].copy_(part.movedim(1, -1))
-        del part
-    return out
-
-
-def _upscale_frames(frames, mode, model_name, target_short_edge, batch=4):
-    """Optional post-pass upscale of the finished frames (on CPU).
-      mode 'model'   : run a ComfyUI upscale model (Real-ESRGAN/UltraSharp class)
-                       via the registered loader+apply nodes, chunked with cleanup
-                       so 2000+ frames don't OOM; then fit to target short edge.
-      mode 'rtx'     : NVIDIA RTX Video Super Resolution (Tensor Cores; fastest,
-                       best quality for video -- needs Nvidia_RTX_Nodes_ComfyUI).
-      mode 'lanczos' : plain high-quality resize to the target short edge.
-    Any failure falls back to lanczos (or the raw frames), so it never breaks a
-    render. Returns (frames, note). NOTE: this SHARPENS/ENLARGES; it does not
-    reconstruct video detail the way a second-model (LTX 2.3) pass does."""
-    if mode == "off" or frames is None or getattr(frames, "shape", [0])[0] == 0:
-        return frames, ""
-    note = ""
-    if mode == "rtx":
-        try:
-            rtx = (_find_node(["rtx", "video", "super"]) or _find_node(["rtxvideosuperresolution"])
-                   or _find_node(["rtx", "upscale"]))
-            if rtx is None:
-                raise RuntimeError("RTX node not installed (Nvidia_RTX_Nodes_ComfyUI)")
-            scale = 2
-            if target_short_edge and int(target_short_edge) > 0:
-                cur = min(frames.shape[1], frames.shape[2])
-                if cur > 0:
-                    scale = max(1, min(4, int(round(int(target_short_edge) / cur))))
-            _put, _done = _stream_chunks(frames.shape[0])
-            n = frames.shape[0]
-            step = max(1, int(batch))
-            for st in range(0, n, step):
-                part = frames[st:st + step]
-                res = None
-                for kw in ({"image": part, "scale": scale}, {"images": part, "scale": scale},
-                           {"image": part, "scale_factor": scale}, {"image": part}):
-                    try:
-                        res = _invoke_node(rtx, **kw); break
-                    except TypeError:
-                        continue
-                if res is None:
-                    raise RuntimeError("RTX node signature not recognized")
-                _put(res.detach().to("cpu"))
-                del res, part
-                _deep_cleanup()
-            frames = _done()
-            note = f"RTX Video Super Resolution x{scale}"
-            if target_short_edge and int(target_short_edge) > 0:
-                frames = _resize_short_edge(frames, int(target_short_edge))
-                note += f"; fit to {int(target_short_edge)}px short edge"
-            return frames, note
-        except Exception as e:
-            mode = "model"
-            note = f"RTX upscale unavailable ({e}); fell back to model/lanczos"
-    if mode == "model" and model_name and model_name != "none":
-        try:
-            loader = _find_node(["upscale", "model", "load"]) or _find_node(["loadupscalemodel"])
-            applier = _find_node(["imageupscale", "model"]) or _find_node(["upscaleimageusingmodel"])
-            if loader is None or applier is None:
-                raise RuntimeError("upscale-model nodes not found")
-            up_model = _invoke_node(loader, model_name=model_name)
-            _put, _done = _stream_chunks(frames.shape[0])
-            n = frames.shape[0]
-            for s in range(0, n, max(1, int(batch))):
-                part = frames[s:s + max(1, int(batch))]
-                res = _invoke_node(applier, upscale_model=up_model, image=part)
-                _put(res.detach().to("cpu"))
-                del res, part
-                _deep_cleanup()
-            frames = _done()
-            note = f"upscaled with {model_name}"
-        except Exception as e:
-            mode = "lanczos"
-            note = f"model upscale unavailable ({e}); used lanczos"
-    if target_short_edge and int(target_short_edge) > 0:
-        try:
-            frames = _resize_short_edge(frames, int(target_short_edge))
-            note = (note + "; " if note else "") + f"fit to {int(target_short_edge)}px short edge"
-        except Exception as e:
-            note = (note + "; " if note else "") + f"resize failed ({e})"
-    elif mode == "lanczos" and not note:
-        note = "lanczos selected but no target set -> unchanged"
-    return frames, note
-
-
-def _find_node(substrings):
-    """Find a registered node whose key contains all of `substrings` (lowercased)."""
-    maps = getattr(nodes, "NODE_CLASS_MAPPINGS", {}) or {}
-    for k, v in maps.items():
-        kl = k.lower()
-        if all(s in kl for s in substrings):
-            return v
-    return None
-
-
-def _invoke_node(cls, **kwargs):
-    """Call a registered ComfyUI node (V1 FUNCTION or V3 execute) with kwargs and
-    return its first output. Used to reuse ComfyUI's own upscale-model loader/apply
-    so we don't reimplement spandrel loading or tiled scaling."""
-    inst = cls()
-    fn = None
-    if getattr(cls, "FUNCTION", None) and hasattr(inst, cls.FUNCTION):
-        fn = getattr(inst, cls.FUNCTION)
-    else:
-        for cand in ("execute", "upscale", "load_model", "load"):
-            if hasattr(inst, cand):
-                fn = getattr(inst, cand); break
-    if fn is None:
-        raise RuntimeError("no callable entrypoint")
-    out = fn(**kwargs)
-    out = getattr(out, "result", out)
-    return out[0] if isinstance(out, (tuple, list)) else out
-
-
-LEVEL_POOL = 64                # cells per axis the level statistics are measured on
+LEVEL_POOL = 64
 
 
 def frame_levels(img):
-    """(mean, std) per colour channel for one frame, as 3-vectors, or (None, None).
-
-    Area-pooled to LEVEL_POOL first, so a pre-upscale frame and an upscaled one can be
-    compared: pooling measures the PICTURE's levels rather than its resolution. Measured
-    across a 2x resize, std agrees to 0.28% on picture-like content -- and to only 15%
-    on pure noise, because pooling cannot preserve variance that lives entirely at the
-    pixel scale. Real frames are the former, and whatever residual there is cancels
-    anyway: the caller measures the same pipeline difference separately and subtracts it.
-
-    float32 throughout, deliberately: these frames are fp16 under
-    --fp16-intermediates, and an fp16 mean accumulated over a 1344x768 frame biases
-    badly enough to matter at the sizes being corrected here."""
     x = img
     if x.dim() == 4:
         x = x[0]
@@ -953,64 +472,15 @@ def frame_levels(img):
     p = torch.nn.functional.adaptive_avg_pool2d(x, LEVEL_POOL)[0].reshape(3, -1)
     return p.mean(dim=1), p.std(dim=1)
 
-
-def apply_levels(img, gain, offset):
-    """Rescale a frame's contrast and level about its OWN per-channel mean.
-
-    The pivot is the frame's own mean and never a target. That is the whole reason this
-    can run on any scene: a beat that walks into a darker room keeps its darkness,
-    because nothing here knows or cares what the level is -- only how much the last
-    boundary expanded it. Anchoring to shot 1 instead would cancel every deliberate
-    lighting change in the film, which is the opposite failure.
-
-    Clamped into 0..1 because the next thing that happens to this frame is an 8-bit
-    quantisation (comfy.utils.common_upscale goes through a uint8 PIL round trip even
-    at the same size), so there is no headroom outside the range to borrow from."""
-    x = img.float()
-    c = min(3, int(x.shape[-1]))
-    m = x[..., :c].reshape(-1, c).mean(dim=0)
-    g = gain[:c].to(device=x.device, dtype=x.dtype)
-    o = offset[:c].to(device=x.device, dtype=x.dtype)
-    y = x.clone()
-    y[..., :c] = ((x[..., :c] - m) * g + m + o).clamp(0.0, 1.0)
-    return y.to(img.dtype)
-
-
-GRADE_GAIN_CAP = 0.12        # log-gain either part of a shot's grade may take out: ~12%
+GRADE_GAIN_CAP = 0.12
 GRADE_OFFSET_CAP = 0.05
-GRADE_OWN_GAIN = 0.25        # a within-shot change this large is the picture changing,
-GRADE_OWN_OFFSET = 0.10      # ...a light going off, not a chain cooking by a few percent
-GRADE_MIN_SIGMA = 0.01       # below this a contrast RATIO means nothing
-GRADE_FLOOR = 1.0 / 255.0    # the handoff is quantised to 8 bits; less than a step is erased
+GRADE_OWN_GAIN = 0.25
+GRADE_OWN_OFFSET = 0.10
+GRADE_MIN_SIGMA = 0.01
+GRADE_FLOOR = 1.0 / 255.0
 
 
 def shot_grade(given, first, last, strength, own_change=False, pipe=None):
-    """(start, end) grades taking a shot's OWN cooking back out, or None when there is none.
-
-    Each grade is (log-gain, offset), per colour channel, about the frame's own mean --
-    apply_levels' model. `start` is for the shot's first frame, `end` for its last, and
-    grade_frames ramps between them.
-
-    THE BURN BUILDS INSIDE THE SHOT, NOT ONLY AT THE CUT. The correction before this
-    measured one thing: the handoff against the model's reproduction of it at frame one
-    (`given` against `first`), where nothing was asked to change -- and treated what the
-    shot then did over its length as the author's, taking it out only once three shots
-    agreed on its sign and never more than 1.5% of contrast. A distill cooking a few
-    percent over every take reproduces the handoff faithfully and burns the frames after
-    it, so that measurement read nothing, the last frame went out cooked, the next shot
-    reproduced the cooked frame faithfully and cooked it again. Reported as the scene
-    burning itself in through every beat, after that correction was in.
-
-    Both parts now, from this shot alone:
-      * the boundary -- `given` to `first` -- which is never the author's, and
-      * the take -- `first` to `last` -- unless `own_change` says the beat changes the
-        light, the place or the camera, or the change is too large to be cooking.
-    Frame one carries the boundary part only; the last frame carries both. The video's
-    own frames are graded along that ramp, so the last one IS the handoff: no step at the
-    cut, and nothing left for the next shot to inherit.
-
-    `pipe` is (last frame as decoded, the same frame before latent upscaling), whose
-    difference is the pipeline's and not the shot's; it is taken out of the boundary."""
     if strength is None or float(strength) <= 0:
         return None
     fm, fs = frame_levels(first)
@@ -1046,10 +516,6 @@ def shot_grade(given, first, last, strength, own_change=False, pipe=None):
 
 
 def grade_frames(frames, start, end, chunk=16):
-    """Grade a shot's frames IN PLACE, ramping from `start` at frame one to `end` at the last.
-
-    In place and in chunks: the shot is the largest thing the node holds, and grading a
-    copy of it is a second shot in RAM at the decode, where RAM is shortest."""
     n = int(frames.shape[0])
     c = min(3, int(frames.shape[-1]))
     if n == 0 or c == 0:
