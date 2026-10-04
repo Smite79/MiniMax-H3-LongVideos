@@ -30,9 +30,10 @@ def _load_local(name, filename):
 
 
 rt = _load_local("h3_runtime", "runtime.py")
-_load_local("h3_audio", "audio.py")
+au = _load_local("h3_audio", "audio.py")
 cnd = _load_local("h3_conditioning", "conditioning.py")
 up = _load_local("h3_upscale", "upscale.py")
+snd = _load_local("h3_sound", "sound.py")
 try:
     pose = _load_local("h3_pose_control", "pose_control.py")
     POSE_IMPORT_ERROR = ""
@@ -67,8 +68,29 @@ _HYPERFLOW_DELTAS = {}
 
 _PICTURE = re.compile(r"(\(\s*)?<\s*picture[\s_\-]*(\d+)\s*>(\s*\))?", re.I)
 _SPEECH = re.compile(r"\"[^\"]*\"|“[^”]*”|<\s*d\s*>.*?<\s*/\s*d\s*>", re.S | re.I)
-_DIRECTIVE = re.compile(r"^\s*(hold|release|seconds)\s*:\s*(.*?)\s*$", re.I)
+_DIRECTIVE = re.compile(r"^\s*(hold|release|seconds|exit)\s*:\s*(.*?)\s*$", re.I)
 _CUT = re.compile(r"^\s*cut\s*:?\s*$", re.I)
+_SHEET = re.compile(r"^\s*([A-Z][\w'’-]{0,24}(?:\s+[A-Z][\w'’-]{0,24}){0,2})\s*:\s*\S")
+_CLAIM = re.compile(r"\b([A-Z][\w'’-]{0,24})[\s,:(\[]*(?i:<\s*picture[\s_\-]*\d+\s*>)")
+_EXIT = re.compile(
+    r"\b(?:leaves?|left|leaving)(?=\s*(?:[.,;:!?]|$)|\s+(?:again|together|without|through|by|via|for|with|and|"
+    r"then|now|quietly|alone)\b|\s+(?:the|this|that|his|her|their|our)\s+(?:[\w-]+\s+)?(?:room|cell|house|building|"
+    r"apartment|flat|office|kitchen|bedroom|bathroom|basement|hall|hallway|corridor|car|van|scene|shot|frame|home)\b)"
+    r"|\bexit(?:s|ed|ing)?\b"
+    r"|\b(?:walk|goes|going|gone|went|heads|headed|step|run|ran|storm|hurr|slip|wander|strid|strode|march|rush|back|"
+    r"driv|drove|sneak|snuck|dash|bolt|stomp|limp)\w*\s+(?:\w+ly\s+)?(?:out\b(?!\s+of\b)|out\s+of\s+"
+    r"(?:the\s+|this\s+|his\s+|her\s+|their\s+)?(?:room|cell|house|building|door|doorway|flat|apartment|office|"
+    r"kitchen|bedroom|bathroom|car|van|frame|shot|view|sight)\b|off\b(?!\s+(?:the|a|an|his|her|their)\b)"
+    r"|away\b(?!\s+from\b)|outside\b|home\b)"
+    r"|\b(?:disappear|vanish)(?:s|es|ed|ing)?\b"
+    r"|\bout\s+of\s+(?:(?:the|this|that|his|her|their)\s+)?(?:frame|shot|view|sight)\b", re.I)
+_NOT_NAMES = {"She", "He", "They", "It", "Her", "His", "Him", "Their", "The", "A", "An", "This", "That", "With",
+              "Like", "As", "And", "Picture", "Setting", "Location", "Place", "Scene", "Style", "Look", "Camera",
+              "Lighting", "Light", "Mood", "Time", "Note", "Notes", "Shot", "Audio", "Sound", "Music"}
+_BOUNDARY = re.compile(r"[,;:]|\b(?:as|while|when|after|before|until|but|then|so)\b", re.I)
+_EXTRAS = re.compile(r"\b(?:crowd|people|someone|somebody|others|strangers?|bystanders?|onlookers?|"
+                     r"(?:a|an|another|two|three|several|some)\s+(?:\w+\s+)?(?:man|woman|men|women|guards?|nurses?|"
+                     r"doctors?|officers?|police|person|girl|boy|child|children|kids?|figure|soldiers?))\b", re.I)
 _CLAUSE = re.compile(r"(?:[.!?;]+|,?\s+(?:and then|then|and|before|after|while|as|until)\s+"
                      r"|,\s+(?=\w+(?:ing|es|s|ed)\b))")
 
@@ -114,7 +136,7 @@ def shot_frames(text, ceiling, applying):
 
 
 def parse_paragraph(par):
-    out = {"lines": [], "hold": [], "release": [], "seconds": None, "cut": False}
+    out = {"lines": [], "hold": [], "release": [], "exit": [], "seconds": None, "cut": False}
     for line in par.splitlines():
         m = _DIRECTIVE.match(line)
         if m is None:
@@ -124,6 +146,9 @@ def parse_paragraph(par):
                 out["lines"].append(line.strip())
             continue
         kind, arg = m.group(1).lower(), m.group(2)
+        if kind == "exit":
+            out["exit"] += [w.strip() for w in arg.split(",") if w.strip()]
+            continue
         if kind == "seconds":
             try:
                 out["seconds"] = float(arg.lower().rstrip("s ").strip())
@@ -216,6 +241,59 @@ def pose_plan(during, released, added):
     return bound
 
 
+def _mentions(text, names):
+    return [n for n in names if re.search(rf"\b{re.escape(n)}\b", text or "")]
+
+
+def roster(sheets, texts, paras):
+    names = [m.group(1) for t in sheets for m in map(_SHEET.match, t.splitlines()) if m]
+    names += [n for t in texts for n in _CLAIM.findall(t)]
+    names += [who for p in paras for who, _ in p["hold"] + p["release"]] + [n for p in paras for n in p["exit"]]
+    return [n for n in dict.fromkeys(names) if n not in _NOT_NAMES]
+
+
+def leavers(text, names):
+    out = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+        for m in _EXIT.finditer(sentence):
+            before = sentence[:m.start()]
+            spots = sorted((k.start(), k.end(), n) for n in names for k in re.finditer(rf"\b{re.escape(n)}\b", before))
+            if not spots:
+                continue
+            if re.fullmatch(r"\s+(?:\w+ly\s+)?", before[spots[-1][1]:]):
+                who, j = [spots[-1][2]], len(spots) - 1
+                while j > 0 and re.fullmatch(r"\s*(?:,|and|,\s*and)\s*", before[spots[j - 1][1]:spots[j][0]], re.I):
+                    j -= 1
+                    who.insert(0, spots[j][2])
+            else:
+                clauses = [c for c in _BOUNDARY.split(before) if _mentions(c, names)]
+                who = [min(((k.start(), n) for n in names for k in re.finditer(rf"\b{re.escape(n)}\b", clauses[-1])))[1]]
+            out += [n for n in who if n not in out]
+    return out
+
+
+def cast_line(cast, beat):
+    if _EXTRAS.search(beat or ""):
+        return ""
+    if len(cast) == 1:
+        return "There is one person in the shot: one body, one face."
+    if len(cast) == 2:
+        return "There are two people in the shot, with one body for each person."
+    return ""
+
+
+def without_absent(text, absent, names):
+    here, out = [n for n in names if n not in absent], []
+    for line in text.splitlines():
+        m = _SHEET.match(line)
+        if m and m.group(1) in names:
+            out += [line] if m.group(1) not in absent else []
+            continue
+        out.append(" ".join(s for s in re.split(r"(?<=[.!?])\s+", line)
+                            if not (_mentions(s, absent) and not _mentions(s, here))))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
 def shot_pictures(text, refs, held_names):
     claimed = set()
     for name in held_names:
@@ -238,30 +316,54 @@ def shot_pictures(text, refs, held_names):
 
 def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor="", from_beat=False):
     scene, paras = parse_script(prompt, all_beats=bool((anchor or "").strip()))
-    lead = ([parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
-            + [parse_paragraph(p) for p in paragraphs(memory)])
+    setting = [parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
+    lead = setting + [parse_paragraph(p) for p in paragraphs(memory)]
     state = {}
     for para in lead:
         state, _, _ = apply_holds(state, para)
     scene_text = "\n\n".join(p["text"] for p in lead if p["text"])
-    shots = []
+    names = roster([p["text"] for p in lead if p not in setting], [p["text"] for p in lead], lead + paras)
+    present = _mentions(" ".join(p["text"] for p in setting), names)
+    solo_seen, shots = set(), []
     for i, para in enumerate(paras):
         start = state
         state, released, added = apply_holds(start, para)
         during = {k: [it for it in v if it not in released.get(k, [])] for k, v in start.items()}
         during = {k: v for k, v in during.items() if v}
         keyed = (i > 0 and not para["cut"]) or (i == 0 and has_first_frame)
-        held = held_line(during)
-        text = "\n\n".join(x for x in (scene_text, para["text"], held) if x)
-        text, shot_refs = shot_pictures(text, refs, list(during) if keyed else [])
+        named = list(dict.fromkeys(_mentions(para["text"], names) + [who for who, _ in para["hold"]]))
+        cast = (named or present) if para["cut"] else list(dict.fromkeys(present + named))
+        present = [n for n in cast if n not in leavers(para["text"], names) + para["exit"]]
+        absent = [n for n in names if n not in cast]
+        recover = [n for n in cast if n in solo_seen] if not keyed else []
+        speech = bool(_SPEECH.search(para["text"]))
+        text = "\n\n".join(x for x in (without_absent(scene_text, absent, names), para["text"]) if x)
+        drop = absent + (list(during) if keyed else []) + recover
+        text, shot_refs = shot_pictures(text, refs, drop)
+        sound_text, sounded = snd.sound_line(para["text"], scene_text, speech)
+        notes = [held_line(during)]
+        notes += [f"By the last frame, {who} has {' and '.join(items)}, in plain view, with no one's hands in the way."
+                  for who, items in added.items()]
+        if speech or snd.vocal(para["text"]):
+            notes += [snd.muffled(who, snd.mouth_item(during.get(who, []))) for who in cast
+                      if snd.mouth_item(during.get(who, []))]
+        notes += [sound_text, cast_line(cast, para["text"]) if names else ""]
+        if keyed:
+            notes.append(f"<Picture {len(shot_refs) + 1}> is the frame this shot opens on: the same place and the same "
+                         f"people, one moment earlier, carried forward rather than joined by anybody new.")
+        notes += [f"<Picture {len(shot_refs) + k}> shows {who} as they look now." for k, who in enumerate(recover, 1)]
+        text = "\n\n".join(x for x in (text, " ".join(n for n in notes if n)) if x)
         frames = rt.align_frame_count(round((para["seconds"] or shot_seconds) * rt.H3_FPS))
         if from_beat and not para["seconds"]:
             frames = shot_frames(para["text"], frames, bool(added))
         bound = pose_plan(during, released, added)
         latch = any(f["latch_limbs"] for f in bound.values())
+        solo = present[0] if len(present) == 1 and present[0] in cast else ""
+        solo_seen |= {solo} if solo else set()
         shots.append({"n": i + 1, "prompt": text, "refs": shot_refs, "frames": frames, "keyed": keyed,
-                      "cut": para["cut"], "wordless": not _SPEECH.search(para["text"]), "held": held,
-                      "bound": bound, "latch_after": int(math.ceil(POSE_LATCH_FROM * frames)) if latch else None})
+                      "cut": para["cut"], "wordless": not speech, "sounded": sounded, "held": held_line(during),
+                      "cast": cast, "solo": solo, "recover": recover, "bound": bound,
+                      "latch_after": int(math.ceil(POSE_LATCH_FROM * frames)) if latch else None})
     return shots
 
 
@@ -608,6 +710,8 @@ def shot_line(shot):
     bits = [f"shot {shot['n']}: {shot['frames']} frames"]
     if shot["cut"]:
         bits.append("cut")
+    if shot["cast"]:
+        bits.append("cast: " + ", ".join(shot["cast"]))
     if shot["held"]:
         bits.append(f"held: {shot['held']}")
     if shot["bound"]:
@@ -657,6 +761,8 @@ class H3LongVideos:
                 "upscale_model": (up.frame_models(), {"default": "none"}),
                 "upscale_target_short_edge": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
                 "shot_length": (SHOT_LENGTHS, {"default": "from the beat"}),
+                "ambient_audio": ("AUDIO",),
+                "ambient_level": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.05}),
             },
             "hidden": {"graph": "PROMPT"},
         }
@@ -671,7 +777,8 @@ class H3LongVideos:
             ref_image_4=None, sigmas=None, shift_video=12.0, shift_audio=3.0, silence_wordless=True,
             plan_only=False, pose_controlnet=None, pose_strength=1.0, pose_end=0.6, anchor="", character_memory="",
             latent_upscale="off", latent_upscale_scale=2.0, upscale="off", upscale_model="none",
-            upscale_target_short_edge=0, shot_length="from the beat", graph=None, **legacy):
+            upscale_target_short_edge=0, shot_length="from the beat", ambient_audio=None, ambient_level=0.25,
+            graph=None, **legacy):
         t0 = time.perf_counter()
         check_vaes(vae, audio_vae)
         w, h = frame_size(resolution, megapixels)
@@ -703,13 +810,15 @@ class H3LongVideos:
         acc = rt.FrameAccumulator(sum(s["frames"] for s in shots), rt._image_out_dtype(), True)
         audio_parts, sr = [], 44100
         handoff = first_frame[:1] if first_frame is not None else None
-        detector, carry, size = None, None, None
+        detector, carry, size, captured = None, None, None, {}
         try:
             for i, shot in enumerate(shots):
                 given = handoff if shot["keyed"] else None
+                refs = shot["refs"] + [captured[n] for n in shot["recover"] if n in captured]
                 cond, latent, fc, _ = cnd.build_conditioning(
-                    clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=given, refs=shot["refs"],
-                    silent=shot["wordless"] and silence_wordless, lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD)
+                    clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
+                    silent=shot["wordless"] and not shot["sounded"] and silence_wordless,
+                    lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD)
                 rt._evict_all_but(model, latent)
                 out = sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas)
                 imgs = wav = None
@@ -769,6 +878,8 @@ class H3LongVideos:
                     if pre is not None:
                         hand = rt.grade_frames(hand.clone(), grade[1], grade[1])
                 handoff = (hand if pre is not None else imgs[-1:]).detach().clamp(0.0, 1.0).to("cpu", copy=True)
+                if shot["solo"]:
+                    captured[shot["solo"]] = handoff
                 sr = wav["sample_rate"]
                 wave = wav["waveform"]
                 if given is not None and i > 0:
@@ -794,8 +905,11 @@ class H3LongVideos:
         if note:
             info.append(note)
         total = int(video.shape[0])
+        audio, note = au.mix_ambient(torch.cat(audio_parts, dim=-1), sr, ambient_audio, ambient_level)
+        if note:
+            info.append(note)
         info.append(f"{total} frames, {total / rt.H3_FPS:.1f}s, rendered in {time.perf_counter() - t0:.0f}s")
-        return (video, {"waveform": torch.cat(audio_parts, dim=-1), "sample_rate": sr}, " | ".join(info), script,
+        return (video, {"waveform": audio, "sample_rate": sr}, " | ".join(info), script,
                 shots[0]["frames"], total, len(shots), total / rt.H3_FPS)
 
 

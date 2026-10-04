@@ -59,7 +59,8 @@ def test_plan():
     check("a held item shows from the shot after it goes on",
           shots[2]["held"] == "Mara: handcuffs behind her back."
           and shots[3]["held"] == "Mara: handcuffs behind her back; duct tape over her mouth.", shots[3]["held"])
-    check("the held line ends the prompt", p[3].endswith("Mara: handcuffs behind her back; duct tape over her mouth."))
+    check("the held line opens the shot's closing notes",
+          p[3].split("\n\n")[-1].startswith("Mara: handcuffs behind her back; duct tape over her mouth."), p[3])
     check("a released item leaves the held line in the shot it comes off",
           shots[5]["held"] == "Mara: handcuffs behind her back.", shots[5]["held"])
     check("seconds: sets that shot's length on the H3 grid",
@@ -75,7 +76,7 @@ def test_plan():
     check("after a cut the portrait rides again", shots[4]["refs"] == [IMG1, IMG2])
     one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
     check("a single paragraph is one shot, keyed on a first frame", len(one) == 1 and one[0]["keyed"]
-          and one[0]["prompt"] == "Mara waves.")
+          and one[0]["prompt"].startswith("Mara waves.\n\n"), one[0]["prompt"])
     t, refs = S.shot_pictures("Ana (<Picture 3>) waits. <Picture 1> hums.", [IMG1, None, None], [])
     check("a tag with no image is removed with its brackets", t == "Ana waits. <Picture 1> hums." and refs == [IMG1], t)
 
@@ -187,7 +188,8 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     S.prepare_model = lambda m, st, sn, sc, sg, sv, sa, g: (m, st, sn, None, torch.linspace(1, 0, st + 1), False, ["prepared"])
 
     def build(clip, vae, avae, prompt, w, h, length, handoff=None, refs=(), silent=False, lead_seconds=0.0):
-        calls["cond"].append({"prompt": prompt, "handoff": handoff, "silent": silent, "lead": lead_seconds})
+        calls["cond"].append({"prompt": prompt, "handoff": handoff, "silent": silent, "lead": lead_seconds,
+                              "refs": list(refs)})
         return "cond", {"shot": len(calls["cond"]), "fc": length}, length, silent
 
     def sample(model, cond, neg, latent, seed, steps, sn, sc, sg):
@@ -253,8 +255,9 @@ def test_render():
     check("each continued shot opens on the last frame of the one before", hand[0] is None and hand[4] is None
           and abs(float(hand[1].mean()) - (0.1 + (fc[0] - 1) / 1e4)) < 1e-4
           and abs(float(hand[5].mean()) - (0.5 + (fc[4] - 1) / 1e4)) < 1e-4, [None if x is None else float(x.mean()) for x in hand])
-    check("wordless shots are silenced and the spoken one holds its lead",
-          [c["silent"] for c in calls["cond"]] == [True, True, True, False, True, True] and calls["cond"][3]["lead"] == 0.5)
+    check("a wordless shot with nothing to hear is silenced; foley shots are not; the spoken one holds its lead",
+          [c["silent"] for c in calls["cond"]] == [True, False, False, False, False, False] and calls["cond"][3]["lead"] == 0.5,
+          [c["silent"] for c in calls["cond"]])
     check("no pose without the controlnet", calls["pose"] == [] and FakeDet.made == 0)
     check("info has a line per shot and the totals", sum(1 for x in info.split(" | ") if x.startswith("shot ")) == 6
           and "rendered in" in info, info)
@@ -310,6 +313,109 @@ def test_shot_length():
           "shot 2: 175 frames" in out[2] and "shot 2: 362 frames" in fixed_out[2], (out[2], fixed_out[2]))
 
 
+def test_presence():
+    print("\n=== who is in each shot ===")
+    script = ("A dim cell. Mara <Picture 1> sits on a cot. Dan <Picture 2> stands by the door.\n\n"
+              "Dan walks out and slams the door.\n\nMara cries.\n\nDan comes back in.\n\nHe leaves.\nexit: Dan\n\n"
+              "Mara waits.\n\ncut\nA garden. Mara walks along the path.")
+    shots = S.plan_shots(script, 10.0, [IMG1, IMG2, None, None], False, memory="Mara: a tall woman.\nDan: a guard.\nSetting: a prison.")
+    check("a named exit, a return when named, an exit: line, and a cut",
+          [s["cast"] for s in shots] == [["Mara", "Dan"], ["Mara"], ["Mara", "Dan"], ["Mara", "Dan"], ["Mara"], ["Mara"]],
+          [s["cast"] for s in shots])
+    p = shots[1]["prompt"]
+    check("an absent person's picture, character line and scene sentence stay out",
+          shots[1]["refs"] == [IMG1] and "Dan" not in p and "Mara: a tall woman." in p and "Setting: a prison." in p, p)
+    check("the head count follows the cast", "There is one person in the shot: one body, one face." in p
+          and "There are two people in the shot" in shots[2]["prompt"])
+    check("after a cut a person seen alone gets that frame as their current look, in place of the portrait",
+          shots[5]["recover"] == ["Mara"] and shots[5]["refs"] == [] and "<Picture 1> shows Mara as they look now." in shots[5]["prompt"]
+          and "<Picture" not in shots[5]["prompt"].split("\n\n")[0], shots[5]["prompt"])
+    check("names read from leaving lines",
+          S.leavers("Dan walks out.", ["Mara", "Dan"]) == ["Dan"]
+          and S.leavers("Mara watches Dan leave.", ["Mara", "Dan"]) == ["Dan"]
+          and S.leavers("Dan kisses Mara and leaves.", ["Mara", "Dan"]) == ["Dan"]
+          and S.leavers("Dan and Ana leave.", ["Mara", "Dan", "Ana"]) == ["Dan", "Ana"]
+          and S.leavers("Mara screams and Dan storms off.", ["Mara", "Dan"]) == ["Dan"])
+    check("...and lines that only sound like leaving",
+          S.leavers("Dan leaves Mara on the bed.", ["Mara", "Dan"]) == []
+          and S.leavers("Dan walks away from the bed.", ["Mara", "Dan"]) == []
+          and S.leavers("Mara slips out of her cuffs.", ["Mara", "Dan"]) == []
+          and S.leavers("Dan left the keys on the table.", ["Mara", "Dan"]) == [])
+    crowd = S.plan_shots("A street.\n\nMara walks past a crowd.", 5.0, [None] * 4, False, memory="Mara: a woman.")
+    check("no head count when the beat brings in other people", "There is one person" not in crowd[0]["prompt"])
+    odd = S.plan_shots("She is <Picture 1>. Style: noir.\n\nShe waits.", 5.0, [IMG1, None, None, None], False)
+    check("pronouns and labels are not taken for characters", odd[0]["cast"] == [] and odd[0]["refs"] == [IMG1], odd[0])
+
+
+def test_continuity_lines():
+    print("\n=== continuity between beats ===")
+    shots = S.plan_shots(SCRIPT, 10.0, [IMG1, IMG2, None, None], False)
+    claim = "is the frame this shot opens on: the same place and the same people, one moment earlier"
+    check("every continued shot claims its opening frame, numbered after its pictures",
+          f"<Picture 3> {claim}" in shots[1]["prompt"] and f"<Picture 2> {claim}" in shots[2]["prompt"]
+          and claim not in shots[0]["prompt"] and claim not in shots[4]["prompt"], shots[2]["prompt"])
+    check("a shot where something goes on ends with it in plain view",
+          "By the last frame, Mara has handcuffs behind her back, in plain view, with no one's hands in the way." in shots[1]["prompt"])
+    one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
+    check("a first frame is claimed too", f"<Picture 1> {claim}" in one[0]["prompt"], one[0]["prompt"])
+
+
+def test_mumble():
+    print("\n=== gagged speech ===")
+    shots = S.plan_shots(SCRIPT, 10.0, [None] * 4, False)
+    check("a gagged person in a shot with speech is muffled",
+          "Every sound from Mara comes out muffled, the lips held shut under the tape." in shots[3]["prompt"], shots[3]["prompt"])
+    check("no muffling in a quiet shot", "muffled" not in shots[4]["prompt"])
+    ball = S.plan_shots("A room.\nhold: Mara, ball gag in her mouth\n\nMara whimpers.", 5.0, [None] * 4, False)
+    check("a gag that holds the mouth open says so, and a vocal sound triggers it",
+          "Every sound from Mara comes out muffled, the mouth held open around the gag." in ball[0]["prompt"], ball[0]["prompt"])
+
+
+def test_sound_lines():
+    print("\n=== foley and ambience ===")
+    line, sounded = S.snd.sound_line("Dan walks to the door and opens the door.", "A rainy street.", False)
+    check("actions bring their foley, the scene its ambience",
+          sounded and line == "The only sounds are footsteps, a door on its hinges and rain against the glass.", line)
+    line, sounded = S.snd.sound_line("Somewhere a dog barks loudly.", "", False)
+    check("a beat that names its own sounds keeps them", sounded and line == "The only sounds are the ones this beat describes.")
+    check("a spoken shot gets no sound line", S.snd.sound_line("Dan walks in.", "", True) == ("", False))
+    check("nothing to hear, nothing said", S.snd.sound_line("Mara thinks.", "", False) == ("", False))
+    check("at most three sounds, and closing cuffs replace rattling ones",
+          len(S.snd.foley("Dan walks in, slams the door, drags a chair, pours water and drops the keys.")) == 3
+          and S.snd.foley("Dan handcuffs her and yanks the cuffs.") == ["cuffs ratcheting closed"])
+    check("a vocal sound alone adds no foley", S.snd.foley("Mara whimpers.") == [])
+
+
+def test_ambient_bed():
+    print("\n=== ambient bed ===")
+    track = torch.zeros(1, 2, 1000)
+    bed = {"waveform": torch.ones(1, 1, 300) * 0.5, "sample_rate": 100}
+    out, note = S.au.mix_ambient(track, 100, bed, 0.4)
+    check("a bed is looped under the whole soundtrack at its level",
+          out.shape == track.shape and abs(float(out[0, 0, 500]) - 0.2) < 1e-4 and abs(float(out[0, 1, 900]) - 0.2) < 1e-4
+          and "ambient bed mixed at 0.40" in note, (out.shape, note))
+    out, _ = S.au.mix_ambient(track, 200, bed, 0.4)
+    check("a bed at another sample rate is resampled", out.shape == track.shape)
+    out, _ = S.au.mix_ambient(torch.full((1, 2, 100), 0.9), 100, bed, 1.0)
+    check("the mix is scaled down instead of clipping", float(out.abs().max()) <= 1.0 + 1e-6)
+    check("level 0 or no bed leaves the soundtrack alone",
+          S.au.mix_ambient(track, 100, bed, 0.0)[0] is track and S.au.mix_ambient(track, 100, None, 0.5)[0] is track)
+    out, note = S.au.mix_ambient(track, 100, {"waveform": None}, 0.5)
+    check("an empty bed says so", out is track and "no usable waveform" in note, note)
+    out, calls = render(SCRIPT, ambient_audio={"waveform": torch.ones(1, 2, 50) * 0.1, "sample_rate": 1000}, ambient_level=0.5)
+    check("the node mixes the bed into its soundtrack", "ambient bed mixed at 0.50" in out[2], out[2])
+
+
+def test_recovered_look_render():
+    print("\n=== a current look carried across a cut ===")
+    script = "A cell. Mara <Picture 1> waits.\n\nMara paces.\n\ncut\nA garden. Mara walks."
+    out, calls = render(script, ref_image_1=IMG1)
+    check("the shot after a cut gets the last frame of the shot she was alone in",
+          len(calls["cond"]) == 2 and calls["cond"][1]["handoff"] is None and len(calls["cond"][1]["refs"]) == 1
+          and abs(float(calls["cond"][1]["refs"][0].mean()) - (0.1 + (S.rt.align_frame_count(48) - 1) / 1e4)) < 1e-4,
+          [(c["handoff"] is None, len(c["refs"])) for c in calls["cond"]])
+
+
 def test_scene_inputs():
     print("\n=== anchor and character memory ===")
     shots = S.plan_shots("Mara sits.\n\nMara stands.", 5.0, [None] * 4, False,
@@ -321,12 +427,12 @@ def test_scene_inputs():
           shots[0]["prompt"])
     check("a hold: in the character memory is on from the first shot",
           shots[0]["held"] == "Mara: handcuffs behind her back." and "hold:" not in shots[0]["prompt"], shots[0]["held"])
-    plain = S.plan_shots("A cell.\n\nMara sits.", 5.0, [None] * 4, False, memory="Dan: a guard.")
+    plain = S.plan_shots("A cell.\n\nMara sits.", 5.0, [None] * 4, False, memory="Mara: a tall woman.")
     check("without an anchor the first paragraph is the scene, before the character memory",
-          len(plain) == 1 and plain[0]["prompt"] == "A cell.\n\nDan: a guard.\n\nMara sits.", plain[0]["prompt"])
-    out, _ = render(SCRIPT, plan_only=True, character_memory="Dan: a guard.", negative="x", ambient_level=0.2)
+          len(plain) == 1 and plain[0]["prompt"].startswith("A cell.\n\nMara: a tall woman.\n\nMara sits."), plain[0]["prompt"])
+    out, _ = render(SCRIPT, plan_only=True, character_memory="Dan: a guard.", negative="x", foley_level=0.2)
     check("inputs left over from an older workflow are named in info, not a crash",
-          "ignored inputs from an older version of this node: ambient_level, negative" in out[2], out[2])
+          "ignored inputs from an older version of this node: foley_level, negative" in out[2], out[2])
     check("...and character_memory reaches every shot", out[3].count("Dan: a guard.") == 6, out[3])
 
 
@@ -486,6 +592,12 @@ def main():
     test_helpers()
     test_render()
     test_shot_length()
+    test_presence()
+    test_continuity_lines()
+    test_mumble()
+    test_sound_lines()
+    test_ambient_bed()
+    test_recovered_look_render()
     test_scene_inputs()
     test_upscale_module()
     test_upscale_render()

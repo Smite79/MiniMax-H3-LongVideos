@@ -90,14 +90,14 @@ Dan says "Not a sound." He walks out.
 
 ### Lines the node reads
 
-These lines are taken out of the text before the model sees it. Nothing else is
-guessed from your writing.
+These lines are taken out of the text before the model sees it.
 
 | line | what it does |
 |---|---|
 | `hold: Name, item; item` | Name is wearing or bound with these items. From the next shot on, every prompt ends with `Name: item; item.` until the item is released. |
 | `release: Name, item` | the item comes off in this shot. `release: Name` takes everything off Name. |
 | `seconds: 6` | this shot's length, whatever `shot_length` says. |
+| `exit: Name` | Name leaves during this shot and is gone from the next. A named exit such as `Dan walks out` is read without it; use it for anything else, such as `He leaves.` |
 | `cut` | this shot starts fresh instead of on the previous shot's last frame. Use it for a new place or time. |
 
 A `hold:` line in the scene paragraph, the anchor or the character memory means the
@@ -105,8 +105,39 @@ person starts the video already held.
 
 Write each item the way it should look: `handcuffs behind her back`,
 `wrists zip tied in front`, `rope around her ankles`, `duct tape over her mouth`.
-The shot where an item goes on is described by your own sentence. The item joins the
-held line from the shot after, so it is not drawn before the action happens.
+The shot where an item goes on is described by your own sentence, and it closes with
+the item in plain view at its last frame. The item joins the held line from the shot
+after, so it is not drawn before the action happens.
+
+### Who is in each shot
+
+The node keeps track of who is present, so people appear only when they should.
+
+- A character is anyone with a line in `character_memory` (`Mara: a tall woman`), a
+  name written right before a picture tag (`Mara <Picture 1>`), or a name on a `hold:`
+  or `exit:` line.
+- Anyone named in the scene paragraph or the anchor starts the video present.
+- Anyone named in a beat is present from that shot on, until they leave.
+- After a `cut`, only the people that beat names are present.
+
+For someone who is not present:
+
+- their picture is left out
+- their `character_memory` line is left out
+- any scene sentence that is only about them is left out
+
+A shot with one or two people also says how many people are in it, unless the beat
+brings in others (*a crowd*, *a guard*).
+
+### Continuity
+
+Every shot that starts on the previous shot's last frame says so in its prompt: the
+same place and the same people, one moment earlier, with nobody new joining. That
+frame reaches H3 as a picture, and a picture the prompt does not mention is read as
+another person.
+
+After a `cut`, someone who was last seen alone is given that frame as their current
+look, in place of their portrait. Their clothes and anything held on them carry over.
 
 ### Reference pictures
 
@@ -115,13 +146,25 @@ as `<Picture 1>` … `<Picture 4>`. A tag with no picture wired is removed.
 
 Once a person is held, their own picture (written right after their name, as in
 `Mara <Picture 1>`) is left out of shots that start on the previous frame. A portrait
-without the cuffs or the tape pulls them back off. The picture comes back after a `cut`.
+without the cuffs or the tape pulls them back off. After a `cut` the picture comes back,
+unless a later frame of them stands in for it.
 
 ### Sound
 
-A shot with a quoted line (`"…"` or `<d>…</d>`) speaks, and its first half second is
-held quiet so the line does not start on the cut. A shot without one is held silent so
-no voice is invented. Turn `silence_wordless` off to let the model add sound there.
+- **Speech:** a shot with a quoted line (`"…"` or `<d>…</d>`) speaks. Its first half
+  second is held quiet so the line does not start on the cut.
+- **Foley and ambience:** a shot without a line keeps the sounds its beat brings
+  (footsteps, a door, cuffs closing, tape tearing) and the ambience of the scene (rain,
+  traffic, a quiet house), and the prompt names them as the only sounds. A beat that
+  describes its own sounds keeps those.
+- **Silence:** a shot with nothing to hear is held silent so no voice is invented. Turn
+  `silence_wordless` off to let the model add sound there.
+- **Gagged speech:** a gagged person in a shot with speech or vocal sounds is muffled.
+  Their lips stay shut under tape, or the mouth stays held open around a ball or ring
+  gag.
+- **Ambient bed:** wire an audio file into `ambient_audio` to have it looped under the
+  whole soundtrack at `ambient_level`. It plays under the model's sound and does not
+  change it.
 
 ## Pose control
 
@@ -203,6 +246,7 @@ restraint broke.
 | `character_memory` | who is in the film, after the scene in every shot |
 | `latent_upscale`, `latent_upscale_scale` | upscale each shot in latent space, and by how much |
 | `upscale`, `upscale_model`, `upscale_target_short_edge` | upscale the finished video |
+| `ambient_audio`, `ambient_level` | an audio bed looped under the whole soundtrack, and how loud |
 
 ## Outputs
 

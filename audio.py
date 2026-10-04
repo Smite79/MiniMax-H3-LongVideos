@@ -55,3 +55,44 @@ def pin_audio_silence(latent, silence, lead_frames=None):
         return True
     except Exception:
         return False
+
+
+def seamless_loop(x, n, sr):
+    m = int(x.shape[-1])
+    if m <= 0:
+        return None
+    if m >= n:
+        return x[..., :n]
+    fade = min(int(0.25 * sr), m // 4)
+    if fade < 1:
+        return x.repeat(1, -(-n // m))[..., :n]
+    t = torch.linspace(0.0, 1.0, fade, dtype=x.dtype, device=x.device)
+    unit = torch.cat([x[..., :fade] * t + x[..., m - fade:] * (1.0 - t), x[..., fade:m - fade]], dim=-1)
+    return unit.repeat(1, -(-n // int(unit.shape[-1])))[..., :n]
+
+
+def mix_ambient(audio, sr, bed, level):
+    try:
+        if audio is None or bed is None or float(level or 0.0) <= 0.0:
+            return audio, ""
+        w = bed.get("waveform") if isinstance(bed, dict) else None
+        if w is None or w.dim() not in (2, 3) or w.shape[-1] < 2:
+            return audio, "ambient_audio carries no usable waveform; nothing was mixed"
+        w = (w[0] if w.dim() == 3 else w).detach().to(dtype=audio.dtype, device=audio.device)
+        b_sr = int(bed.get("sample_rate") or 0)
+        if b_sr > 0 and b_sr != int(sr):
+            size = max(2, int(round(w.shape[-1] * float(sr) / float(b_sr))))
+            w = torch.nn.functional.interpolate(w.unsqueeze(0), size=size, mode="linear", align_corners=False)[0]
+        ch = int(audio.shape[1])
+        if int(w.shape[0]) != ch:
+            w = w.mean(dim=0, keepdim=True).repeat(ch, 1) if int(w.shape[0]) > ch else w[:1].repeat(ch, 1)
+        loop = seamless_loop(w, int(audio.shape[-1]), int(sr))
+        if loop is None:
+            return audio, ""
+        out = audio + loop.unsqueeze(0) * float(level)
+        peak = float(out.abs().max())
+        if peak > 1.0:
+            out = out / peak
+        return out, f"ambient bed mixed at {float(level):.2f}"
+    except Exception as e:
+        return audio, f"ambient bed not mixed ({type(e).__name__}: {e})"
