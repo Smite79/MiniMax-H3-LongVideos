@@ -56,6 +56,8 @@ SECONDS_PER_ACTION = 2.2
 WORDS_PER_SEC = 2.5
 MIN_AUTO_FRAMES = 73
 
+FOLEY_SCALES = {"half": 0.5, "full": 1.0}
+FOLEY_DROP = ("minimax_keyframes", "minimax_refs", "minimax_visual_cond_noise_aug")
 FAST_H3_SHIFT_VIDEO = 10.0
 FAST_H3_VSA_KEEP = 0.10
 FAST_H3_VSA_START = 0.20
@@ -799,11 +801,17 @@ def sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, 
                                      latent, denoise=1.0)[0]
 
 
-def foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas):
+def foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas, scale=1.0):
     video, audio = out["samples"].unbind()
-    lat = dict(latent, samples=comfy.nested_tensor.NestedTensor((video, torch.zeros_like(audio))),
-               noise_mask=comfy.nested_tensor.NestedTensor((torch.zeros_like(video[:, :1]), torch.ones_like(audio[:, :1]))))
-    return sample(model, cond, negative, lat, seed, steps, sampler_name, scheduler, sigmas)
+    small, scaled = video, scale < 1.0 and min(video.shape[-2:]) >= 32
+    if scaled:
+        size = (video.shape[2],) + tuple(max(2, 2 * round(n * scale / 2)) for n in video.shape[-2:])
+        small = torch.nn.functional.interpolate(video.float(), size=size, mode="area").to(video.dtype)
+        cond = [[c, {k: v for k, v in d.items() if k not in FOLEY_DROP}] for c, d in cond]
+    lat = dict(latent, samples=comfy.nested_tensor.NestedTensor((small, torch.zeros_like(audio))),
+               noise_mask=comfy.nested_tensor.NestedTensor((torch.zeros_like(small[:, :1]), torch.ones_like(audio[:, :1]))))
+    res = sample(model, cond, negative, lat, seed, steps, sampler_name, scheduler, sigmas)
+    return dict(res, samples=comfy.nested_tensor.NestedTensor((video, res["samples"].unbind()[1]))), scaled
 
 
 def decode(vae, audio_vae, model, out, tiled=False):
@@ -875,6 +883,10 @@ def pose_pass(detector, imgs, shot, carry, model, pose_cn, vae, latent, strength
     return pose.install_pose_control(model, pose_cn, vae, hint_latent, shape, strength, s0, s1), rep
 
 
+def draft_size(w, h):
+    return max(32, int(round(w / 64)) * 32), max(32, int(round(h / 64)) * 32)
+
+
 def shot_line(shot):
     bits = [f"shot {shot['n']}: {shot['frames']} frames"]
     if shot["cut"]:
@@ -941,6 +953,7 @@ class H3LongVideos:
                 "ambient_audio": ("AUDIO",),
                 "ambient_level": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "pose_retries": ("INT", {"default": 2, "min": 0, "max": 5}),
+                "foley_resolution": (list(FOLEY_SCALES), {"default": "half"}),
             },
             "hidden": {"graph": "PROMPT"},
         }
@@ -956,7 +969,7 @@ class H3LongVideos:
             plan_only=False, pose_controlnet=None, pose_strength=1.0, pose_end=0.6, anchor="", character_memory="",
             latent_upscale="off", latent_upscale_scale=2.0, upscale="off", upscale_model="none",
             upscale_target_short_edge=0, shot_length="from the beat", ambient_audio=None, ambient_level=0.25,
-            pose_retries=2, graph=None, **legacy):
+            pose_retries=2, foley_resolution="half", graph=None, **legacy):
         t0 = time.perf_counter()
         check_vaes(vae, audio_vae)
         w, h = frame_size(resolution, megapixels)
@@ -1011,6 +1024,7 @@ class H3LongVideos:
         detector, carry, size, captured = None, None, None, {}
         try:
             for i, shot in enumerate(shots):
+                started = time.perf_counter()
                 given = handoff if shot["keyed"] else None
                 refs = shot["refs"] + [captured[n] for n in shot["recover"] if n in captured]
                 cond, latent, fc, _ = cnd.build_conditioning(
@@ -1018,37 +1032,45 @@ class H3LongVideos:
                     silent=shot["wordless"] and silence_wordless,
                     lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD)
                 rt._evict_all_but(model, latent)
-                out = sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas)
+                drafted = pose_ok and shot["bound"]
+                out = None if drafted else sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler,
+                                                  sigmas)
                 imgs = wav = None
                 line = shot_line(shot)
                 shot_carry, carry = (carry if shot["keyed"] else None), None
-                if pose_ok and shot["bound"]:
-                    imgs, wav = decode(vae, audio_vae, model, out)
-                    if detector is None:
-                        detector = pose.PoseDetector()
+                if drafted:
+                    small, small_latent, _, _ = cnd.build_conditioning(
+                        clip, vae, audio_vae, shot["prompt"], *draft_size(w, h), shot["frames"], handoff=given, refs=refs,
+                        silent=shot["wordless"] and silence_wordless,
+                        lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD, text=cond)
+                    sketch = sample(model, small, negative, small_latent, seed, steps, sampler_name, scheduler, sigmas)
+                    sketch = up.fit(decode(vae, audio_vae, model, sketch)[0], w, h)
+                    detector = detector or pose.PoseDetector()
                     try:
-                        patched, rep = pose_pass(detector, imgs, shot, shot_carry, model, pose_controlnet, vae,
+                        patched, rep = pose_pass(detector, sketch, shot, shot_carry, model, pose_controlnet, vae,
                                                  latent, pose_strength, pose_end, window, w, h)
                     except Exception as e:
                         if _interrupted(e):
                             raise
                         patched, rep = None, {"skipped": f"pose check failed ({type(e).__name__}: {e})"}
+                    del sketch, small, small_latent
                     carry = (rep["boxes_last"], rep.get("appearance_last") or None) if rep.get("boxes_last") else None
                     verdict = rep.get("skipped") or "nothing broken"
+                    rt._evict_all_but(model, latent)
                     if patched is not None:
-                        rt._evict_all_but(model, latent)
                         try:
                             out = sample(patched, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas)
-                            imgs = wav = None
                             verdict = "repaired" if rep.get("broken") else "held"
                         except Exception as e:
                             if _interrupted(e):
                                 raise
                             rt._deep_cleanup()
                             pose_ok = False
-                            verdict = f"second pass failed ({type(e).__name__}); kept the first; pose control off"
+                            verdict = f"controlled pass failed ({type(e).__name__}); rendered without it; pose control off"
                         patched = None
-                    line += f", pose {verdict}"
+                    if out is None:
+                        out = sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas)
+                    line += f", pose {verdict} (checked on a half-size draft)"
                 elif checks and shot["bound"]:
                     imgs, wav = decode(vae, audio_vae, model, out)
                     detector = detector or pose.PoseDetector()
@@ -1081,9 +1103,11 @@ class H3LongVideos:
                                  + ("one where it held" if not n else f"the take with the fewest broken frames ({n})"))
                 if shot["wordless"] and shot["sounded"] and silence_wordless:
                     rt._evict_all_but(model, latent)
-                    out = foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas)
+                    out, scaled = foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler,
+                                             sigmas, FOLEY_SCALES.get(foley_resolution, 1.0))
                     wav = None
-                    line += ", sound made for the finished picture"
+                    line += ", sound made for the finished picture" + (" from a half-size copy" if scaled else "")
+                at = len(info)
                 info.append(line)
                 pre = None
                 if latent_upscale != "off" and float(latent_upscale_scale) > 1.0:
@@ -1129,6 +1153,7 @@ class H3LongVideos:
                 audio_parts.append(wave.to("cpu", copy=True))
                 del imgs, wav, wave
                 rt._deep_cleanup()
+                info[at] += f", {time.perf_counter() - started:.0f}s"
         except BaseException:
             acc.release()
             raise

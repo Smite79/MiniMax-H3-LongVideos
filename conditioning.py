@@ -22,14 +22,14 @@ def ref_blocks(vae, images, width, height):
 
 
 def build_conditioning(clip, vae, audio_vae, prompt, width, height, length, handoff=None, refs=(),
-                       silent=False, lead_seconds=0.0):
+                       silent=False, lead_seconds=0.0, text=None):
     latent, fc = _empty_av_latent(width, height, length, H3_FPS)
     items, blocks = ref_blocks(vae, [r for r in refs if r is not None], width, height)
     hand = _resize(handoff[:1], width, height, "disabled") if handoff is not None else None
     if hand is not None:
         items.append({"type": "image", "data": hand})
-    tokens = clip.tokenize(prompt, minimax_ref_items=items) if items else clip.tokenize(prompt)
-    cond = clip.encode_from_tokens_scheduled(tokens)
+    cond = text if text is not None else clip.encode_from_tokens_scheduled(
+        clip.tokenize(prompt, minimax_ref_items=items) if items else clip.tokenize(prompt))
     vals = {}
     if blocks:
         vals["minimax_refs"] = blocks

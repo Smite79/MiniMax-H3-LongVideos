@@ -182,7 +182,7 @@ class FakeDet:
 
 def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=False, lat_up=None, frames_up=None,
            seconds=2.0, dwpose=False, check=None, width=None, auto=None, fast=False, **run_kw):
-    calls = {"cond": [], "sample": [], "pose": [], "decode": [], "tail": [], "frames_up": []}
+    calls = {"cond": [], "sample": [], "pose": [], "decode": [], "tail": [], "frames_up": [], "draft": []}
     saved = (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
              S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video,
              S.rt._decode_audio, S.pose_read, S.adaln_width, S.auto_pose_patch, S.is_fast_h3)
@@ -191,14 +191,18 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     S.check_vaes = lambda v, a: None
     S.prepare_model = lambda m, st, sn, sc, sg, sv, sa, g: (m, st, sn, None, torch.linspace(1, 0, st + 1), False, ["prepared"])
 
-    def build(clip, vae, avae, prompt, w, h, length, handoff=None, refs=(), silent=False, lead_seconds=0.0):
+    def build(clip, vae, avae, prompt, w, h, length, handoff=None, refs=(), silent=False, lead_seconds=0.0, text=None):
+        if text is not None:
+            calls["draft"].append({"size": (w, h), "text": text, "handoff": handoff, "refs": list(refs)})
+            return "small", {"shot": len(calls["cond"]), "fc": length, "draft": True}, length, silent
         calls["cond"].append({"prompt": prompt, "handoff": handoff, "silent": silent, "lead": lead_seconds,
-                              "refs": list(refs)})
+                              "refs": list(refs), "size": (w, h)})
         return "cond", {"shot": len(calls["cond"]), "fc": length}, length, silent
 
     def sample(model, cond, neg, latent, seed, steps, sn, sc, sg):
         mask = latent.get("noise_mask")
         calls["sample"].append({"model": model, "shot": latent["shot"], "seed": seed, "foley": mask is not None,
+                                "draft": latent.get("draft", False), "cond": cond,
                                 "mask": None if mask is None else [float(m.max()) for m in mask.unbind()]})
         if oom_pass2 and model == "patched":
             raise RuntimeError("CUDA out of memory")
@@ -226,7 +230,8 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
         return torch.full((3, int(lat.shape[-2]) * 4, int(lat.shape[-1]) * 4, 3), 0.9)
 
     def pose_pass(det, imgs, shot, carry, model, cn, vae, latent, st, pe, window, w, h):
-        calls["pose"].append({"shot": shot["n"], "carry": carry, "latch": shot["latch_after"]})
+        calls["pose"].append({"shot": shot["n"], "carry": carry, "latch": shot["latch_after"],
+                              "size": tuple(imgs.shape[1:3])})
         return (pose_result or (lambda n: ("patched", {"broken": True, "boxes_last": {"Mara": n}})))(shot["n"])
 
     def frames_fake(frames, mode, name, target):
@@ -307,16 +312,29 @@ def test_render():
           passes.count((3, "patched")) == 1 and passes.count((3, "base")) == 1 and all(c["seed"] == 7 for c in calls["sample"]))
     check("the repaired frames are the ones kept", abs(float(out[0][0].mean()) - 0.1) < 1e-3
           and any(abs(float(f.mean()) - 0.35) < 2e-3 for f in out[0]))
-    check("info says what pose control did", out[2].count("pose repaired") == 5, out[2])
+    check("info says what pose control did", out[2].count("pose repaired") == 5
+          and "checked on a half-size draft" in out[2], out[2])
+    full = calls["cond"][1]["size"]
+    check("each held shot is drafted at half size from the same text, and only the draft feeds the pose check",
+          [d["size"] for d in calls["draft"]] == [S.draft_size(*full)] * 5 and all(d["text"] == "cond" for d in calls["draft"])
+          and [c["shot"] for c in calls["sample"] if c["draft"]] == [2, 3, 4, 5, 6]
+          and all(c["cond"] == "small" and c["model"] == "base" for c in calls["sample"] if c["draft"])
+          and all(c["size"] == (full[1], full[0]) for c in calls["pose"]), (calls["draft"], [c["size"] for c in calls["pose"]]))
+    check("the draft costs a quarter of the picture: 1344x768 drafts at 672x384",
+          S.draft_size(1344, 768) == (672, 384) and S.draft_size(768, 1344) == (384, 672))
 
     out, calls = render(SCRIPT, pose_cn="cn", oom_pass2=True)
-    check("a second pass that runs out of memory keeps the first and turns pose control off",
-          [c["shot"] for c in calls["pose"]] == [2] and "second pass failed" in out[2]
-          and int(out[0].shape[0]) == sum(fc) - keyed_after_first, ([c["shot"] for c in calls["pose"]], out[2]))
+    check("a controlled pass that runs out of memory renders the shot plainly at full size and turns pose control off",
+          [c["shot"] for c in calls["pose"]] == [2] and "controlled pass failed" in out[2]
+          and [(c["shot"], c["model"]) for c in calls["sample"] if not c["draft"] and not c["foley"] and c["shot"] == 2]
+          == [(2, "patched"), (2, "base")] and int(out[0].shape[0]) == sum(fc) - keyed_after_first,
+          ([c["shot"] for c in calls["pose"]], out[2]))
 
     out, calls = render(SCRIPT, pose_cn="cn", pose_result=lambda n: (None, {"skipped": "not guessing"}))
-    check("a skipped check keeps the first pass", all(c["model"] == "base" for c in calls["sample"])
-          and "pose not guessing" in out[2], out[2])
+    finals = [c for c in calls["sample"] if not c["draft"] and not c["foley"]]
+    check("a skipped check renders the shot plainly at full size, never keeping the draft",
+          all(c["model"] == "base" for c in calls["sample"]) and [c["shot"] for c in finals] == [1, 2, 3, 4, 5, 6]
+          and all(c["cond"] == "cond" for c in finals) and "pose not guessing" in out[2], out[2])
 
     out, calls = render(SCRIPT, plan_only=True)
     check("plan_only samples nothing and still returns the script", calls["sample"] == [] and out[3].count("[shot ") == 6
@@ -450,20 +468,38 @@ def test_quiet_mouths():
     seen = {}
 
     def fake_sample(model, cond, neg, latent, seed, steps, sn, sc, sg):
-        seen.update(latent)
-        return "out"
+        seen.update(latent, cond=cond)
+        v, a = latent["samples"].unbind()
+        return {"samples": comfy.nested_tensor.NestedTensor((v * 0 + 5, a + 3)), "extra": 1}
     saved = S.sample
     S.sample = fake_sample
+    cond = [["emb", {"minimax_keyframes": [1], "minimax_refs": [2], "minimax_token_tags": 3}]]
     try:
-        res = S.foley_pass("m", "c", "n", {"shot": 1, "noise_mask": "old"},
-                           {"samples": comfy.nested_tensor.NestedTensor((video, audio))}, 7, 8, "euler", "simple", None)
+        res, scaled = S.foley_pass("m", cond, "n", {"shot": 1, "noise_mask": "old"},
+                                   {"samples": comfy.nested_tensor.NestedTensor((video, audio))}, 7, 8, "euler", "simple",
+                                   None, 0.5)
+        v, a = seen["samples"].unbind()
+        mv, ma = seen["noise_mask"].unbind()
+        rv, ra = res["samples"].unbind()
+        check("the sound pass keeps the finished video and makes only the audio",
+              bool((v == 1).all()) and float(a.abs().max()) == 0.0 and float(mv.max()) == 0.0 and float(ma.min()) == 1.0
+              and seen["shot"] == 1 and bool((rv == 1).all()) and bool((ra == 3).all()) and res["extra"] == 1
+              and not scaled and seen["cond"] is cond)
+        big = torch.rand(1, 24, 7, 48, 84)
+        res, scaled = S.foley_pass("m", cond, "n", {"shot": 2}, {"samples": comfy.nested_tensor.NestedTensor((big, audio))},
+                                   7, 8, "euler", "simple", None, 0.5)
+        v, _ = seen["samples"].unbind()
+        mv, _ = seen["noise_mask"].unbind()
+        check("on a full-size shot the sound pass listens to a half-size copy and hands back the full picture",
+              scaled and tuple(v.shape) == (1, 24, 7, 24, 42) and tuple(mv.shape) == (1, 1, 7, 24, 42)
+              and abs(float(v.mean()) - float(big.mean())) < 1e-3 and res["samples"].unbind()[0] is big
+              and seen["cond"][0][1] == {"minimax_token_tags": 3})
+        full, scaled = S.foley_pass("m", cond, "n", {"shot": 3}, {"samples": comfy.nested_tensor.NestedTensor((big, audio))},
+                                    7, 8, "euler", "simple", None, 1.0)
+        check("foley_resolution full keeps the old full-size pass", not scaled
+              and tuple(seen["samples"].unbind()[0].shape) == (1, 24, 7, 48, 84) and seen["cond"] is cond)
     finally:
         S.sample = saved
-    v, a = seen["samples"].unbind()
-    mv, ma = seen["noise_mask"].unbind()
-    check("the sound pass keeps the finished video and makes only the audio",
-          res == "out" and bool((v == 1).all()) and float(a.abs().max()) == 0.0 and float(mv.max()) == 0.0
-          and float(ma.min()) == 1.0 and seen["shot"] == 1)
 
 
 def test_directive_forms():

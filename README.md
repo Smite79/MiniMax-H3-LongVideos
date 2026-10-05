@@ -217,7 +217,9 @@ FastH3 never gets the pictures (see below).
   door, cuffs closing, tape tearing) and the ambience of the scene (rain, traffic, a
   quiet house). Its sound is made in a second, audio-only pass over the finished
   picture, so the sound follows what is on screen and has no moving mouths to put a
-  voice to. That pass costs about one extra render of the shot. A beat that describes
+  voice to. That pass listens to a half-size copy of the picture, which makes it about
+  six times cheaper than rendering the shot again, and the picture itself is never
+  touched. Set `foley_resolution` to *full* for a full-size pass. A beat that describes
   its own sounds keeps those.
 - **Silence:** a shot with nothing to hear stays silent. Turn `silence_wordless` off to
   render every shot in one pass with free audio instead.
@@ -238,9 +240,12 @@ DWPose after it renders, in one of two ways.
 `minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` from
 `models/model_patches` by itself, or uses the one wired into `pose_controlnet`.
 
-- If the restrained person's limbs left their position, the shot is rendered again on
-  the same seed, with their skeleton held in place for the first `pose_end` of the steps.
-- Each repaired shot costs one extra render.
+- Each such shot is first drafted at half size from the same text and seed. DWPose reads
+  the draft, and the shot itself is then rendered at full size with the restrained
+  person's skeleton held in place for the first `pose_end` of the steps. If the draft
+  gives nothing to hold, the shot is rendered at full size without it.
+- The draft costs about a tenth of a full render, so a checked shot costs about 1.1
+  renders instead of 2. The movement follows the draft.
 - The controlnet only fits that checkpoint's 8-wide timestep embedding.
 
 **On any other checkpoint: the shot is rendered again.** If the restraint broke, the
@@ -321,6 +326,7 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 | `latent_upscale`, `latent_upscale_scale` | upscale each shot in latent space, and by how much |
 | `upscale`, `upscale_model`, `upscale_target_short_edge` | upscale the finished video |
 | `ambient_audio`, `ambient_level` | an audio bed looped under the whole soundtrack, and how loud |
+| `foley_resolution` | the size of the picture copy the sound pass listens to: *half* (about six times faster) or *full* |
 
 ## Outputs
 
@@ -328,7 +334,7 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 |---|---|
 | `images` | the finished frames |
 | `audio` | the synchronised soundtrack |
-| `info` | what the node did for each shot |
+| `info` | what the node did for each shot, and how long each shot took |
 | `script` | the exact text each shot was given |
 | `frames_per_shot`, `total_frames`, `shots`, `video_seconds` | for downstream nodes |
 
