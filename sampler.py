@@ -416,14 +416,15 @@ def clothes(para, people, gender, described, undressed):
 
 
 def with_reading(para, people, gender, held):
-    holds, releases, unclear = rst.read(para["text"], people, gender, held)
+    holds, releases, unclear, worn = rst.read(para["text"], people, gender, held)
     told = {who for who, _ in para["hold"] + para["release"]}
     return dict(para, hold=[(w, i) for w, i in holds.items() if w not in told] + para["hold"],
                 release=[(w, i) for w, i in releases.items() if w not in told] + para["release"],
-                unread=para["unread"] + unclear)
+                worn=[(w, i) for w, i in worn.items() if w not in told], unread=para["unread"] + unclear)
 
 
-def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor="", from_beat=False):
+def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor="", from_beat=False, pictures=True):
+    refs = refs if pictures else [None] * len(refs)
     scene, paras = parse_script(prompt, all_beats=bool((anchor or "").strip()))
     setting = [parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
     lead = setting + [parse_paragraph(p) for p in paragraphs(memory)]
@@ -447,7 +448,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         dressed = wrd.undress(scene_text, undressed, people)
         undressed, off, on, unclear = clothes(para, seen, gender, described, undressed)
         para = dict(para, unread=para["unread"] + unclear)
-        start = state
+        start, _, _ = apply_holds(state, {"release": [], "hold": para["worn"]})
         state, released, added = apply_holds(start, para)
         during = {k: [it for it in v if it not in released.get(k, [])] for k, v in start.items()}
         during = {k: v for k, v in during.items() if v}
@@ -457,7 +458,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         cast = (named or present) if para["cut"] else list(dict.fromkeys(present + named))
         present = [n for n in cast if n not in leavers(para["text"], names) + para["exit"]]
         absent = [n for n in names if n not in cast]
-        recover = [n for n in cast if n in solo_seen] if not keyed else []
+        recover = [n for n in cast if n in solo_seen] if pictures and not keyed else []
         speech = bool(_SPEECH.search(para["text"]))
         text = "\n\n".join(x for x in (without_absent(dressed, absent, names), para["text"]) if x)
         drop = absent + (list(during) if keyed else []) + recover
@@ -822,7 +823,32 @@ def _interrupted(e):
     return isinstance(e, getattr(mm, "InterruptProcessingException", ())) or "Interrupt" in type(e).__name__
 
 
-def pose_pass(detector, imgs, shot, carry, model, pose_cn, vae, latent, strength, pose_end, window, w, h):
+POSE_CN_WIDTH = 8
+_POSE_PATCH = {}
+
+
+def adaln_width(model):
+    try:
+        return int(model.model.diffusion_model.blocks[0].adaln_proj.linear.in_features)
+    except Exception:
+        return None
+
+
+def auto_pose_patch():
+    try:
+        import folder_paths
+        name = next((n for n in folder_paths.get_filename_list("model_patches") if "minimax_h3_fun_controlnet" in n.lower()), None)
+        if name is None:
+            return None, ""
+        if name not in _POSE_PATCH:
+            _POSE_PATCH.clear()
+            _POSE_PATCH[name] = up.run_node(up.find_node("ModelPatchLoader"), name=name)
+        return _POSE_PATCH[name], name
+    except Exception:
+        return None, ""
+
+
+def pose_read(detector, imgs, shot, carry, w, h):
     try:
         det = detector.detect(imgs, stride=2)
     finally:
@@ -832,8 +858,12 @@ def pose_pass(detector, imgs, shot, carry, model, pose_cn, vae, latent, strength
         kw["carry_appearance"] = carry[1]
     if shot["latch_after"] is not None:
         kw["latch_after"] = shot["latch_after"]
-    hint, rep = pose.build_hint(det, int(imgs.shape[0]), h, w, shot["bound"], carry=carry[0] if carry else None,
-                                mode="repair", draw="everyone", **kw)
+    return pose.build_hint(det, int(imgs.shape[0]), h, w, shot["bound"], carry=carry[0] if carry else None,
+                           mode="repair", draw="everyone", **kw)
+
+
+def pose_pass(detector, imgs, shot, carry, model, pose_cn, vae, latent, strength, pose_end, window, w, h):
+    hint, rep = pose_read(detector, imgs, shot, carry, w, h)
     if hint is None:
         return None, rep
     shape = tuple(latent["samples"].unbind()[0].shape)
@@ -910,6 +940,7 @@ class H3LongVideos:
                 "shot_length": (SHOT_LENGTHS, {"default": "from the beat"}),
                 "ambient_audio": ("AUDIO",),
                 "ambient_level": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "pose_retries": ("INT", {"default": 2, "min": 0, "max": 5}),
             },
             "hidden": {"graph": "PROMPT"},
         }
@@ -925,22 +956,27 @@ class H3LongVideos:
             plan_only=False, pose_controlnet=None, pose_strength=1.0, pose_end=0.6, anchor="", character_memory="",
             latent_upscale="off", latent_upscale_scale=2.0, upscale="off", upscale_model="none",
             upscale_target_short_edge=0, shot_length="from the beat", ambient_audio=None, ambient_level=0.25,
-            graph=None, **legacy):
+            pose_retries=2, graph=None, **legacy):
         t0 = time.perf_counter()
         check_vaes(vae, audio_vae)
         w, h = frame_size(resolution, megapixels)
-        shots = plan_shots(prompt, shot_seconds, [ref_image_1, ref_image_2, ref_image_3, ref_image_4],
-                           first_frame is not None, character_memory, anchor, shot_length != "fixed")
+        fast, pictures = is_fast_h3(model), [ref_image_1, ref_image_2, ref_image_3, ref_image_4]
+        shots = plan_shots(prompt, shot_seconds, pictures, first_frame is not None, character_memory, anchor,
+                           shot_length != "fixed", not fast)
         if not shots:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
         info = [f"{w}x{h}, {len(shots)} shots"]
+        if fast and any(r is not None for r in pictures):
+            info.append("FastH3 was distilled without reference pictures, so ref_image_1-4 are left out: people carry "
+                        "over through each shot's opening frame, and after a cut they are drawn from their descriptions")
         if legacy:
             info.append("ignored inputs from an older version of this node: " + ", ".join(sorted(legacy)))
         unread = [u for s in shots for u in s["unread"]]
         if unread:
             info.append("not read (write a hold: or release: line for these, as in 'hold: Mara, handcuffs behind "
                         "her back'): " + " / ".join(unread))
+        limbs = [str(s["n"]) for s in shots if s["bound"]]
         if plan_only:
             info += [shot_line(s) for s in shots]
             return (torch.zeros((1, h, w, 3)), {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100},
@@ -949,13 +985,24 @@ class H3LongVideos:
         model, steps, sampler_name, sigmas, window, two_time, notes = prepare_model(
             model, steps, sampler_name, scheduler, sigmas, shift_video, shift_audio, graph)
         info += notes
-        pose_ok = False
-        if pose_controlnet is not None and any(s["bound"] for s in shots):
-            if pose is None:
-                info.append(f"pose control off: {POSE_IMPORT_ERROR}")
-            else:
+        pose_ok, checks = False, False
+        if limbs and pose is None:
+            info.append(f"pose control off: {POSE_IMPORT_ERROR}")
+        elif limbs:
+            if pose_controlnet is None and adaln_width(model) == POSE_CN_WIDTH:
+                pose_controlnet, name = auto_pose_patch()
+                info += [f"pose controlnet {name} loaded by the node"] if pose_controlnet is not None else []
+            if pose_controlnet is not None:
                 pose_ok, note = pose.pose_status(model, pose_controlnet, pose_strength, two_time)
                 info.append(note or "pose control on")
+            checks = not pose_ok and pose_retries > 0 and pose.dwpose_status()[0]
+            if checks:
+                info.append(f"held arms or ankles in shot(s) {', '.join(limbs)} are checked after each take and the shot "
+                            f"is rendered again, up to {pose_retries} more time(s), when they break")
+            elif not pose_ok:
+                info.append(f"held arms or ankles in shot(s) {', '.join(limbs)} are kept by the prompt alone, which a LoRA "
+                            f"can override: pose control needs the hybrid b25-49 checkpoint with its controlnet in "
+                            f"models/model_patches, and retakes need pose_retries above 0 and the DWPose files")
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
 
         acc = rt.FrameAccumulator(sum(s["frames"] for s in shots), rt._image_out_dtype(), True)
@@ -1002,6 +1049,36 @@ class H3LongVideos:
                             verdict = f"second pass failed ({type(e).__name__}); kept the first; pose control off"
                         patched = None
                     line += f", pose {verdict}"
+                elif checks and shot["bound"]:
+                    imgs, wav = decode(vae, audio_vae, model, out)
+                    detector = detector or pose.PoseDetector()
+                    best, tries = None, 0
+                    while True:
+                        try:
+                            rep = pose_read(detector, imgs, shot, shot_carry, w, h)[1]
+                        except Exception as e:
+                            if _interrupted(e):
+                                raise
+                            rep = {"skipped": f"pose check failed ({type(e).__name__}: {e})"}
+                        broken = bool(rep.get("broken")) and not rep.get("skipped")
+                        n = len(rep.get("broken_frames") or []) if broken else 0
+                        if best is None or n < best[0]:
+                            best = (n, out, imgs, wav, rep)
+                        if not broken or tries >= pose_retries:
+                            break
+                        tries += 1
+                        rt._evict_all_but(model, latent)
+                        out = sample(model, cond, negative, latent, seed + tries, steps, sampler_name, scheduler, sigmas)
+                        imgs, wav = decode(vae, audio_vae, model, out)
+                    n, out, imgs, wav, rep = best
+                    carry = (rep["boxes_last"], rep.get("appearance_last") or None) if rep.get("boxes_last") else None
+                    if rep.get("skipped"):
+                        line += f", restraint not checked: {rep['skipped']}"
+                    elif not tries:
+                        line += ", restraint held"
+                    else:
+                        line += (f", restraint broke: {tries} retake(s), kept "
+                                 + ("one where it held" if not n else f"the take with the fewest broken frames ({n})"))
                 if shot["wordless"] and shot["sounded"] and silence_wordless:
                     rt._evict_all_but(model, latent)
                     out = foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas)

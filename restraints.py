@@ -20,8 +20,11 @@ KINDS = (
 PARTS = (("hips", r"hips?|waist|crotch|groin|pelvis|between\s+(?:her|his|their|[A-Z][a-z]+['’]s)\s+(?:legs|thighs)"),
          ("wrists", r"wrists?|hands|arms"), ("ankles", r"ankles?|feet|legs|knees"), ("mouth", r"mouth|lips|face|cheeks|jaw"),
          ("eyes", r"eyes"), ("neck", r"neck|throat"))
-APPLY = (r"puts?|putting|snaps?|locks?|clicks?|fastens?|clamps?|slaps?|places?|clips?|wraps?|wrapping|winds?|presses?|"
-         r"sticks?|stuffs?|shoves?|forces?|pushes?|ties?|tied|tying|binds?|loops?|secures?|straps?|buckles?|slips?")
+APPLY = (r"puts?|putting|snaps?|snapped|locks?|locked|locking|clicks?|clicked|fastens?|fastened|clamps?|clamped|slaps?|"
+         r"slapped|places?|placed|clips?|clipped|wraps?|wrapped|wrapping|winds?|presses?|pressed|sticks?|stuffs?|stuffed|"
+         r"shoves?|forces?|pushes?|ties?|tied|tying|binds?|bound|binding|loops?|secures?|secured|securing|straps?|strapped|"
+         r"buckles?|slips?|restrains?|restrained|restraining|pins?|pinned|pinning|cinch(?:es|ed)?|uses?|used|using")
+REPORT = {"handcuffs", "zip ties", "shackles", "ball gag", "blindfold"}
 REMOVE = r"remov(?:e|es|ed|ing)|unlock(?:s|ed|ing)?|unfasten(?:s|ed|ing)?|unbuckl(?:e|es|ed|ing)|unwrap(?:s|ped|ping)?"
 STRIP = (r"takes?|took|taking|pulls?|pulled|pulling|rips?|ripped|ripping|peels?|peeled|peeling|tears?|tore|tearing|"
          r"yanks?|yanked|strips?|stripped|cuts?|cutting|slices?|sliced|snips?|snipped|loosens?|loosened|works?|worked")
@@ -33,6 +36,12 @@ PERSON = r"her|him|them|his|their|she|he|they"
 _POS = re.compile(r"\b(?:behind\s+(?:her|his|their|the)\s+back|in\s+front(?:\s+of\s+(?:her|him|them|the\s+body))?|"
                   r"(?:above|over)\s+(?:her|his|their|the)\s+head|at\s+(?:her|his|their|the)\s+waist)\b", re.I)
 _ANCHOR = re.compile(r"\bto\s+(?:the|a|an)\s+[\w-]+(?:\s+(?:frame|post|rail|bar|pipe|ring|hook|leg))?\b", re.I)
+_CLAUSE = re.compile(r"[,;]\s+(?=(?:then|and then|while|as|his|her|their|he|she|they|[A-Z][a-z]+)\b)")
+_PART = r"mouth|lips|eyes|neck|wrists|hands|arms|ankles|feet|hips|waist|legs"
+_WHO = r"(?P<who>her|his|their|(?-i:[A-Z])[a-z]+(?=['’]s))(?:['’]s)?"
+_BIT = (r"(?:a|an|the|another|one|two|three|more)\s+(?:\w+\s+)?(?:strip|piece|length|band|loop|coil|section|layer|"
+        r"turn)s?")
+_SEX = {"her": "f", "she": "f", "him": "m", "his": "m", "he": "m"}
 _AUX = re.compile(r"\b(?:is|are|was|were|gets?|got|been|being|remains?|stays?|still)\s+(?:\w+ly\s+)?$", re.I)
 _FEMALE = r"woman|girl|lady|wife|mother|sister|daughter"
 _MALE = r"man|boy|guy|husband|father|brother|son"
@@ -79,7 +88,7 @@ def tokens(text, people):
 def resolve(token, people, gender, exclude=()):
     if token in people:
         return token if token not in exclude else ""
-    want = {"her": "f", "she": "f", "him": "m", "his": "m", "he": "m"}.get(token.lower())
+    want = _SEX.get(token.lower())
     pool = [n for n in people if n not in exclude]
     known = [n for n in pool if want and gender.get(n) == want]
     pool = known or [n for n in pool if want is None or gender.get(n, want) == want]
@@ -117,45 +126,81 @@ def phrase(kind, part, pos, poss, anchor, scope=""):
     return f"{kind} on {poss} {part}" + tail
 
 
-def _wearer(sentence, toks, m, mode, people, gender):
-    before, after = sentence[:m.start()], sentence[m.end():]
-    near_before = next((t for p, t in reversed(toks) if p < m.start()), None)
-    obj = next((t for p, t in toks if m.end() <= p <= m.end() + (25 if mode == "verb" else 45)), None)
-    passive = mode == "state" or (mode == "verb" and m.group(0).lower().endswith(("ed", "bound"))
-                                  and (obj is None or _AUX.search(before) is not None))
+def _subject(sentence, toks, m):
+    cands = [(p, t) for p, t in reversed(toks) if p < m.start() and t.lower() not in ("her", "his", "their", "him", "them")
+             and sentence[p + len(t):p + len(t) + 2] not in ("'s", "’s")]
+    near = [t for p, t in cands if re.fullmatch(r"\s+(?:(?:\w+ly|also|now|just)\s+)?", sentence[p + len(t):m.start()])]
+    lead = [t for p, t in cands if re.search(r"(?:^|[,;:]|\b(?:and|as|while|when|then|but|before|after|until|once))\s*$",
+                                             sentence[:p], re.I)]
+    return (near + lead + [t for _, t in cands] + [None])[0]
+
+
+def _described(mode, m, lead, before, after, verb):
+    if mode == "worn":
+        return not re.search(rf"\b(?:{APPLY}|{verb})\b", lead, re.I)
     if mode == "state":
-        token, actor = re.search(rf"\b(her|his|their|[A-Z][a-z]+)(?=['’]s\b|\s)", m.group(0).split(None, 1)[-1]).group(1), ""
+        return bool(re.fullmatch(r"(?:.*(?:\bwith|,))?\s*(?:the|a|an)?\s*", lead, re.I | re.S)) and not re.search(
+            rf"\b(?:{APPLY}|{verb}|is|are|was|were|gets?|got|being|goes|went)\b", m.group("gap"), re.I)
+    return mode == "verb" and not re.search(r"\b(?:is|are|was|were|gets?|got|getting|being|been)\s+(?:\w+ly\s+)?$", before,
+                                            re.I) and not re.match(r"[^,;.]*\bby\s+(?:[A-Z]|him\b|her\b|them\b)", after)
+
+
+def _wearer(sentence, toks, m, mode, people, gender):
+    before = sentence[:m.start()]
+    near_before = next((t for p, t in reversed(toks) if p < m.start()), None)
+    first = m.group(0).split()[0].lower()
+    start = m.end() if mode == "verb" else m.start() + len(first)
+    obj = next(((p, t) for p, t in toks if start <= p <= m.end() + (25 if mode == "verb" else 45)), None)
+    if mode == "verb" and obj is not None and sentence[m.end():obj[0]].strip():
+        obj = None
+    obj = obj[1] if obj else None
+    passive = mode in ("state", "worn") or (mode in ("verb", "noun") and first.endswith(("ed", "bound"))
+                                            and (obj is None or _AUX.search(before) is not None))
+    if mode in ("state", "it"):
+        token, actor = m.group("who"), ""
     elif passive:
         token, actor = near_before, ""
     elif obj is None:
-        return None, ""
+        return None, "", False
     else:
-        actor = resolve(near_before, people, gender) if near_before else ""
+        subject = _subject(sentence, toks, m)
+        actor = resolve(subject, people, gender) if subject else ""
         token = obj
     if token is None:
-        return None, ""
-    who = resolve(token, people, gender, exclude=(actor,) if actor else ())
+        return None, "", False
+    limb = [x for x in re.finditer(r"\b(her|his|their|[A-Z][a-z]+(?=['’]s))(?:['’]s)?\s+(?:\w+\s+)?(?:wrists?|hands|arms|ankles?|"
+                                   r"feet|legs)\b", before)]
+    if token.lower() in ("them", "it") and limb:
+        token = limb[-1].group(1)
+    who, want = resolve(token, people, gender, exclude=(actor,) if actor else ()), _SEX.get(token.lower())
     if not who and token.lower() in PERSON.split("|"):
-        who = next((t for p, t in reversed(toks) if p < m.start() and t in people and t != actor), "")
-    return who, {"her": "her", "she": "her", "him": "his", "his": "his", "he": "his"}.get(token.lower(), "")
+        who = next((t for p, t in reversed(toks) if p < m.start() and t in people and t != actor
+                    and (want is None or gender.get(t, want) == want)), "")
+    return who, {"f": "her", "m": "his"}.get(want, ""), passive
 
 
 def read(text, people, gender, held):
-    holds, releases, unclear = {}, {}, []
+    holds, releases, unclear, worn = {}, {}, [], {}
     for sentence in sentences(text):
         toks, taken = tokens(sentence, people), []
         for kind, noun, verb, default, key in KINDS:
             found = ([(m, "noun") for m in re.finditer(rf"\b(?:{APPLY})\s+(?:[\w'’-]+\s+){{0,3}}?(?:{noun})\b", sentence, re.I)]
+                     + [(m, "worn") for m in re.finditer(rf"\b(?:in|with|wearing|against)\s+(?:a\s+pair\s+of\s+|a\s+set\s+of\s+|"
+                                                          rf"the\s+|her\s+|his\s+|their\s+|some\s+)?(?:{noun})\b", sentence, re.I)]
                      + [(m, "verb") for m in re.finditer(rf"(?<![\w-])(?:{verb})\b", sentence, re.I)]
                      + [(m, "state") for m in re.finditer(
-                         rf"\b(?:{noun})\s+(?:[\w'’-]+\s+){{0,2}}?(?:over|across|around|on|in|between|covers?|covering|seals?|sealing)\s+"
-                         rf"(?:her|his|their|[A-Z][a-z]+['’]s)\s+"
-                         rf"(?:mouth|lips|eyes|neck|wrists|ankles|hips|waist|legs)\b", sentence, re.I)])
+                         rf"\b(?:{noun})\s+(?P<gap>(?:(?!(?:and|then|or|but|while|as)\b)[\w'’-]+\s+){{0,2}}?)(?:over|across|"
+                         rf"around|on|onto|in|into|between|covers?|covering|seals?|sealing|holds?|holding|keeps?|{APPLY})\s+"
+                         rf"{_WHO}\s+(?:{_PART})\b", sentence, re.I)]
+                     + [(m, "it") for m in re.finditer(
+                         rf"\b(?:{noun})\b[^.;]{{0,60}}?(?P<act>\b(?:{APPLY})\s+(?:it|them|{_BIT})\s+(?:\w+\s+)?(?:over|across|around|"
+                         rf"on|onto|to|into|between|behind)\s+{_WHO}\s+(?:{_PART}|back)\b)", sentence, re.I)])
             for m, mode in found:
-                if any(a < m.end() and m.start() < b for a, b in taken):
+                span = m.span("act") if mode == "it" else m.span()
+                if any(a < span[1] and span[0] < b for a, b in taken):
                     continue
-                taken.append(m.span())
                 before, after = sentence[:m.start()], sentence[m.end():]
+                lead = _CLAUSE.split(before)[-1]
                 if re.search(r"un$", before, re.I) or re.match(r"\s+(?:off|from|away)\b", after, re.I):
                     continue
                 if mode == "verb" and re.search(r"\b(?:the|a|an|her|his|their|some|of|pair)\s*$", before, re.I):
@@ -165,15 +210,19 @@ def read(text, people, gender, held):
                     continue
                 if kind == "gag" and mode == "noun" and "gag" not in m.group(0).lower() and not re.search(r"\bmouth\b", after, re.I):
                     continue
-                who, said = _wearer(sentence, toks, m, mode, people, gender)
+                if mode == "worn" and m.group(0)[:4].lower() == "with" and not parts_in(lead):
+                    continue
+                who, said, passive = _wearer(sentence, toks, m, mode, people, gender)
                 if who is None:
                     continue
+                taken.append(span)
                 if not who:
                     unclear.append(f"who wears the {kind} in '{sentence.strip()}'")
                     continue
                 pos, anchor = _POS.search(after) or _POS.search(sentence), _ANCHOR.search(after)
-                scope = re.split(r"[,;]\s+(?=(?:then|and then|while|as|his|her|their|he|she|they|[A-Z][a-z]+)\b)",
-                                 sentence[m.start():] if mode == "state" else after)[0]
+                scope = _CLAUSE.split(lead + sentence[m.start():] if mode == "worn" else
+                                      sentence[span[0]:] if mode in ("state", "it") else after)[0]
+                already = passive and _described(mode, m, lead, before, after, verb)
                 known = owner(held.get(who, []) + holds.get(who, [])) or {"f": "her", "m": "his"}.get(gender.get(who), "")
                 for part, rx, spot in parts_in(scope) or [(default, dict(PARTS)[default], "")]:
                     have = held.get(who, []) + holds.get(who, [])
@@ -186,8 +235,16 @@ def read(text, people, gender, held):
                     poss = own.group(1).lower() if own else said or known or f"{who}'s"
                     item = phrase(kind, part, pos.group(0) if pos else "", poss, anchor.group(0) if anchor else "", scope)
                     holds.setdefault(who, []).append(item)
+                    if already:
+                        worn.setdefault(who, []).append(item)
                     if owner([item]) and who not in gender:
                         gender[who] = "f" if owner([item]) == "her" else "m"
+        for kind, noun, verb, _default, key in KINDS:
+            if kind in REPORT and re.search(rf"\b(?:{noun})\b|(?<![\w-])(?:{verb})\b", sentence, re.I) and \
+                    not any(key in i.lower() for items in list(held.values()) + list(holds.values()) for i in items) and \
+                    not any(kind in u and sentence.strip() in u for u in unclear):
+                unclear.append(f"the {kind} in '{sentence.strip()}' were not read" if kind.endswith("s")
+                               else f"the {kind} in '{sentence.strip()}' was not read")
         applied = {k for who in holds for k in (r[4] for r in KINDS) if any(k in h.lower() for h in holds[who])}
         for kind, noun, _verb, _default, key in KINDS:
             undo = [w for w, k in UNDO if k == kind]
@@ -199,8 +256,7 @@ def read(text, people, gender, held):
             for m in (m for pat in pats for m in re.finditer(pat, sentence, re.I)):
                 if key in applied and not m.group(0).lower().startswith(("remov", "unwrap", "un")):
                     continue
-                after = re.split(r"[,;]\s+(?=(?:then|and then|while|as|his|her|their|he|she|they|[A-Z][a-z]+)\b)",
-                                 sentence[m.start():])[0]
+                after = _CLAUSE.split(sentence[m.start():])[0]
                 place = next(((n, rx) for n, rx, _ in parts_in(after)), None)
                 tok = next((t for p, t in toks if p >= m.start() + 2), None)
                 holders = [n for n, items in held.items() if any(key in i.lower() for i in items)]
@@ -215,4 +271,4 @@ def read(text, people, gender, held):
                         releases.setdefault(who, []).append(items[0])
                 elif len(items) > 1:
                     unclear.append(f"which {kind} comes off in '{sentence.strip()}'")
-    return holds, releases, unclear
+    return holds, releases, unclear, worn

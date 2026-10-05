@@ -181,11 +181,13 @@ class FakeDet:
 
 
 def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=False, lat_up=None, frames_up=None,
-           seconds=2.0, **run_kw):
+           seconds=2.0, dwpose=False, check=None, width=None, auto=None, fast=False, **run_kw):
     calls = {"cond": [], "sample": [], "pose": [], "decode": [], "tail": [], "frames_up": []}
     saved = (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
              S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video,
-             S.rt._decode_audio)
+             S.rt._decode_audio, S.pose_read, S.adaln_width, S.auto_pose_patch, S.is_fast_h3)
+    calls["check"] = []
+    S.is_fast_h3 = lambda m: fast
     S.check_vaes = lambda v, a: None
     S.prepare_model = lambda m, st, sn, sc, sg, sv, sa, g: (m, st, sn, None, torch.linspace(1, 0, st + 1), False, ["prepared"])
 
@@ -237,7 +239,15 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     S.rt._decode_video = tail
     S.rt._decode_audio = lambda avae, out: {"waveform": torch.full((1, 2, round(out["fc"] * 1000 / 24)), 9.0),
                                             "sample_rate": 1000}
-    S.pose = SimpleNamespace(pose_status=lambda m, cn, st, tt: (True, ""), PoseDetector=FakeDet)
+    S.pose = SimpleNamespace(pose_status=lambda m, cn, st, tt: (True, ""), PoseDetector=FakeDet,
+                             dwpose_status=lambda: (dwpose, ""))
+
+    def read_pose(det, imgs, shot, carry, w, h):
+        calls["check"].append(shot["n"])
+        return None, (check or (lambda n, k: {"broken": False}))(shot["n"], calls["check"].count(shot["n"]))
+    S.pose_read = read_pose
+    S.adaln_width = lambda m: width
+    S.auto_pose_patch = lambda: auto or (None, "")
     if lat_up is not None:
         S.up.upscale_latent = lat_up
     if frames_up is not None:
@@ -248,7 +258,7 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     finally:
         (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
          S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video,
-         S.rt._decode_audio) = saved
+         S.rt._decode_audio, S.pose_read, S.adaln_width, S.auto_pose_patch, S.is_fast_h3) = saved
     return out, calls
 
 
@@ -280,7 +290,11 @@ def test_render():
           and "rendered in" in info, info)
     check("script holds what each shot was told", out[3].count("[shot ") == 6 and "Mara: handcuffs behind her back." in out[3])
 
+    check("without pose control or retakes, info says held limbs are kept by the prompt alone and what would change that",
+          "held arms or ankles in shot(s) 2, 3, 4, 5, 6 are kept by the prompt alone" in info
+          and "pose control needs the hybrid b25-49 checkpoint" in info, info)
     out, calls = render(SCRIPT, pose_cn="cn")
+    check("with pose control running there is no such warning", "kept by the prompt alone" not in out[2], out[2])
     check("the pose check runs on every shot with a held limb", [c["shot"] for c in calls["pose"]] == [2, 3, 4, 5, 6])
     check("the cuffing shot latches; later shots repair",
           calls["pose"][0]["latch"] == int(S.math.ceil(S.POSE_LATCH_FROM * fc[1])) and calls["pose"][1]["latch"] is None,
@@ -533,6 +547,24 @@ def test_recovered_look_render():
           [(c["handoff"] is None, len(c["refs"])) for c in calls["cond"]])
 
 
+def test_fast_h3_pictures():
+    print("\n=== FastH3 gets only what it was distilled on ===")
+    script = "A cell. Mara <Picture 1> waits. Dan <Picture 2> stands guard.\n\nMara paces.\n\nMara sits.\n\ncut\nA garden. Mara walks."
+    out, calls = render(script, fast=True, ref_image_1=IMG1, ref_image_2=IMG1)
+    check("no reference pictures and no picture tags for them, even after a cut",
+          len(calls["cond"]) == 3 and all(c["refs"] == [] for c in calls["cond"])
+          and all("<Picture 2>" not in c["prompt"] and "Mara <Picture" not in c["prompt"] for c in calls["cond"]),
+          [(len(c["refs"]), c["prompt"][:120]) for c in calls["cond"]])
+    check("the opening frame still carries the shot on as <Picture 1>",
+          calls["cond"][1]["handoff"] is not None and "<Picture 1> is the frame this shot opens on" in calls["cond"][1]["prompt"]
+          and calls["cond"][2]["handoff"] is None, [c["handoff"] is None for c in calls["cond"]])
+    check("info says why the pictures were left out", "distilled without reference pictures" in out[2], out[2])
+    _, base = render(script, ref_image_1=IMG1, ref_image_2=IMG1)
+    check("other checkpoints still get her portrait, and her current look after the cut",
+          [len(c["refs"]) for c in base["cond"]] == [1, 1, 1] and float(base["cond"][2]["refs"][0].mean()) != 0.1,
+          [len(c["refs"]) for c in base["cond"]])
+
+
 def test_reading():
     print("\n=== restraints read from the beats ===")
     script = ("A dim room. Mara lies on the bed. Dan stands beside her.\n\nDan handcuffs her wrists behind her back.\n\n"
@@ -563,15 +595,38 @@ def test_reading():
         "Mara lies on the bed, her wrists cuffed behind her back.": {"Mara": ["handcuffs behind her back"]},
         "Mara sits with duct tape over her mouth.": {"Mara": ["duct tape over her mouth"]},
         "He cuffs her.": {"Mara": ["handcuffs on her wrists"]},
+        "Dan grabs Mara and cuffs her.": {"Mara": ["handcuffs on her wrists"]},
+        "Dan turns Mara around and handcuffs her wrists behind her back.": {"Mara": ["handcuffs behind her back"]},
+        "Dan restrains Mara, cuffing her wrists behind her back.": {"Mara": ["handcuffs behind her back"]},
+        "Dan grabs Mara's wrists and cuffs them behind her back.": {"Mara": ["handcuffs behind her back"]},
+        "Dan locks her wrists in handcuffs.": {"Mara": ["handcuffs on her wrists"]},
+        "Mara sits in handcuffs.": {"Mara": ["handcuffs on her wrists"]},
+        "The cuffs click shut around her wrists.": {"Mara": ["handcuffs on her wrists"]},
+        "Handcuffs are snapped onto Mara's wrists.": {"Mara": ["handcuffs on her wrists"]},
+        "Dan takes out the handcuffs and snaps them onto her wrists.": {"Mara": ["handcuffs on her wrists"]},
+        "Dan uses handcuffs to lock her wrists behind her back.": {"Mara": ["handcuffs behind her back"]},
+        "Dan takes duct tape and wraps it around her mouth.": {"Mara": ["duct tape over her mouth"]},
+        "Dan takes out a roll of duct tape and presses a strip over her mouth.": {"Mara": ["duct tape over her mouth"]},
+        "Dan comes back with rope and ties her ankles.": {"Mara": ["rope around her ankles"]},
     }
     got = {t: read(t) for t in expect}
     check("common restraint wording is read onto the right person", got == expect,
           {t: g for t, g in got.items() if g != expect[t]})
     check("whoever does the restraining is never the one restrained",
           all("Dan" not in read(t) for t in expect))
-    quiet = ["Dan ties his shoes.", "Dan tapes the box shut.", "Mara gags at the smell.", "Dan grabs her by the collar."]
+    quiet = ["Dan ties his shoes.", "Dan tapes the box shut.", "Mara gags at the smell.", "Dan grabs her by the collar.",
+             "Dan walks in with handcuffs.", "Dan slides the key into the handcuffs.",
+             "Dan unlocks the cuffs and slips them into his pocket."]
     check("wording that only sounds like a restraint is left alone", all(read(t) == {} for t in quiet),
           {t: read(t) for t in quiet})
+    belt = S.rst.read("Dan carries handcuffs on his belt.", people, gender, {})
+    check("cuffs it mentions but cannot place are listed as not read", belt[0] == {} and "were not read" in belt[2][0], belt)
+    worn = S.plan_shots("A cell. Mara and Dan wait.\n\nMara kneels on the floor, her wrists cuffed behind her back.\n\n"
+                        "Dan watches her.", 10.0, [None] * 4, False)
+    check("cuffs a beat describes as already on are held for that whole shot, not put on during it",
+          worn[0]["held"] == "Mara: handcuffs behind her back." and not worn[0]["added"]
+          and worn[0]["bound"]["Mara"]["latch_limbs"] == () and worn[1]["held"] == "Mara: handcuffs behind her back.",
+          [S.shot_line(x) for x in worn])
     held = {"Mara": ["duct tape over her mouth", "duct tape around her wrists", "handcuffs behind her back"]}
     off = S.rst.read("Dan removes the tape from her mouth.", people, gender, held)[1]
     state, _, _ = S.apply_holds(held, {"release": [(w, i) for w, i in off.items()], "hold": []})
@@ -690,6 +745,33 @@ def test_no_false_removal():
     check("across a whole scene the tape stays held until something takes it off",
           all(x["held"] == "Crystal: duct tape around her hips and between her legs." and not x["released"] for x in shots),
           [S.shot_line(x) for x in shots])
+
+
+def test_retakes():
+    print("\n=== a broken restraint is rendered again ===")
+    def once(n, k):
+        return {"broken": True, "broken_frames": [1, 2, 3]} if (n == 3 and k == 1) else {"broken": False}
+    out, calls = render(SCRIPT, dwpose=True, check=once)
+    takes = [c["seed"] for c in calls["sample"] if c["shot"] == 3 and not c["foley"]]
+    check("a shot whose cuffs break is rendered again on a new seed and the take that holds is kept",
+          takes == [7, 8] and "shot 3:" in out[2] and "restraint broke: 1 retake(s), kept one where it held" in out[2]
+          and out[2].count("restraint held") == 4, (takes, out[2]))
+    check("info says the restraints are checked after each take", "are checked after each take" in out[2]
+          and "kept by the prompt alone" not in out[2])
+    always = lambda n, k: {"broken": True, "broken_frames": list(range(10 - 3 * k))} if n == 2 else {"broken": False}
+    out, calls = render(SCRIPT, dwpose=True, check=always)
+    takes = [c["seed"] for c in calls["sample"] if c["shot"] == 2 and not c["foley"]]
+    check("when every take breaks, the one that breaks least is kept",
+          takes == [7, 8, 9] and "kept the take with the fewest broken frames (1)" in out[2], (takes, out[2]))
+    out, calls = render(SCRIPT, dwpose=True, check=always, pose_retries=0)
+    check("pose_retries 0 renders each shot once", [c["shot"] for c in calls["sample"] if not c["foley"]] == [1, 2, 3, 4, 5, 6]
+          and "kept by the prompt alone" in out[2])
+    out, calls = render(SCRIPT, width=8, auto=("cn", "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"))
+    check("on a checkpoint that takes the pose controlnet, the node loads it itself and pose control runs",
+          "pose controlnet minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors loaded by the node" in out[2]
+          and [c["shot"] for c in calls["pose"]] == [2, 3, 4, 5, 6], out[2])
+    out, calls = render(SCRIPT, width=16, auto=("cn", "x"))
+    check("on any other checkpoint it is not loaded", "loaded by the node" not in out[2] and calls["pose"] == [])
 
 
 def test_scene_inputs():
@@ -878,10 +960,12 @@ def main():
     test_wardrobe()
     test_hips()
     test_no_false_removal()
+    test_retakes()
     test_mumble()
     test_sound_lines()
     test_ambient_bed()
     test_recovered_look_render()
+    test_fast_h3_pictures()
     test_scene_inputs()
     test_upscale_module()
     test_upscale_render()

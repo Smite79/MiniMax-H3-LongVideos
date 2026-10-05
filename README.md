@@ -94,14 +94,21 @@ Dan says "Not a sound." He walks out.
 The node reads restraints and gags from your beats and carries them from shot to shot:
 handcuffs, zip ties, rope, chains, shackles, duct tape, gags and ball gags, blindfolds and
 collars. It reads them being put on (*Dan handcuffs her wrists behind her back*, *Dan
-wraps duct tape around her mouth*), already on (*her wrists cuffed behind her back*,
-*Mara sits with duct tape over her mouth*), and coming off (*Dan pulls the tape off*,
-*Dan unlocks the cuffs*).
+grabs Mara's wrists and cuffs them*, *Dan takes out the handcuffs and snaps them onto her
+wrists*, *Dan wraps duct tape around her mouth*), already on (*her wrists cuffed behind
+her back*, *Mara sits in handcuffs*, *Mara sits with duct tape over her mouth*), and
+coming off (*Dan pulls the tape off*, *Dan unlocks the cuffs*).
 
-- A pronoun is read as the one other person present, never the one doing it, so in
-  *Dan gags her* the gag goes on Mara.
+- Whoever does it is never the one restrained. In *Dan grabs Mara and cuffs her* the
+  cuffs go on Mara, and in *Dan gags her* the pronoun is read as the one other person
+  present.
+- Something put on during a beat is in plain view at the end of that shot and held from
+  the next. Something a beat describes as already on is held from that shot's first frame.
 - When it cannot tell who is meant, it lists the sentence in `info` instead of guessing.
   Add a `hold:` line for those.
+- Handcuffs, zip ties, shackles, ball gags or blindfolds that a beat mentions but that
+  could not be placed on anyone (*Dan carries handcuffs on his belt*) are listed in `info`
+  as not read. If they belong on someone, add a `hold:` line.
 - Something comes off only when a beat takes it off directly (*removes the tape*,
   *peels the tape off her hips*). Mentioning it, or cutting more tape, does not count.
   When more than one piece could be meant, the sentence is listed in `info` instead.
@@ -196,6 +203,8 @@ Once a person is held, their own picture (written right after their name, as in
 without the cuffs or the tape pulls them back off. After a `cut` the picture comes back,
 unless a later frame of them stands in for it.
 
+FastH3 never gets the pictures (see below).
+
 ### Sound
 
 - **Speech:** a shot with a quoted line (`"…"` or `<d>…</d>`) speaks. Its first half
@@ -221,37 +230,42 @@ unless a later frame of them stands in for it.
 
 ## Pose control
 
-Text alone cannot stop H3 from freeing restrained arms or catching a fall with cuffed
-hands. Pose control checks each shot with DWPose and renders it again where the
-restraint broke.
+Text alone cannot stop H3, or a LoRA, from freeing restrained arms or catching a fall
+with cuffed hands. Every shot where someone's arms or ankles are held is checked with
+DWPose after it renders, in one of two ways.
 
-**Wiring:** add a **Load Model Patch** node with
-`minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` (in
-`models/model_patches`) and connect it to `pose_controlnet`.
+**On the hybrid b25-49 checkpoint: the skeleton is held.** The node loads
+`minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` from
+`models/model_patches` by itself, or uses the one wired into `pose_controlnet`.
 
-**Needs:**
-
-- the **hybrid b25-49** checkpoint. The controlnet is built for its 8-wide timestep
-  embedding, and `info` says so when the model cannot carry it.
-- the DWPose files from `comfyui_controlnet_aux`:
-  - `ckpts/hr16/yolox-onnx/yolox_l.torchscript.pt`
-  - `ckpts/hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt`
-
-**What it does:**
-
-- Every shot with a held arm or ankle position is checked. The positions come from your
-  `hold:` lines: *behind her back*, *in front*, *above her head*, *at her waist*,
-  *ankles*, *ankles to her wrists*.
-- If the restrained person's limbs left that position, the shot is rendered again on
+- If the restrained person's limbs left their position, the shot is rendered again on
   the same seed, with their skeleton held in place for the first `pose_end` of the steps.
-- In the shot where the restraint goes on, the limbs are held only from the moment they
-  close.
-- Some shots keep their first render instead:
+- Each repaired shot costs one extra render.
+- The controlnet only fits that checkpoint's 8-wide timestep embedding.
+
+**On any other checkpoint: the shot is rendered again.** If the restraint broke, the
+shot is rendered again on a new seed, up to `pose_retries` more times. The node keeps
+the take where it held, or else the take where it broke in the fewest frames. Set
+`pose_retries` to 0 to turn this off.
+
+**Needs:** the DWPose files from `comfyui_controlnet_aux`:
+
+- `ckpts/hr16/yolox-onnx/yolox_l.torchscript.pt`
+- `ckpts/hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt`
+
+**What is checked:**
+
+- The held positions come from the restraints the node reads, or from your `hold:` lines:
+  *behind her back*, *in front*, *above her head*, *at her waist*, *ankles*, *ankles to
+  her wrists*.
+- In the shot where the restraint goes on, the limbs are checked only from the moment
+  they close.
+- Some shots are not checked:
   - a restraint fastened to an object (`to the bed`)
   - a restraint coming off
   - any shot where the node cannot tell who is restrained
-- `info` has a line for every checked shot.
-- Each repaired shot costs one extra render.
+- `info` says which way the restraints are being kept and has a line for every checked
+  shot.
 
 ## Upscaling
 
@@ -273,6 +287,12 @@ restraint broke.
 - **FastH3**, detected from the model, runs at shift 10/3 with the VSA attention it was
   trained on (keep 10%, from 20% of the schedule). If torch is on the `cudaMallocAsync`
   allocator, restart ComfyUI with `--disable-cuda-malloc`.
+  - FastH3 was distilled for text and first-frame shots only, not for reference pictures,
+    and it draws them in as extra people. So with FastH3 the node leaves `ref_image_1` …
+    `ref_image_4` and their tags out. People carry from shot to shot through each shot's
+    opening frame. After a `cut` they are drawn from their descriptions in the scene
+    paragraph and `character_memory`. For faces that match your pictures after a cut, use
+    the base or hybrid checkpoint.
 - **Hyperflow**, detected from the LoRA's metadata or its file name, samples every shot
   on its own 8-step grid (shift 12/3, `euler`). Leave `sigmas` unwired.
   - Its endpoint conditioning is added back from `hyperflow_endpoint_v1.0.safetensors`
@@ -295,6 +315,7 @@ restraint broke.
 | `silence_wordless` | keep shots without a quoted line silent |
 | `plan_only` | report the shots and their text without rendering |
 | `pose_strength`, `pose_end` | how strongly, and for how much of the schedule, the skeleton holds |
+| `pose_retries` | without pose control, how many times a shot whose restraint broke is rendered again |
 | `anchor` | framing at the front of every shot; filled in, every paragraph is a shot |
 | `character_memory` | who is in the film, after the scene in every shot |
 | `latent_upscale`, `latent_upscale_scale` | upscale each shot in latent space, and by how much |
