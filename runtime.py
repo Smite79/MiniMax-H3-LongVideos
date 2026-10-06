@@ -198,8 +198,11 @@ def _decode_audio(audio_vae, out_latent):
     return {"waveform": audio, "sample_rate": sr}
 
 
+OOM_TEXT = ("out of memory", "vram grow failed", "vram reservation failed")
+
+
 def _is_oom(e):
-    return isinstance(e, torch.cuda.OutOfMemoryError) or "out of memory" in str(e).lower()
+    return isinstance(e, torch.cuda.OutOfMemoryError) or any(t in str(e).lower() for t in OOM_TEXT)
 
 
 def _deep_cleanup():

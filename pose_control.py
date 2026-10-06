@@ -315,7 +315,8 @@ def _spans(frames):
 
 
 def _is_oom(e):
-    return isinstance(e, torch.cuda.OutOfMemoryError) or "out of memory" in str(e).lower()
+    return isinstance(e, torch.cuda.OutOfMemoryError) or any(
+        t in str(e).lower() for t in ("out of memory", "vram grow failed", "vram reservation failed"))
 
 
 def _free_cuda():

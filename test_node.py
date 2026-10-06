@@ -601,6 +601,54 @@ def test_fast_h3_pictures():
           [len(c["refs"]) for c in base["cond"]])
 
 
+def test_memory():
+    print("\n=== running out of VRAM ===")
+    check("ComfyUI's dynamic VRAM failure counts as out of memory",
+          S.rt._is_oom(RuntimeError("VRAM grow failed: 272157696 bytes"))
+          and S.rt._is_oom(torch.cuda.OutOfMemoryError("CUDA out of memory")) and not S.rt._is_oom(ValueError("bad"))
+          and S.pose._is_oom(RuntimeError("VRAM grow failed: 1 bytes")))
+    log = []
+
+    def run(error):
+        def go(*a, **k):
+            log.append("sample")
+            raise error
+        log.clear()
+        S.rt._sample_on_sigmas = go
+        try:
+            S.sample("m", "c", "n", {}, 7, 8, "euler", "simple", torch.ones(3))
+        except Exception as e:
+            return e
+    saved = S.rt._sample_on_sigmas
+    try:
+        got = run(RuntimeError("VRAM grow failed: 1 bytes"))
+        check("a pass that runs out of VRAM says what to lower, without retrying into a broken memory plan",
+              isinstance(got, RuntimeError) and "lower megapixels or shot_seconds" in str(got) and log == ["sample"], (got, log))
+        got = run(ValueError("bad input"))
+        check("other errors pass through untouched", isinstance(got, ValueError) and log == ["sample"], (got, log))
+    finally:
+        S.rt._sample_on_sigmas = saved
+    base = SimpleNamespace()
+    seen = {}
+
+    def executor(model, noise_shape, conds, **kw):
+        seen["need"] = model.model.memory_required([1, 24, 37, 48, 84])
+        seen["kw"] = kw
+        return "loaded"
+    model = SimpleNamespace(model=base)
+    got = S.reserve_activations(executor, model, [1, 24, 37, 48, 84], [], force_offload=False)
+    tokens = 37 * 24 * 42
+    check("model loading reserves room for the shot's real activations, about 120 KB per token, then puts it back",
+          got == "loaded" and seen["need"] == tokens * S.H3_TOKEN_BYTES + S.H3_FIXED_BYTES and "memory_required" not in vars(base)
+          and seen["kw"] == {"force_offload": False}, seen)
+    base.memory_required = "theirs"
+    S.reserve_activations(executor, model, [1, 24, 37, 48, 84], [])
+    check("an estimate someone else already set is restored afterwards", base.memory_required == "theirs")
+    big = S.h3_activations([1, 24, 72, 48, 84])
+    check("a 10 s shot at 1344x768 reserves about 9.4 GB for activations instead of ComfyUI's under 1 GB",
+          9.0e9 < big < 10.0e9, big)
+
+
 def test_reading():
     print("\n=== restraints read from the beats ===")
     script = ("A dim room. Mara lies on the bed. Dan stands beside her.\n\nDan handcuffs her wrists behind her back.\n\n"
@@ -1002,6 +1050,7 @@ def main():
     test_ambient_bed()
     test_recovered_look_render()
     test_fast_h3_pictures()
+    test_memory()
     test_scene_inputs()
     test_upscale_module()
     test_upscale_render()

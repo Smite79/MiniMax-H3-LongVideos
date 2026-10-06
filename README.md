@@ -347,6 +347,11 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 
 - No negative prompt and no cfg setting: H3 runs at cfg 1.
 - Denoise is fixed at 1.0: partial denoise desyncs the joint audio/video schedule.
+- ComfyUI sizes H3's working memory at a fraction of what a shot uses (a block needs
+  about 105 KB per token), so on long shots it keeps too much of the model in VRAM and
+  runs out. The node tells it 120 KB per token instead, so the rest of the model streams
+  in as needed. If a shot still does not fit, the error says to lower `megapixels` or
+  `shot_seconds`.
 - Widgets are restored by position. If they read NaN, recreate the node as described
   under Install.
 

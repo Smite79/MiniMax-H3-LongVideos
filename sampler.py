@@ -19,6 +19,7 @@ import nodes
 import comfy.samplers
 import comfy.nested_tensor
 import comfy.model_management as mm
+import comfy.patcher_extension as pe
 
 
 def _load_local(name, filename):
@@ -56,6 +57,8 @@ SECONDS_PER_ACTION = 2.2
 WORDS_PER_SEC = 2.5
 MIN_AUTO_FRAMES = 73
 
+H3_TOKEN_BYTES = 120 * 1024
+H3_FIXED_BYTES = 1024 ** 3
 FOLEY_SCALES = {"half": 0.5, "full": 1.0}
 FOLEY_DROP = ("minimax_keyframes", "minimax_refs", "minimax_visual_cond_noise_aug")
 FAST_H3_SHIFT_VIDEO = 10.0
@@ -734,7 +737,6 @@ def hyperflow_two_time(model, hyper):
     gate = float(hyper.get("gate") or 0.0) or float(_safetensors_meta(path)[1].get("hyperflow_gate", 0.0) or 0.0)
     if not gate:
         return model, False, "Hyperflow endpoint gate is 0"
-    import comfy.patcher_extension as pe
     d_in, d_out = hyperflow_endpoint_deltas(path, strength)
     m = model.clone()
     m.add_wrapper_with_key(pe.WrappersMP.DIFFUSION_MODEL, HYPERFLOW_WRAPPER_KEY,
@@ -759,6 +761,24 @@ def apply_fast_h3_vsa(model):
     return m, "FastH3 VSA on"
 
 
+def h3_activations(shape, cond_shapes=None):
+    b, t, h, w = (int(shape[i]) for i in (0, 2, -2, -1))
+    return b * (t * (h // 2) * (w // 2) * H3_TOKEN_BYTES + H3_FIXED_BYTES)
+
+
+def reserve_activations(executor, model, *args, **kwargs):
+    base = model.model
+    had = base.__dict__.get("memory_required")
+    base.memory_required = h3_activations
+    try:
+        return executor(model, *args, **kwargs)
+    finally:
+        if had is None:
+            del base.memory_required
+        else:
+            base.memory_required = had
+
+
 def prepare_model(model, steps, sampler_name, scheduler, sigmas, shift_video, shift_audio, graph):
     notes = []
     fast = is_fast_h3(model)
@@ -774,6 +794,7 @@ def prepare_model(model, steps, sampler_name, scheduler, sigmas, shift_video, sh
         steps, sampler_name = len(sigmas) - 1, HYPERFLOW_SAMPLER
         notes.append(f"Hyperflow ({hyper['source']}): {steps}-step grid, shift {shift_video:g}/{shift_audio:g}, {sampler_name}")
     model = set_shift(model, shift_video, shift_audio)
+    model.add_wrapper_with_key(pe.WrappersMP.PREPARE_SAMPLING, "h3_longvideos_activations", reserve_activations)
     two_time = False
     if grid:
         model, two_time, note = hyperflow_two_time(model, hyper)
@@ -794,11 +815,16 @@ def prepare_model(model, steps, sampler_name, scheduler, sigmas, shift_video, sh
 
 
 def sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas):
-    if sigmas is not None:
-        return rt._sample_on_sigmas(model, seed, 1.0, sampler_name, cond, negative, latent, sigmas)
-    with rt._ChainNoise():
-        return nodes.common_ksampler(model, seed, steps, 1.0, sampler_name, scheduler, cond, negative,
-                                     latent, denoise=1.0)[0]
+    try:
+        if sigmas is not None:
+            return rt._sample_on_sigmas(model, seed, 1.0, sampler_name, cond, negative, latent, sigmas)
+        with rt._ChainNoise():
+            return nodes.common_ksampler(model, seed, steps, 1.0, sampler_name, scheduler, cond, negative,
+                                         latent, denoise=1.0)[0]
+    except Exception as e:
+        if rt._is_oom(e):
+            raise RuntimeError(f"not enough VRAM for this shot ({e}): lower megapixels or shot_seconds") from e
+        raise
 
 
 def foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas, scale=1.0):
