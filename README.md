@@ -193,6 +193,15 @@ another person.
 After a `cut`, someone who was last seen alone is given that frame as their current
 look, in place of their portrait. Their clothes and anything held on them carry over.
 
+H3 comes out a little more saturated and contrasty each time it continues from a frame,
+and left alone that burns the picture more with every shot. The first shot, and the
+first shot after a `cut`, are left as rendered and set the look. Every shot that
+continues from a frame is graded onto that frame's tone: brightness, contrast,
+saturation and the shape of the shadows and highlights. Its last frame, which the next
+shot opens on, is graded too, so nothing builds up and nothing washes out. A real
+change inside a shot, such as the lights going down, is kept. A black or faded frame,
+or a shot that does not pick up where the last one ended, is left as rendered.
+
 ### Reference pictures
 
 Wire up to four pictures into `ref_image_1` … `ref_image_4` and refer to them in the text
@@ -203,7 +212,14 @@ Once a person is held, their own picture (written right after their name, as in
 without the cuffs or the tape pulls them back off. After a `cut` the picture comes back,
 unless a later frame of them stands in for it.
 
-FastH3 never gets the pictures (see below).
+Only a checkpoint trained on reference pictures gets them: the hybrid b25-49
+(`fl2va_ref2va`), or any checkpoint whose file name says `ref2va`. FL2VA checkpoints, such
+as the base `minimax_h3_fl2va` and 10Eros, and FastH3 were never trained on them and draw
+each picture in as another person, so one character can turn up twice in a shot. The node
+reads which checkpoint is loaded from its own `model` link and leaves the pictures, and
+the recovered looks after a `cut`, out for those, and says so in `info`. People then carry
+over through each shot's opening frame, and after a `cut` they are drawn from their
+descriptions.
 
 ### Sound
 
@@ -221,6 +237,8 @@ FastH3 never gets the pictures (see below).
   six times cheaper than rendering the shot again, and the picture itself is never
   touched. Set `foley_resolution` to *full* for a full-size pass. A beat that describes
   its own sounds keeps those.
+- **No music:** every shot says there is no background music, unless its beat or the
+  scene mentions music, a radio, singing or an instrument.
 - **Silence:** a shot with nothing to hear stays silent. Turn `silence_wordless` off to
   render every shot in one pass with free audio instead.
 - **Gagged speech:** a gagged person in a shot with speech or vocal sounds is muffled.
@@ -236,8 +254,8 @@ Text alone cannot stop H3, or a LoRA, from freeing restrained arms or catching a
 with cuffed hands. Every shot where someone's arms or ankles are held is checked with
 DWPose after it renders, in one of two ways.
 
-**On the hybrid b25-49 checkpoint: the skeleton is held.** The node loads
-`minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` from
+**With the H3 Fun controlnet: the skeleton is held, on any H3 checkpoint and LoRA.** The
+node loads `minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` from
 `models/model_patches` by itself, or uses the one wired into `pose_controlnet`.
 
 - Each such shot is first drafted at half size from the same text and seed. DWPose reads
@@ -246,9 +264,12 @@ DWPose after it renders, in one of two ways.
   gives nothing to hold, the shot is rendered at full size without it.
 - The draft costs about a tenth of a full render, so a checked shot costs about 1.1
   renders instead of 2. The movement follows the draft.
-- The controlnet only fits that checkpoint's 8-wide timestep embedding.
+- The controlnet was trained on the hybrid b25-49 checkpoint and reads its 8-wide
+  timestep curve. On any other checkpoint the node reads each step's timestep off that
+  checkpoint and hands the controlnet the matching point on the hybrid's curve, so keep
+  the hybrid checkpoint in `models/diffusion_models`; only its small curve is read.
 
-**On any other checkpoint: the shot is rendered again.** If the restraint broke, the
+**Without the controlnet: the shot is rendered again.** If the restraint broke, the
 shot is rendered again on a new seed, up to `pose_retries` more times. The node keeps
 the take where it held, or else the take where it broke in the fewest frames. Set
 `pose_retries` to 0 to turn this off.
@@ -292,19 +313,16 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 - **FastH3**, detected from the model, runs at shift 10/3 with the VSA attention it was
   trained on (keep 10%, from 20% of the schedule). If torch is on the `cudaMallocAsync`
   allocator, restart ComfyUI with `--disable-cuda-malloc`.
-  - FastH3 was distilled for text and first-frame shots only, not for reference pictures,
-    and it draws them in as extra people. So with FastH3 the node leaves `ref_image_1` …
-    `ref_image_4` and their tags out. People carry from shot to shot through each shot's
-    opening frame. After a `cut` they are drawn from their descriptions in the scene
-    paragraph and `character_memory`. For faces that match your pictures after a cut, use
-    the base or hybrid checkpoint.
+  - FastH3 was distilled for text and first-frame shots only, so it gets no reference
+    pictures (see Reference pictures). For faces that match your pictures after a cut,
+    use the hybrid checkpoint.
 - **Hyperflow**, detected from the LoRA's metadata or its file name, samples every shot
   on its own 8-step grid (shift 12/3, `euler`). Leave `sigmas` unwired.
   - Its endpoint conditioning is added back from `hyperflow_endpoint_v1.0.safetensors`
     beside the node, or from the original `minimax_h3_hyperflow_8step_v1.0.safetensors`
     in `models/loras`.
-  - That needs a checkpoint with a time embedder, so Hyperflow two-time and pose control
-    never run together.
+  - That needs a checkpoint with a full time embedder. On curve checkpoints (hybrid
+    b25-49, 10Eros, FastH3) Hyperflow runs without it, and `info` says so.
 
 ## Settings
 
@@ -334,7 +352,7 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 |---|---|
 | `images` | the finished frames |
 | `audio` | the synchronised soundtrack |
-| `info` | what the node did for each shot, and how long each shot took |
+| `info` | what the node did for each shot, how long it took, and its contrast and colour against shot 1 |
 | `script` | the exact text each shot was given |
 | `frames_per_shot`, `total_frames`, `shots`, `video_seconds` | for downstream nodes |
 

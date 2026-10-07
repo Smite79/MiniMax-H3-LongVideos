@@ -181,15 +181,15 @@ class FakeDet:
 
 
 def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=False, lat_up=None, frames_up=None,
-           seconds=2.0, dwpose=False, check=None, width=None, auto=None, fast=False, **run_kw):
+           seconds=2.0, dwpose=False, check=None, auto=None, fast=False, **run_kw):
     calls = {"cond": [], "sample": [], "pose": [], "decode": [], "tail": [], "frames_up": [], "draft": []}
     saved = (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
              S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video,
-             S.rt._decode_audio, S.pose_read, S.adaln_width, S.auto_pose_patch, S.is_fast_h3)
+             S.rt._decode_audio, S.pose_read, S.auto_pose_patch, S.is_fast_h3)
     calls["check"] = []
     S.is_fast_h3 = lambda m: fast
     S.check_vaes = lambda v, a: None
-    S.prepare_model = lambda m, st, sn, sc, sg, sv, sa, g: (m, st, sn, None, torch.linspace(1, 0, st + 1), False, ["prepared"])
+    S.prepare_model = lambda m, st, sn, sc, sg, sv, sa, g: (m, st, sn, None, torch.linspace(1, 0, st + 1), ["prepared"])
 
     def build(clip, vae, avae, prompt, w, h, length, handoff=None, refs=(), silent=False, lead_seconds=0.0, text=None):
         if text is not None:
@@ -244,14 +244,13 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     S.rt._decode_video = tail
     S.rt._decode_audio = lambda avae, out: {"waveform": torch.full((1, 2, round(out["fc"] * 1000 / 24)), 9.0),
                                             "sample_rate": 1000}
-    S.pose = SimpleNamespace(pose_status=lambda m, cn, st, tt: (True, ""), PoseDetector=FakeDet,
+    S.pose = SimpleNamespace(pose_status=lambda m, cn, st: (True, ""), PoseDetector=FakeDet,
                              dwpose_status=lambda: (dwpose, ""))
 
     def read_pose(det, imgs, shot, carry, w, h):
         calls["check"].append(shot["n"])
         return None, (check or (lambda n, k: {"broken": False}))(shot["n"], calls["check"].count(shot["n"]))
     S.pose_read = read_pose
-    S.adaln_width = lambda m: width
     S.auto_pose_patch = lambda: auto or (None, "")
     if lat_up is not None:
         S.up.upscale_latent = lat_up
@@ -263,7 +262,7 @@ def render(script, pose_cn=None, pose_result=None, oom_pass2=False, plan_only=Fa
     finally:
         (S.check_vaes, S.prepare_model, S.cnd.build_conditioning, S.sample, S.decode, S.rt._evict_all_but,
          S.rt._deep_cleanup, S.pose_pass, S.pose, S.up.upscale_latent, S.up.upscale_frames, S.rt._decode_video,
-         S.rt._decode_audio, S.pose_read, S.adaln_width, S.auto_pose_patch, S.is_fast_h3) = saved
+         S.rt._decode_audio, S.pose_read, S.auto_pose_patch, S.is_fast_h3) = saved
     return out, calls
 
 
@@ -297,7 +296,7 @@ def test_render():
 
     check("without pose control or retakes, info says held limbs are kept by the prompt alone and what would change that",
           "held arms or ankles in shot(s) 2, 3, 4, 5, 6 are kept by the prompt alone" in info
-          and "pose control needs the hybrid b25-49 checkpoint" in info, info)
+          and "pose control needs the H3 Fun controlnet" in info, info)
     out, calls = render(SCRIPT, pose_cn="cn")
     check("with pose control running there is no such warning", "kept by the prompt alone" not in out[2], out[2])
     check("the pose check runs on every shot with a held limb", [c["shot"] for c in calls["pose"]] == [2, 3, 4, 5, 6])
@@ -414,7 +413,8 @@ def test_beats_decide_presence():
     shots = S.plan_shots(script, 10.0, [None] * 4, False, memory=memory)
     check("an empty establishing beat puts nobody in the shot and says so",
           shots[0]["cast"] == [] and shots[0]["prompt"] == "A bathroom in a small apartment.\n\nThe camera views the interior "
-          "of the bathroom. It pans over to the door, where it opens to the inside.\n\nNobody is in the shot.", shots[0]["prompt"])
+          "of the bathroom. It pans over to the door, where it opens to the inside.\n\nNobody is in the shot. There is no "
+          "background music.", shots[0]["prompt"])
     check("people join from the beat that brings them in, not from the scene paragraph",
           [x["cast"] for x in shots] == [[], ["Dan"], ["Dan", "Crystal"]] and "There is one person" in shots[1]["prompt"],
           [x["cast"] for x in shots])
@@ -541,12 +541,20 @@ def test_mumble():
 def test_sound_lines():
     print("\n=== foley and ambience ===")
     line, sounded = S.snd.sound_line("Dan walks to the door and opens the door.", "A rainy street.", False)
-    check("actions bring their foley, the scene its ambience",
-          sounded and line == "The only sounds are footsteps, a door on its hinges and rain against the glass.", line)
+    check("actions bring their foley, the scene its ambience, and no music",
+          sounded and line == "The only sounds are footsteps, a door on its hinges and rain against the glass. "
+          "There is no background music.", line)
     line, sounded = S.snd.sound_line("Somewhere a dog barks loudly.", "", False)
-    check("a beat that names its own sounds keeps them", sounded and line == "The only sounds are the ones this beat describes.")
-    check("a spoken shot gets no sound line", S.snd.sound_line("Dan walks in.", "", True) == ("", False))
-    check("nothing to hear, nothing said", S.snd.sound_line("Mara thinks.", "", False) == ("", False))
+    check("a beat that names its own sounds keeps them", sounded and line == "The only sounds are the ones this beat "
+          "describes. There is no background music.", line)
+    check("a spoken shot is told there is no background music",
+          S.snd.sound_line("Dan walks in.", "", True) == ("There is no background music.", False))
+    check("nothing to hear, nothing said, and no music", S.snd.sound_line("Mara thinks.", "", False)
+          == ("There is no background music.", False))
+    check("music the beat or the scene asks for is allowed",
+          S.snd.sound_line("Dan turns the radio up.", "", True) == ("", False)
+          and "no background music" not in S.snd.sound_line("Mara walks in.", "A piano bar.", False)[0]
+          and "no background music" not in S.snd.sound_line("Mara sings softly.", "", False)[0])
     check("at most three sounds, and closing cuffs replace rattling ones",
           len(S.snd.foley("Dan walks in, slams the door, drags a chair, pours water and drops the keys.")) == 3
           and S.snd.foley("Dan handcuffs her and yanks the cuffs.") == ["cuffs ratcheting closed"])
@@ -581,6 +589,29 @@ def test_recovered_look_render():
           len(calls["cond"]) == 2 and calls["cond"][1]["handoff"] is None and len(calls["cond"][1]["refs"]) == 1
           and abs(float(calls["cond"][1]["refs"][0].mean()) - (0.1 + (S.rt.align_frame_count(48) - 1) / 1e4)) < 1e-4,
           [(c["handoff"] is None, len(c["refs"])) for c in calls["cond"]])
+
+
+def test_pictures_by_checkpoint():
+    print("\n=== reference pictures only for checkpoints trained on them ===")
+    graph = {"9": {"class_type": "H3LongVideos", "inputs": {"model": ["7", 0], "clip": ["2", 0]}},
+             "7": {"class_type": "LoraLoader", "inputs": {"model": ["5", 0], "clip": ["2", 0], "lora_name": "hyperflow.safetensors"}},
+             "5": {"class_type": "UNETLoader", "inputs": {"unet_name": "h3/10Eros_Max_H3_FL2VA-INT8-ConvRot-HQ.safetensors"}},
+             "3": {"class_type": "UNETLoader", "inputs": {"unet_name": "minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors"}},
+             "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl.safetensors"}}}
+    check("the checkpoint is traced back through the LoRA loaders on the node's own model link",
+          S.checkpoint_name(graph, "9") == "h3/10Eros_Max_H3_FL2VA-INT8-ConvRot-HQ.safetensors" and S.checkpoint_name({}, "9") == "")
+    hybrid = dict(graph, **{"9": {"class_type": "H3LongVideos", "inputs": {"model": ["3", 0]}}})
+    check("only a ref2va checkpoint takes reference pictures; an unknown loader keeps them",
+          S.takes_pictures("m", graph, "9")[0] is False and "10Eros_Max_H3_FL2VA" in S.takes_pictures("m", graph, "9")[1]
+          and S.takes_pictures("m", hybrid, "9") == (True, "") and S.takes_pictures("m", None, None) == (True, ""))
+    script = "A cell. Mara <Picture 1> waits. Dan <Picture 2> stands guard.\n\nMara paces.\n\nMara sits.\n\ncut\nA garden. Mara walks."
+    out, calls = render(script, ref_image_1=IMG1, ref_image_2=IMG1, graph=graph, unique_id="9")
+    check("on an FL2VA checkpoint like 10Eros no shot gets a portrait or a recovered look, so nobody is drawn twice",
+          all(c["refs"] == [] for c in calls["cond"]) and all("<Picture 2>" not in c["prompt"] for c in calls["cond"])
+          and "not trained on reference pictures" in out[2], [len(c["refs"]) for c in calls["cond"]])
+    out, calls = render(script, ref_image_1=IMG1, ref_image_2=IMG1, graph=hybrid, unique_id="9")
+    check("on the hybrid fl2va_ref2va the portraits still go in", [len(c["refs"]) for c in calls["cond"]] == [1, 1, 1]
+          and "not trained on reference pictures" not in out[2], [len(c["refs"]) for c in calls["cond"]])
 
 
 def test_fast_h3_pictures():
@@ -647,6 +678,64 @@ def test_memory():
     big = S.h3_activations([1, 24, 72, 48, 84])
     check("a 10 s shot at 1344x768 reserves about 9.4 GB for activations instead of ComfyUI's under 1 GB",
           9.0e9 < big < 10.0e9, big)
+
+
+def test_grading():
+    print("\n=== the look holds from shot to shot ===")
+    rt = S.rt
+    torch.manual_seed(0)
+    yy, xx = torch.meshgrid(torch.linspace(0, 1, 96), torch.linspace(0, 1, 168), indexing="ij")
+    blobs = sum(torch.exp(-((xx - torch.rand(1)) ** 2 + (yy - torch.rand(1)) ** 2) / 0.02) * torch.rand(3).view(3, 1, 1)
+                for _ in range(12))
+    orig = (0.25 + 0.5 * blobs / blobs.max() + 0.05 * torch.randn(3, 96, 168)).clamp(0, 1).permute(1, 2, 0)
+
+    def burn(img, amount):
+        y = rt._ycc(img)
+        y[..., 0] = ((y[..., 0] - 0.5) * (1 + 0.6 * amount) + 0.5).clamp(0, 1) ** (1 + 0.4 * amount)
+        y[..., 1:] = (y[..., 1:] - 0.5) * (1 + amount) + 0.5
+        return rt._rgb(y).clamp(0, 1)
+    sat = lambda img: float((rt._ycc(img)[..., 1:] - 0.5).abs().mean())
+    con = lambda img: float(rt._ycc(img)[..., 0].std())
+    def chain(frame):
+        key, look = orig.clone(), None
+        for n in range(12):
+            f = torch.stack([frame(key, k) for k in range(24)])
+            g = rt.shot_grade(None if n == 0 else key, f[0], f[-1])
+            if g is not None:
+                rt.grade_frames(f, g)
+            key = f[-1].clone()
+            look = key.clone() if n == 0 else look
+        return key, look
+    key, look = chain(lambda key, k: burn(key, 0.05 + 0.05 * k / 23))
+    check("twelve shots that each come out more saturated and contrasty than they started keep the first shot's look",
+          abs(sat(key) / sat(look) - 1) < 0.02 and abs(con(key) / con(look) - 1) < 0.02, (sat(key) / sat(look), con(key) / con(look)))
+    key, look = chain(lambda key, k: burn(key, -0.25 * max(0.0, 1 - k / 6) + 0.03 * k / 23))
+    check("shots that open a little flat and brighten up do not wash the video out",
+          abs(sat(key) / sat(look) - 1) < 0.03 and abs(con(key) / con(look) - 1) < 0.03, (sat(key) / sat(look), con(key) / con(look)))
+    first = torch.stack([burn(orig, 0.1 * k / 23) for k in range(24)])
+    check("the first shot, and a shot after a cut, set the look and are left as rendered",
+          rt.shot_grade(None, first[0], first[-1]) is None)
+    f = torch.stack([burn(orig, 0.05) * (1 - 0.6 * k / 23) for k in range(24)])
+    dark = float(f[-1].mean())
+    rt.grade_frames(f, rt.shot_grade(orig, f[0], f[-1]))
+    check("a real change inside a shot, like the lights going down, is kept", float(f[-1].mean()) < 0.6 * float(f[0].mean())
+          and float(f[-1].mean()) < 1.2 * dark, (float(f[0].mean()), float(f[-1].mean()), dark))
+    first = burn(orig, 0.2)
+    g = rt.shot_grade(orig, first, first)
+    graded = rt.grade_frames(first.unsqueeze(0).clone(), g)[0]
+    check("a continued shot opens on the same look as the frame it continues from",
+          float((rt.tone(graded) - rt.tone(orig)).abs().mean()) < 0.002 and float((rt.tone(first) - rt.tone(orig)).abs().mean()) > 0.01)
+    black = torch.full((24, 96, 168, 3), 0.02)
+    check("a black or faded opening is left alone instead of being stretched to the last shot's look",
+          rt.shot_grade(orig, black[0], black[-1]) is None)
+    other = torch.flip(orig, dims=[-1]).roll(1, dims=-1) * 0.4
+    check("a shot that does not pick up where the last one ended is left as rendered", rt.shot_grade(orig, other, other) is None)
+    check("nothing is touched when the shot already matches", rt.shot_grade(orig, orig, orig) is None)
+    check("the look readout gives contrast and colour, and nothing for a flat frame",
+          rt.look(orig) is not None and rt.look(burn(orig, 0.3))[1] > rt.look(orig)[1] and rt.look(black[0]) is None)
+    hand = rt.match_frame(burn(orig, 0.3).unsqueeze(0).clone(), rt.tone(orig))
+    check("the handing-off frame can be put back on the shot's look on its own",
+          float((rt.tone(hand) - rt.tone(orig)).abs().mean()) < 0.004)
 
 
 def test_reading():
@@ -850,12 +939,10 @@ def test_retakes():
     out, calls = render(SCRIPT, dwpose=True, check=always, pose_retries=0)
     check("pose_retries 0 renders each shot once", [c["shot"] for c in calls["sample"] if not c["foley"]] == [1, 2, 3, 4, 5, 6]
           and "kept by the prompt alone" in out[2])
-    out, calls = render(SCRIPT, width=8, auto=("cn", "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"))
-    check("on a checkpoint that takes the pose controlnet, the node loads it itself and pose control runs",
+    out, calls = render(SCRIPT, auto=("cn", "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"))
+    check("on any checkpoint the node loads the pose controlnet itself and pose control runs",
           "pose controlnet minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors loaded by the node" in out[2]
           and [c["shot"] for c in calls["pose"]] == [2, 3, 4, 5, 6], out[2])
-    out, calls = render(SCRIPT, width=16, auto=("cn", "x"))
-    check("on any other checkpoint it is not loaded", "loaded by the node" not in out[2] and calls["pose"] == [])
 
 
 def test_scene_inputs():
@@ -1050,7 +1137,9 @@ def main():
     test_ambient_bed()
     test_recovered_look_render()
     test_fast_h3_pictures()
+    test_pictures_by_checkpoint()
     test_memory()
+    test_grading()
     test_scene_inputs()
     test_upscale_module()
     test_upscale_render()

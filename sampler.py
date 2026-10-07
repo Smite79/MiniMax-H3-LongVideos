@@ -48,7 +48,6 @@ NATIVE_RES = {"16:9": (1344, 768), "9:16": (768, 1344), "4:3": (1024, 768), "3:4
               "1:1": (768, 768), "21:9": (1536, 672), "9:21": (672, 1536)}
 RES_MULTIPLE = 32
 SPEECH_LEAD = 0.5
-LEVELS = 0.8
 POSE_LATCH_FROM = 0.4
 HANDOFF_LATENT_TAIL = 8
 SHOT_LENGTHS = ["from the beat", "fixed"]
@@ -523,6 +522,36 @@ def check_vaes(vae, audio_vae):
         raise RuntimeError("vae is the audio VAE: the video and audio VAE inputs are swapped.")
 
 
+CHECKPOINT_KEYS = ("unet_name", "ckpt_name", "model_name")
+
+
+def checkpoint_name(graph, node_id):
+    seen, todo = set(), [str(node_id)]
+    while todo and len(seen) < 64:
+        nid = todo.pop(0)
+        if nid in seen or not isinstance(graph, dict) or not isinstance(graph.get(nid), dict):
+            continue
+        seen.add(nid)
+        inputs = graph[nid].get("inputs") or {}
+        if nid != str(node_id):
+            name = next((v for k, v in inputs.items() if k in CHECKPOINT_KEYS and isinstance(v, str)), None)
+            if name:
+                return name
+        links = [v for k, v in sorted(inputs.items(), key=lambda kv: kv[0] != "model")
+                 if isinstance(v, list) and len(v) == 2 and (k == "model" or nid != str(node_id))]
+        todo += [str(v[0]) for v in links]
+    return ""
+
+
+def takes_pictures(model, graph, node_id):
+    if is_fast_h3(model):
+        return False, "FastH3 was distilled without reference pictures"
+    name = checkpoint_name(graph, node_id)
+    if name and "ref2va" not in name.lower():
+        return False, f"{os.path.basename(name)} was not trained on reference pictures (only ref2va checkpoints are)"
+    return True, ""
+
+
 def is_fast_h3(model):
     try:
         return getattr(model.model.diffusion_model.blocks[0].attn, "to_gate_compress", None) is not None
@@ -795,9 +824,8 @@ def prepare_model(model, steps, sampler_name, scheduler, sigmas, shift_video, sh
         notes.append(f"Hyperflow ({hyper['source']}): {steps}-step grid, shift {shift_video:g}/{shift_audio:g}, {sampler_name}")
     model = set_shift(model, shift_video, shift_audio)
     model.add_wrapper_with_key(pe.WrappersMP.PREPARE_SAMPLING, "h3_longvideos_activations", reserve_activations)
-    two_time = False
     if grid:
-        model, two_time, note = hyperflow_two_time(model, hyper)
+        model, _, note = hyperflow_two_time(model, hyper)
         notes.append(note)
     if fast:
         model, note = apply_fast_h3_vsa(model)
@@ -811,7 +839,7 @@ def prepare_model(model, steps, sampler_name, scheduler, sigmas, shift_video, sh
             if len(landed) != len(base):
                 sigmas = torch.tensor(landed, dtype=torch.float32)
                 notes.append("one audio landing step added")
-    return model, steps, sampler_name, sigmas, window, two_time, notes
+    return model, steps, sampler_name, sigmas, window, notes
 
 
 def sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas):
@@ -857,15 +885,7 @@ def _interrupted(e):
     return isinstance(e, getattr(mm, "InterruptProcessingException", ())) or "Interrupt" in type(e).__name__
 
 
-POSE_CN_WIDTH = 8
 _POSE_PATCH = {}
-
-
-def adaln_width(model):
-    try:
-        return int(model.model.diffusion_model.blocks[0].adaln_proj.linear.in_features)
-    except Exception:
-        return None
 
 
 def auto_pose_patch():
@@ -981,7 +1001,7 @@ class H3LongVideos:
                 "pose_retries": ("INT", {"default": 2, "min": 0, "max": 5}),
                 "foley_resolution": (list(FOLEY_SCALES), {"default": "half"}),
             },
-            "hidden": {"graph": "PROMPT"},
+            "hidden": {"graph": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "STRING", "STRING", "INT", "INT", "INT", "FLOAT")
@@ -995,20 +1015,22 @@ class H3LongVideos:
             plan_only=False, pose_controlnet=None, pose_strength=1.0, pose_end=0.6, anchor="", character_memory="",
             latent_upscale="off", latent_upscale_scale=2.0, upscale="off", upscale_model="none",
             upscale_target_short_edge=0, shot_length="from the beat", ambient_audio=None, ambient_level=0.25,
-            pose_retries=2, foley_resolution="half", graph=None, **legacy):
+            pose_retries=2, foley_resolution="half", graph=None, unique_id=None, **legacy):
         t0 = time.perf_counter()
         check_vaes(vae, audio_vae)
         w, h = frame_size(resolution, megapixels)
-        fast, pictures = is_fast_h3(model), [ref_image_1, ref_image_2, ref_image_3, ref_image_4]
+        pictures = [ref_image_1, ref_image_2, ref_image_3, ref_image_4]
+        refs_ok, why = takes_pictures(model, graph, unique_id)
         shots = plan_shots(prompt, shot_seconds, pictures, first_frame is not None, character_memory, anchor,
-                           shot_length != "fixed", not fast)
+                           shot_length != "fixed", refs_ok)
         if not shots:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
         info = [f"{w}x{h}, {len(shots)} shots"]
-        if fast and any(r is not None for r in pictures):
-            info.append("FastH3 was distilled without reference pictures, so ref_image_1-4 are left out: people carry "
-                        "over through each shot's opening frame, and after a cut they are drawn from their descriptions")
+        if not refs_ok and any(r is not None for r in pictures):
+            info.append(f"{why}, so it draws reference pictures in as extra people: ref_image_1-4 and recovered looks "
+                        f"are left out, people carry over through each shot's opening frame, and after a cut they are "
+                        f"drawn from their descriptions")
         if legacy:
             info.append("ignored inputs from an older version of this node: " + ", ".join(sorted(legacy)))
         unread = [u for s in shots for u in s["unread"]]
@@ -1021,18 +1043,18 @@ class H3LongVideos:
             return (torch.zeros((1, h, w, 3)), {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100},
                     " | ".join(info), script, shots[0]["frames"], 0, len(shots), 0.0)
 
-        model, steps, sampler_name, sigmas, window, two_time, notes = prepare_model(
+        model, steps, sampler_name, sigmas, window, notes = prepare_model(
             model, steps, sampler_name, scheduler, sigmas, shift_video, shift_audio, graph)
         info += notes
         pose_ok, checks = False, False
         if limbs and pose is None:
             info.append(f"pose control off: {POSE_IMPORT_ERROR}")
         elif limbs:
-            if pose_controlnet is None and adaln_width(model) == POSE_CN_WIDTH:
+            if pose_controlnet is None:
                 pose_controlnet, name = auto_pose_patch()
                 info += [f"pose controlnet {name} loaded by the node"] if pose_controlnet is not None else []
             if pose_controlnet is not None:
-                pose_ok, note = pose.pose_status(model, pose_controlnet, pose_strength, two_time)
+                pose_ok, note = pose.pose_status(model, pose_controlnet, pose_strength)
                 info.append(note or "pose control on")
             checks = not pose_ok and pose_retries > 0 and pose.dwpose_status()[0]
             if checks:
@@ -1040,14 +1062,14 @@ class H3LongVideos:
                             f"is rendered again, up to {pose_retries} more time(s), when they break")
             elif not pose_ok:
                 info.append(f"held arms or ankles in shot(s) {', '.join(limbs)} are kept by the prompt alone, which a LoRA "
-                            f"can override: pose control needs the hybrid b25-49 checkpoint with its controlnet in "
-                            f"models/model_patches, and retakes need pose_retries above 0 and the DWPose files")
+                            f"can override: pose control needs the H3 Fun controlnet in models/model_patches, "
+                            f"and retakes need pose_retries above 0 and the DWPose files")
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
 
         acc = rt.FrameAccumulator(sum(s["frames"] for s in shots), rt._image_out_dtype(), True)
         audio_parts, sr = [], 44100
         handoff = first_frame[:1] if first_frame is not None else None
-        detector, carry, size, captured = None, None, None, {}
+        detector, carry, size, captured, first_look = None, None, None, {}, None
         try:
             for i, shot in enumerate(shots):
                 started = time.perf_counter()
@@ -1156,12 +1178,17 @@ class H3LongVideos:
                     del tail
                 size = size or (int(imgs.shape[2]), int(imgs.shape[1]))
                 imgs = up.fit(imgs, *size)
-                grade = rt.shot_grade(given, imgs[0], imgs[-1], LEVELS,
-                                      pipe=(imgs[-1], hand[-1]) if pre is not None else None) if imgs.shape[0] > 1 else None
+                grade = rt.shot_grade(given, imgs[0], imgs[-1]) if imgs.shape[0] > 1 else None
                 if grade is not None:
-                    rt.grade_frames(imgs, *grade)
+                    rt.grade_frames(imgs, grade)
                     if pre is not None:
-                        hand = rt.grade_frames(hand.clone(), grade[1], grade[1])
+                        hand = rt.match_frame(hand.clone(), grade[2])
+                seen = rt.look(imgs[-1])
+                first_look = first_look or seen
+                if seen and first_look:
+                    info[at] += (f", {'graded onto the frame it continues from, ' if grade is not None else ''}look against "
+                                 f"shot 1: contrast {seen[0] / first_look[0]:.2f}, colour "
+                                 f"{seen[1] / max(first_look[1], 1e-6):.2f}")
                 handoff = (hand if pre is not None else imgs[-1:]).detach().clamp(0.0, 1.0).to("cpu", copy=True)
                 if shot["solo"]:
                     captured[shot["solo"]] = handoff

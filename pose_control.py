@@ -174,6 +174,8 @@ POSE_END_DEFAULT = 0.6
 _KP = namedtuple("_KP", "x y score id")
 _DRAW_FN = None
 _PRESET_CLS = None
+_CURVES = {}
+BRIDGE_POINTS = 1025
 
 
 def _person(a):
@@ -2515,7 +2517,7 @@ def _fun_patch_on(model):
     return False
 
 
-def pose_status(model, pose_cn, strength, hyperflow_two_time_on):
+def pose_status(model, pose_cn, strength):
     try:
         try:
             st = float(strength or 0.0)
@@ -2528,21 +2530,16 @@ def pose_status(model, pose_cn, strength, hyperflow_two_time_on):
             return False, ("pose control off: what is wired to pose_controlnet is not a MiniMax H3 "
                            "Fun controlnet (load the H3 Fun controlnet with Load Model Patch)")
         notes = []
-        base_w = _as_int(_dig(model, ("model", "diffusion_model", "blocks", 0, "adaln_proj",
-                                      "linear", "in_features")))
-        cn_w = _as_int(_dig(inner, ("control_blocks", 0, "adaln_proj", "linear", "in_features")))
-        if base_w is not None and cn_w is not None:
-            if base_w != cn_w:
-                return False, (f"pose control off: the pose controlnet takes a {cn_w}-wide timestep "
-                               f"embedding and this base model gives {base_w}; it is built for the "
-                               f"8-wide hybrid b25-49 base")
-        else:
-            notes.append("could not read the adaln widths of the base and the pose controlnet to "
-                         "compare them; it is built for the 8-wide hybrid b25-49 base, and on any "
-                         "other the first controlled step fails")
-        if hyperflow_two_time_on:
-            return False, ("pose control off: Hyperflow two-time is on; it needs a full-form base "
-                           "and the pose controlnet the 8-wide curve base, so they never run together")
+        base_w, cn_w = _widths(model, pose_cn)
+        if base_w is None or cn_w is None:
+            notes.append("could not read the timestep widths of the model and the pose controlnet to compare them")
+        elif base_w != cn_w:
+            if curve_table(cn_w) is None:
+                return False, (f"pose control off: the pose controlnet takes a {cn_w}-wide timestep and this model "
+                               f"gives {base_w}; put the hybrid b25-49 checkpoint in models/diffusion_models so the "
+                               f"node can read its {cn_w}-wide timestep curve")
+            notes.append(f"pose control on, with the controlnet's timestep read off this model and matched to the "
+                         f"hybrid's {cn_w}-wide curve")
         ok, note = dwpose_status()
         if not ok:
             return False, note
@@ -2710,6 +2707,12 @@ def _preset_patch_class():
         class PresetFunControlPatch(MiniMaxH3FunControlPatch):
             preset_latent = None
             preset_shape = None
+            bridge = None
+
+            def after_block(self, block_index, args, out):
+                if self.active and self.bridge is not None:
+                    args = dict(args, t_emb=self.bridge(args["t_emb"]))
+                return super().after_block(block_index, args, out)
 
             def cleanup(self):
                 super().cleanup()
@@ -2720,6 +2723,70 @@ def _preset_patch_class():
     return _PRESET_CLS
 
 
+def curve_table(width):
+    if width not in _CURVES:
+        _CURVES[width] = None
+        try:
+            import folder_paths
+            from safetensors import safe_open
+            for name in folder_paths.get_filename_list("diffusion_models"):
+                path = folder_paths.get_full_path("diffusion_models", name)
+                if not str(path).endswith(".safetensors"):
+                    continue
+                with safe_open(path, "pt", device="cpu") as f:
+                    key = next((k for k in f.keys() if k.endswith("adaln_t_table")), None)
+                    if key is not None and f.get_slice(key).get_shape()[-1] == width:
+                        _CURVES[width] = f.get_tensor(key).float()
+                        break
+        except Exception:
+            pass
+    return _CURVES[width]
+
+
+class TimeBridge:
+    def __init__(self, base, table):
+        self.base, self.table = base, table
+        self.curve, self.last = None, None
+
+    def _curve(self, like):
+        if self.curve is None or self.curve.device != like.device:
+            if getattr(self.base, "use_adaln_curves", False):
+                c = self.base.adaln_t_table
+            else:
+                te = self.base.time_embedder
+                with torch.no_grad():
+                    c = type(te).forward(te, torch.linspace(0.0, 1.0, BRIDGE_POINTS, device=like.device))
+            self.curve = c.detach().float().to(like.device)
+        return self.curve
+
+    def __call__(self, t_emb):
+        if self.last is not None and self.last[0] is t_emb:
+            return self.last[1]
+        curve = self._curve(t_emb)
+        x, n = t_emb.detach().float(), int(curve.shape[0])
+        pos = []
+        for row, k in zip(x, torch.cdist(x, curve).argmin(dim=1).tolist()):
+            best = (float("inf"), float(k))
+            for a in (k - 1, k):
+                if 0 <= a < n - 1:
+                    seg = curve[a + 1] - curve[a]
+                    u = min(max(float((row - curve[a]) @ seg) / max(float(seg @ seg), 1e-12), 0.0), 1.0)
+                    d = float((row - curve[a] - u * seg).norm())
+                    best = (d, a + u) if d < best[0] else best
+            pos.append(best[1])
+        table = self.table.to(x.device)
+        p = (torch.tensor(pos, device=x.device) / (n - 1)).clamp(0.0, 1.0) * (table.shape[0] - 1)
+        i0 = p.floor().long().clamp(max=table.shape[0] - 2)
+        out = torch.lerp(table[i0], table[i0 + 1], (p - i0).unsqueeze(1))
+        self.last = (t_emb, out)
+        return out
+
+
+def _widths(model, pose_cn):
+    base = _as_int(_dig(model, ("model", "diffusion_model", "blocks", 0, "adaln_proj", "linear", "in_features")))
+    return base, _as_int(_dig(pose_cn, ("model", "control_blocks", 0, "adaln_proj", "linear", "in_features")))
+
+
 def install_pose_control(model, pose_cn, vae, hint_latent, latent_shape, strength, s_start, s_end):
     cls = _preset_patch_class()
     shape = tuple(int(x) for x in latent_shape)
@@ -2728,6 +2795,9 @@ def install_pose_control(model, pose_cn, vae, hint_latent, latent_shape, strengt
     patch.preset_shape = shape
     patch.control_latent = patch.preset_latent
     patch.control_latent_shape = shape
+    base_w, cn_w = _widths(model, pose_cn)
+    if base_w and cn_w and base_w != cn_w:
+        patch.bridge = TimeBridge(model.get_model_object("diffusion_model"), curve_table(cn_w))
     m = model.clone()
     patch.register(m)
     return m

@@ -164,18 +164,26 @@ def ambience(*texts):
     return next((phrase for pat, phrase in AMBIENT if re.search(pat, joined, re.I)), "")
 
 
+_MUSIC = re.compile(r"\b(?:music(?:al)?|songs?|sings?|singing|sang|radio|stereo|piano|guitar|violin|drums?|band|"
+                    r"orchestra|melod(?:y|ies|ic)|tunes?|humm(?:ed|ing)|hums? a|whistl(?:e|es|ed|ing)|jukebox|"
+                    r"concert|playlist)\b", re.I)
+NO_MUSIC = "There is no background music."
+
+
 def sound_line(beat, scene, speech):
+    quiet = "" if _MUSIC.search(f"{beat} {scene}") else NO_MUSIC
     if speech:
-        return "", False
+        return quiet, False
     amb = ambience(scene) or ambience(beat)
     if described(beat):
-        return (f"The only sounds are the ones this beat describes, with {amb} under them." if amb
-                else "The only sounds are the ones this beat describes."), True
+        line = (f"The only sounds are the ones this beat describes, with {amb} under them." if amb
+                else "The only sounds are the ones this beat describes.")
+        return f"{line} {quiet}".strip(), True
     heard = foley(beat)
     if not heard:
-        return "", False
+        return quiet, False
     heard += [amb] if amb else []
-    return f"The only sound{'s are' if len(heard) > 1 else ' is'} {_join(heard)}.", True
+    return f"The only sound{'s are' if len(heard) > 1 else ' is'} {_join(heard)}. {quiet}".strip(), True
 
 
 def held_open(item):

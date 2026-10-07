@@ -1518,37 +1518,73 @@ def _ns_cn(width):
                                                  control_blocks=[blk], init_stream=lambda *a: None))
 
 
+def test_time_bridge():
+    print("\n=== the controlnet's timestep on any model ===")
+    t = torch.linspace(0, 1, 4097)
+    base_curve = torch.stack([torch.sin(3 * t), torch.cos(2 * t), t ** 2, torch.sin(7 * t) * 0.3] * 4, dim=1)
+    cn_table = torch.stack([torch.linspace(0, 1, 1025) ** (k + 1) for k in range(8)], dim=1)
+    want = torch.tensor([0.0, 0.123, 0.5, 0.987, 1.0])
+    pos = want * 4096
+    i0 = pos.floor().long().clamp(max=4095)
+    rows = torch.lerp(base_curve[i0], base_curve[i0 + 1], (pos - i0).unsqueeze(1))
+    bridge = P.TimeBridge(SimpleNamespace(use_adaln_curves=True, adaln_t_table=base_curve), cn_table)
+    got = bridge(rows)
+    expect = torch.stack([cn_table[:, k].new_tensor([float(x) ** (k + 1) for x in want]) for k in range(8)], dim=1)
+    check("a 16-wide curve model's timestep is read back and given to the controlnet on its 8-wide curve",
+          tuple(got.shape) == (5, 8) and float((got - expect).abs().max()) < 2e-3, float((got - expect).abs().max()))
+    check("the same embedding within a step is bridged once", bridge(rows) is got)
+
+    class FakeTE(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.proj = torch.nn.Linear(8, 32)
+
+        def forward(self, tt):
+            f = torch.exp(-torch.arange(4, dtype=torch.float32) / 4)
+            a = tt.float()[:, None] * f[None] * 6
+            return self.proj(torch.cat([torch.cos(a), torch.sin(a)], dim=-1))
+    torch.manual_seed(0)
+    te = FakeTE()
+    bridge = P.TimeBridge(SimpleNamespace(time_embedder=te), cn_table)
+    got = bridge(te(want).detach())
+    check("a full-form model's timestep is read back through its own time embedder",
+          float((got - expect).abs().max()) < 5e-3, float((got - expect).abs().max()))
+
+
 def test_pose_status():
     print("\n=== setup check (pose_status) ===")
     saved = (P.dwpose_status, P._ensure_aux_path, P.dwpose_paths)
     try:
         P.dwpose_status = lambda: (True, "")
-        check("unwired: off, silently", P.pose_status(_ns_model(8), None, 1.0, False) == (False, ""))
-        check("strength 0: off, silently", P.pose_status(_ns_model(8), _ns_cn(8), 0.0, False) == (False, ""))
-        ok, note = P.pose_status(_ns_model(8), SimpleNamespace(model=SimpleNamespace()), 1.0, False)
+        check("unwired: off, silently", P.pose_status(_ns_model(8), None, 1.0) == (False, ""))
+        check("strength 0: off, silently", P.pose_status(_ns_model(8), _ns_cn(8), 0.0) == (False, ""))
+        ok, note = P.pose_status(_ns_model(8), SimpleNamespace(model=SimpleNamespace()), 1.0)
         check("not an H3 Fun patch: off with a note", not ok and "not a MiniMax H3 Fun" in note, note)
-        ok, note = P.pose_status(_ns_model(16), _ns_cn(8), 1.0, False)
-        check("16-wide base, 8-wide controlnet: off, naming both widths and the base it is for",
-              not ok and "16" in note and "8-wide" in note and "built for the 8-wide hybrid b25-49 base" in note,
-              note)
-        ok, note = P.pose_status(_ns_model(2688), _ns_cn(8), 1.0, False)
-        check("full-form 2688 base: off", not ok and "2688" in note, note)
-        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), 1.0, False)
+        curves = P.curve_table
+        P.curve_table = lambda width: None
+        ok, note = P.pose_status(_ns_model(16), _ns_cn(8), 1.0)
+        check("16-wide base and no 8-wide curve to bridge from: off, naming both widths and what to add",
+              not ok and "16" in note and "8-wide" in note and "hybrid b25-49 checkpoint" in note, note)
+        P.curve_table = lambda width: torch.zeros(1025, width)
+        ok, note = P.pose_status(_ns_model(16), _ns_cn(8), 1.0)
+        check("16-wide base with the hybrid's curve on disk: on, bridged", ok and "matched to the hybrid" in note, note)
+        ok, note = P.pose_status(_ns_model(2688), _ns_cn(8), 1.0)
+        check("full-form 2688 base with the curve on disk: on, bridged", ok and "matched to the hybrid" in note, note)
+        P.curve_table = curves
+        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), 1.0)
         check("8 = 8 and everything present: on, no note", ok and note == "", note)
         stub = SimpleNamespace(model=SimpleNamespace(injection_layers=(0,), init_stream=None))
-        ok, note = P.pose_status(SimpleNamespace(), stub, 1.0, False)
+        ok, note = P.pose_status(SimpleNamespace(), stub, 1.0)
         check("widths unreadable (stubs): cannot tell -- on, with a note", ok and "could not read" in note, note)
-        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), 1.0, True)
-        check("Hyperflow two-time on: off with a note", not ok and "Hyperflow" in note, note)
         P.dwpose_status = saved[0]
         P._ensure_aux_path = lambda: False
-        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), 1.0, False)
+        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), 1.0)
         check("aux not importable: off with a note", not ok and "custom_controlnet_aux" in note, note)
         P._ensure_aux_path = saved[1]
         fake = ("/nonexistent/ckpts/hr16/yolox-onnx/yolox_l.torchscript.pt",
                 "/nonexistent/ckpts/hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt")
         P.dwpose_paths = lambda: fake
-        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), 1.0, False)
+        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), 1.0)
         if _aux_ok():
             check("DWPose files missing: off, with both exact paths and the download",
                   not ok and fake[0] in note and fake[1] in note and "hf download" in note, note)
@@ -1560,20 +1596,20 @@ def test_pose_status():
         m = _ns_model(8)
         m.model_options = {"transformer_options": {"patches_replace": {"dit": {
             ("double_block", 0): _OtherPatch(previous=MiniMaxH3FunControlBlockPatch())}}}}
-        ok, note = P.pose_status(m, _ns_cn(8), 1.0, False)
+        ok, note = P.pose_status(m, _ns_cn(8), 1.0)
         check("a Fun block patch already on the model (even under another): off with a note",
               not ok and "already on the incoming model" in note, note)
         m.model_options = {"transformer_options": {"patches_replace": {"dit": {
             ("double_block", 0): _OtherPatch()}}}}
-        check("a non-Fun patch (VSA) alone does not count", P.pose_status(m, _ns_cn(8), 1.0, False)[0])
+        check("a non-Fun patch (VSA) alone does not count", P.pose_status(m, _ns_cn(8), 1.0)[0])
 
         class Boom:
             @property
             def model(self):
                 raise RuntimeError("boom")
-        ok, note = P.pose_status(Boom(), _ns_cn(8), 1.0, False)
+        ok, note = P.pose_status(Boom(), _ns_cn(8), 1.0)
         check("a model that raises on access: never raises, cannot tell", ok and "could not read" in note, note)
-        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), "x", False)
+        ok, note = P.pose_status(_ns_model(8), _ns_cn(8), "x")
         check("a nonsense strength: off, silently", (ok, note) == (False, ""))
     finally:
         P.dwpose_status, P._ensure_aux_path, P.dwpose_paths = saved
@@ -1765,6 +1801,7 @@ def main():
     test_blend_in()
     test_captor_arm_removed()
     test_sigma_window()
+    test_time_bridge()
     test_pose_status()
     test_encode_hint()
     test_install_pose_control()

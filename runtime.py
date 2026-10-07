@@ -460,69 +460,96 @@ def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent
     out["samples"] = samples
     return out
 
-LEVEL_POOL = 64
-
-
-def frame_levels(img):
-    x = img
-    if x.dim() == 4:
-        x = x[0]
-    if x.dim() != 3 or int(x.shape[-1]) < 3:
-        return None, None
-    if int(x.shape[0]) < 2 or int(x.shape[1]) < 2:
-        return None, None
-    x = x[..., :3].float().permute(2, 0, 1).unsqueeze(0)
-    p = torch.nn.functional.adaptive_avg_pool2d(x, LEVEL_POOL)[0].reshape(3, -1)
-    return p.mean(dim=1), p.std(dim=1)
-
-GRADE_GAIN_CAP = 0.12
-GRADE_OFFSET_CAP = 0.05
-GRADE_OWN_GAIN = 0.25
-GRADE_OWN_OFFSET = 0.10
-GRADE_MIN_SIGMA = 0.01
+GRADE_POOL = 256
+GRADE_POINTS = 33
+GRADE_LUT = 1024
+GRADE_DRIFT = (0.10, 0.05, 0.05)
+GRADE_JUMP = (0.15, 0.08, 0.08)
+GRADE_FLAT = 0.02
 GRADE_FLOOR = 1.0 / 255.0
+_YCC = torch.tensor([[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5], [0.5, -0.418688, -0.081312]])
+_RGB = torch.linalg.inv(_YCC)
+_MID = torch.tensor([0.0, 0.5, 0.5])
 
 
-def shot_grade(given, first, last, strength, own_change=False, pipe=None):
-    if strength is None or float(strength) <= 0:
+def _ycc(x):
+    return x @ _YCC.T.to(x) + _MID.to(x)
+
+
+def _rgb(y):
+    return (y - _MID.to(y)) @ _RGB.T.to(y)
+
+
+def tone(img):
+    x = img[0] if img.dim() == 4 else img
+    if x.dim() != 3 or int(x.shape[-1]) < 3 or min(int(x.shape[0]), int(x.shape[1])) < 2:
         return None
-    fm, fs = frame_levels(first)
-    lm, ls = frame_levels(last)
-    if fm is None or lm is None or float(fs.min()) < GRADE_MIN_SIGMA:
-        return None
-    zero = torch.zeros(3)
-    bg, bo = zero, zero
-    if given is not None:
-        gm, gs = frame_levels(given)
-        if gm is not None and float(gs.min()) >= GRADE_MIN_SIGMA:
-            ug, uo = zero, zero
-            if pipe is not None:
-                pm, ps = frame_levels(pipe[1])
-                if pm is not None and float(ps.min()) >= GRADE_MIN_SIGMA:
-                    ug, uo = torch.log(ls / ps), lm - pm
-            bg = (torch.log(fs / gs) - ug).clamp(-GRADE_GAIN_CAP, GRADE_GAIN_CAP)
-            bo = (fm - gm - uo).clamp(-GRADE_OFFSET_CAP, GRADE_OFFSET_CAP)
-    wg, wo = zero, zero
-    if not own_change and float(ls.min()) >= GRADE_MIN_SIGMA:
-        g, o = torch.log(ls / fs), lm - fm
-        if float(g.abs().max()) <= GRADE_OWN_GAIN and float(o.abs().max()) <= GRADE_OWN_OFFSET:
-            wg = g.clamp(-GRADE_GAIN_CAP, GRADE_GAIN_CAP)
-            wo = o.clamp(-GRADE_OFFSET_CAP, GRADE_OFFSET_CAP)
-    s = float(strength)
-    start = (-s * bg, -s * bo)
-    end = (-s * (bg + wg), -s * (bo + wo))
-    tiny = lambda gr: (float((torch.exp(gr[0]) - 1.0).abs().max()) < 1e-3
-                       and float(gr[1].abs().max()) < GRADE_FLOOR)
-    if tiny(start) and tiny(end):
-        return None
-    return start, end
+    x = x[..., :3].float().permute(2, 0, 1).unsqueeze(0)
+    x = torch.nn.functional.adaptive_avg_pool2d(x, GRADE_POOL)[0].permute(1, 2, 0).reshape(-1, 3)
+    return torch.quantile(_ycc(x).cpu(), torch.linspace(0, 1, GRADE_POINTS), dim=0).T
 
 
-def grade_frames(frames, start, end, chunk=16):
+def _remap(x, src, dst):
+    out = torch.empty_like(x)
+    for c in range(3):
+        s = src[c] + torch.arange(GRADE_POINTS, dtype=src.dtype) * 1e-6
+        v = x[..., c].contiguous()
+        i = torch.searchsorted(s, v).clamp(1, GRADE_POINTS - 1)
+        w = ((v - s[i - 1]) / (s[i] - s[i - 1])).clamp(0, 1)
+        out[..., c] = dst[c][i - 1] + w * (dst[c][i] - dst[c][i - 1]) + v - v.clamp(float(s[0]), float(s[-1]))
+    return out
+
+
+def _lut(src, dst):
+    return _remap(torch.linspace(0, 1, GRADE_LUT).view(-1, 1).expand(-1, 3).contiguous(), src, dst)
+
+
+def _flat(q):
+    return q is None or float(q[0][-2] - q[0][1]) < GRADE_FLAT
+
+
+def shot_grade(given, first, last):
+    if given is None:
+        return None
+    qg, qf, ql = tone(given), tone(first), tone(last)
+    if _flat(qg) or _flat(qf) or _flat(ql) or not bool(((qg - qf).abs().mean(dim=1) <= torch.tensor(GRADE_JUMP)).all()):
+        return None
+    end = qg if bool(((ql - qf).abs().mean(dim=1) <= torch.tensor(GRADE_DRIFT)).all()) else _remap(ql.T, qf, qg).T
+    if float((qg - qf).abs().max()) < GRADE_FLOOR and float((end - ql).abs().max()) < GRADE_FLOOR:
+        return None
+    return _lut(qf, qg), _lut(ql, end), end
+
+
+def grade_frames(frames, grade, chunk=16):
     n = int(frames.shape[0])
-    c = min(3, int(frames.shape[-1]))
-    if n == 0 or c == 0:
+    if n == 0 or int(frames.shape[-1]) < 3:
         return frames
+    dev = mm.get_torch_device() if torch.cuda.is_available() else frames.device
+    first, last = (t.to(dev) for t in grade[:2])
+    for a in range(0, n, max(1, int(chunk))):
+        x = _ycc(frames[a:a + chunk, ..., :3].to(dev, torch.float32))
+        k = int(x.shape[0])
+        t = (torch.arange(a, a + k, dtype=torch.float32, device=dev) / max(1, n - 1)).view(k, 1, 1)
+        lut = first.unsqueeze(0) * (1 - t) + last.unsqueeze(0) * t
+        pos = x.clamp(0, 1).reshape(k, -1, 3) * (GRADE_LUT - 1)
+        i0 = pos.floor().long().clamp(0, GRADE_LUT - 2)
+        lo, hi = torch.gather(lut, 1, i0), torch.gather(lut, 1, i0 + 1)
+        y = (lo + (pos - i0) * (hi - lo)).view_as(x)
+        frames[a:a + k, ..., :3] = _rgb(y).clamp(0.0, 1.0).to(frames.device, frames.dtype)
+    return frames
+
+
+def look(img):
+    q = tone(img)
+    return None if _flat(q) else (float(q[0][-2] - q[0][1]), float((q[1:] - 0.5).abs().mean()))
+
+
+def match_frame(frame, target):
+    q = tone(frame)
+    if _flat(q) or _flat(target):
+        return frame
+    lut = _lut(q, target)
+    return grade_frames(frame, (lut, lut))
     g0, o0 = (t[:c].float().to(frames.device) for t in start)
     g1, o1 = (t[:c].float().to(frames.device) for t in end)
     for a in range(0, n, max(1, int(chunk))):
