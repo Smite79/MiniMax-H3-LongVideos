@@ -50,9 +50,9 @@ def test_plan():
     shots = S.plan_shots(SCRIPT, 10.0, [IMG1, IMG2, None, None], False)
     check("six beats, six shots", len(shots) == 6, len(shots))
     p = [s["prompt"] for s in shots]
-    check("the scene leads every shot and each beat follows word for word",
+    check("the scene leads every shot and each beat follows word for word, its line in H3's speech tags",
           all(x.startswith("A dim cell with a cot.") for x in p) and "Mara sits on the cot." in p[0]
-          and "Dan says \"Quiet.\" Mara looks at him." in p[3], p[0])
+          and "Dan says <d>Quiet.</d> Mara looks at him." in p[3], p[3])
     check("no directive reaches a prompt",
           not any(k in x.lower() for x in p for k in ("hold:", "release:", "seconds:")) and "\ncut" not in p[4], p[4])
     check("nothing is held before anything goes on", [s["held"] for s in shots[:2]] == ["", ""])
@@ -340,6 +340,32 @@ def test_render():
           and "pose latch: Mara behind the back" in out[2], out[2])
 
 
+def test_speech():
+    print("\n=== every word of a line is spoken ===")
+    beat = "Dan grabs her arm. 'You aren't going anywhere tonight,' he says. Mara's eyes widen."
+    shot = S.plan_shots("A cell.\n\n" + beat, 5.0, [None] * 4, False)[0]
+    check("a line in single quotes is speech, and the apostrophes in aren't and Mara's are not quotes",
+          not shot["wordless"] and "<d>You aren't going anywhere tonight,</d> he says. Mara's eyes widen." in shot["prompt"]
+          and "Nobody speaks" not in shot["prompt"], shot["prompt"])
+    for line, want in (('Dan says "Get in."', 'Dan says <d>Get in.</d>'), ("Dan says “Get in.”", "Dan says <d>Get in.</d>"),
+                       ("Dan says ‘Don’t move.’", "Dan says <d>Don’t move.</d>"), ("Dan says <d>Get in.</d>", "Dan says <d>Get in.</d>")):
+        check(f"{line} reaches H3 inside its own speech tags", S.dialogue(line) == want, S.dialogue(line))
+    quiet = S.plan_shots("A cell.\n\nDan's hands shake. She doesn't look up.", 5.0, [None] * 4, False)[0]
+    check("apostrophes alone are not a line", quiet["wordless"] and "<d>" not in quiet["prompt"], quiet["prompt"])
+    long = "Dan says \"" + " ".join(["word"] * 40) + ".\""
+    shot = S.plan_shots("A cell.\n\n" + long, 5.0, [None] * 4, False)[0]
+    check("a line that needs more than one shot can hold gets the longest shot and says to split it",
+          shot["frames"] == S.rt.MAX_FRAMES and "split it across beats" in S.shot_line(shot), S.shot_line(shot))
+    ten = S.plan_shots("A cell.\n\nDan says \"one two three four five six seven eight nine ten.\"", 4.0, [None] * 4, False)[0]
+    check("a ten-word line gets about 6.5 seconds even when shot_seconds is 4",
+          ten["frames"] == S.rt.align_frame_count(round(6.5 * 24)) and "lengthened to fit its line" in S.shot_line(ten),
+          (ten["frames"], S.shot_line(ten)))
+    told = S.plan_shots("A cell.\n\nDan says \"one two three four five six seven eight nine ten.\"\nseconds: 3", 4.0,
+                        [None] * 4, False)[0]
+    check("seconds: is still obeyed, and info says the line needs more", told["frames"] == S.rt.align_frame_count(72)
+          and "needs more than its seconds" in S.shot_line(told), S.shot_line(told))
+
+
 def test_shot_length():
     print("\n=== shot length ===")
     script = ("A cell.\n\nMara sits on the cot.\n\nDan opens the door, walks in and sits down.\n\n"
@@ -349,11 +375,12 @@ def test_shot_length():
     twelve = S.rt.align_frame_count(288)
     beat = [s["frames"] for s in S.plan_shots(script, 15.0, [None] * 4, False, from_beat=True)]
     check("from the beat: one action, three actions, a spoken line, a restraint going on, an explicit length",
-          beat == [73, 175, 107, 124, twelve], beat)
+          beat == [73, 175, 158, 124, twelve], beat)
     capped = [s["frames"] for s in S.plan_shots(script, 5.0, [None] * 4, False, from_beat=True)]
-    check("shot_seconds caps every estimate and seconds: still wins", capped == [73, 124, 107, 124, twelve], capped)
+    check("shot_seconds caps every estimate except a spoken line's, and seconds: still wins",
+          capped == [73, 124, 158, 124, twelve], capped)
     fixed = [s["frames"] for s in S.plan_shots(script, 5.0, [None] * 4, False)]
-    check("fixed gives every shot shot_seconds", fixed == [124, 124, 124, 124, twelve], fixed)
+    check("fixed gives every shot shot_seconds, unless its line needs longer", fixed == [124, 124, 158, 124, twelve], fixed)
     check("a beat with nothing to stage gets one action's worth", S.shot_frames("Silence.", 362, False) == 73)
     out, _ = render(script, plan_only=True, seconds=15.0)
     fixed_out, _ = render(script, plan_only=True, seconds=15.0, shot_length="fixed")
@@ -592,7 +619,7 @@ def test_recovered_look_render():
 
 
 def test_pictures_by_checkpoint():
-    print("\n=== reference pictures only for checkpoints trained on them ===")
+    print("\n=== reference pictures on every checkpoint ===")
     graph = {"9": {"class_type": "H3LongVideos", "inputs": {"model": ["7", 0], "clip": ["2", 0]}},
              "7": {"class_type": "LoraLoader", "inputs": {"model": ["5", 0], "clip": ["2", 0], "lora_name": "hyperflow.safetensors"}},
              "5": {"class_type": "UNETLoader", "inputs": {"unet_name": "h3/10Eros_Max_H3_FL2VA-INT8-ConvRot-HQ.safetensors"}},
@@ -601,36 +628,41 @@ def test_pictures_by_checkpoint():
     check("the checkpoint is traced back through the LoRA loaders on the node's own model link",
           S.checkpoint_name(graph, "9") == "h3/10Eros_Max_H3_FL2VA-INT8-ConvRot-HQ.safetensors" and S.checkpoint_name({}, "9") == "")
     hybrid = dict(graph, **{"9": {"class_type": "H3LongVideos", "inputs": {"model": ["3", 0]}}})
-    check("only a ref2va checkpoint takes reference pictures; an unknown loader keeps them",
+    check("only a ref2va checkpoint takes pictures in every shot; an unknown loader is treated as one",
           S.takes_pictures("m", graph, "9")[0] is False and "10Eros_Max_H3_FL2VA" in S.takes_pictures("m", graph, "9")[1]
           and S.takes_pictures("m", hybrid, "9") == (True, "") and S.takes_pictures("m", None, None) == (True, ""))
     script = "A cell. Mara <Picture 1> waits. Dan <Picture 2> stands guard.\n\nMara paces.\n\nMara sits.\n\ncut\nA garden. Mara walks."
     out, calls = render(script, ref_image_1=IMG1, ref_image_2=IMG1, graph=graph, unique_id="9")
-    check("on an FL2VA checkpoint like 10Eros no shot gets a portrait or a recovered look, so nobody is drawn twice",
-          all(c["refs"] == [] for c in calls["cond"]) and all("<Picture 2>" not in c["prompt"] for c in calls["cond"])
-          and "not trained on reference pictures" in out[2], [len(c["refs"]) for c in calls["cond"]])
+    check("on an FL2VA checkpoint like 10Eros the pictures go in except where she is already in the opening frame",
+          [len(c["refs"]) for c in calls["cond"]] == [1, 0, 1] and "not trained on reference pictures" in out[2],
+          [len(c["refs"]) for c in calls["cond"]])
+    entry = "A cell. Mara <Picture 1> waits. Dan <Picture 2> is a guard.\n\nMara paces.\n\nDan walks in."
+    _, calls = render(entry, ref_image_1=IMG1, ref_image_2=IMG2, graph=graph, unique_id="9")
+    check("someone who walks into a continued shot still gets their picture, renumbered",
+          [len(c["refs"]) for c in calls["cond"]] == [1, 1] and abs(float(calls["cond"][1]["refs"][0].mean()) - 0.2) < 1e-6
+          and "Dan <Picture 1>" in calls["cond"][1]["prompt"] and "Mara <Picture" not in calls["cond"][1]["prompt"],
+          ([len(c["refs"]) for c in calls["cond"]], calls["cond"][1]["prompt"][:200]))
     out, calls = render(script, ref_image_1=IMG1, ref_image_2=IMG1, graph=hybrid, unique_id="9")
     check("on the hybrid fl2va_ref2va the portraits still go in", [len(c["refs"]) for c in calls["cond"]] == [1, 1, 1]
           and "not trained on reference pictures" not in out[2], [len(c["refs"]) for c in calls["cond"]])
 
 
 def test_fast_h3_pictures():
-    print("\n=== FastH3 gets only what it was distilled on ===")
+    print("\n=== FastH3 gets pictures only where nobody can be drawn twice ===")
     script = "A cell. Mara <Picture 1> waits. Dan <Picture 2> stands guard.\n\nMara paces.\n\nMara sits.\n\ncut\nA garden. Mara walks."
     out, calls = render(script, fast=True, ref_image_1=IMG1, ref_image_2=IMG1)
-    check("no reference pictures and no picture tags for them, even after a cut",
-          len(calls["cond"]) == 3 and all(c["refs"] == [] for c in calls["cond"])
-          and all("<Picture 2>" not in c["prompt"] and "Mara <Picture" not in c["prompt"] for c in calls["cond"]),
-          [(len(c["refs"]), c["prompt"][:120]) for c in calls["cond"]])
+    check("her portrait opens the video, is left out while she is in the opening frame, and her look returns after the cut",
+          [len(c["refs"]) for c in calls["cond"]] == [1, 0, 1] and "Mara <Picture" not in calls["cond"][1]["prompt"],
+          [len(c["refs"]) for c in calls["cond"]])
     check("the opening frame still carries the shot on as <Picture 1>",
           calls["cond"][1]["handoff"] is not None and "<Picture 1> is the frame this shot opens on" in calls["cond"][1]["prompt"]
           and calls["cond"][2]["handoff"] is None, [c["handoff"] is None for c in calls["cond"]])
-    check("info says why the pictures were left out", "distilled without reference pictures" in out[2], out[2])
+    check("info says when pictures are left out", "distilled without reference pictures" in out[2]
+          and "already in" in out[2], out[2])
     _, base = render(script, ref_image_1=IMG1, ref_image_2=IMG1)
-    check("other checkpoints still get her portrait, and her current look after the cut",
+    check("other checkpoints still get her portrait in every shot, and her current look after the cut",
           [len(c["refs"]) for c in base["cond"]] == [1, 1, 1] and float(base["cond"][2]["refs"][0].mean()) != 0.1,
           [len(c["refs"]) for c in base["cond"]])
-
 
 def test_memory():
     print("\n=== running out of VRAM ===")
@@ -736,6 +768,60 @@ def test_grading():
     hand = rt.match_frame(burn(orig, 0.3).unsqueeze(0).clone(), rt.tone(orig))
     check("the handing-off frame can be put back on the shot's look on its own",
           float((rt.tone(hand) - rt.tone(orig)).abs().mean()) < 0.004)
+
+
+def test_lora_refit():
+    print("\n=== LoRA timestep layers re-fitted to the loaded checkpoint ===")
+    from comfy.weight_adapter.lora import LoRAAdapter
+    P = S.pose
+    t = torch.linspace(0, 1, 4097)
+    eros = torch.stack([torch.sin((k + 1) * 1.7 * t) * (0.5 + 0.1 * k) for k in range(16)], dim=1)
+    hyb = eros @ torch.linspace(-1, 1, 128).reshape(16, 8) + torch.linspace(0.2, 0.9, 8)
+
+    class Patcher:
+        def __init__(self, patches):
+            self.patches, self.patches_uuid = patches, 0
+            lin = SimpleNamespace(in_features=16)
+            self.dm = SimpleNamespace(use_adaln_curves=True, adaln_t_table=eros,
+                                      blocks=[SimpleNamespace(adaln_proj=SimpleNamespace(linear=lin))])
+
+        def get_model_object(self, name):
+            return self.dm
+
+        def clone(self):
+            return Patcher({k: list(v) for k, v in self.patches.items()})
+    torch.manual_seed(0)
+    up, down, db = torch.randn(64, 4), torch.randn(4, 8), torch.randn(64) * 0.1
+    key = "diffusion_model.blocks.0.adaln_proj.linear.weight"
+    bias = key[:-6] + "bias"
+    model = Patcher({key: [(1.0, LoRAAdapter({}, (up, down, 4.0, None, None, None)), 1.0, None, None)],
+                     bias: [(1.0, ("diff", (db,)), 1.0, None, None)]})
+    curves = S.pose.curve_table
+    P.curve_table = lambda width: hyb if width == 8 else None
+    try:
+        out, note = S.pose.bridge_lora_timesteps(model)
+    finally:
+        P.curve_table = curves
+    pts = torch.rand(500)
+    rows = lambda table: S.pose._curve_rows(table, pts)
+    want = rows(hyb) @ down.T @ up.T + db
+    got = sum(rows(eros) @ e[1].weights[1].T @ e[1].weights[0].float().T * (1.0 if e[1].weights[2] is None else
+                                                                          float(e[1].weights[2]) / e[1].weights[1].shape[0])
+              for e in out.patches[key]) + sum(b[1][1][0] for b in out.patches[bias])
+    check("an 8-wide LoRA's timestep change is re-fitted onto a 16-wide checkpoint and lands where it was meant to",
+          float((got - want).norm() / want.norm()) < 1e-3 and "re-fitted" in note, (float((got - want).norm() / want.norm()), note))
+    check("the incoming model's own patches are left untouched", model.patches[key][0][1].weights[1] is down
+          and model.patches[bias][0][1][1][0] is db and out is not model)
+    same = Patcher({key: [(1.0, LoRAAdapter({}, (up, torch.randn(4, 16), 4.0, None, None, None)), 1.0, None, None)]})
+    check("a LoRA built for this checkpoint's width is left alone", S.pose.bridge_lora_timesteps(same) == (same, ""))
+    P.curve_table = lambda width: None
+    saved = S.pose.full_curve
+    S.pose.full_curve = lambda: None
+    try:
+        _, note = S.pose.bridge_lora_timesteps(model)
+    finally:
+        S.pose.curve_table, S.pose.full_curve = curves, saved
+    check("without the checkpoint it was built for, info says so", "could not be re-fitted" in note, note)
 
 
 def test_reading():
@@ -1144,6 +1230,7 @@ def main():
     test_helpers()
     test_render()
     test_shot_length()
+    test_speech()
     test_presence()
     test_beats_decide_presence()
     test_continuity_lines()
@@ -1162,6 +1249,7 @@ def main():
     test_pictures_by_checkpoint()
     test_memory()
     test_grading()
+    test_lora_refit()
     test_scene_inputs()
     test_upscale_module()
     test_upscale_render()

@@ -2782,6 +2782,123 @@ class TimeBridge:
         return out
 
 
+def full_curve():
+    if "full" not in _CURVES:
+        _CURVES["full"] = None
+        try:
+            import folder_paths
+            from safetensors import safe_open
+            for name in folder_paths.get_filename_list("diffusion_models"):
+                path = folder_paths.get_full_path("diffusion_models", name)
+                if not str(path).endswith(".safetensors"):
+                    continue
+                with safe_open(path, "pt", device="cpu") as f:
+                    keys = set(f.keys())
+                    pre = next((k[:-len("time_embedder.proj_in.weight")] for k in keys
+                                if k.endswith("time_embedder.proj_in.weight")), None)
+                    if pre is None:
+                        continue
+                    te = {n: f.get_tensor(pre + "time_embedder." + n).float()
+                          for n in ("proj_in.weight", "proj_in.bias", "proj_out.weight", "proj_out.bias")}
+                _CURVES["full"] = te
+                break
+        except Exception:
+            pass
+    return _CURVES["full"]
+
+
+def _te_rows(ts, te):
+    half = int(te["proj_in.weight"].shape[1]) // 2
+    freqs = torch.exp(-math.log(10000.0) * torch.arange(half, dtype=torch.float32) / half)
+    a = ts[:, None] * freqs[None]
+    h = torch.nn.functional.silu(torch.cat([torch.cos(a), torch.sin(a)], -1) @ te["proj_in.weight"].T + te["proj_in.bias"])
+    return torch.nn.functional.silu(h @ te["proj_out.weight"].T + te["proj_out.bias"])
+
+
+def _curve_rows(table, ts):
+    p = ts.clamp(0.0, 1.0) * (table.shape[0] - 1)
+    i0 = p.floor().long().clamp(max=table.shape[0] - 2)
+    return torch.lerp(table[i0], table[i0 + 1], (p - i0).unsqueeze(1))
+
+
+def _source_rows(width, ts):
+    table = curve_table(width)
+    if table is not None:
+        return _curve_rows(table, ts)
+    te = full_curve()
+    if te is not None and int(te["proj_out.weight"].shape[0]) == width:
+        return _te_rows(ts, te)
+    return None
+
+
+def _target_rows(dm, ts):
+    if getattr(dm, "use_adaln_curves", False):
+        return _curve_rows(dm.adaln_t_table.detach().float().cpu(), ts)
+    te = dm.time_embedder
+    with torch.no_grad():
+        out = type(te).forward(te, ts.to(next(te.parameters()).device))
+    return torch.nn.functional.silu(out.detach().float().cpu())
+
+
+def bridge_lora_timesteps(model):
+    try:
+        from comfy.weight_adapter.lora import LoRAAdapter
+        dm = model.get_model_object("diffusion_model")
+        width = int(dm.blocks[0].adaln_proj.linear.in_features)
+        keys = [k for k in getattr(model, "patches", {}) if k.endswith("adaln_proj.linear.weight")]
+    except Exception:
+        return model, ""
+    odd = [k for k in keys for e in model.patches[k] if getattr(e[1], "name", "") == "lora"
+           and int(e[1].weights[1].shape[-1]) != width]
+    if not odd:
+        return model, ""
+    m = model.clone()
+    ts = torch.linspace(0.0, 1.0, BRIDGE_POINTS)
+    try:
+        solve = torch.linalg.pinv(torch.cat([_target_rows(dm, ts), torch.ones(BRIDGE_POINTS, 1)], 1))
+    except Exception as e:
+        return model, f"LoRA timestep layers built for another checkpoint could not be re-fitted ({type(e).__name__}: {e})"
+    fixed, missing = 0, set()
+    for key in dict.fromkeys(odd):
+        bias_key = key[:-len("weight")] + "bias"
+        bias = list(m.patches.get(bias_key, []))
+        out = []
+        for entry in m.patches[key]:
+            p = entry[1]
+            up, down, alpha, mid, dora, reshape = (list(getattr(p, "weights", ())) + [None] * 6)[:6]
+            src = int(down.shape[-1]) if getattr(p, "name", "") == "lora" else width
+            rows_src = _source_rows(src, ts) if src != width and mid is None and dora is None and reshape is None else None
+            if src == width or rows_src is None:
+                missing |= {src} if src != width else set()
+                out.append(entry)
+                continue
+            pair = next((b for b in bias if isinstance(b[1], tuple) and b[1][0] == "diff" and b[0] == entry[0]
+                         and tuple(b[1][1][0].shape) == (int(up.shape[0]),)), None)
+            db = pair[1][1][0].float() if pair is not None else None
+            bias = [b for b in bias if b is not pair]
+            q = solve @ rows_src
+            g = solve.sum(dim=1)
+            scale = float(alpha) / int(down.shape[0]) if alpha is not None else 1.0
+            low = down.float() @ q[:width].T
+            out.append((entry[0], LoRAAdapter(p.loaded_keys, (up, low, alpha, None, None, None)),) + tuple(entry[2:]))
+            shift = scale * (up.float() @ (down.float() @ q[width]))
+            if db is not None:
+                out.append((entry[0], LoRAAdapter(p.loaded_keys, (db[:, None], g[:width][None, :], None, None, None, None)),)
+                           + tuple(entry[2:]))
+                shift = shift + db * float(g[width])
+            bias.append((entry[0], ("diff", (shift,))) + tuple(entry[2:]))
+            fixed += 1
+        m.patches[key] = out
+        m.patches[bias_key] = bias
+    import uuid
+    m.patches_uuid = uuid.uuid4()
+    note = (f"{fixed} LoRA timestep layer(s) built for a different checkpoint were re-fitted to this one" if fixed else "")
+    if missing:
+        note += ("; " if note else "") + (f"LoRA timestep layers built for a {'/'.join(map(str, sorted(missing)))}-wide "
+                                          f"checkpoint could not be re-fitted: keep that checkpoint in models/diffusion_models")
+    return m, note
+
+
 def _widths(model, pose_cn):
     base = _as_int(_dig(model, ("model", "diffusion_model", "blocks", 0, "adaln_proj", "linear", "in_features")))
     return base, _as_int(_dig(pose_cn, ("model", "control_blocks", 0, "adaln_proj", "linear", "in_features")))

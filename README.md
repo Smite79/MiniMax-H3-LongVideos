@@ -215,19 +215,25 @@ Once a person is held, their own picture (written right after their name, as in
 without the cuffs or the tape pulls them back off. After a `cut` the picture comes back,
 unless a later frame of them stands in for it.
 
-Only a checkpoint trained on reference pictures gets them: the hybrid b25-49
-(`fl2va_ref2va`), or any checkpoint whose file name says `ref2va`. FL2VA checkpoints, such
-as the base `minimax_h3_fl2va` and 10Eros, and FastH3 were never trained on them and draw
-each picture in as another person, so one character can turn up twice in a shot. The node
-reads which checkpoint is loaded from its own `model` link and leaves the pictures, and
-the recovered looks after a `cut`, out for those, and says so in `info`. People then carry
-over through each shot's opening frame, and after a `cut` they are drawn from their
-descriptions.
+The pictures work on every checkpoint and LoRA. The hybrid b25-49 (`fl2va_ref2va`) and any
+checkpoint whose file name says `ref2va` were trained on them and get them in every shot.
+FL2VA checkpoints, such as the base `minimax_h3_fl2va` and 10Eros, and FastH3 were not:
+when a person is already in the frame a shot opens on and their picture comes in as well,
+they draw that person twice. So on those, a person's picture is left out of a shot that
+continues from a frame they are in, and that frame carries their look. The first shot,
+the shots after a `cut`, and anyone walking into a continued shot still get their
+picture. The node reads which checkpoint is loaded from its own `model` link.
 
 ### Sound
 
-- **Speech:** a shot with a quoted line (`"…"` or `<d>…</d>`) speaks. Its first half
-  second is held quiet so the line does not start on the cut.
+- **Speech:** a shot with a quoted line (`"…"`, `'…'`, `“…”`, `‘…’` or `<d>…</d>`)
+  speaks. Every line reaches H3 inside `<d>…</d>`, the speech tags it was trained on,
+  with the words exactly as written. Its first half second is held quiet so the line
+  does not start on the cut.
+- **Room to speak:** a shot gets about 2 words a second plus 1.5 seconds for its line,
+  even past `shot_seconds`, up to H3's 15 seconds, so words are not rushed or cut off.
+  A `seconds:` line still wins. A line too long for one shot is flagged in `info`: split
+  it across beats.
 - **No talking without a line:** every shot without a quoted line renders its picture
   with the audio held silent and says that nobody speaks and every mouth stays closed,
   so nobody's mouth moves to mumbling. The closed-mouth wording is left out when the beat
@@ -316,9 +322,8 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 - **FastH3**, detected from the model, runs at shift 10/3 with the VSA attention it was
   trained on (keep 10%, from 20% of the schedule). If torch is on the `cudaMallocAsync`
   allocator, restart ComfyUI with `--disable-cuda-malloc`.
-  - FastH3 was distilled for text and first-frame shots only, so it gets no reference
-    pictures (see Reference pictures). For faces that match your pictures after a cut,
-    use the hybrid checkpoint.
+  - FastH3 was distilled for text and first-frame shots only, so it gets reference
+    pictures only where nobody can be drawn twice (see Reference pictures).
 - **Hyperflow**, detected from the LoRA's metadata or its file name, samples every shot
   on its own 8-step grid (shift 12/3, `euler`). Leave `sigmas` unwired.
   - Its endpoint conditioning is added back from `hyperflow_endpoint_v1.0.safetensors`
@@ -368,6 +373,11 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 
 - No negative prompt and no cfg setting: H3 runs at cfg 1.
 - Denoise is fixed at 1.0: partial denoise desyncs the joint audio/video schedule.
+- A LoRA whose timestep layers were built for another checkpoint's time curve, such as
+  one made for an 8-wide hybrid and used on 10Eros or the full FL2VA, cannot attach
+  those layers as it is, and the sampler loses part of its timing, which shows as faded
+  beats. The node re-fits them onto the loaded checkpoint's curve, which needs the
+  checkpoint the LoRA was built for in `models/diffusion_models`; `info` says how many.
 - ComfyUI sizes H3's working memory at a fraction of what a shot uses (a block needs
   about 105 KB per token), so on long shots it keeps too much of the model in VRAM and
   runs out. The node tells it 120 KB per token instead, so the rest of the model streams

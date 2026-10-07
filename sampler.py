@@ -53,7 +53,8 @@ HANDOFF_LATENT_TAIL = 8
 SHOT_LENGTHS = ["from the beat", "fixed"]
 BEAT_BASE_SEC = 0.8
 SECONDS_PER_ACTION = 2.2
-WORDS_PER_SEC = 2.5
+WORDS_PER_SEC = 2.0
+SPEECH_PAD = 1.5
 MIN_AUTO_FRAMES = 73
 
 H3_TOKEN_BYTES = 120 * 1024
@@ -73,7 +74,9 @@ HYPERFLOW_TE_KEY = "diffusion_model.time_embedder.proj_in.weight"
 _HYPERFLOW_DELTAS = {}
 
 _PICTURE = re.compile(r"(\(\s*)?<\s*picture[\s_\-]*(\d+)\s*>(\s*\))?", re.I)
-_SPEECH = re.compile(r"\"[^\"]*\"|“[^”]*”|<\s*d\s*>.*?<\s*/\s*d\s*>", re.S | re.I)
+_SPEECH = re.compile(r"\"[^\"]*\"|“[^”]*”|<\s*d\s*>.*?<\s*/\s*d\s*>"
+                     r"|(?<![\w'’])['‘](?=[^\s'‘’])(?:[^'‘’\n]|(?<=\w)['’](?=\w))+?(?<=[^\s'‘’])['’](?![\w'’])", re.S | re.I)
+_TAGS = re.compile(r"^\s*(?:<\s*d\s*>|[\"“'‘])|(?:<\s*/\s*d\s*>|[\"”'’])\s*$", re.I)
 _DIRECTIVE = re.compile(r"^\s*(hold|release|remove|wear|seconds|exit)\s*:\s*(.*?)\s*$", re.I)
 _CUT = re.compile(r"^\s*cut\s*:?\s*$", re.I)
 _INLINE = re.compile(r"(?<=[.!?\"”])\s+(?=(?:hold|release|remove|wear|seconds|exit)\s*:)", re.I)
@@ -138,11 +141,23 @@ def align_nearest(n):
     return min(rt.MAX_FRAMES, lo if (n - lo) <= (lo + 17 - n) else lo + 17)
 
 
+def spoken_words(text):
+    return sum(len(_TAGS.sub("", q).split()) for q in _SPEECH.findall(text or ""))
+
+
+def dialogue(text):
+    return _SPEECH.sub(lambda m: f"<d>{_TAGS.sub('', m.group(0)).strip()}</d>", text)
+
+
+def line_seconds(text):
+    words = spoken_words(text)
+    return words / WORDS_PER_SEC + SPEECH_PAD if words else 0.0
+
+
 def beat_seconds(text):
-    spoken = sum(len(re.sub(r"</?\s*d\s*>|[\"“”]", " ", q).split()) for q in _SPEECH.findall(text))
     clauses = [p for p in _CLAUSE.split(_SPEECH.sub(" ", text)) if p and len(p.split()) >= 2]
     action = BEAT_BASE_SEC + SECONDS_PER_ACTION * len(clauses) if clauses else 0.0
-    return max(action, spoken / WORDS_PER_SEC + 1.0 if spoken else 0.0)
+    return max(action, line_seconds(text))
 
 
 def shot_frames(text, ceiling, applying):
@@ -428,7 +443,6 @@ def with_reading(para, people, gender, held):
 
 
 def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor="", from_beat=False, pictures=True):
-    refs = refs if pictures else [None] * len(refs)
     scene, paras = parse_script(prompt, all_beats=bool((anchor or "").strip()))
     setting = [parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
     lead = setting + [parse_paragraph(p) for p in paragraphs(memory)]
@@ -457,15 +471,16 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         during = {k: [it for it in v if it not in released.get(k, [])] for k, v in start.items()}
         during = {k: v for k, v in during.items() if v}
         keyed = (i > 0 and not para["cut"]) or (i == 0 and has_first_frame)
+        opening = (present if i > 0 else around) if keyed and not pictures else []
         named = list(dict.fromkeys(_mentions(para["text"], names) + [who for who, _ in para["hold"]]
                                    + referred(para["text"], names, gender, around)))
         cast = (named or present) if para["cut"] else list(dict.fromkeys(present + named))
         present = [n for n in cast if n not in leavers(para["text"], names) + para["exit"]]
         absent = [n for n in names if n not in cast]
-        recover = [n for n in cast if n in solo_seen] if pictures and not keyed else []
+        recover = [n for n in cast if n in solo_seen] if not keyed else []
         speech = bool(_SPEECH.search(para["text"]))
-        text = "\n\n".join(x for x in (without_absent(dressed, absent, names), para["text"]) if x)
-        drop = absent + (list(during) if keyed else []) + recover
+        text = "\n\n".join(x for x in (without_absent(dressed, absent, names), dialogue(para["text"])) if x)
+        drop = absent + (list(during) if keyed else []) + recover + opening
         text, shot_refs = shot_pictures(text, refs, drop)
         sound_text, sounded = snd.sound_line(para["text"], scene_text, speech)
         notes = held_notes({who: items for who, items in during.items() if who in cast or who not in names})
@@ -490,11 +505,16 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         frames = rt.align_frame_count(round((para["seconds"] or shot_seconds) * rt.H3_FPS))
         if from_beat and not para["seconds"]:
             frames = shot_frames(para["text"], frames, bool(added))
+        talk = round(line_seconds(para["text"]) * rt.H3_FPS)
+        fit = "" if talk <= frames else ("its line is too long for one shot, so split it across beats" if talk > rt.MAX_FRAMES
+                                         else "lengthened to fit its line" if not para["seconds"] else
+                                         "its line needs more than its seconds: line gives it")
+        frames = rt.align_frame_count(talk) if talk > frames and not para["seconds"] else frames
         bound = pose_plan(during, released, added)
         latch = any(f["latch_limbs"] for f in bound.values())
         solo = present[0] if len(present) == 1 and present[0] in cast else ""
         solo_seen |= {solo} if solo else set()
-        shots.append({"n": i + 1, "prompt": text, "refs": shot_refs, "frames": frames, "keyed": keyed,
+        shots.append({"n": i + 1, "prompt": text, "refs": shot_refs, "frames": frames, "keyed": keyed, "fit": fit,
                       "cut": para["cut"], "wordless": not speech, "sounded": sounded, "held": held_line(during),
                       "cast": cast, "solo": solo, "recover": recover, "bound": bound,
                       "added": held_line(added), "released": held_line(released),
@@ -823,6 +843,9 @@ def prepare_model(model, steps, sampler_name, scheduler, sigmas, shift_video, sh
         steps, sampler_name = len(sigmas) - 1, HYPERFLOW_SAMPLER
         notes.append(f"Hyperflow ({hyper['source']}): {steps}-step grid, shift {shift_video:g}/{shift_audio:g}, {sampler_name}")
     model = set_shift(model, shift_video, shift_audio)
+    if pose is not None:
+        model, note = pose.bridge_lora_timesteps(model)
+        notes += [note] if note else []
     model.add_wrapper_with_key(pe.WrappersMP.PREPARE_SAMPLING, "h3_longvideos_activations", reserve_activations)
     if grid:
         model, _, note = hyperflow_two_time(model, hyper)
@@ -934,7 +957,7 @@ def draft_size(w, h):
 
 
 def shot_line(shot):
-    bits = [f"shot {shot['n']}: {shot['frames']} frames"]
+    bits = [f"shot {shot['n']}: {shot['frames']} frames"] + ([shot["fit"]] if shot.get("fit") else [])
     if shot["cut"]:
         bits.append("cut")
     if shot["cast"]:
@@ -1028,9 +1051,8 @@ class H3LongVideos:
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
         info = [f"{w}x{h}, {len(shots)} shots"]
         if not refs_ok and any(r is not None for r in pictures):
-            info.append(f"{why}, so it draws reference pictures in as extra people: ref_image_1-4 and recovered looks "
-                        f"are left out, people carry over through each shot's opening frame, and after a cut they are "
-                        f"drawn from their descriptions")
+            info.append(f"{why}, so a person's picture is left out of a shot that opens on a frame they are already "
+                        f"in, which keeps them from being drawn twice; everywhere else the pictures go in")
         if legacy:
             info.append("ignored inputs from an older version of this node: " + ", ".join(sorted(legacy)))
         unread = [u for s in shots for u in s["unread"]]
