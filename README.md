@@ -113,8 +113,11 @@ coming off (*Dan pulls the tape off*, *Dan unlocks the cuffs*).
   *peels the tape off her hips*). Mentioning it, or cutting more tape, does not count.
   When more than one piece could be meant, the sentence is listed in `info` instead.
 - Each shot's line in `info` says what goes on, what is held, and what comes off.
-- Tape or rope around the hips or waist, or between the legs, is carried as you wrote
-  it and gets no pose; legs tied together count as the ankles.
+- Tape, rope or chain wrapped around the body, torso, chest or arms to the sides, or
+  around the hips, waist or between the legs, is carried as wound all the way around,
+  front and back, so later shots do not shrink it to strips on the front. These wraps
+  get no pose. A wrap around her with no body part named counts as a torso wrap. Legs
+  tied together count as the ankles.
 
 ### Clothing
 

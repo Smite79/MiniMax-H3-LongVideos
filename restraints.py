@@ -17,7 +17,11 @@ KINDS = (
     ("blindfold", r"blindfold", r"blindfold(?:s|ed|ing)", "eyes", "blindfold"),
     ("collar", r"collar", r"collar(?:s|ed)", "neck", "collar"),
 )
+_OWN = r"(?:her|his|their|[A-Z][a-z]+['’]s)"
 PARTS = (("hips", r"hips?|waist|crotch|groin|pelvis|between\s+(?:her|his|their|[A-Z][a-z]+['’]s)\s+(?:legs|thighs)"),
+         ("torso", rf"(?:around|across|over|about|off|from)\s+{_OWN}\s+(?:(?:entire|whole|upper)\s+)?(?:body|torso|chest|breasts?|"
+                   rf"bust|stomach|belly|midriff|ribs|middle)(?:\s+and\s+(?:{_OWN}\s+)?arms)?|(?:pinn(?:ing|ed)|pins?)\s+{_OWN}\s+arms(?:\s+(?:to|against|at)\s+"
+                   rf"{_OWN}\s+sides)?|arms\s+(?:to|against|at)\s+{_OWN}\s+sides"),
          ("wrists", r"wrists?|hands|arms"), ("ankles", r"ankles?|feet|legs|knees"), ("mouth", r"mouth|lips|face|cheeks|jaw"),
          ("eyes", r"eyes"), ("neck", r"neck|throat"))
 APPLY = (r"puts?|putting|snaps?|snapped|locks?|locked|locking|clicks?|clicked|fastens?|fastened|clamps?|clamped|slaps?|"
@@ -41,6 +45,8 @@ _PART = r"mouth|lips|eyes|neck|wrists|hands|arms|ankles|feet|hips|waist|legs"
 _WHO = r"(?P<who>her|his|their|(?-i:[A-Z])[a-z]+(?=['’]s))(?:['’]s)?"
 _BIT = (r"(?:a|an|the|another|one|two|three|more)\s+(?:\w+\s+)?(?:strip|piece|length|band|loop|coil|section|layer|"
         r"turn)s?")
+WRAPS = ("duct tape", "rope", "chains")
+_AROUND = re.compile(r"\b(?:around|about)\s+(?:her|him|them|(?-i:[A-Z])[a-z]+)\b(?!['’])", re.I)
 _SEX = {"her": "f", "she": "f", "him": "m", "his": "m", "he": "m"}
 _AUX = re.compile(r"\b(?:is|are|was|were|gets?|got|been|being|remains?|stays?|still)\s+(?:\w+ly\s+)?$", re.I)
 _FEMALE = r"woman|girl|lady|wife|mother|sister|daughter"
@@ -108,8 +114,12 @@ def parts_in(text):
 def phrase(kind, part, pos, poss, anchor, scope=""):
     if part == "hips":
         word = "waist" if re.search(r"\bwaist\b", scope, re.I) else "hips"
-        around = f"around {poss} {word}" + (f" and between {poss} legs" if re.search(r"\bbetween\b", scope, re.I) else "")
-        return f"{'duct tape' if kind == 'duct tape' else kind} {around}"
+        around = f"wound all the way around {poss} {word}, front and back" + (
+            f", and between {poss} legs" if re.search(r"\bbetween\b", scope, re.I) else "")
+        return f"{kind} {around}"
+    if part == "torso":
+        pin = f", pinning {poss} arms to {poss} sides" if re.search(r"\barms\b", scope, re.I) else ""
+        return f"{kind} wound all the way around {poss} torso, front and back{pin}"
     tail = (f" {pos}" if pos and part == "wrists" else "") + (f" {anchor}" if anchor else "")
     if kind == "handcuffs":
         return (f"handcuffs {pos}" if pos else f"handcuffs on {poss} {part}") + (f" {anchor}" if anchor else "")
@@ -224,7 +234,8 @@ def read(text, people, gender, held):
                                       sentence[span[0]:] if mode in ("state", "it") else after)[0]
                 already = passive and _described(mode, m, lead, before, after, verb)
                 known = owner(held.get(who, []) + holds.get(who, [])) or {"f": "her", "m": "his"}.get(gender.get(who), "")
-                for part, rx, spot in parts_in(scope) or [(default, dict(PARTS)[default], "")]:
+                fallback = ("torso" if kind in WRAPS and _AROUND.search(scope) else default)
+                for part, rx, spot in parts_in(scope) or [(fallback, dict(PARTS)[fallback], "")]:
                     have = held.get(who, []) + holds.get(who, [])
                     if any(key in h.lower() and (part in h.lower() or kind == "handcuffs") for h in have):
                         continue

@@ -873,19 +873,41 @@ def test_hips():
     read = lambda t: S.rst.read(t, people, gender, {})[0]
     check("tape around the hips and between the legs is its own part, never the ankles",
           read("Dan wraps duct tape around her hips and between her legs.")
-          == {"Crystal": ["duct tape around her hips and between her legs"]}
+          == {"Crystal": ["duct tape wound all the way around her hips, front and back, and between her legs"]}
           and read("Crystal: a slim woman with duct tape wound around her waist and between her legs.")
-          == {"Crystal": ["duct tape around her waist and between her legs"]})
+          == {"Crystal": ["duct tape wound all the way around her waist, front and back, and between her legs"]})
     check("legs tied together are still the ankles, and a wrist position at the waist stays a position",
           read("Dan ties her legs together.") == {"Crystal": ["rope around her ankles"]}
           and read("Dan ties her wrists at her waist.") == {"Crystal": ["rope around her wrists at her waist"]})
     check("tape around the hips gets no pose", S.limb_facts("duct tape around her hips and between her legs")[:2] == ("", ""))
+    wraps = {"Dan wraps duct tape around her entire body.":
+             ["duct tape wound all the way around her torso, front and back"],
+             "Dan wraps duct tape around her torso, pinning her arms to her sides.":
+             ["duct tape wound all the way around her torso, front and back, pinning her arms to her sides"],
+             "Dan winds duct tape around her chest and arms.":
+             ["duct tape wound all the way around her torso, front and back, pinning her arms to her sides"],
+             "Dan wraps tape around her several times.":
+             ["duct tape wound all the way around her torso, front and back"],
+             "Dan ties rope around her chest.": ["rope wound all the way around her torso, front and back"]}
+    got = {t: read(t).get("Crystal") for t in wraps}
+    check("a wrap around her body, torso or chest is a torso wrap that goes all the way round, never mouth or wrist tape",
+          got == wraps, {t: g for t, g in got.items() if g != wraps[t]})
+    check("her body or stomach mentioned in passing is not a wrap",
+          read("Dan tapes her ankles as she lies on her stomach.") == {"Crystal": ["duct tape around her ankles"]}
+          and read("Dan tapes her wrists, her chest heaving.") == {"Crystal": ["duct tape around her wrists"]})
+    torso = wraps["Dan wraps duct tape around her entire body."][0]
+    held = {"Crystal": [torso, "duct tape over her mouth"]}
+    check("cutting the tape off her body takes the wrap off and leaves the mouth tape",
+          S.rst.read("Dan cuts the tape off her body.", ["Crystal", "Dan"], {"Crystal": "f", "Dan": "m"}, held)[1]
+          == {"Crystal": [torso]})
+    check("a torso wrap gets no pose", S.limb_facts(wraps["Dan winds duct tape around her chest and arms."][0])[:2] == ("", ""))
     memory = "Dan: a tall man.\nCrystal: a slim woman with duct tape wound around her hips and between her legs."
     shots = S.plan_shots("A bedroom. Dan stands by the bed.\n\nDan looks down at her.\n\nCrystal turns her head.\n\n"
                          "Dan peels the tape off her hips.", 10.0, [None] * 4, False, memory=memory)
     check("on from the first shot as written, nothing on her ankles, and off when it is peeled off",
-          shots[0]["held"] == "Crystal: duct tape around her hips and between her legs." and shots[0]["bound"] == {}
-          and shots[2]["released"] == "Crystal: duct tape around her hips and between her legs.", [S.shot_line(x) for x in shots])
+          shots[0]["held"] == "Crystal: duct tape wound all the way around her hips, front and back, and between her legs."
+          and shots[0]["bound"] == {} and shots[2]["released"] == "Crystal: duct tape wound all the way around her hips, front "
+          "and back, and between her legs.", [S.shot_line(x) for x in shots])
     check("a person referred to as her is in the shot when she is the only woman", shots[0]["cast"] == ["Dan", "Crystal"],
           shots[0]["cast"])
     away = S.plan_shots("A hallway. Dan waits.\nhold: Crystal, duct tape over her mouth\n\nDan walks.", 5.0, [None] * 4, False,
