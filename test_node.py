@@ -738,12 +738,19 @@ def test_grading():
             key = f[-1].clone()
             look = key.clone() if n == 0 else look
         return key, look
-    key, look = chain(lambda key, k: burn(key, 0.05 + 0.05 * k / 23))
-    check("twelve shots that each come out more saturated and contrasty than they started keep the first shot's look",
+    key, look = chain(lambda key, k: burn(key, 0.05))
+    check("twelve shots that each open more saturated and contrasty than the frame they continue from keep the first shot's look",
           abs(sat(key) / sat(look) - 1) < 0.02 and abs(con(key) / con(look) - 1) < 0.02, (sat(key) / sat(look), con(key) / con(look)))
-    key, look = chain(lambda key, k: burn(key, -0.25 * max(0.0, 1 - k / 6) + 0.03 * k / 23))
-    check("shots that open a little flat and brighten up do not wash the video out",
-          abs(sat(key) / sat(look) - 1) < 0.03 and abs(con(key) / con(look) - 1) < 0.03, (sat(key) / sat(look), con(key) / con(look)))
+    key, look = chain(lambda key, k: burn(key, -0.15))
+    check("twelve shots that each open a little paler than the frame they continue from do not wash the video out",
+          abs(sat(key) / sat(look) - 1) < 0.02 and abs(con(key) / con(look) - 1) < 0.02, (sat(key) / sat(look), con(key) / con(look)))
+    moved = torch.stack([orig.clone() for _ in range(24)])
+    moved[-1, 30:70, 20:60] = 0.05
+    before = float(rt.tone(moved[-1])[0][3])
+    g = rt.shot_grade(orig, moved[1], moved[-1])
+    after = float(rt.tone(rt.grade_frames(moved, g)[-1])[0][3]) if g is not None else before
+    check("when someone dark steps into the end of a shot its shadows stay dark: it is never forced onto the opening's tones",
+          abs(after - before) < 0.02, (before, after))
     first = torch.stack([burn(orig, 0.1 * k / 23) for k in range(24)])
     check("the first shot, and a shot after a cut, set the look and are left as rendered",
           rt.shot_grade(None, first[0], first[-1]) is None)
@@ -752,6 +759,10 @@ def test_grading():
     rt.grade_frames(f, rt.shot_grade(orig, f[0], f[-1]))
     check("a real change inside a shot, like the lights going down, is kept", float(f[-1].mean()) < 0.6 * float(f[0].mean())
           and float(f[-1].mean()) < 1.2 * dark, (float(f[0].mean()), float(f[-1].mean()), dark))
+    grows = torch.stack([burn(orig, 0.3 * k / 23) for k in range(24)])
+    g = rt.shot_grade(orig, grows[1], grows[-1])
+    check("how a shot develops after its opening is its own: nothing inside a shot is forced onto another frame's tones",
+          g is None or float((rt.tone(rt.grade_frames(grows.clone(), g)[-1]) - rt.tone(grows[-1])).abs().max()) < 0.01)
     first = burn(orig, 0.2)
     g = rt.shot_grade(orig, first, first)
     graded = rt.grade_frames(first.unsqueeze(0).clone(), g)[0]
@@ -763,6 +774,23 @@ def test_grading():
     other = torch.flip(orig, dims=[-1]).roll(1, dims=-1) * 0.4
     check("a shot that does not pick up where the last one ended is left as rendered", rt.shot_grade(orig, other, other) is None)
     check("nothing is touched when the shot already matches", rt.shot_grade(orig, orig, orig) is None)
+
+    def washout(img, amount):
+        y = rt._ycc(img)
+        mid = y[..., 0].median()
+        y[..., 0] = (y[..., 0] - mid) * (1 - 0.5 * amount) + mid
+        y[..., 1:] = (y[..., 1:] - 0.5) * (1 - amount) + 0.5
+        return rt._rgb(y).clamp(0, 1)
+    pale = torch.stack([washout(orig, 0.7) for _ in range(24)])
+    rt.grade_frames(pale, rt.shot_grade(orig, pale[1], pale[-1]))
+    check("a continued shot that comes out badly washed out, same scene and brightness, is given its colour back",
+          sat(pale[12]) / sat(orig) > 0.95 and con(pale[12]) / con(orig) > 0.95, (sat(pale[12]) / sat(orig), con(pale[12]) / con(orig)))
+    punchy = torch.stack([burn(orig, 0.3)] + [orig.clone() for _ in range(23)])
+    g = rt.shot_grade(orig, punchy[1], punchy[-1])
+    old_way = rt.shot_grade(orig, punchy[0], punchy[-1])
+    drained = rt.grade_frames(punchy.clone(), old_way) if old_way is not None else punchy
+    check("an odd opening frame that is trimmed anyway does not drain the frames after it",
+          g is None and sat(drained[6]) / sat(orig) < 0.97, (g is None, sat(drained[6]) / sat(orig)))
     check("the look readout gives contrast and colour, and nothing for a flat frame",
           rt.look(orig) is not None and rt.look(burn(orig, 0.3))[1] > rt.look(orig)[1] and rt.look(black[0]) is None)
     hand = rt.match_frame(burn(orig, 0.3).unsqueeze(0).clone(), rt.tone(orig))

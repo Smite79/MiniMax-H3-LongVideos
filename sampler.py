@@ -8,6 +8,7 @@ import glob
 import importlib.util as _ilu
 import inspect
 import json
+import logging
 import math
 import os
 import re
@@ -1103,6 +1104,11 @@ class H3LongVideos:
                     lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD)
                 rt._evict_all_but(model, latent)
                 drafted = pose_ok and shot["bound"]
+                logging.info("[H3-LongVideos] shot %d starts: %d frames, %s, %d reference picture(s), %s, pose %s",
+                             shot["n"], shot["frames"], "continues from the last frame" if given is not None else "fresh",
+                             len(refs), "spoken line" if not shot["wordless"] else "no line",
+                             "draft and controlled render" if drafted else "retake checks" if checks and shot["bound"]
+                             else "none")
                 out = None if drafted else sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler,
                                                   sigmas)
                 imgs = wav = None
@@ -1200,13 +1206,21 @@ class H3LongVideos:
                     del tail
                 size = size or (int(imgs.shape[2]), int(imgs.shape[1]))
                 imgs = up.fit(imgs, *size)
-                grade = rt.shot_grade(given, imgs[0], imgs[-1]) if imgs.shape[0] > 1 else None
+                opening = imgs[1] if given is not None and imgs.shape[0] > 2 else imgs[0]
+                raw, ref = rt.look(opening), rt.look(given) if given is not None else None
+                grade = rt.shot_grade(given, opening, imgs[-1]) if imgs.shape[0] > 1 else None
                 if grade is not None:
                     rt.grade_frames(imgs, grade)
                     if pre is not None:
                         hand = rt.match_frame(hand.clone(), grade[2])
                 seen = rt.look(imgs[-1])
                 first_look = first_look or seen
+                if raw and ref and seen and first_look:
+                    logging.info("[H3-LongVideos] shot %d: rendered opening against the frame it continues from: contrast "
+                                 "%.2f, colour %.2f; %s; finished look against shot 1: contrast %.2f, colour %.2f",
+                                 shot["n"], raw[0] / ref[0], raw[1] / max(ref[1], 1e-6),
+                                 "graded" if grade is not None else "left as rendered",
+                                 seen[0] / first_look[0], seen[1] / max(first_look[1], 1e-6))
                 if seen and first_look:
                     info[at] += (f", {'graded onto the frame it continues from, ' if grade is not None else ''}look against "
                                  f"shot 1: contrast {seen[0] / first_look[0]:.2f}, colour "

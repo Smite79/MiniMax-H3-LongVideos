@@ -463,9 +463,10 @@ def _sample_on_sigmas(model, seed, cfg, sampler_name, positive, negative, latent
 GRADE_POOL = 256
 GRADE_POINTS = 33
 GRADE_LUT = 1024
-GRADE_DRIFT = (0.10, 0.05, 0.05)
 GRADE_JUMP = (0.15, 0.08, 0.08)
 GRADE_FLAT = 0.02
+GRADE_MEDIAN = 0.12
+GRADE_WASHED = 0.85
 GRADE_FLOOR = 1.0 / 255.0
 _YCC = torch.tensor([[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5], [0.5, -0.418688, -0.081312]])
 _RGB = torch.linalg.inv(_YCC)
@@ -508,13 +509,22 @@ def _flat(q):
     return q is None or float(q[0][-2] - q[0][1]) < GRADE_FLAT
 
 
+def _washed(ref, q):
+    spread = lambda x: float(x[0][-2] - x[0][1])
+    colour = lambda x: float((x[1:] - 0.5).abs().mean())
+    return (abs(float(q[0][GRADE_POINTS // 2] - ref[0][GRADE_POINTS // 2])) <= GRADE_MEDIAN
+            and (spread(q) < GRADE_WASHED * spread(ref) or colour(q) < GRADE_WASHED * colour(ref)))
+
+
 def shot_grade(given, first, last):
     if given is None:
         return None
     qg, qf, ql = tone(given), tone(first), tone(last)
-    if _flat(qg) or _flat(qf) or _flat(ql) or not bool(((qg - qf).abs().mean(dim=1) <= torch.tensor(GRADE_JUMP)).all()):
+    if _flat(qg) or _flat(qf) or _flat(ql):
         return None
-    end = qg if bool(((ql - qf).abs().mean(dim=1) <= torch.tensor(GRADE_DRIFT)).all()) else _remap(ql.T, qf, qg).T
+    if not bool(((qg - qf).abs().mean(dim=1) <= torch.tensor(GRADE_JUMP)).all()) and not _washed(qg, qf):
+        return None
+    end = _remap(ql.T, qf, qg).T
     if float((qg - qf).abs().max()) < GRADE_FLOOR and float((end - ql).abs().max()) < GRADE_FLOOR:
         return None
     return _lut(qf, qg), _lut(ql, end), end

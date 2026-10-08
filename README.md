@@ -199,11 +199,16 @@ look, in place of their portrait. Their clothes and anything held on them carry 
 H3 comes out a little more saturated and contrasty each time it continues from a frame,
 and left alone that burns the picture more with every shot. The first shot, and the
 first shot after a `cut`, are left as rendered and set the look. Every shot that
-continues from a frame is graded onto that frame's tone: brightness, contrast,
-saturation and the shape of the shadows and highlights. Its last frame, which the next
-shot opens on, is graded too, so nothing builds up and nothing washes out. A real
-change inside a shot, such as the lights going down, is kept. A black or faded frame,
-or a shot that does not pick up where the last one ended, is left as rendered.
+continues from a frame is graded where it picks up: the first frame you see is matched
+to the frame it continues from (brightness, contrast, saturation and the shape of the
+shadows and highlights), since both show the same moment, and that same correction is
+carried through the rest of the shot. Nothing later in a shot is forced onto another
+frame's tones, so someone stepping in, the lights going down or the camera turning keep
+their own look. A continued shot that opens washed out gets its colour back the same way.
+A black frame, or a shot that does not pick up where the last one ended, is left as
+rendered. Each continued shot's numbers (how its opening came out against the frame it
+continues from, whether it was graded, and its finished look against shot 1) go to the
+ComfyUI log.
 
 ### Reference pictures
 
