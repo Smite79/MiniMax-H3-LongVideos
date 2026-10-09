@@ -129,6 +129,9 @@ It comes back once they put it on.
 
 - A garment belongs to the person its pronoun or name points to, or else to the one
   person whose description mentions it.
+- A garment that comes off takes its whole description with it: *a thong made of black
+  latex*, *with lace trim*, *cut high on her hips*, *thong underwear*, and a following
+  sentence such as *It is black latex.* Nothing of it is left for H3 to paint onto her.
 - When it cannot tell whose it is, the sentence is listed in `info`.
 
 ### Lines the node reads

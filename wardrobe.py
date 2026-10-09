@@ -36,6 +36,13 @@ _STOP = {"wears", "wear", "wearing", "worn", "is", "are", "was", "were", "in", "
          "of", "on", "under", "over", "into", "to", "from", "she", "he", "they", "still", "now", "also", "nothing"}
 
 
+_TRAIL = re.compile(rf"(?:\s+(?:underwear|panties|briefs|bottoms?|knickers))?(?:\s*,?\s+(?:made\s+(?:of|from)|of|in|with|"
+                    rf"cut|trimmed|lined|edged|covered|that|which|stretched|clinging|pulled|riding|sitting|hugging)\b"
+                    rf".*?(?=\s*(?:[,;.!?]|\band\s+(?:a|an|the|her|his|their)\b|$)|\s+(?:a|an|the|her|his|their|matching)\s+"
+                    rf"(?:[\w-]+\s+){{0,2}}?(?:{GARMENT})\b))?", re.I)
+_ITS = re.compile(r"^\s*It(?:['’]s|s|\s+(?:is|was|has))\b", re.I)
+
+
 def strip(text, garment):
     while True:
         m = re.search(rf"\b{re.escape(garment)}s?\b", text, re.I)
@@ -50,6 +57,7 @@ def strip(text, garment):
             if low in _DET:
                 break
         before, after = text[:start], text[m.end():]
+        after = after[_TRAIL.match(after).end():]
         if re.search(r",\s*$", before):
             before = re.sub(r",\s*$", "", before)
         elif re.search(r"\s+and\s*$", before):
@@ -93,10 +101,14 @@ def undress(text, undressed, people):
     lines = []
     for line in text.splitlines():
         sheet = _SHEET.match(line)
-        kept = []
+        kept, gone = [], False
         for s, who in _owners(line, people, sheet.group(1) if sheet and sheet.group(1) in people else None):
+            if gone and _ITS.match(s):
+                continue
+            gone = False
             for n in who:
                 for g in undressed.get(n, []):
+                    gone = gone or mentions(s, g)
                     s = strip(s, g)
             kept.append(s)
         lines.append(" ".join(k for k in kept if k))

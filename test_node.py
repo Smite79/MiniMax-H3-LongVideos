@@ -981,6 +981,19 @@ def test_wardrobe():
           == "Max: a tall man in a grey suit.")
 
 
+    cases = {"Crystal wears a black latex thong.": "",
+             "Crystal wears a thong made of shiny black latex.": "",
+             "Crystal wears a thong of red latex with lace trim and a white bra.": "Crystal wears a white bra.",
+             "Crystal wears black latex thong underwear.": "",
+             "Crystal wears a black-latex thong, cut high on her hips.": "",
+             "Crystal wears a latex thong and a white bra.": "Crystal wears a white bra.",
+             "Crystal wears a red thong with a matching bra.": "Crystal wears a matching bra."}
+    got = {d: S.wrd.strip(d, "thong") for d in cases}
+    check("a thong that comes off takes its whole description with it, latex and all",
+          got == cases, {d: g for d, g in got.items() if g != cases[d]})
+    left = S.wrd.undress("Crystal wears a thong. It is black latex. She has long red hair.", {"Crystal": ["thong"]}, ["Crystal"])
+    check("a sentence that only describes the removed thong goes with it", left == "She has long red hair.", left)
+
 def test_hips():
     print("\n=== tape around the hips ===")
     people, gender = ["Crystal", "Dan"], {"Crystal": "f", "Dan": "m"}
