@@ -113,6 +113,11 @@ coming off (*Dan pulls the tape off*, *Dan unlocks the cuffs*).
   *peels the tape off her hips*). Mentioning it, or cutting more tape, does not count.
   When more than one piece could be meant, the sentence is listed in `info` instead.
 - Each shot's line in `info` says what goes on, what is held, and what comes off.
+- Wrists held behind the back or in front stay locked together for the whole shot. When
+  someone else in the shot does something with their hands (*Mike grabs the chain and
+  pulls it*), the prompt says it is Mike who does it, with his own hands, while her hands
+  stay still, so she does not slip free to do it herself. That line is left out when she
+  does something with her own hands, or when the beat is about her hands.
 - Tape, rope or chain wrapped around the body, torso, chest or arms to the sides, or
   around the hips, waist or between the legs, is carried as wound all the way around,
   front and back, so later shots do not shrink it to strips on the front. These wraps
@@ -198,6 +203,13 @@ another person.
 
 After a `cut`, someone who was last seen alone is given that frame as their current
 look, in place of their portrait. Their clothes and anything held on them carry over.
+
+When a beat shows someone from behind (*the camera moves behind Crystal*, *her back to
+the camera*, *she faces away from the camera*, *a rear view of Crystal*), the prompt
+says the camera sees their back and the back of everything they wear, with their face
+and the front of their clothes turned away. That keeps a belt or harness from being
+drawn back to front when the shot continues from a frame that showed its front. Say
+what the back of an item looks like (*a chain hanging from the back*) so it can be drawn.
 
 H3 comes out a little more saturated and contrasty each time it continues from a frame,
 and left alone that burns the picture more with every shot. The first shot, and the

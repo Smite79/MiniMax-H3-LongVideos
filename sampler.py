@@ -264,7 +264,7 @@ def held_line(state):
     return " ".join(f"{who}: {'; '.join(items)}." for who, items in state.items() if items)
 
 
-_STAY_ARMS = {"behind the back": "stay locked behind the back", "in front of the body": "stay bound in front",
+_STAY_ARMS = {"behind the back": "stay locked together behind the back", "in front of the body": "stay bound together in front",
               "above the head": "stay above the head", "at the waist": "stay at the waist"}
 _STAY_LEGS = {"ankles together": "ankles stay bound together", "ankles to the wrists": "ankles stay tied to the wrists"}
 
@@ -279,6 +279,71 @@ def held_notes(during):
         legs = next((g for _, g, anchored, _ in facts if g in _STAY_LEGS and not anchored), "")
         out += [f"{who}'s wrists {_STAY_ARMS[arms]} the whole time."] if arms else []
         out += [f"{who}'s {_STAY_LEGS[legs]} the whole time."] if legs else []
+    return out
+
+
+_HANDS = (r"(?:grab|grip|pull|tug|yank|jerk|lift|push|shov|drag|hold|tak|open|unlock|unzip|unbuckl|unclip|unhook|unfasten|"
+          r"reach|touch|strok|rub|slap|spank|smack|squeez|pinch|twist|press|carr|pick|hand|giv|put|plac|slid|slip|wrap|"
+          r"tie|cuff|tap|gag|feed|pour|wip|clip|attach|fasten|hook|tighten|loosen|adjust|cup|caress|fondl|pat|poke|prod|"
+          r"tickl|whip|paddl|remov|strip|peel|rip|tear|cut|unti|unwrap)\w*(?:s|ed)\b|(?:took|held|gave|tore|fed)\b")
+_PREDICATE_END = re.compile(r"\s*[,;]?\s+(?:while|as|when|whilst|but|before|after|until)\b.*$|\s*,?\s+and\s+(?=(?:she|he|they|"
+                            r"(?-i:[A-Z])[a-z]+)\b).*$|\s*[,;]\s+(?=(?:she|he|they|(?-i:[A-Z])[a-z]+)\b).*$|,?\s+(?:and\s+)?"
+                            r"(?:says?|said|asks?|tells?|whispers?|shouts?|yells?|growls?|orders?|mutters?|replies|answers?)\b.*$",
+                            re.I | re.S)
+_POSS = {"f": ("her", "she", "wears"), "m": ("his", "he", "wears")}
+
+
+def hand_notes(text, cast, gender, during):
+    bound = [w for w in cast if any(_ARMS.search(it) for it in during.get(w, []))]
+    if not bound or not cast:
+        return []
+    names = "|".join(re.escape(n) for n in cast)
+    acts = []
+    for s in rst.sentences(_SPEECH.sub(".", text or "")):
+        for m in re.finditer(rf"\b({names}|(?i:she|he))\s+(?=(?:(?:\w+ly|then|now|also|just|finally)\s+)?(?i:{_HANDS}))", s):
+            who = rst.resolve(m.group(1), cast, gender)
+            what = _PREDICATE_END.sub("", s[m.end():]).strip().rstrip(".!?,;: ")
+            if who and what:
+                acts.append((who, what))
+    acting = {w for w, _ in acts}
+    still = [b for b in bound if b not in acting] if not re.search(
+        r"\b(?:hands?|wrists?|arms?|fingers?|cuffs?|elbows?)\b", text or "", re.I) else []
+    owners = " and ".join(f"{b}'s" for b in still)
+    tail = f", while {owners} hands stay still" if still else ""
+    return list(dict.fromkeys(f"It is {w} who {what}, with {_POSS.get(gender.get(w), ('their',))[0]} own hands{tail}."
+                              for w, what in acts if w not in bound))
+
+
+_REAR = re.compile(r"\b(?:from\s+)?behind\s+(?!(?:her|his|their)\s+back\b)(?P<who>her|him|them|(?-i:[A-Z])[a-z]+)\b(?!['’])"
+                   r"|\b(?:from\s+(?:behind|the\s+(?:back|rear)(?!\s+of\s+(?:the|a|an|this|that)\b))|(?:back|rear)\s+view)(?:\s+of\s+(?P<of>her|him|them|"
+                   r"(?-i:[A-Z])[a-z]+)\b)?|(?<!behind )\b(?P<own>her|his|their|(?-i:[A-Z])[a-z]+(?=['’]s))(?:['’]s)?\s+"
+                   r"(?:back|backside|rear|bottom)\b(?!\s+(?:lips?|teeth|row|step|drawer|shelf|bunk))", re.I)
+_LENS = re.compile(r"\b(?:camera|lens|view(?:s|ed|ing)?|shot|angle|we\s+see|seen|shown|show(?:s|ing)?|framed|close-?up)\b", re.I)
+_AWAY = re.compile(r"\b(?:back|backside|rear|bottom)\s+(?:is\s+)?(?:turned\s+)?(?:to|toward|towards)\s+(?:the\s+)?(?:camera|lens|"
+                   r"viewer|us)\b|\b(?:fac|turn)\w*\s+away\s+from\s+(?:the\s+)?(?:camera|lens|viewer|us)\b|\bturn\w*\s+(?:her|his|"
+                   r"their)\s+back\s+(?:to|on)\s+(?:the\s+)?(?:camera|lens|viewer|us)\b", re.I)
+_PART_WAYS = re.compile(r"[;:]|\s*,?\s+(?:while|whilst|as|when|until|before|after)\s+|,\s+(?=(?:she|he|they|(?-i:[A-Z])[a-z]+)"
+                        r"\s+\w+(?:s|ed)\b)", re.I)
+
+
+def rear_notes(text, cast, gender):
+    seen = []
+    for s in rst.sentences(_SPEECH.sub(".", text or "")):
+        for part in _PART_WAYS.split(s):
+            hits = [(m, m.group("who") or m.group("of") or m.group("own")) for m in _REAR.finditer(part) if _LENS.search(part)]
+            hits += [(m, None) for m in _AWAY.finditer(part)]
+            for m, tok in hits:
+                toks = [tok] if tok else [t for p, t in reversed(rst.tokens(part, cast)) if p < m.start()]
+                toks = [t for t in toks if t in cast or t.lower() in rst.PERSON.split("|")]
+                who = next((w for w in (rst.resolve(t, cast, gender) for t in toks) if w), "")
+                who = who or (cast[0] if len(cast) == 1 and not tok else "")
+                if who and who not in seen:
+                    seen.append(who)
+    out = []
+    for who in seen:
+        poss, subj, wears = _POSS.get(gender.get(who), ("their", "they", "wear"))
+        out.append(f"Seen from behind, {who} shows {poss} back and the back of everything {subj} {wears}; {poss} face and "
+                   f"the front of what {subj} {wears} face away from the camera.")
     return out
 
 
@@ -487,6 +552,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         notes = held_notes({who: items for who, items in during.items() if who in cast or who not in names})
         notes += [f"By the last frame, {who} has {' and '.join(items)} in plain view, and whoever put it on has let go."
                   for who, items in added.items()]
+        notes += hand_notes(para["text"], cast, gender, during) + rear_notes(para["text"], cast, gender)
         if speech or snd.vocal(para["text"]):
             notes += [snd.muffled(who, snd.mouth_item(during.get(who, []))) for who in cast
                       if snd.mouth_item(during.get(who, []))]

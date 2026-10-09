@@ -466,16 +466,54 @@ def test_continuity_lines():
           "By the last frame, Mara has handcuffs behind her back in plain view, and whoever put it on has let go."
           in shots[1]["prompt"], shots[1]["prompt"])
     check("what is held stays on for the whole shot, wrists in place, when the next thing goes on",
-          "Mara: handcuffs behind her back. All of it stays on for the whole shot. Mara's wrists stay locked behind the back "
+          "Mara: handcuffs behind her back. All of it stays on for the whole shot. Mara's wrists stay locked together behind the back "
           "the whole time. By the last frame, Mara has duct tape over her mouth in plain view" in shots[2]["prompt"], shots[2]["prompt"])
     legs = S.plan_shots("A room.\nhold: Mara, wrists zip tied in front; rope around her ankles; cuffs to the bed rail\n\nMara waits.",
                         5.0, [None] * 4, False)
     check("held wrists in front and ankles get their own line; a restraint fastened to an object adds none",
-          "Mara's wrists stay bound in front the whole time." in legs[0]["prompt"]
+          "Mara's wrists stay bound together in front the whole time." in legs[0]["prompt"]
           and "Mara's ankles stay bound together the whole time." in legs[0]["prompt"]
           and legs[0]["prompt"].count("the whole time.") == 2, legs[0]["prompt"])
     one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
     check("a first frame is claimed too", f"<Picture 1> {claim}" in one[0]["prompt"], one[0]["prompt"])
+
+
+def test_hands_and_backs():
+    print("\n=== who uses their hands, and what shows from behind ===")
+    memory = "Crystal: a slim woman. She wears a steel chastity belt with a chain hanging from the back.\nMike: a tall man."
+    script = ("A dim basement.\n\nCrystal stands with her wrists cuffed behind her back. Mike stands beside her.\n\n"
+              "The camera moves behind Crystal, showing her back. Mike grabs the chain at the back of her chastity belt and "
+              "pulls it.")
+    shots = S.plan_shots(script, 5.0, [None] * 4, False, memory=memory)
+    check("the free person does the hand work while the cuffed hands stay still",
+          "It is Mike who grabs the chain at the back of her chastity belt and pulls it, with his own hands, while Crystal's "
+          "hands stay still." in shots[1]["prompt"] and "It is" not in shots[0]["prompt"], shots[1]["prompt"])
+    check("a shot from behind shows the back of what she wears",
+          "Seen from behind, Crystal shows her back and the back of everything she wears; her face and the front of what she "
+          "wears face away from the camera." in shots[1]["prompt"] and "Seen from behind" not in shots[0]["prompt"],
+          shots[1]["prompt"])
+    cast, g, cuffed = ["Crystal", "Mike"], {"Crystal": "f", "Mike": "m"}, {"Crystal": ["handcuffs behind her back"]}
+    check("a pronoun doer is named, the adverb kept, the next clause and the dialogue left out",
+          S.hand_notes("He slowly pulls the chain, while Crystal gasps.", cast, g, cuffed)
+          == ["It is Mike who slowly pulls the chain, with his own hands, while Crystal's hands stay still."]
+          and S.hand_notes("Mike grabs the chain and says \"Move.\"", cast, g, cuffed)
+          == ["It is Mike who grabs the chain, with his own hands, while Crystal's hands stay still."])
+    check("no hand line when nobody's hands are held, when the held one acts, or when her hands are the point",
+          S.hand_notes("Mike grabs the chain.", cast, g, {}) == []
+          and S.hand_notes("She pulls at the chain. Mike watches.", cast, g, cuffed) == []
+          and S.hand_notes("Crystal struggles. Mike grabs her cuffed wrists and pulls her up.", cast, g, cuffed)
+          == ["It is Mike who grabs her cuffed wrists and pulls her up, with his own hands."])
+    rear = lambda t: S.rear_notes(t, cast, g)
+    check("a back view is read from the camera, a back to the camera, or facing away",
+          all(rear(t) and "Crystal" in rear(t)[0] for t in ("The camera views Crystal from behind as Mike approaches.",
+                                                             "Crystal stands with her back to the camera.",
+                                                             "Crystal faces away from the camera.",
+                                                             "A rear view of Crystal kneeling.")))
+    check("someone standing behind her, cuffs behind her back or the back of a room is not a back view",
+          all(rear(t) == [] for t in ("The camera watches as Mike steps behind her.", "Mike stands behind Crystal.",
+                                      "Mike cuffs her wrists behind her back. The camera holds on her face.",
+                                      "The camera shows her bottom lip trembling.", "The camera watches from the back of the room.",
+                                      "Viewed from behind, Mike grabs the chain.")))
 
 
 def test_quiet_mouths():
@@ -860,7 +898,7 @@ def test_reading():
     check("cuffs go on, then stay on while the tape goes on, with no hold lines",
           shots[0]["added"] == "Mara: handcuffs behind her back." and shots[1]["held"] == "Mara: handcuffs behind her back."
           and shots[1]["added"] == "Mara: duct tape over her mouth."
-          and "Mara's wrists stay locked behind the back the whole time." in shots[1]["prompt"], [S.shot_line(x) for x in shots])
+          and "Mara's wrists stay locked together behind the back the whole time." in shots[1]["prompt"], [S.shot_line(x) for x in shots])
     check("pose control latches the cuffs as they go on and holds them after",
           shots[0]["bound"]["Mara"]["latch_limbs"] == ("arms",) and shots[1]["bound"]["Mara"]["latch_limbs"] == ()
           and all(x["bound"].get("Mara", {}).get("arms") == "behind the back" for x in shots[1:]))
@@ -1275,6 +1313,7 @@ def main():
     test_presence()
     test_beats_decide_presence()
     test_continuity_lines()
+    test_hands_and_backs()
     test_quiet_mouths()
     test_directive_forms()
     test_reading()
