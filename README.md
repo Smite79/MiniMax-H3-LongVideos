@@ -113,11 +113,23 @@ coming off (*Dan pulls the tape off*, *Dan unlocks the cuffs*).
   *peels the tape off her hips*). Mentioning it, or cutting more tape, does not count.
   When more than one piece could be meant, the sentence is listed in `info` instead.
 - Each shot's line in `info` says what goes on, what is held, and what comes off.
+- *Behind her* right after her hands, wrists, arms or the cuffing (*Dan cuffs her hands
+  behind her*) counts as behind her back. When cuffs were first read with no position
+  (*Dan cuffs her*), a later beat that gives one (*her hands cuffed behind her back*)
+  moves them there from that shot on. Cuffs with no position at all are drawn wherever
+  the model likes, usually in front, so say where they go.
 - Wrists held behind the back or in front stay locked together for the whole shot. When
   someone else in the shot does something with their hands (*Mike grabs the chain and
   pulls it*), the prompt says it is Mike who does it, with his own hands, while her hands
   stay still, so she does not slip free to do it herself. That line is left out when she
   does something with her own hands, or when the beat is about her hands.
+- A leash goes with the collar it is clipped to (*Dan clips a chain leash to her collar*,
+  *Mara kneels in a collar and chain leash*). While it is on, each shot names the hand
+  holding it (*The leash runs from Mara's collar to Dan's hand.*), taken from the beat
+  that has someone hold, lead, pull or clip it, so the other end is never drawn on a
+  stranger. Unclipping the leash leaves the collar on.
+- Whenever someone in a shot is held, the prompt names everyone else in it as wearing
+  none of it, so a collar, cuffs or a leash are not copied onto them.
 - Tape, rope or chain wrapped around the body, torso, chest or arms to the sides, or
   around the hips, waist or between the legs, is carried as wound all the way around,
   front and back, so later shots do not shrink it to strips on the front. These wraps
@@ -138,6 +150,28 @@ It comes back once they put it on.
   latex*, *with lace trim*, *cut high on her hips*, *thong underwear*, and a following
   sentence such as *It is black latex.* Nothing of it is left for H3 to paint onto her.
 - When it cannot tell whose it is, the sentence is listed in `info`.
+- Something worn with a detail on one side (*chastity belt with tight rear heavy duty
+  security chain going through her ass*, *a dress with a zip down the back*, *a collar
+  with a ring at the front*) is stated the right way round in every shot that person is
+  in. The detail can be written in the same sentence or the next (*A chain is attached
+  to the back of the belt.*), with or without *a* or *her*. A chastity belt gets this
+  even with no detail written. Each side is pinned to a place on the body: for a belt or
+  anything on the hips, the front low on the belly and the back on the backside, with a
+  fastened chain or strap between the buttocks up to the small of the back; for a
+  collar, the throat and the nape of the neck; for a dress or top, the chest and between
+  the shoulder blades. It turns with them, and their body never twists at the waist.
+  That keeps the front of a belt from being drawn on their backside when they are seen
+  from behind, or after it leaves the frame. `info` names each thing kept this way.
+- A chain, strap or cord on something worn that is described as fastened or on one side
+  (*a chain on the back that keeps it secured to her body*, *a rear chain*) is said to
+  stay fastened at both ends, snug against them, in every shot, so it never comes back
+  hanging or dragging on the floor. One you describe as hanging is left as you wrote it.
+  A beat that pulls it (*Dan pulls her up by the chain*), or pulls a leash, says it keeps
+  its length: the links are solid and never stretch, and the pull moves her by the belt
+  or collar instead, unless the beat itself breaks, cuts or unclips it. In that shot the
+  pull line stands in for the fastened line. When she wears a leash and a chained belt,
+  the prompt says they are two separate chains, so the belt chain is not drawn running
+  out to a hand like a leash.
 
 ### Lines the node reads
 
@@ -172,7 +206,8 @@ after, so it is not drawn before the action happens.
 
 The node keeps track of who is present, so people appear only when they should.
 
-- A character is anyone with a line in `character_memory` (`Mara: a tall woman`), a
+- A character is anyone with a line in `character_memory` (`Mara: a tall woman`, or a
+  sentence that starts with their name: `Mara is a tall woman`, `Mara, a tall woman`), a
   name written right before a picture tag (`Mara <Picture 1>`), or a name on a `hold:`
   or `exit:` line.
 - Anyone named in a beat is present from that shot on, until they leave. So is someone
@@ -186,18 +221,27 @@ For someone who is not present:
 
 - their picture is left out
 - their `character_memory` line is left out
-- any scene sentence that is only about them is left out
+- any scene sentence that is only about them is left out, along with the sentences
+  after it that start with *she* or *he* and so are about them too
 
 When everyone in a shot is a declared character, a shot with one or two people also
 says how many are in it. The count is left out whenever someone else might be there:
-a name that is not declared, or *a guard*, *the man*, *a crowd*. Declare every
-character, with a `character_memory` line or a picture tag, so the guarding covers
-them all.
+a name that is not declared, or *a guard*, *the man*, *a crowd*. Words that only
+describe someone (*a slim Asian woman*, *Blue eyes.*) do not count as another person.
+Declare every character, with a `character_memory` line or a picture tag, so the
+guarding covers them all.
+
+Extras are welcome: a beat can bring in *a woman*, *a crowd* or a name you did not
+declare. That shot then says everyone other than your characters looks nothing like
+them, with a different face, hair, body and clothes and none of what they wear, so an
+extra is never drawn as a copy of someone in `character_memory`.
 
 ### Continuity
 
 Every shot that starts on the previous shot's last frame says so in its prompt: the
-same place and the same people, one moment earlier, with nobody new joining. That
+same place and the same people, one moment earlier, with nobody new joining, or, when
+the beat brings someone in, with that person coming into view and nobody else. When the
+beat brings in extras, they come into view too. That
 frame reaches H3 as a picture, and a picture the prompt does not mention is read as
 another person.
 
@@ -206,10 +250,11 @@ look, in place of their portrait. Their clothes and anything held on them carry 
 
 When a beat shows someone from behind (*the camera moves behind Crystal*, *her back to
 the camera*, *she faces away from the camera*, *a rear view of Crystal*), the prompt
-says the camera sees their back and the back of everything they wear, with their face
-and the front of their clothes turned away. That keeps a belt or harness from being
-drawn back to front when the shot continues from a frame that showed its front. Say
-what the back of an item looks like (*a chain hanging from the back*) so it can be drawn.
+says they face away from the camera from head to feet, so their back and the back of
+everything they wear show, and that their body never twists at the waist. That keeps a
+belt or harness from being drawn back to front when the shot continues from a frame
+that showed its front, without turning only half of them around. Say what the back of
+an item looks like (*a chain hanging from the back*) so it can be drawn.
 
 H3 comes out a little more saturated and contrasty each time it continues from a frame,
 and left alone that burns the picture more with every shot. The first shot, and the
@@ -231,9 +276,10 @@ Wire up to four pictures into `ref_image_1` … `ref_image_4` and refer to them 
 as `<Picture 1>` … `<Picture 4>`. A tag with no picture wired is removed.
 
 Once a person is held, their own picture (written right after their name, as in
-`Mara <Picture 1>`) is left out of shots that start on the previous frame. A portrait
-without the cuffs or the tape pulls them back off. After a `cut` the picture comes back,
-unless a later frame of them stands in for it.
+`Mara <Picture 1>`) is left out of shots that start on a frame they are already in. A
+portrait without the cuffs or the tape pulls them back off. In the shot where they come
+in, the picture still goes in. After a `cut` the picture comes back, unless a later frame
+of them stands in for it.
 
 The pictures work on every checkpoint and LoRA. The hybrid b25-49 (`fl2va_ref2va`) and any
 checkpoint whose file name says `ref2va` were trained on them and get them in every shot.

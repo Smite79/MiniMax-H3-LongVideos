@@ -465,8 +465,8 @@ def test_continuity_lines():
     check("a shot where something goes on ends with it in plain view",
           "By the last frame, Mara has handcuffs behind her back in plain view, and whoever put it on has let go."
           in shots[1]["prompt"], shots[1]["prompt"])
-    check("what is held stays on for the whole shot, wrists in place, when the next thing goes on",
-          "Mara: handcuffs behind her back. All of it stays on for the whole shot. Mara's wrists stay locked together behind the back "
+    check("what is held stays on for the whole shot, wrists in place, the other person free of it, when the next thing goes on",
+          "Mara: handcuffs behind her back. All of it stays on for the whole shot. Dan wears none of it. Mara's wrists stay locked together behind the back "
           "the whole time. By the last frame, Mara has duct tape over her mouth in plain view" in shots[2]["prompt"], shots[2]["prompt"])
     legs = S.plan_shots("A room.\nhold: Mara, wrists zip tied in front; rope around her ankles; cuffs to the bed rail\n\nMara waits.",
                         5.0, [None] * 4, False)
@@ -476,6 +476,33 @@ def test_continuity_lines():
           and legs[0]["prompt"].count("the whole time.") == 2, legs[0]["prompt"])
     one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
     check("a first frame is claimed too", f"<Picture 1> {claim}" in one[0]["prompt"], one[0]["prompt"])
+
+
+def test_strangers():
+    print("\n=== extras are welcome and look like nobody in character memory ===")
+    memory = "Crystal is a slim woman with long dark hair. She wears a grey dress.\nMike, a tall man in a black shirt."
+    script = ("A dim bar.\n\nMike waits at the bar.\n\nA woman walks past Mike.\n\nCrystal and Mike sit down as a crowd watches.\n\n"
+              "Jake walks over to Crystal.\n\nCrystal kneels.")
+    shots = S.plan_shots(script, 5.0, [None] * 4, False, memory=memory)
+    check("memory written as sentences declares its people, and leaves their lines out of shots they are not in",
+          [x["cast"] for x in shots[:3]] == [["Mike"], ["Mike"], ["Mike", "Crystal"]]
+          and "Crystal is a slim woman" not in shots[1]["prompt"] and "grey dress" not in shots[1]["prompt"]
+          and "She wears a grey dress." in shots[2]["prompt"], [x["prompt"][:200] for x in shots])
+    unlike = ("Everyone in the shot other than Mike and Crystal looks nothing like them: a different face, hair, body and "
+              "clothes, and nothing that Mike and Crystal wear.")
+    check("a shot with a woman, a crowd or an undeclared name says they look nothing like the declared characters",
+          "Everyone in the shot other than Mike looks nothing like him: a different face, hair, body and clothes, and "
+          "nothing that Mike wears." in shots[1]["prompt"] and unlike in shots[2]["prompt"] and unlike in shots[3]["prompt"]
+          and "looks nothing like" not in shots[0]["prompt"] + shots[4]["prompt"], [x["prompt"][-600:] for x in shots])
+    check("a continued shot lets the extras in, and only a shot without any keeps everyone else out",
+          "carried forward; the strangers this beat brings in come into view during this shot." in shots[1]["prompt"]
+          and "carried forward; Crystal and the strangers this beat brings in come into view during this shot."
+          in shots[2]["prompt"] and "carried forward rather than joined by anybody new." in shots[4]["prompt"]
+          and "There are two people in the shot" in shots[4]["prompt"], [x["prompt"][-400:] for x in shots])
+    looks = S.plan_shots("A room.\n\nCrystal waits.", 5.0, [None] * 4, False,
+                         memory="Crystal: a slim Asian woman. Long dark hair. Blue eyes.")
+    check("capitalised words that describe someone do not count as another person",
+          "There is one person in the shot" in looks[0]["prompt"], looks[0]["prompt"])
 
 
 def test_hands_and_backs():
@@ -488,10 +515,11 @@ def test_hands_and_backs():
     check("the free person does the hand work while the cuffed hands stay still",
           "It is Mike who grabs the chain at the back of her chastity belt and pulls it, with his own hands, while Crystal's "
           "hands stay still." in shots[1]["prompt"] and "It is" not in shots[0]["prompt"], shots[1]["prompt"])
-    check("a shot from behind shows the back of what she wears",
-          "Seen from behind, Crystal shows her back and the back of everything she wears; her face and the front of what she "
-          "wears face away from the camera." in shots[1]["prompt"] and "Seen from behind" not in shots[0]["prompt"],
-          shots[1]["prompt"])
+    check("a shot from behind turns her whole body away, the back of what she wears showing, and she never twists",
+          "Seen from behind, Crystal faces away from the camera from head to feet, so her back, the back of her head and the "
+          "back of everything she wears show. Crystal's body never twists at the waist: her head, chest, hips and legs always "
+          "face the same way and turn together." in shots[1]["prompt"] and "Seen from behind" not in shots[0]["prompt"]
+          and shots[1]["prompt"].count("never twists") == 1, shots[1]["prompt"])
     cast, g, cuffed = ["Crystal", "Mike"], {"Crystal": "f", "Mike": "m"}, {"Crystal": ["handcuffs behind her back"]}
     check("a pronoun doer is named, the adverb kept, the next clause and the dialogue left out",
           S.hand_notes("He slowly pulls the chain, while Crystal gasps.", cast, g, cuffed)
@@ -683,6 +711,22 @@ def test_pictures_by_checkpoint():
     out, calls = render(script, ref_image_1=IMG1, ref_image_2=IMG1, graph=hybrid, unique_id="9")
     check("on the hybrid fl2va_ref2va the portraits still go in", [len(c["refs"]) for c in calls["cond"]] == [1, 1, 1]
           and "not trained on reference pictures" not in out[2], [len(c["refs"]) for c in calls["cond"]])
+    memory = "Crystal <Picture 1>: a slim woman.\nMike <Picture 2>: a tall man.\nhold: Crystal, handcuffs behind her back"
+    late = "A cell.\n\nMike waits by the door.\n\nCrystal is pushed into the cell.\n\nMike grabs Crystal <Picture 1> by the arm."
+    for pics in (True, False):
+        shots = S.plan_shots(late, 5.0, [IMG1, IMG2, None, None], False, memory=memory, pictures=pics)
+        check(f"someone already held keeps their picture in the shot they enter (ref model: {pics}), and it says they come in",
+              [len(s["refs"]) for s in shots][1] == (2 if pics else 1) and "Crystal <Picture 1>" in shots[1]["prompt"]
+              and "carried forward; Crystal comes into view during this shot, and nobody else joins." in shots[1]["prompt"]
+              and "Crystal <Picture" not in shots[2]["prompt"] and "rather than joined by anybody new" in shots[2]["prompt"],
+              [(len(s["refs"]), s["prompt"][-300:]) for s in shots])
+        check("a restated action carries no picture tags", "It is Mike who grabs Crystal by the arm, with his own hands."
+              in shots[2]["prompt"], shots[2]["prompt"])
+    tagged = S.plan_shots("A bedroom.\n\nShe sits on the bed.\n\nHe walks in and cuffs her wrists.", 5.0, [IMG1, IMG2, None, None],
+                          False, memory="Crystal <Picture 1>: a slim woman.\nMike (<Picture 2>): a tall man.")
+    check("she and he find characters declared only in memory, even with a picture tag between name and colon",
+          [(s["cast"], len(s["refs"])) for s in tagged] == [(["Crystal"], 1), (["Crystal", "Mike"], 2)]
+          and tagged[1]["added"] == "Crystal: handcuffs on her wrists.", [(s["cast"], len(s["refs"]), s["added"]) for s in tagged])
 
 
 def test_fast_h3_pictures():
@@ -904,10 +948,102 @@ def test_reading():
           and all(x["bound"].get("Mara", {}).get("arms") == "behind the back" for x in shots[1:]))
     check("the tape comes off and the cuffs stay", shots[3]["released"] == "Mara: duct tape over her mouth."
           and shots[3]["held"] == "Mara: handcuffs behind her back.", S.shot_line(shots[3]))
+    later = S.plan_shots("A cell. Mara waits. Dan stands guard.\n\nDan cuffs her.\n\nMara kneels with her hands cuffed behind her "
+                         "back.\n\nDan waits.", 5.0, [None] * 4, False)
+    check("cuffs read with no position take the one a later beat gives, and keep it",
+          later[0]["added"] == "Mara: handcuffs on her wrists." and later[1]["held"] == "Mara: handcuffs behind her back."
+          and later[1]["released"] == "Mara: handcuffs on her wrists." and later[2]["held"] == "Mara: handcuffs behind her back."
+          and "Mara's wrists stay locked together behind the back the whole time." in later[1]["prompt"]
+          and all(x["bound"]["Mara"]["arms"] == "behind the back" for x in later[1:]), [S.shot_line(x) for x in later])
+    placed = S.plan_shots("A cell.\nhold: Mara, handcuffs\n\nMara wears handcuffs behind her back.\n\nDan waits.", 5.0,
+                          [None] * 4, False)
+    check("a hold with no position takes the one the beat gives from that shot's first frame",
+          placed[0]["held"] == "Mara: handcuffs behind her back." and placed[0]["added"] == ""
+          and placed[1]["held"] == "Mara: handcuffs behind her back.", [S.shot_line(x) for x in placed])
     people, gender = ["Mara", "Dan"], {"Mara": "f", "Dan": "m"}
     read = lambda t, held=None: S.rst.read(t, people, gender, held or {})[0]
+    leashed = "a collar around her neck, with a chain leash clipped to it"
+    check("a leash goes with the collar it is clipped to, never as chains on her wrists",
+          all(read(t) == {"Mara": [leashed]} for t in ("Dan locks a collar around her neck and clips a chain leash to it.",
+                                                      "Dan clips a chain leash to her collar.", "Dan attaches a chain leash to Mara's collar.",
+                                                      "Mara wears a collar with a chain leash.", "Mara kneels in a collar and chain leash."))
+          and read("Dan clips a leash to it.", {"Mara": ["a collar around her neck"]})
+          == {"Mara": ["a collar around her neck, with a leash clipped to it"]}
+          and read("Mara kneels in a steel collar.") == {"Mara": ["a collar around her neck"]})
+    off = S.rst.read("Dan unclips the leash.", people, gender, {"Mara": [leashed]})
+    check("unclipping the leash leaves the collar on, already in place",
+          off[0] == {"Mara": ["a collar around her neck"]} and off[1] == {"Mara": [leashed]}
+          and off[3] == {"Mara": ["a collar around her neck"]}, off)
+    check("rope carried in, chains on a wall and a grab by the collar put nothing on anyone",
+          all(read(t) == {} for t in ("Dan enters with a coil of rope.", "Mara sits in a room with chains on the wall.",
+                                      "Dan grabs her by the collar.")))
+    memory = "Mara: a slim woman. She wears a steel chastity belt with a chain hanging from the back.\nDan: a tall man."
+    leash = S.plan_shots("A cell.\n\nMara kneels with her wrists cuffed behind her back.\n\nDan locks a collar around her neck and "
+                         "clips a chain leash to it.\n\nThe camera frames her face.\n\nDan pulls her up by the leash.\n\n"
+                         "Dan unclips the leash.", 5.0, [None] * 4, False, memory=memory)
+    check("the leash runs to the hand that holds it, from the shot it goes on until it comes off, and nobody else wears it",
+          [("The leash runs from Mara's collar to Dan's hand, and its links never stretch." in x["prompt"]) for x in leash]
+          == [False, True, True, True, False]
+          and "The leash and the chain on her steel chastity belt are two separate chains." in leash[2]["prompt"]
+          and "Dan wears none of it." in leash[2]["prompt"]
+          and "in plain view." in leash[1]["prompt"] and "has let go" not in leash[1]["prompt"], [x["prompt"][-900:] for x in leash])
+    twist = "Mara's body never twists at the waist: her head, chest, hips and legs always face the same way and turn together."
+    tight = ("Mara's chastity belt is worn the right way round. The front of the belt sits low on her belly, over her crotch, and "
+             "its chain sits between her buttocks, up to the small of her back; it turns with her.")
+    fast = "The chain on Mara's chastity belt stays fastened at both ends, short and snug against her; it never hangs loose, trails or stretches."
+    side = lambda d: S.side_notes(f"Mara: a slim woman. {d}", ["Mara"], gender)
+    check("a hanging chain sits on her backside, a fastened one between her buttocks, the front low on her belly, every shot",
+          all("Mara's steel chastity belt is worn the right way round. The front of the belt sits low on her belly, over her "
+              f"crotch, and its chain sits on her backside, at the small of her back; it turns with her. {twist}" in x["prompt"]
+              for x in leash) and "stays fastened" not in leash[0]["prompt"], leash[0]["prompt"])
+    check("the belt is found however it is written, across sentences and with no article, and a plain one still gets its line",
+          all(side(d) == [tight, twist, fast] for d in (
+              "She wears chastity belt with tight rear heavy duty security chain going through her ass.",
+              "She wears a chastity belt. A chain is attached to the back of the belt.",
+              "She wears a chastity belt that has a chain at the back.", "She wears a chastity belt with a rear chain.",
+              "She wears a chastity belt. It has a chain at the back that keeps it locked on her.",
+              "She is locked in a chastity belt, secured at the back with a chain."))
+          and side("She wears a steel chastity belt.") == [
+              "Mara's steel chastity belt is worn the right way round. The front of the belt sits low on her belly, over her "
+              "crotch, and its back sits on her backside, at the small of her back; it turns with her.", twist]
+          and side("She wears a chastity belt with a front shield and a chain at the back.")[0]
+          == tight.replace("The front of the belt", "The shield at the front of the belt"),
+          [side(d) for d in ("She wears chastity belt with tight rear heavy duty security chain going through her ass.",)])
+    check("other worn things are pinned by place too, and hair down her back or a tattoo there pins nothing",
+          side("She wears a leather collar with a ring at the front.")[0]
+          == "Mara's leather collar is worn the right way round. The ring at the front of the collar sits at her throat, and its "
+             "back sits at the nape of her neck; it turns with her."
+          and "its zip sits between her shoulder blades" in side("She wears a dress with a zip down the back.")[0]
+          and side("She has long dark hair down her back.") == [] and side("She wears a shirt. A tattoo on her back.") == []
+          and S.side_notes("Mara kneels in a cell with a door at the back.", ["Mara"], gender) == [])
+    out, _ = render("A cell.\n\nMara kneels.", character_memory="Mara: a slim woman, chastity belt with tight rear heavy duty "
+                                                                "security chain going through her ass.")
+    check("info names what is kept the right way round",
+          "kept the right way round, front and back pinned to the body: Mara's chastity belt" in out[2], out[2])
+    held = "Mara: a slim woman. She wears a steel chastity belt with a chain on the back that keeps it secured to her body."
+    pulled = lambda t: S.pull_notes(t, held, ["Mara", "Dan"], gender, {"Mara": [leashed]})
+    holds = ("The chain on Mara's steel chastity belt keeps its length when it is pulled: its links are solid metal and never "
+             "stretch, it stays snug against her, and the pull moves her by the belt instead.")
+    check("pulling that chain or her leash keeps its length and moves her; a chain elsewhere, or one the beat breaks, gets none",
+          all(pulled(t) == [holds] for t in ("Dan grabs the chain at the back of her chastity belt and pulls it.",
+                                             "Dan yanks her chain.", "Dan pulls her up by the chain."))
+          and pulled("Dan pulls her up by the leash.") == ["The chain leash on Mara's collar keeps its length when it is pulled: "
+                                                           "its links are solid metal and never stretch, it stays clipped to "
+                                                           "the collar, and the pull moves her by the collar instead."]
+          and pulled("Dan pulls the chain on the wall.") == [] and pulled("Dan pulls the chain and it snaps.") == [])
+    yank = S.plan_shots("A cell.\n\nMara kneels.\n\nDan grabs the chain at the back of her chastity belt and pulls it.", 5.0,
+                        [None] * 4, False, memory="Mara: a slim woman. She wears a steel chastity belt with a chain on the back "
+                                                  "that keeps it secured to her body.\nDan: a tall man.")
+    check("in the shot that pulls the chain, its pull line stands in for the fastened line",
+          holds in yank[1]["prompt"] and "stays fastened at both ends" not in yank[1]["prompt"]
+          and "stays fastened at both ends" in yank[0]["prompt"], yank[1]["prompt"])
     expect = {
         "Dan cuffs Mara.": {"Mara": ["handcuffs on her wrists"]},
+        "Dan cuffs her hands behind her.": {"Mara": ["handcuffs behind her back"]},
+        "Dan pulls her arms behind her and handcuffs her wrists.": {"Mara": ["handcuffs behind her back"]},
+        "Mara stands with her wrists handcuffed behind her.": {"Mara": ["handcuffs behind her back"]},
+        "Mara wears handcuffs behind her back.": {"Mara": ["handcuffs behind her back"]},
+        "Dan stands behind her and cuffs her wrists.": {"Mara": ["handcuffs on her wrists"]},
         "Dan snaps the handcuffs on her wrists.": {"Mara": ["handcuffs on her wrists"]},
         "Dan tapes her wrists and ankles together.": {"Mara": ["duct tape around her wrists", "duct tape around her ankles"]},
         "Dan ties her ankles together with rope.": {"Mara": ["rope around her ankles"]},
@@ -1314,6 +1450,7 @@ def main():
     test_beats_decide_presence()
     test_continuity_lines()
     test_hands_and_backs()
+    test_strangers()
     test_quiet_mouths()
     test_directive_forms()
     test_reading()

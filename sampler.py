@@ -245,7 +245,9 @@ def apply_holds(state, para):
         key = _person(new, who)
         if key is None:
             continue
-        gone = [it for it in new[key] if not items or any(_matches(r, it) for r in items)]
+        gone = [it for r in items for it in ([x for x in new[key] if x.lower() == r.lower()]
+                                             or [x for x in new[key] if _matches(r, x)])] if items else list(new[key])
+        gone = list(dict.fromkeys(gone))
         released.setdefault(key, []).extend(gone)
         new[key] = [it for it in new[key] if it not in gone]
         if not new[key]:
@@ -269,10 +271,11 @@ _STAY_ARMS = {"behind the back": "stay locked together behind the back", "in fro
 _STAY_LEGS = {"ankles together": "ankles stay bound together", "ankles to the wrists": "ankles stay tied to the wrists"}
 
 
-def held_notes(during):
+def held_notes(during, free=()):
     if not during:
         return []
     out = [held_line(during), "All of it stays on for the whole shot."]
+    out += [f"{' and '.join(free)} {'wears' if len(free) == 1 else 'wear'} none of it."] if free else []
     for who, items in during.items():
         facts = [limb_facts(it) for it in items]
         arms = next((a for a, _, anchored, _ in facts if a and not anchored), "")
@@ -283,7 +286,7 @@ def held_notes(during):
 
 
 _HANDS = (r"(?:grab|grip|pull|tug|yank|jerk|lift|push|shov|drag|hold|tak|open|unlock|unzip|unbuckl|unclip|unhook|unfasten|"
-          r"reach|touch|strok|rub|slap|spank|smack|squeez|pinch|twist|press|carr|pick|hand|giv|put|plac|slid|slip|wrap|"
+          r"reach|touch|strok|rub|slap|spank|smack|squeez|pinch|twist|press|carr|pick|hand|giv|put|plac|slid|slip|wrap|lock|"
           r"tie|cuff|tap|gag|feed|pour|wip|clip|attach|fasten|hook|tighten|loosen|adjust|cup|caress|fondl|pat|poke|prod|"
           r"tickl|whip|paddl|remov|strip|peel|rip|tear|cut|unti|unwrap)\w*(?:s|ed)\b|(?:took|held|gave|tore|fed)\b")
 _PREDICATE_END = re.compile(r"\s*[,;]?\s+(?:while|as|when|whilst|but|before|after|until)\b.*$|\s*,?\s+and\s+(?=(?:she|he|they|"
@@ -293,13 +296,17 @@ _PREDICATE_END = re.compile(r"\s*[,;]?\s+(?:while|as|when|whilst|but|before|afte
 _POSS = {"f": ("her", "she", "wears"), "m": ("his", "he", "wears")}
 
 
+def _bare(text):
+    return re.sub(r"[ \t]{2,}", " ", _PICTURE.sub("", _SPEECH.sub(".", text or "")))
+
+
 def hand_notes(text, cast, gender, during):
     bound = [w for w in cast if any(_ARMS.search(it) for it in during.get(w, []))]
     if not bound or not cast:
         return []
     names = "|".join(re.escape(n) for n in cast)
     acts = []
-    for s in rst.sentences(_SPEECH.sub(".", text or "")):
+    for s in rst.sentences(_bare(text)):
         for m in re.finditer(rf"\b({names}|(?i:she|he))\s+(?=(?:(?:\w+ly|then|now|also|just|finally)\s+)?(?i:{_HANDS}))", s):
             who = rst.resolve(m.group(1), cast, gender)
             what = _PREDICATE_END.sub("", s[m.end():]).strip().rstrip(".!?,;: ")
@@ -328,7 +335,7 @@ _PART_WAYS = re.compile(r"[;:]|\s*,?\s+(?:while|whilst|as|when|until|before|afte
 
 def rear_notes(text, cast, gender):
     seen = []
-    for s in rst.sentences(_SPEECH.sub(".", text or "")):
+    for s in rst.sentences(_bare(text)):
         for part in _PART_WAYS.split(s):
             hits = [(m, m.group("who") or m.group("of") or m.group("own")) for m in _REAR.finditer(part) if _LENS.search(part)]
             hits += [(m, None) for m in _AWAY.finditer(part)]
@@ -342,9 +349,137 @@ def rear_notes(text, cast, gender):
     out = []
     for who in seen:
         poss, subj, wears = _POSS.get(gender.get(who), ("their", "they", "wear"))
-        out.append(f"Seen from behind, {who} shows {poss} back and the back of everything {subj} {wears}; {poss} face and "
-                   f"the front of what {subj} {wears} face away from the camera.")
+        out += [f"Seen from behind, {who} faces away from the camera from head to feet, so {poss} back, the back of {poss} "
+                f"head and the back of everything {subj} {wears} show.", whole_body(who, gender)]
     return out
+
+
+def whole_body(who, gender):
+    poss = _POSS.get(gender.get(who), ("their",))[0]
+    return f"{who}'s body never twists at the waist: {poss} head, chest, hips and legs always face the same way and turn together."
+
+
+_LEASH_HAND = (r"(?:holds?|held|grips?|gripped|pulls?|pulled|tugs?|tugged|yanks?|yanked|leads?|led|walks?|walked|drags?|"
+               r"dragged|takes?|took|grabs?|grabbed|keeps?|kept|wraps?|wrapped|jerks?|jerked|tows?|towed|guides?|guided|clips?|"
+               r"clipped|attach(?:es|ed)|hooks?|hooked)")
+
+
+def leash_holder(text, cast, leashed, gender):
+    names = "|".join(re.escape(n) for n in cast) or "(?!)"
+    for s in rst.sentences(_bare(text)):
+        for m in re.finditer(rf"\b({names}|(?i:he|she))\s+(?:(?!\b(?:{names}|(?i:she|he|as|while|when|then))\b)[^.;])*?"
+                             rf"\b(?i:{_LEASH_HAND})\b[^.;]*?\b(?i:leash)\b", s):
+            who = rst.resolve(m.group(1), cast, gender)
+            if who and who != leashed:
+                return who
+    return ""
+
+
+_WORN = rf"(?:{wrd.GARMENT}|harness|cage|hood|mask|device|collar)"
+_LONG = r"chains?|straps?|cords?|ropes?|tethers?|bands?|wires?|bars?|leash"
+_PARTS = (rf"{_LONG}|padlocks?|locks?|zips?|zippers?|rings?|bows?|buckles?|plates?|shields?|panels?|laces?|hooks?|clasps?|"
+          rf"tags?")
+_ITEM = re.compile(rf"\b(?:(?:an?|the|her|his|their)\s+)?(?P<thing>(?:(?!(?:and|with|that|which|is|are|has|have|wears?|wearing|wore|"
+                   rf"in|on|of|she|he|they|her|his|their|an?|the|its|locked|only|just)\b)[\w-]+\s+){{0,3}}?{_WORN})\b", re.I)
+_SIDE = re.compile(rf"\b(?:at|on|from|across|down|over|along|in|to|towards?|around|up)\s+(?:the|its|her|his|their)\s+"
+                   rf"(?P<a>back|rear|front|backside)\b|\b(?P<b>back|rear|front)\s+of\s+(?:the|her|his|their|its)\b|"
+                   rf"\b(?P<c>rear|back|front)\s+(?=(?:[\w-]+\s+){{0,3}}?(?:{_PARTS})\b)|\b(?:through|between|up|into|in)\s+(?:her|his|"
+                   rf"their)\s+(?:ass|arse|butt|buttocks|bum|cheeks|backside|crack)\b",
+                   re.I)
+_REFER = re.compile(r"^\s*(?:it|its|the|this|that|a|an)\b", re.I)
+_PULLED = r"(?:pull|tug|yank|jerk|drag|lift|hoist|haul|wrench|tighten)\w*"
+_BROKEN = r"\b(?:snap|break|broke|tear|tore|rip|cut|unclip|unlock|unhook|detach|remov|loosen)\w*|\bcomes?\s+(?:loose|off|free|apart)\b"
+
+
+def _pronouns(who, gender):
+    return {"f": ("her", "her"), "m": ("his", "him")}.get(gender.get(who), ("their", "them"))
+
+
+def _worn_sides(text, cast):
+    out = {}
+    for who, desc in wrd.descriptions(_PICTURE.sub("", text or ""), cast).items():
+        carried = None
+        for sent in rst.sentences(desc):
+            items = list(_ITEM.finditer(sent))
+            for m in _SIDE.finditer(sent):
+                near = min(items, key=lambda i: abs(i.start() - m.start()), default=None)
+                thing = near.group("thing") if near else (carried if _REFER.match(sent) and re.search(
+                    rf"^\s*its?\b|\b(?:{_PARTS})\b", sent, re.I) else None)
+                if near and carried and thing.split()[-1].lower() == carried.split()[-1].lower() and len(carried) > len(thing):
+                    thing = carried
+                if not thing:
+                    continue
+                side = (m.group("a") or m.group("b") or m.group("c") or "back").lower()
+                side = "front" if side == "front" else "back"
+                parts = sorted((abs(p.start() - m.start()), p.group(0).lower()) for p in re.finditer(rf"\b(?:{_PARTS})\b", sent, re.I)
+                               if not (near and near.start() <= p.start() < near.end()))
+                part = parts[0][1] if parts else ""
+                rec = out.setdefault((who, thing.lower()), {"who": who, "thing": thing, "back": "", "front": "", "fastened": ""})
+                rec[side] = rec[side] or part
+                if re.fullmatch(_LONG, part) and not re.search(r"\b(?:hang|dangl|swing|trail|loose)\w*", sent, re.I):
+                    rec["fastened"] = rec["fastened"] or part
+            carried = items[-1].group("thing") if items else carried
+        for m in _ITEM.finditer(desc):
+            if re.search(r"\bchastity\b", m.group("thing"), re.I) and not any(w == who and k.split()[-1] == m.group("thing").split()[-1].lower()
+                                                                             for w, k in out):
+                out[(who, m.group("thing").lower())] = {"who": who, "thing": m.group("thing"), "back": "", "front": "", "fastened": ""}
+    return list(out.values())
+
+
+_LOWER = re.compile(r"\b(?:belt|chastity|thong|panties|knickers|briefs|underwear|g-string|shorts|skirt|pants|trousers|jeans|"
+                    r"leggings|tights|bottoms?|cage|device)\b", re.I)
+_HEAD = re.compile(r"\b(?:collar|choker|hood|mask|gag)\b", re.I)
+
+
+def _spots(thing, poss, part=""):
+    if _LOWER.search(thing):
+        return f"low on {poss} belly, over {poss} crotch", (
+            f"between {poss} buttocks, up to the small of {poss} back" if re.fullmatch(_LONG, part or "-")
+            else f"on {poss} backside, at the small of {poss} back")
+    if _HEAD.search(thing):
+        return f"at {poss} throat", f"at the nape of {poss} neck"
+    return f"over {poss} chest", f"between {poss} shoulder blades"
+
+
+def side_notes(text, cast, gender):
+    out = []
+    for rec in _worn_sides(text, cast):
+        who, thing = rec["who"], rec["thing"]
+        poss, obj = _pronouns(who, gender)
+        front, back = _spots(thing, poss, rec["back"] if rec["back"] == rec["fastened"] else "")
+        head = thing.split()[-1]
+        lead = f"The {rec['front']} at the front of the {head} sits {front}" if rec["front"] else f"The front of the {head} sits {front}"
+        tail = f"its {rec['back']} sits {back}" if rec["back"] else f"its back sits {back}"
+        out += [f"{who}'s {thing} is worn the right way round. {lead}, and {tail}; it turns with {obj}.", whole_body(who, gender)]
+        if rec["fastened"]:
+            out.append(f"The {rec['fastened']} on {who}'s {thing} stays fastened at both ends, short and snug against {obj}; it "
+                       f"never hangs loose, trails or stretches.")
+    return list(dict.fromkeys(out))
+
+
+def pull_notes(text, scene, cast, gender, held):
+    fix = [(r["who"], r["thing"], part) for r in _worn_sides(scene, cast) for part in {r["back"], r["front"], r["fastened"]}
+           if part and re.fullmatch(_LONG, part)]
+    fix += [(w, "collar", "chain leash" if any("chain leash" in it for it in held.get(w, [])) else "leash") for w in cast
+            if any("leash" in it for it in held.get(w, []))]
+    out = []
+    for s in rst.sentences(_bare(text)):
+        if re.search(_BROKEN, s, re.I):
+            continue
+        for who, thing, part in fix:
+            noun = rf"{re.escape(part.split()[-1].rstrip('s'))}s?"
+            if not re.search(rf"\b{_PULLED}\b[^.;]{{0,60}}?\b{noun}\b|\b{noun}\b[^.;]{{0,60}}?\b{_PULLED}\b", s, re.I):
+                continue
+            tied = rf"\b{re.escape(thing.split()[-1])}\b|\b(?:her|his|their|{re.escape(who)}['’]s)\s+(?:[\w-]+\s+){{0,2}}?{noun}\b|\bby\s+the\s+"
+            leash = part.endswith("leash")
+            if not leash and not re.search(rf"{tied}(?:[\w-]+\s+){{0,2}}?{noun}\b", s, re.I):
+                continue
+            obj = _pronouns(who, gender)[1]
+            rigid = "its links are solid metal and never stretch" if "chain" in part else "it never stretches"
+            out.append(f"The {part} on {who}'s {thing} keeps its length when it is pulled: {rigid}, it stays "
+                       f"{'clipped to the collar' if leash else 'snug against ' + obj}, and the pull moves {obj} by the "
+                       f"{thing.split()[-1]} instead.")
+    return list(dict.fromkeys(out))
 
 
 def limb_facts(item):
@@ -408,8 +543,13 @@ def nobody(text, names):
                 or set(_CAPS.findall(text or "")) - set(names) - _COMMON_CAPS)
 
 
+_INTRO = re.compile(r"\s*([A-Z][\w'’-]{0,24})\s*(?:,|\(|\b(?:is|was|has|wears|wearing)\b)")
+
+
 def roster(sheets, texts, paras):
     names = [m.group(1) for t in sheets for m in map(_SHEET.match, t.splitlines()) if m]
+    names += [m.group(1) for t in sheets for line in t.splitlines() for sent in re.split(r"(?<=[.!?])\s+", line)
+              for m in [_INTRO.match(sent)] if m and m.group(1) not in _COMMON_CAPS]
     names += [n for t in texts for n in _CLAIM.findall(t)]
     names += [who for p in paras for who, _ in p["hold"] + p["release"]] + [n for p in paras for n in p["exit"]]
     return [n for n in dict.fromkeys(names) if n not in _NOT_NAMES]
@@ -440,9 +580,20 @@ def extras_in(text):
                for m in _EXTRAS.finditer(text))
 
 
-def cast_line(cast, names, *texts):
-    joined = " ".join(t for t in texts if t)
-    if extras_in(joined) or set(_CAPS.findall(joined)) - set(names) - _COMMON_CAPS:
+_LOOKS = (r"eyes|lips|legs|hips|breasts|thighs|arms|hands|feet|nails|curls|locks|heels|boots|jeans|pants|shorts|stockings|"
+          r"tights|panties|gloves|glasses|earrings|freckles|tattoos|piercings|bangs|highlights|cheeks|lashes|brows|eyebrows|"
+          r"shoulders|muscles|abs|streaks|waves")
+
+
+def strangers(beat, scene, names):
+    stop = _COMMON_CAPS | _NOT_NAMES | set(names)
+    mid = [w for s in rst.sentences(_bare(beat)) for w in _CAPS.findall(" ".join(s.split()[1:]))]
+    acting = re.findall(rf"\b([A-Z][a-z]+)(?:['’]s\b|\s+(?:\w+ly\s+)?(?!(?:{_LOOKS})\b)[a-z]+(?:s|ed)\b)", f"{beat}\n{scene}")
+    return [n for n in dict.fromkeys(mid + acting) if n not in stop]
+
+
+def cast_line(cast, names, scene, beat):
+    if extras_in(f"{scene} {beat}") or strangers(beat, scene, names):
         return ""
     if len(cast) == 1:
         return "There is one person in the shot: one body, one face."
@@ -458,9 +609,25 @@ def without_absent(text, absent, names):
         if m and m.group(1) in names:
             out += [line] if m.group(1) not in absent else []
             continue
-        out.append(" ".join(s for s in re.split(r"(?<=[.!?])\s+", line)
-                            if not (_mentions(s, absent) and not _mentions(s, here))))
+        kept, last = [], None
+        for s in re.split(r"(?<=[.!?])\s+", line):
+            named = _mentions(s, names)
+            owners = named or ([last] if last and re.match(r"\s*(?:she|he|they|her|his|their)\b", s, re.I) else [])
+            last = named[0] if len(named) == 1 else (None if named else last)
+            if not (owners and all(o in absent for o in owners) and not _mentions(s, here)):
+                kept.append(s)
+        out.append(" ".join(kept))
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def stranger_line(cast, names, gender, extra):
+    known = [n for n in cast if n in names]
+    if not known or not extra:
+        return ""
+    who = known[0] if len(known) == 1 else ", ".join(known[:-1]) + " and " + known[-1]
+    them = _pronouns(known[0], gender)[1] if len(known) == 1 else "them"
+    return (f"Everyone in the shot other than {who} looks nothing like {them}: a different face, hair, body and clothes, and "
+            f"nothing that {who} {'wears' if len(known) == 1 else 'wear'}.")
 
 
 def shot_pictures(text, refs, held_names):
@@ -513,8 +680,9 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     setting = [parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
     lead = setting + [parse_paragraph(p) for p in paragraphs(memory)]
     texts = [p["text"] for p in lead + paras]
-    people = list(dict.fromkeys(roster([], [], lead + paras) + rst.agents(texts, _COMMON_CAPS | _NOT_NAMES)))
-    gender = rst.genders(people, texts)
+    people = list(dict.fromkeys(roster([p["text"] for p in lead[len(setting):]], [p["text"] for p in lead], lead + paras)
+                                + rst.agents(texts, _COMMON_CAPS | _NOT_NAMES)))
+    gender = rst.genders(people, [_PICTURE.sub("", t) for t in texts])
     state, undressed = {}, {}
     for k, para in enumerate(lead):
         lead[k] = with_reading(para, _mentions(para["text"], people), gender, state)
@@ -525,7 +693,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     names = roster([p["text"] for p in lead[len(setting):]], [p["text"] for p in lead], lead + paras)
     around, present = _mentions(" ".join(p["text"] for p in setting), names), []
     seen = _mentions(" ".join(p["text"] for p in lead), people)
-    solo_seen, shots = set(), []
+    solo_seen, shots, leash_by = set(), [], {}
     for i, para in enumerate(paras):
         seen = list(dict.fromkeys(seen + _mentions(para["text"], people)))
         para = with_reading(para, seen, gender, state)
@@ -537,7 +705,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         during = {k: [it for it in v if it not in released.get(k, [])] for k, v in start.items()}
         during = {k: v for k, v in during.items() if v}
         keyed = (i > 0 and not para["cut"]) or (i == 0 and has_first_frame)
-        opening = (present if i > 0 else around) if keyed and not pictures else []
+        inframe = present if i > 0 else around
+        opening = inframe if keyed and not pictures else []
         named = list(dict.fromkeys(_mentions(para["text"], names) + [who for who, _ in para["hold"]]
                                    + referred(para["text"], names, gender, around)))
         cast = (named or present) if para["cut"] else list(dict.fromkeys(present + named))
@@ -546,13 +715,31 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         recover = [n for n in cast if n in solo_seen] if not keyed else []
         speech = bool(_SPEECH.search(para["text"]))
         text = "\n\n".join(x for x in (without_absent(dressed, absent, names), dialogue(para["text"])) if x)
-        drop = absent + (list(during) if keyed else []) + recover + opening
+        held_in = [n for n in during if i == 0 or n in inframe] if keyed else []
+        drop = absent + held_in + recover + opening
         text, shot_refs = shot_pictures(text, refs, drop)
         sound_text, sounded = snd.sound_line(para["text"], scene_text, speech)
-        notes = held_notes({who: items for who, items in during.items() if who in cast or who not in names})
-        notes += [f"By the last frame, {who} has {' and '.join(items)} in plain view, and whoever put it on has let go."
-                  for who, items in added.items()]
+        free = [n for n in cast if n not in during and n not in added]
+        notes = held_notes({who: items for who, items in during.items() if who in cast or who not in names}, free)
+        notes += [f"By the last frame, {who} has {' and '.join(items)} in plain view" + (
+            "." if any("leash" in it for it in items) else ", and whoever put it on has let go.")
+            for who, items in added.items()]
+        for who in [w for w in cast if any("leash" in it and " tied " not in it for it in during.get(w, []) + added.get(w, []))]:
+            leash_by[who] = leash_holder(para["text"], cast, who, gender) or leash_by.get(who, "")
+            if leash_by[who] in cast:
+                links = any("chain leash" in it for it in during.get(who, []) + added.get(who, []))
+                notes.append(f"The leash runs from {who}'s collar to {leash_by[who]}'s hand" + (
+                    ", and its links never stretch." if links else "."))
+                notes += [f"The leash and the chain on {_pronouns(who, gender)[0]} {r['thing']} are two separate chains."
+                          for r in _worn_sides(without_absent(dressed, absent, names), cast)
+                          if r["who"] == who and "chain" in (r["back"], r["front"], r["fastened"])]
+        leash_by = {w: h for w, h in leash_by.items() if any("leash" in it for it in state.get(w, []))}
         notes += hand_notes(para["text"], cast, gender, during) + rear_notes(para["text"], cast, gender)
+        pulled = pull_notes(para["text"], without_absent(dressed, absent, names), cast, gender,
+                            {w: during.get(w, []) + added.get(w, []) for w in cast})
+        held_by_pull = {n.split(" keeps its length")[0] for n in pulled}
+        notes += pulled + [n for n in side_notes(without_absent(dressed, absent, names), cast, gender)
+                           if n.split(" stays fastened")[0] not in held_by_pull]
         if speech or snd.vocal(para["text"]):
             notes += [snd.muffled(who, snd.mouth_item(during.get(who, []))) for who in cast
                       if snd.mouth_item(during.get(who, []))]
@@ -563,12 +750,20 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
             gags = [snd.mouth_item(during.get(who, [])) for who in cast]
             notes.append("Nobody speaks." if any(snd.held_open(g) for g in gags) else
                          "Nobody speaks, and every mouth stays closed.")
-        notes += [sound_text, cast_line(cast, names, without_absent(scene_text, absent, names), para["text"])]
+        setting_text = " ".join(p["text"] for p in setting)
+        extra = extras_in(f"{setting_text} {para['text']}") or bool(strangers(para["text"], setting_text, names))
+        notes += [sound_text, cast_line(cast, names, without_absent(scene_text, absent, names), para["text"]),
+                  stranger_line(cast, names, gender, extra)]
+        newcomers = [n for n in cast if n not in inframe] if i > 0 else []
+        joining = newcomers + (["the strangers this beat brings in"] if extra else [])
         if keyed:
             notes.append(f"<Picture {len(shot_refs) + 1}> is the frame this shot opens on: the same place and the same "
-                         f"people, one moment earlier, carried forward rather than joined by anybody new.")
+                         f"people, one moment earlier, carried forward" + (
+                             f"; {' and '.join(joining)} {'comes' if joining == newcomers[:1] else 'come'} into view during "
+                             f"this shot" + ("." if extra else ", and nobody else joins.") if joining
+                             else " rather than joined by anybody new."))
         notes += [f"<Picture {len(shot_refs) + k}> shows {who} as they look now." for k, who in enumerate(recover, 1)]
-        text = "\n\n".join(x for x in (text, " ".join(n for n in notes if n)) if x)
+        text = "\n\n".join(x for x in (text, " ".join(n for n in dict.fromkeys(notes) if n)) if x)
         frames = rt.align_frame_count(round((para["seconds"] or shot_seconds) * rt.H3_FPS))
         if from_beat and not para["seconds"]:
             frames = shot_frames(para["text"], frames, bool(added))
@@ -584,6 +779,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         shots.append({"n": i + 1, "prompt": text, "refs": shot_refs, "frames": frames, "keyed": keyed, "fit": fit,
                       "cut": para["cut"], "wordless": not speech, "sounded": sounded, "held": held_line(during),
                       "cast": cast, "solo": solo, "recover": recover, "bound": bound,
+                      "turned": [f"{r['who']}'s {r['thing']}" for r in _worn_sides(without_absent(dressed, absent, names), cast)],
                       "added": held_line(added), "released": held_line(released),
                       "clothes_off": held_line(off), "clothes_on": held_line(on),
                       "unread": para["unread"] + ([u for q in lead for u in q["unread"]] if i == 0 else []),
@@ -1117,6 +1313,9 @@ class H3LongVideos:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
         info = [f"{w}x{h}, {len(shots)} shots"]
+        turned = list(dict.fromkeys(t for s in shots for t in s["turned"]))
+        if turned:
+            info.append("kept the right way round, front and back pinned to the body: " + ", ".join(turned))
         if not refs_ok and any(r is not None for r in pictures):
             info.append(f"{why}, so a person's picture is left out of a shot that opens on a frame they are already "
                         f"in, which keeps them from being drawn twice; everywhere else the pictures go in")

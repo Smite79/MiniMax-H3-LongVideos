@@ -9,13 +9,13 @@ KINDS = (
     ("handcuffs", r"(?:hand)?cuffs|manacles", r"(?:hand)?cuff(?:s|ed|ing)?|manacl(?:es|ed|ing)", "wrists", "cuffs"),
     ("zip ties", r"zip[\s-]?ties|cable\s+ties", r"zip[\s-]?ti(?:es|ed|ing)", "wrists", "zip"),
     ("shackles", r"shackles|leg\s+irons", r"shackl(?:es|ed|ing)", "ankles", "shackles"),
-    ("chains", r"chains?", r"chain(?:s|ed|ing)", "wrists", "chain"),
+    ("chains", r"chains?(?!\s+leash)", r"chain(?:s|ed|ing)", "wrists", "chain"),
     ("duct tape", r"(?:duct\s+|gaffer\s+|packing\s+)?tape", r"tap(?:es|ed|ing)", "mouth", "tape"),
     ("rope", r"ropes?|cords?|twine", r"ti(?:es|ed|ing)|binds?|binding|bound", "wrists", "rope"),
     ("ball gag", r"ball[\s-]?gag", r"(?!)", "mouth", "gag"),
     ("gag", r"gag|cloth|rag", r"gag(?:s|ged|ging)", "mouth", "gag"),
     ("blindfold", r"blindfold", r"blindfold(?:s|ed|ing)", "eyes", "blindfold"),
-    ("collar", r"collar", r"collar(?:s|ed)", "neck", "collar"),
+    ("collar", r"collar|(?:(?:chain|leather|metal|steel)\s+)?leash", r"collar(?:s|ed)|leash(?:es|ed)", "neck", "collar"),
 )
 _OWN = r"(?:her|his|their|[A-Z][a-z]+['’]s)"
 PARTS = (("hips", r"hips?|waist|crotch|groin|pelvis|between\s+(?:her|his|their|[A-Z][a-z]+['’]s)\s+(?:legs|thighs)"),
@@ -27,9 +27,11 @@ PARTS = (("hips", r"hips?|waist|crotch|groin|pelvis|between\s+(?:her|his|their|[
 APPLY = (r"puts?|putting|snaps?|snapped|locks?|locked|locking|clicks?|clicked|fastens?|fastened|clamps?|clamped|slaps?|"
          r"slapped|places?|placed|clips?|clipped|wraps?|wrapped|wrapping|winds?|presses?|pressed|sticks?|stuffs?|stuffed|"
          r"shoves?|forces?|pushes?|ties?|tied|tying|binds?|bound|binding|loops?|secures?|secured|securing|straps?|strapped|"
-         r"buckles?|slips?|restrains?|restrained|restraining|pins?|pinned|pinning|cinch(?:es|ed)?|uses?|used|using")
+         r"buckles?|slips?|restrains?|restrained|restraining|pins?|pinned|pinning|cinch(?:es|ed)?|uses?|used|using|"
+         r"attach(?:es|ed|ing)?|hooks?|hooked")
 REPORT = {"handcuffs", "zip ties", "shackles", "ball gag", "blindfold"}
-REMOVE = r"remov(?:e|es|ed|ing)|unlock(?:s|ed|ing)?|unfasten(?:s|ed|ing)?|unbuckl(?:e|es|ed|ing)|unwrap(?:s|ped|ping)?"
+REMOVE = (r"remov(?:e|es|ed|ing)|unlock(?:s|ed|ing)?|unfasten(?:s|ed|ing)?|unbuckl(?:e|es|ed|ing)|unwrap(?:s|ped|ping)?|"
+          r"unclip(?:s|ped|ping)?|unhook(?:s|ed|ing)?|detach(?:es|ed|ing)?")
 STRIP = (r"takes?|took|taking|pulls?|pulled|pulling|rips?|ripped|ripping|peels?|peeled|peeling|tears?|tore|tearing|"
          r"yanks?|yanked|strips?|stripped|cuts?|cutting|slices?|sliced|snips?|snipped|loosens?|loosened|works?|worked")
 CUT = r"cuts?|cutting|slices?|sliced|snips?|snipped|saws?|sawed"
@@ -48,6 +50,9 @@ _BIT = (r"(?:a|an|the|another|one|two|three|more)\s+(?:\w+\s+)?(?:strip|piece|le
 WRAPS = ("duct tape", "rope", "chains")
 _AROUND = re.compile(r"\b(?:around|about)\s+(?:her|him|them|(?-i:[A-Z])[a-z]+)\b(?!['’])", re.I)
 _SEX = {"her": "f", "she": "f", "him": "m", "his": "m", "he": "m"}
+_BEHIND = re.compile(r"\b((?:wrists?|hands|arms|them|(?:hand)?cuff(?:s|ed)?|tied|bound|taped|zip[\s-]?tied|chained|shackled)\s+"
+                     r"(?:together\s+)?)behind\s+(her|him|them)\b(?!\s+back\b)", re.I)
+_BACK = {"her": "her", "him": "his", "them": "their"}
 _AUX = re.compile(r"\b(?:is|are|was|were|gets?|got|been|being|remains?|stays?|still)\s+(?:\w+ly\s+)?$", re.I)
 _FEMALE = r"woman|girl|lady|wife|mother|sister|daughter"
 _MALE = r"man|boy|guy|husband|father|brother|son"
@@ -132,6 +137,10 @@ def phrase(kind, part, pos, poss, anchor, scope=""):
     if kind == "blindfold":
         return f"a blindfold over {poss} eyes"
     if kind == "collar":
+        leash = re.search(r"\b((?:chain|leather|metal|steel)\s+)?leash", scope, re.I)
+        if leash:
+            return f"a collar around {poss} neck, with a {(leash.group(1) or '').lower()}leash clipped to it" + (
+                f" and tied {anchor}" if anchor else "")
         return f"a collar around {poss} neck" + (f" {anchor}" if anchor else "")
     return f"{kind} on {poss} {part}" + tail
 
@@ -192,11 +201,13 @@ def _wearer(sentence, toks, m, mode, people, gender):
 def read(text, people, gender, held):
     holds, releases, unclear, worn = {}, {}, [], {}
     for sentence in sentences(text):
+        sentence = _BEHIND.sub(lambda b: f"{b.group(1)}behind {_BACK[b.group(2).lower()]} back", sentence)
         toks, taken = tokens(sentence, people), []
         for kind, noun, verb, default, key in KINDS:
             found = ([(m, "noun") for m in re.finditer(rf"\b(?:{APPLY})\s+(?:[\w'’-]+\s+){{0,3}}?(?:{noun})\b", sentence, re.I)]
-                     + [(m, "worn") for m in re.finditer(rf"\b(?:in|with|wearing|against)\s+(?:a\s+pair\s+of\s+|a\s+set\s+of\s+|"
-                                                          rf"the\s+|her\s+|his\s+|their\s+|some\s+)?(?:{noun})\b", sentence, re.I)]
+                     + [(m, "worn") for m in re.finditer(rf"\b(?:in|with|wears?|wearing|wore|against)\s+(?:a\s+pair\s+of\s+|a\s+set\s+of\s+|"
+                                                          rf"the\s+|her\s+|his\s+|their\s+|some\s+|an?\s+)?(?:(?!(?:and|or|with|in|"
+                                                          rf"on)\b)[\w-]+\s+){{0,2}}?(?:{noun})\b", sentence, re.I)]
                      + [(m, "verb") for m in re.finditer(rf"(?<![\w-])(?:{verb})\b", sentence, re.I)]
                      + [(m, "state") for m in re.finditer(
                          rf"\b(?:{noun})\s+(?P<gap>(?:(?!(?:and|then|or|but|while|as)\b)[\w'’-]+\s+){{0,2}}?)(?:over|across|"
@@ -223,6 +234,10 @@ def read(text, people, gender, held):
                 if mode == "worn" and m.group(0)[:4].lower() == "with" and not parts_in(lead):
                     continue
                 who, said, passive = _wearer(sentence, toks, m, mode, people, gender)
+                if who is None and key == "collar" and re.search(r"leash", m.group(0), re.I):
+                    on = list(dict.fromkeys(n for n, items in list(held.items()) + list(holds.items())
+                                            if any("collar" in i.lower() for i in items)))
+                    who, said, passive = (on[0], "", False) if len(on) == 1 else (None, "", False)
                 if who is None:
                     continue
                 taken.append(span)
@@ -232,12 +247,15 @@ def read(text, people, gender, held):
                 pos, anchor = _POS.search(after) or _POS.search(sentence), _ANCHOR.search(after)
                 scope = _CLAUSE.split(lead + sentence[m.start():] if mode == "worn" else
                                       sentence[span[0]:] if mode in ("state", "it") else after)[0]
+                scope = m.group(0) + scope if key == "collar" and mode in ("noun", "verb") else scope
                 already = passive and _described(mode, m, lead, before, after, verb)
                 known = owner(held.get(who, []) + holds.get(who, [])) or {"f": "her", "m": "his"}.get(gender.get(who), "")
                 fallback = ("torso" if kind in WRAPS and _AROUND.search(scope) else default)
                 for part, rx, spot in parts_in(scope) or [(fallback, dict(PARTS)[fallback], "")]:
                     have = held.get(who, []) + holds.get(who, [])
-                    if any(key in h.lower() and (part in h.lower() or kind == "handcuffs") for h in have):
+                    same = [h for h in have if key in h.lower() and (part in h.lower() or kind == "handcuffs")]
+                    if same and not (pos and part == "wrists" and not any(_POS.search(h) for h in same)) and not (
+                            key == "collar" and re.search(r"\bleash", scope, re.I) and not any("leash" in h for h in same)):
                         continue
                     own = re.search(r"\b(her|his|their)\b", spot, re.I) or \
                         re.search(rf"\b(her|his|their)\s+(?:\w+\s+)?(?:{rx})\b", scope, re.I)
@@ -245,6 +263,14 @@ def read(text, people, gender, held):
                         continue
                     poss = own.group(1).lower() if own else said or known or f"{who}'s"
                     item = phrase(kind, part, pos.group(0) if pos else "", poss, anchor.group(0) if anchor else "", scope)
+                    for old in same:
+                        if old in holds.get(who, []):
+                            holds[who].remove(old)
+                            if old in worn.get(who, []):
+                                already = True
+                                worn[who].remove(old)
+                        elif old not in releases.get(who, []):
+                            releases.setdefault(who, []).append(old)
                     holds.setdefault(who, []).append(item)
                     if already:
                         worn.setdefault(who, []).append(item)
@@ -277,9 +303,15 @@ def read(text, people, gender, held):
                     continue
                 items = [i for i in held[who] if key in i.lower()
                          and (place is None or re.search(rf"\b(?:{place[1]})\b", i, re.I))]
+                leash = key == "collar" and "leash" in m.group(0).lower()
+                items = [i for i in items if "leash" in i] if leash else items
                 if len(items) == 1:
                     releases.setdefault(who, []) if items[0] in releases.get(who, []) else \
                         releases.setdefault(who, []).append(items[0])
+                    if leash:
+                        plain = re.sub(r",\s+with\s+an?\s+.*$", "", items[0])
+                        holds.setdefault(who, []).append(plain)
+                        worn.setdefault(who, []).append(plain)
                 elif len(items) > 1:
                     unclear.append(f"which {kind} comes off in '{sentence.strip()}'")
     return holds, releases, unclear, worn
