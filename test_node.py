@@ -78,7 +78,7 @@ def test_plan():
     one = S.plan_shots("Mara waves.", 5.0, [None] * 4, True)
     check("a single paragraph is one shot, keyed on a first frame", len(one) == 1 and one[0]["keyed"]
           and one[0]["prompt"].startswith("Mara waves.\n\n"), one[0]["prompt"])
-    t, refs = S.shot_pictures("Ana (<Picture 3>) waits. <Picture 1> hums.", [IMG1, None, None], [])
+    t, refs, _ = S.shot_pictures("Ana (<Picture 3>) waits. <Picture 1> hums.", [IMG1, None, None], [])
     check("a tag with no image is removed with its brackets", t == "Ana waits. <Picture 1> hums." and refs == [IMG1], t)
 
 
@@ -505,6 +505,73 @@ def test_strangers():
           "There is one person in the shot" in looks[0]["prompt"], looks[0]["prompt"])
 
 
+def test_things():
+    print("\n=== ships, vehicles and animals are not people ===")
+    memory = ("Valiant <Picture 1>: a long white starship with twin blue engines.\n"
+              "Raptor <Picture 2>: a black alien warship shaped like a crescent.")
+    ships = S.plan_shots("Deep space, a nebula behind a ringed planet.\n\nValiant drifts past the planet.\n\nRaptor drops out of "
+                         "hyperspace behind Valiant.", 5.0, [IMG1, IMG2, None, None], False, memory=memory)
+    person = ("person in the shot", "people in the shot", "mouth", "same people", "speaks")
+    check("a shot of things alone says there are no people in it and asks for no bodies, faces, mouths or speech",
+          "There are no people anywhere in the shot, only Valiant." in ships[0]["prompt"]
+          and "There are no people anywhere in the shot, only Valiant and Raptor." in ships[1]["prompt"]
+          and not any(w in x["prompt"] for x in ships for w in person)
+          and "the same place and the same things in it, one moment earlier, carried forward; Raptor (exactly as in <Picture 2>) "
+              "comes into view during this shot, and nothing else joins." in ships[1]["prompt"], [x["prompt"][-500:] for x in ships])
+    mixed = S.plan_shots("Deep space.\n\nValiant drifts past the planet.\n\nReyes stands on the bridge of Valiant.\n\n"
+                         "Valiant's crew runs to their stations.", 5.0, [IMG1, None, None, None], False,
+                         memory="Reyes: a stern woman in a grey uniform.\nValiant <Picture 1>: a long white starship.")
+    check("a person aboard counts as the one person, and a crew is let in as extras",
+          "There is one person in the shot: one body, one face." in mixed[1]["prompt"]
+          and "the same people" in mixed[1]["prompt"] and "There is one person" not in mixed[2]["prompt"]
+          and "the strangers this beat brings in come into view" in mixed[2]["prompt"]
+          and "There are no people" not in mixed[1]["prompt"] + mixed[2]["prompt"], [x["prompt"][-400:] for x in mixed])
+    check("a description decides by what it names first",
+          S.things(["Valiant", "Kirk", "Rex", "Mara"], {"Valiant": "Valiant: a starship crewed by 400 officers.",
+                                                        "Kirk": "Kirk: the captain of a starship.", "Rex": "Rex: a big dog.",
+                                                        "Mara": "Mara: a woman with a car."}) == {"Valiant", "Rex"})
+
+
+def test_named_ship_only():
+    print("\n=== the ship a beat names is the one it gets ===")
+    beats = "\n\nThe Excelsior glides out of spacedock as she powers up.\n\nThe Enterprise follows her out."
+    scene = "Spacedock above Earth, where the Enterprise sits in dry dock."
+    for mem in ("USS Excelsior <Picture 1>: an Excelsior-class Federation starship.\nUSS Enterprise <Picture 2>: a "
+                "Constitution-class Federation starship.",
+                "USS Excelsior (NCC-2000) <Picture 1>: an Excelsior-class Federation starship.\nUSS Enterprise (NCC-1701-A) "
+                "<Picture 2>: a Constitution-class Federation starship.",
+                "USS Excelsior NCC-2000 <Picture 1>: an Excelsior-class Federation starship.\nUSS Enterprise NCC-1701-A "
+                "<Picture 2>: a Constitution-class Federation starship.",
+                "USS Excelsior NCC-2000: an Excelsior-class Federation starship.\nUSS Enterprise NCC-1701-A: a Constitution-class "
+                "Federation starship."):
+        shots = S.plan_shots(scene + beats, 5.0, [IMG1, IMG2, None, None], False, memory=mem)
+        tagged = "<Picture" in mem
+        check(f"beat 1 gets only Excelsior, keeps its place, and beat 2 brings Enterprise in ({mem[14:30]}...)",
+              [x["cast"] for x in shots] == [["Excelsior"], ["Excelsior", "Enterprise"]]
+              and [len(x["refs"]) for x in shots] == ([1, 2] if tagged else [0, 0])
+              and "Enterprise" not in shots[0]["prompt"] and shots[0]["prompt"].startswith("Spacedock above Earth.\n")
+              and scene in shots[1]["prompt"], [(x["cast"], len(x["refs"]), x["prompt"][:160]) for x in shots])
+    layouts = ("USS {n} - <Picture {k}>: {c} Federation starship.", "USS {n} – <Picture {k}> – {c} Federation starship.",
+               "<Picture {k}>: USS {n}, {c} Federation starship.", "<Picture {k}> USS {n}, {c} Federation starship.",
+               "USS {n}, {c} Federation starship <Picture {k}>.", "USS {n}, {c} Federation starship (<Picture {k}>).",
+               "USS {n} = <Picture {k}>, {c} Federation starship.",
+               "The USS {n} is {c} Federation starship, shown in <Picture {k}>.",
+               "USS {n} is {c} Federation starship. <Picture {k}>")
+    fleet = (("Excelsior", 1, "an Excelsior-class"), ("Enterprise", 2, "a Constitution-class"), ("Reliant", 3, "a Miranda-class"))
+    got = []
+    for f in layouts:
+        shots = S.plan_shots("Spacedock above Earth.\n\nThe Excelsior glides out of spacedock.\n\nThe Enterprise follows.", 5.0,
+                             [IMG1, IMG2, IMG1, None], False,
+                             memory="\n".join(f.format(n=n, k=k, c=c) for n, k, c in fleet))
+        got.append((f, [S.shot_line(x) for x in shots]))
+    check("a picture tag anywhere on a memory line belongs to the ship that line is about, and only that ship's picture goes in",
+          all(lines == ["shot 1: 124 frames, cast: Excelsior, pictures: Excelsior (ref_image_1)",
+                        "shot 2: 124 frames, cast: Excelsior, Enterprise, pictures: Excelsior (ref_image_1), Enterprise "
+                        "(ref_image_2)"] for _, lines in got), [g for g in got if g[1][0].count("ref_image") != 1])
+    check("a scene sentence about someone who is not there still goes whole",
+          S.without_absent("A cell. Dan stands guard, with a rifle.", ["Dan"], ["Dan", "Mara"]) == "A cell.")
+
+
 def test_hands_and_backs():
     print("\n=== who uses their hands, and what shows from behind ===")
     memory = "Crystal: a slim woman. She wears a steel chastity belt with a chain hanging from the back.\nMike: a tall man."
@@ -717,7 +784,8 @@ def test_pictures_by_checkpoint():
         shots = S.plan_shots(late, 5.0, [IMG1, IMG2, None, None], False, memory=memory, pictures=pics)
         check(f"someone already held keeps their picture in the shot they enter (ref model: {pics}), and it says they come in",
               [len(s["refs"]) for s in shots][1] == (2 if pics else 1) and "Crystal <Picture 1>" in shots[1]["prompt"]
-              and "carried forward; Crystal comes into view during this shot, and nobody else joins." in shots[1]["prompt"]
+              and "carried forward; Crystal (exactly as in <Picture 1>) comes into view during this shot, and nobody else joins."
+              in shots[1]["prompt"]
               and "Crystal <Picture" not in shots[2]["prompt"] and "rather than joined by anybody new" in shots[2]["prompt"],
               [(len(s["refs"]), s["prompt"][-300:]) for s in shots])
         check("a restated action carries no picture tags", "It is Mike who grabs Crystal by the arm, with his own hands."
@@ -1451,6 +1519,8 @@ def main():
     test_continuity_lines()
     test_hands_and_backs()
     test_strangers()
+    test_things()
+    test_named_ship_only()
     test_quiet_mouths()
     test_directive_forms()
     test_reading()

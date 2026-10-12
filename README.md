@@ -211,7 +211,9 @@ The node keeps track of who is present, so people appear only when they should.
   name written right before a picture tag (`Mara <Picture 1>`), or a name on a `hold:`
   or `exit:` line.
 - Anyone named in a beat is present from that shot on, until they leave. So is someone
-  a beat calls *her* or *him*, when they are the only woman or man among the characters.
+  a beat calls *her* or *him*, when they are the only woman or man among the characters,
+  unless the beat already names someone that *her* or *him* can mean (*The Aurora
+  raises her sails as she leaves port* does not bring in another ship).
 - The scene paragraph and the anchor describe people but do not put them in a shot.
 - A beat with nobody in it (*The camera pans across the empty bathroom*) says that nobody
   is in the shot.
@@ -222,7 +224,9 @@ For someone who is not present:
 - their picture is left out
 - their `character_memory` line is left out
 - any scene sentence that is only about them is left out, along with the sentences
-  after it that start with *she* or *he* and so are about them too
+  after it that start with *she* or *he* and so are about them too. When only a side
+  clause is about them (*A harbour at dawn, where the Aurora sits at anchor.*), just
+  that clause goes and the place stays (*A harbour at dawn.*)
 
 When everyone in a shot is a declared character, a shot with one or two people also
 says how many are in it. The count is left out whenever someone else might be there:
@@ -230,6 +234,13 @@ a name that is not declared, or *a guard*, *the man*, *a crowd*. Words that only
 describe someone (*a slim Asian woman*, *Blue eyes.*) do not count as another person.
 Declare every character, with a `character_memory` line or a picture tag, so the
 guarding covers them all.
+
+A character does not have to be a person. One whose description first names a ship,
+vehicle, planet, robot or animal (`Valiant <Picture 1>: a long white starship`, `Rex: a
+big dog`) is treated as a thing: it is never counted as a person, and a shot with only
+things in it says there are no people anywhere in it, with no talk of bodies, faces or
+mouths, so a scene of ships stays a scene of ships. A person aboard still counts, and a
+beat that mentions a crew, passengers or pilots brings them in as extras.
 
 Extras are welcome: a beat can bring in *a woman*, *a crowd* or a name you did not
 declare. That shot then says everyone other than your characters looks nothing like
@@ -275,6 +286,13 @@ ComfyUI log.
 Wire up to four pictures into `ref_image_1` … `ref_image_4` and refer to them in the text
 as `<Picture 1>` … `<Picture 4>`. A tag with no picture wired is removed.
 
+A tag belongs to the name it sits beside, or else to the one name on its line or
+sentence, so a `character_memory` line can carry it anywhere: `Aurora <Picture 1>:`,
+`HMS Aurora - <Picture 1>:`, `<Picture 1>: HMS Aurora, …`, `HMS Aurora, a three-masted
+frigate (<Picture 1>).` A memory line with a tag declares the one it is about, so its
+picture goes only into the shots that one is in. Each shot's line in `info` lists the
+pictures it sends and whose they are (`pictures: Aurora (ref_image_1)`).
+
 Once a person is held, their own picture (written right after their name, as in
 `Mara <Picture 1>`) is left out of shots that start on a frame they are already in. A
 portrait without the cuffs or the tape pulls them back off. In the shot where they come
@@ -311,7 +329,8 @@ picture. The node reads which checkpoint is loaded from its own `model` link.
   voice to. That pass listens to a half-size copy of the picture, which makes it about
   six times cheaper than rendering the shot again, and the picture itself is never
   touched. Set `foley_resolution` to *full* for a full-size pass. A beat that describes
-  its own sounds keeps those.
+  its own sounds keeps those, and a scene paragraph that describes sounds (*Full battle
+  sounds.*) keeps them in every shot, with the beat's own sounds added.
 - **No music:** every shot says there is no background music, unless its beat or the
   scene mentions music, a radio, singing or an instrument.
 - **Silence:** a shot with nothing to hear stays silent. Turn `silence_wordless` off to

@@ -175,6 +175,10 @@ def sound_line(beat, scene, speech):
     if speech:
         return quiet, False
     amb = ambience(scene) or ambience(beat)
+    if described(scene) and not described(beat):
+        heard = foley(beat)
+        return (f"The sounds are the ones the scene describes{', with ' + _join(heard) if heard else ''}. {quiet}".strip(),
+                True)
     if described(beat):
         line = (f"The only sounds are the ones this beat describes, with {amb} under them." if amb
                 else "The only sounds are the ones this beat describes.")
