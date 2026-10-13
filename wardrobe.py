@@ -4,7 +4,7 @@
 # This notice may not be removed or altered. See LICENSE.
 
 import re
-from h3_restraints import sentences, resolve
+from h3_restraints import sentences, resolve, stand_ins
 
 GARMENT = (r"(?:t-?shirt|shirt|blouse|crop\s+top|tank\s+top|top|sweater|jumper|hoodie|cardigan|jacket|coat|blazer|vest|"
            r"dress|gown|skirt|shorts|trousers|pants|jeans|leggings|tights|stockings|socks|shoes|boots|heels|sneakers|"
@@ -85,11 +85,68 @@ def _owners(text, people, last=None):
     return out
 
 
+LABELS = {"name", "names", "character", "characters", "looks", "look", "hair", "eyes", "outfit", "outfits", "clothes",
+          "clothing", "wears", "wearing", "age", "height", "build", "body", "face", "skin", "personality", "voice", "style",
+          "role", "description", "appearance", "notes", "note", "gender", "sex", "race", "species", "type", "class",
+          "details", "features", "accessories", "shoes", "makeup", "tattoos", "piercings", "background", "traits",
+          "nationality", "ethnicity", "occupation", "job", "relationship"}
+SCENE = {"setting", "location", "scene", "mood", "lighting", "light", "time", "place", "weather", "music", "audio", "sound",
+         "camera", "shot", "style", "note", "notes"}
+_HEAD = re.compile(r"^\s*(?:[-*•>#]+\s*|\d+[.)]\s+)?(?:\*\*|__)?(?:(?:U\.?S\.?S\.?|HMS|RRS)\s+)?"
+                   r"(?P<name>(?-i:[A-Z])[\w'’-]{0,24}(?:\s+(?![A-Z]{1,4}-\d)(?-i:[A-Z])[\w'’-]{0,24}){0,2})(?:\*\*|__)?"
+                   r"(?:\s+\(?[A-Z]{1,4}-\d[\w-]*\)?)?"
+                   r"(?:\s*\([^)]*\))?(?:\s*<\s*picture[\s_\-]*\d+\s*>)?(?:\s*\([^)]*\))?(?:\*\*|__)?"
+                   r"\s*(?P<sep>[:=]|[-–—]\s)?\s*(?P<rest>.*)$", re.I)
+
+
+def plain(name):
+    return name.title() if name.isupper() and len(name) > 1 else name
+
+
+def header(line):
+    m = _HEAD.match(line or "")
+    if not m:
+        return None
+    name, rest = m.group("name"), m.group("rest").strip()
+    if name.lower() in LABELS:
+        if name.lower() in ("name", "character") and re.fullmatch(r"(?:[A-Z][\w'’-]{0,24}\s*){1,3}", rest):
+            return plain(rest.strip())
+        return ""
+    return plain(name) if m.group("sep") or not rest else None
+
+
+def line_owners(text, names):
+    out, owner = [], None
+    for line in (text or "").splitlines():
+        found = header(line) if line.strip() else None
+        head = _HEAD.match(line)
+        if not line.strip() or head and head.group("name").lower() in SCENE:
+            owner = None
+        elif found:
+            owner = found if found in names else None
+        out.append((line, owner))
+    return out
+
+
+_FIELD = re.compile(rf"^\s*(?:[-*•>#]+\s*|\d+[.)]\s+)?(?:(?:{'|'.join(sorted(LABELS))})\s*:\s*)?", re.I)
+
+
+def attributed(text, names):
+    lines = []
+    for line, owner in line_owners(text, names):
+        if owner:
+            head = _HEAD.match(line)
+            body = head.group("rest") if head and header(line) else line
+            line = f"{owner}: {_FIELD.sub('', body).strip()}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def descriptions(text, people):
     out = {}
-    for line in (text or "").splitlines():
+    for line, owner in line_owners(text, people):
         sheet = _SHEET.match(line)
-        for s, who in _owners(line, people, sheet.group(1) if sheet and sheet.group(1) in people else None):
+        for s, who in _owners(line, people, owner or (sheet.group(1) if sheet and sheet.group(1) in people else None)):
             for n in who:
                 out[n] = (out.get(n, "") + " " + s).strip()
     return out
@@ -99,10 +156,10 @@ def undress(text, undressed, people):
     if not undressed:
         return text
     lines = []
-    for line in text.splitlines():
+    for line, owner in line_owners(text, people):
         sheet = _SHEET.match(line)
         kept, gone = [], False
-        for s, who in _owners(line, people, sheet.group(1) if sheet and sheet.group(1) in people else None):
+        for s, who in _owners(line, people, owner or (sheet.group(1) if sheet and sheet.group(1) in people else None)):
             if gone and _ITS.match(s):
                 continue
             gone = False
@@ -115,8 +172,9 @@ def undress(text, undressed, people):
     return "\n".join(lines)
 
 
-def read(text, people, gender, described):
-    off, on, unclear = {}, {}, []
+def read(text, people, gender, described, here=()):
+    off, on, unclear, blocked = {}, {}, [], stand_ins(text)
+    here = [n for n in people if n in here or re.search(rf"\b{re.escape(n)}\b", text)]
     for sentence in sentences(text):
         for rx, out in ((_OFF, off), (_ON, on)):
             for m in rx.finditer(sentence):
@@ -125,9 +183,15 @@ def read(text, people, gender, described):
                 garment = garment_of(m.group("g") or m.group("h"))
                 own = re.search(r"\b(her|his|their)\b|\b([A-Z][a-z]+)['’]s\b",
                                 (m.group("pre") if m.group("g") else m.group("pre2")) or "")
-                who = resolve(own.group(1) or own.group(2), people, gender) if own else ""
-                owners = [n for n in people if mentions(described.get(n, ""), garment)]
-                who = who or (owners[0] if len(owners) == 1 else "")
+                if own and own.group(1) and ({"her": "f", "his": "m"}.get(own.group(1).lower(), "fm") in blocked or
+                                             own.group(1).lower() == "their" and blocked):
+                    unclear.append(f"whose {garment} in '{sentence.strip()}'")
+                    continue
+                want = {"her": "f", "his": "m"}.get((own.group(1) or "").lower()) if own else None
+                owners = [n for n in people if mentions(described.get(n, ""), garment)
+                          and (want is None or gender.get(n, want) == want)]
+                who = (own.group(2) if own and own.group(2) in people else "") or (owners[0] if len(owners) == 1 else "") or (
+                    resolve(own.group(1) or own.group(2), people, gender, here=here) if own else "")
                 if not who:
                     unclear.append(f"whose {garment} in '{sentence.strip()}'")
                     continue

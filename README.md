@@ -64,10 +64,16 @@ Turn on **`plan_only`** to see the exact text every shot will get, without rende
 
 Paragraphs are separated by a blank line.
 
-- The **first paragraph is the scene**: where it takes place, who the characters are
-  and what they look like. It opens every shot, so keep actions out of it. It does not
-  put anyone in a shot: the beats do.
-- **Every paragraph after it is one shot**, sent word for word.
+- The **first paragraph is the scene** when it only describes: where it takes place, who
+  the characters are and what they look like (*is a tall woman*, *has red hair*, *wears a
+  grey hoodie*, or someone introduced with their picture tag). It opens every shot, and
+  does not put anyone in a shot: the beats do. A sentence in it about someone who is not
+  in a shot is left out of that shot.
+- When someone in the first paragraph does something (*Sarah and Dana sit on the couch
+  talking*, *Sarah is lying on the bed*, *Dana cuffs Sarah's wrists*), when anyone
+  speaks, or when the camera moves, the first paragraph is the **first shot** instead,
+  and nothing of it is repeated in the others.
+- **Every other paragraph is one shot**, sent word for word.
 - A prompt with a single paragraph is one shot.
 - **`anchor`** (optional) is framing for the whole film: look, camera, lighting,
   location. It goes at the front of every shot. When it is filled in, every paragraph
@@ -206,14 +212,53 @@ after, so it is not drawn before the action happens.
 
 The node keeps track of who is present, so people appear only when they should.
 
-- A character is anyone with a line in `character_memory` (`Mara: a tall woman`, or a
-  sentence that starts with their name: `Mara is a tall woman`, `Mara, a tall woman`), a
-  name written right before a picture tag (`Mara <Picture 1>`), or a name on a `hold:`
-  or `exit:` line.
-- Anyone named in a beat is present from that shot on, until they leave. So is someone
+- A character is anyone `character_memory` describes, however the memory is laid out:
+  `Mara: a tall woman`, `Mara is a tall woman`, `Mara, a tall woman`, `- Mara: …`,
+  `**Mara**: …`, `Mara (25): …`, `Mara - …`, `MARA: …`, `Name: Mara`, or the name alone
+  on its own line (with or without a picture tag or a colon) and the description on the
+  lines under it, as sentences, bullets or fields such as `Hair: …` and `Outfit: …`.
+  Everything up to the next name or a blank line belongs to that character, so a shot
+  they are not in leaves all of it out. A `Setting:`, `Location:`, `Mood:` or similar
+  line belongs to the scene, not to the character above it. Anyone written right before a
+  picture tag (`Mara <Picture 1>`) or named on a `hold:` or `exit:` line is a character
+  too.
+- A shot holds only the characters its beat names or refers to. Naming someone once does
+  not put them in the shots after it. A name that is only mentioned does not count: *a
+  letter from Mara*, *a text from Mara*, *Mara's photo*, *thinking about Mara*, *calls
+  Mara on the phone*, *waiting for Mara*, *hears Mara upstairs*, *before Mara gets home*,
+  *Mara is at work*, *Mara has left*, *screams for Mara*, `Mara (V.O.):`, and any name,
+  *she* or *he* inside spoken words (*"Mara, where are you?"*). *Walks over to Mara*,
+  *takes the keys from Mara*, *calls Mara over*, *kneels before Mara*, *Mara's hand* or
+  Mara speaking outside the quotes (*"Stop!" Mara begs*) do. So does anyone the beat cuffs, tapes, ties or frees, and someone
   a beat calls *her* or *him*, when they are the only woman or man among the characters,
   unless the beat already names someone that *her* or *him* can mean (*The Aurora
-  raises her sails as she leaves port* does not bring in another ship).
+  raises her sails as she leaves port* does not bring in another ship), or has an
+  unnamed person they could mean (*A waitress brings him a drink. She smiles.*, *A man
+  knocks on her door. He waits.*, *the receptionist*, *someone*): then the pronoun is
+  that person and no declared character is brought in. Cuffs or clothes on such a
+  pronoun (*A woman walks in. Dan handcuffs her.*) are listed in `info` instead of being
+  put on a declared character. *Mara, a slim woman* or *Dan is a man* describe a named
+  character and do not count as an unnamed person.
+- A character whose memory never says *woman*, *man*, *she* or *he* can still be the one
+  *her* or *his* means, so *Dana drops her bag* stays Dana's shot and never brings in the
+  only character known to be a woman. A *She …* or *Her …* sentence in a character's own
+  memory lines gives their gender. *Her own wrists* are the wrists of whoever is doing the
+  cuffing, and *her hoodie* is the hoodie of whoever memory says wears one.
+- Everyone still in the scene is in the shot when the beat says *both of them*, *each
+  other*, *the two of them*, *everyone*, *the others* or *they … together*, or names
+  nobody and says *they*. *Her wrists crossed over each other* does not count.
+- A beat that names nobody (*The lights flicker.*, or *She sighs.* with two women in the
+  scene) keeps the people the shot before it showed.
+- People stay in the scene until they leave: walking or heading out, off, away or home,
+  or going upstairs, downstairs, to bed or into another room (*into the bathroom*),
+  unless that room is where the scene paragraph sets the scene.
+- When a continued shot opens on a frame with someone the beat leaves out, the prompt
+  says this shot frames only the beat's people.
+- If the node's files change after ComfyUI loads them, `info` starts with `RESTART COMFYUI`,
+  because that run used the old code.
+- In `info`, anyone in a shot whom the beat does not name says why, for example
+  `cast: Sarah, Dana (from the shot before)`: *she/he*, *held*, *freed*, *everyone*,
+  *from the shot before* or *in the scene*.
 - The scene paragraph and the anchor describe people but do not put them in a shot.
 - A beat with nobody in it (*The camera pans across the empty bathroom*) says that nobody
   is in the shot.

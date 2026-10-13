@@ -44,6 +44,8 @@ try:
 except Exception as _e:
     pose = None
     POSE_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
+_LOADED = {p: os.path.getmtime(p) for p in glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "*.py"))
+           if not os.path.basename(p).startswith("test_")}
 
 NATIVE_RES = {"16:9": (1344, 768), "9:16": (768, 1344), "4:3": (1024, 768), "3:4": (768, 1024),
               "1:1": (768, 768), "21:9": (1536, 672), "9:21": (672, 1536)}
@@ -96,7 +98,31 @@ _EXIT = re.compile(
     r"kitchen|bedroom|bathroom|car|van|frame|shot|view|sight)\b|off\b(?!\s+(?:the|a|an|his|her|their)\b)"
     r"|away\b(?!\s+from\b)|outside\b|home\b)"
     r"|\b(?:disappear|vanish)(?:s|es|ed|ing)?\b"
+    r"|\b(?:walk|goes|going|gone|went|heads?|headed|step|run|ran|storm|hurr|slip|wander|strid|strode|march|rush|climb|creep|"
+    r"crept|sneak|snuck|dash|bolt|stomp|retreat|retire|escape|flee|fled|limp)\w*\s+(?:\w+ly\s+)?(?:back\s+)?(?:upstairs|"
+    r"downstairs|indoors|to\s+bed|to\s+sleep|into\s+(?:the|her|his|their|a|an)\s+(?:[\w-]+\s+)?(?P<into>room|bedroom|"
+    r"bathroom|kitchen|hall|hallway|house|office|car|shower|study|garage|basement|attic|cellar|elevator|lift|closet|night|"
+    r"darkness|woods|forest|building|shop|store|lounge|den|cabin|tent|barn|yard|garden))\b"
     r"|\bout\s+of\s+(?:(?:the|this|that|his|her|their)\s+)?(?:frame|shot|view|sight)\b", re.I)
+_SAID = re.compile(r"\b(?:(?:photo(?:graph)?|picture|portrait|image|memor(?:y|ies)|thoughts?|letter|note|message|text|call|"
+                   r"email|voicemail|gift|package|parcel|card|dreams?|video|recording|news|word)s?\s+(?:of|from|about|for)|"
+                   r"(?:think|thought|dream|ask|talk|worr(?:y|ie)|wonder|hear|know|speak|spoke|gossip)\w*\s+(?:about|of)|"
+                   r"remember\w*|miss(?:es|ed|ing)?|(?:call|phone|text|message|email)\w*|wr(?:ites?|ote|iting)\s+to|mention\w*|"
+                   r"imagin\w*|(?:wait|look|search|long|pray|hop|ask|shout|yell|scream|cry|cries|holler)\w*\s+(?:out\s+)?for|"
+                   r"expect\w*|hears?|heard|hearing|without|"
+                   r"no\s+sign\s+of|instead\s+of)\s+$", re.I)
+_OFFSCREEN = re.compile(r"\s*\((?:v\.?\s*o\.?|o\.?\s*s\.?|o\.?\s*c\.?|off[\s-]?(?:screen|camera)|voice[\s-]?over|voice|"
+                        r"unseen|on\s+the\s+phone)\)", re.I)
+_UNTIL = re.compile(r"\b(?:before|until|till|unless|in\s+case)\s+$", re.I)
+_LATER = re.compile(r"\s+(?:\w+ly\s+)?(?:gets?|comes?|arrives?|returns?|wakes?|walks?|shows?|finds?|sees?|notices?|leaves?|is|was|"
+                    r"has|had|can|could|will|would|might|does|did|knows?|hears?|calls?)\b", re.I)
+_GONE = re.compile(r"\s+(?:(?:is|was|has\s+been|had\s+been)\s+(?:still\s+|already\s+|now\s+)?(?:(?:not|n't)\s+(?:here|home|there|"
+                   r"around|back)|away|gone|out\s+(?:of\s+town|for|at|with)|at\s+(?:work|school|the\s+(?:office|store|shop|gym|"
+                   r"hospital))|asleep\s+(?:upstairs|downstairs|in\s+(?:another|the\s+other|her|his|their))|upstairs|downstairs|"
+                   r"elsewhere|nowhere|in\s+(?:another|the\s+other)\s+room|on\s+(?:a\s+trip|vacation|holiday))|(?:has|had)\s+"
+                   r"(?:already\s+)?(?:gone|left)|(?:isn't|wasn't)\s+(?:here|home|there|around|back))\b", re.I)
+_BODY = (r"hands?|arms?|face|eyes?|lips|mouth|hair|head|body|legs?|feet|foot|fingers?|shoulders?|back|neck|chest|hips?|waist|"
+         r"knees?|skin|cheeks?|wrists?|ankles?|breath|lap|side|silhouette|shadow")
 _NOT_NAMES = {"She", "He", "They", "It", "Her", "His", "Him", "Their", "The", "A", "An", "This", "That", "With",
               "Like", "As", "And", "Picture", "Setting", "Location", "Place", "Scene", "Style", "Look", "Camera",
               "Lighting", "Light", "Mood", "Time", "Note", "Notes", "Shot", "Audio", "Sound", "Music"}
@@ -146,6 +172,10 @@ def align_nearest(n):
 
 def spoken_words(text):
     return sum(len(_TAGS.sub("", q).split()) for q in _SPEECH.findall(text or ""))
+
+
+def narration(text):
+    return _SPEECH.sub(lambda m: " " * len(m.group(0)), text or "")
 
 
 def dialogue(text):
@@ -205,7 +235,25 @@ def paragraphs(text):
     return [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip()) if p.strip()]
 
 
-def parse_script(text, all_beats=False):
+_STILL = re.compile(r"(?:is|are|was|were)(?!\s+\w+ing\b)|has|have|had|wears?|wearing|wore|lives?|lived|looks|seems|appears", re.I)
+_POSED = re.compile(r"sits?|sitting|sat|stands?|standing|stood|lies|lying|lay|waits?|waiting|kneels?|kneeling|knelt", re.I)
+_DOING = re.compile(r"\b(?P<det>(?:a|an|the|her|his|their|its|of|this|that)\s+)?(?!(?:morning|evening|ceiling|building|"
+                    r"clothing|nothing|something|anything|everything|thing|string|ring|king|wing|spring|bedding|railing|"
+                    r"lighting|painting|wedding|opening|stocking|wearing)\b)[a-z]+ing\b")
+
+
+def acts(text, names):
+    who = "|".join(map(re.escape, names)) or "(?!)"
+    for m in re.finditer(rf"(?:^|[.!?;:,]\s*|\b(?:and|then|as|while|when)\s+)(?:[Tt]he\s+)?(?:(?:{who})(?:\s*(?:,|and|&)\s*"
+                         rf"(?:{who}))*|(?i:she|he|they|camera|the\s+camera))(?P<pic>\s*<\s*picture[^>]*>)?(?:\s*\([^)]*\))?"
+                         rf"\s+(?:\w+ly\s+)?(?P<v>[a-z]\w*)(?P<rest>[^.!?;]*)", text):
+        still = _STILL.match(text, m.start("v")) or m.group("pic") and _POSED.fullmatch(m.group("v"))
+        if not still or any(not d.group("det") for d in _DOING.finditer(m.group("rest"))):
+            return True
+    return bool(_SPEECH.search(text))
+
+
+def parse_script(text, all_beats=False, names=()):
     merged, early, cut_next = [], [], False
     for p in map(parse_paragraph, paragraphs(text)):
         if p["text"]:
@@ -224,7 +272,7 @@ def parse_script(text, all_beats=False):
             cut_next = cut_next or p["cut"]
     if not merged:
         return None, []
-    scene = merged.pop(0) if len(merged) > 1 and not all_beats else None
+    scene = merged.pop(0) if len(merged) > 1 and not all_beats and not acts(merged[0]["text"], names) else None
     return scene, merged
 
 
@@ -530,12 +578,14 @@ _PEOPLE = re.compile(r"\b(?:she|he|they|her|him|his|their|them|herself|himself|t
                      r"cop|maid|waiter|waitress|driver|stranger|intruder|visitor)s?\b", re.I)
 
 
-def referred(text, names, gender, around=()):
-    out = []
+def referred(text, names, gender, around=(), here=()):
+    out, blocked, said = [], rst.stand_ins(text), present_in(text or "", names)
     for m in re.finditer(r"\b(she|her|herself|he|him|his|himself)\b", text or "", re.I):
         g = "f" if m.group(1).lower() in ("she", "her", "herself") else "m"
-        hits = [n for n in names if gender.get(n) == g] or ([] if any(gender.get(n, g) == g for n in _mentions(text, names))
-                                                            else [n for n in around if gender.get(n, g) == g])
+        if g in blocked or any(gender.get(n, g) == g for n in said):
+            continue
+        hits = [n for n in names if gender.get(n) == g] + [n for n in here if n not in gender]
+        hits = hits or [n for n in around if gender.get(n, g) == g]
         if len(hits) == 1 and hits[0] not in out:
             out.append(hits[0])
     return out
@@ -582,14 +632,44 @@ def roster(sheets, texts, paras):
     names += [n for t in texts for n in _CLAIM.findall(t)]
     names += [m.group(1) for t in sheets for line in t.splitlines() if _PICTURE.search(line)
               for m in [_LEAD.match(line)] if m and m.group(1) not in _COMMON_CAPS]
+    names += [h for t in sheets for h in map(wrd.header, t.splitlines()) if h and h not in _COMMON_CAPS]
     names += [who for p in paras for who, _ in p["hold"] + p["release"]] + [n for p in paras for n in p["exit"]]
-    return [n for n in dict.fromkeys(names) if n not in _NOT_NAMES]
+    return [n for n in dict.fromkeys(map(wrd.plain, names)) if n not in _NOT_NAMES and n.lower() not in wrd.LABELS]
 
 
-def leavers(text, names):
+def present_in(text, names):
+    out = []
+    for n in _mentions(text, names):
+        for m in re.finditer(rf"\b{re.escape(n)}\b(?:['’]s\s+(?P<own>[\w-]+)(?:\s+(?P<then>[\w-]+))?)?", text):
+            if _SAID.search(text[:m.start()]) and not re.match(r"\s+(?:over|in|back|out|to\s+(?:him|her|them))\b", text[m.end():]):
+                continue
+            if m.group("own") and not any(re.fullmatch(_BODY, w or "", re.I) for w in (m.group("own"), m.group("then"))):
+                continue
+            if _GONE.match(text[m.end():]) or _OFFSCREEN.match(text[m.end():]) or _UNTIL.search(text[:m.start()]) and \
+                    _LATER.match(text[m.end():]):
+                continue
+            out.append(n)
+            break
+    return out
+
+
+_TOGETHER = re.compile(r"\b(?:each\s+other|one\s+another|(?:both|all|the\s+(?:two|three|four))\s+of\s+(?:them|us)|"
+                       r"(?:they|we)\s+(?:both|all)|the\s+(?:pair|couple|others)|everyone|everybody|"
+                       r"(?:both|all|the|the\s+(?:two|three|four))\s+(?:women|girls|men|boys|ladies|guys|friends))\b"
+                       r"|\b(?:they|them|we)\b[^.!?]{0,40}\btogether\b", re.I)
+_LIMBS = re.compile(r"\b(?:wrists|ankles|arms|legs|hands|feet|fingers|knees|thighs)\s+\w+(?:ed|ing)\s+(?:\w+\s+)?$", re.I)
+
+
+def together(text):
+    return any(not _LIMBS.search(text[:m.start()]) for m in _TOGETHER.finditer(text or ""))
+
+
+def leavers(text, names, here=""):
     out = []
     for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
         for m in _EXIT.finditer(sentence):
+            if m.group("into") and re.search(rf"\b{m.group('into')}s?\b", here, re.I):
+                continue
             before = sentence[:m.start()]
             spots = sorted((k.start(), k.end(), n) for n in names for k in re.finditer(rf"\b{re.escape(n)}\b", before))
             if not spots:
@@ -636,11 +716,10 @@ def cast_line(cast, names, scene, beat):
 
 
 def without_absent(text, absent, names):
-    here, out = [n for n in names if n not in absent], []
-    for line in text.splitlines():
-        m = _SHEET.match(line)
-        if m and m.group(1) in names:
-            out += [line] if m.group(1) not in absent else []
+    out = []
+    for line, owner in wrd.line_owners(text, names):
+        if owner:
+            out += [line] if owner not in absent else []
             continue
         kept, last = [], None
         for s in re.split(r"(?<=[.!?])\s+", line):
@@ -648,12 +727,13 @@ def without_absent(text, absent, names):
             owners = named or ([last] if last and (re.match(r"\s*(?:she|he|they|her|his|their)\b", s, re.I)
                                                    or _PICTURE.search(s)) else [])
             last = named[0] if len(named) == 1 else (None if named else last)
-            if not (owners and all(o in absent for o in owners) and not _mentions(s, here)):
+            if not (present_in(narration(s), absent) if named else owners and all(o in absent for o in owners)):
                 kept.append(s)
                 continue
             parts = re.split(r",\s+(?=(?:where|with|while|as|and|beside|near|alongside|next\s+to|behind)\b)|;\s+", s)
-            if named and len(parts) > 1 and not _mentions(parts[0], absent):
-                kept.append(", ".join(p for p in parts if not _mentions(p, absent)).rstrip(".!? ") + (re.search(r"[.!?]$", s) or [""])[0])
+            if named and len(parts) > 1 and not present_in(narration(parts[0]), absent):
+                kept.append(", ".join(p for p in parts if not present_in(narration(p), absent)).rstrip(".!? ")
+                            + (re.search(r"[.!?]$", s) or [""])[0])
         out.append(" ".join(kept))
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
@@ -669,7 +749,8 @@ def stranger_line(cast, names, gender, extra):
 
 
 def picture_owners(text, names):
-    out, last = {}, None
+    out = {int(m.group(2)): owner for line, owner in wrd.line_owners(text, names) if owner for m in _PICTURE.finditer(line)}
+    last = None
     for sent in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
         hit = _mentions(sent, names)
         owner = hit[0] if len(hit) == 1 else None if hit else last
@@ -705,8 +786,8 @@ def shot_pictures(text, refs, held_names, names=()):
     return text.strip(), [refs[n - 1] for n in live], live
 
 
-def clothes(para, people, gender, described, undressed):
-    off, on, unclear = wrd.read(para["text"], people, gender, described)
+def clothes(para, people, gender, described, undressed, here=()):
+    off, on, unclear = wrd.read(para["text"], people, gender, described, here)
     told = {who for who, _ in para["remove"] + para["wear"]}
     off = {w: g for w, g in off.items() if w not in told}
     on = {w: g for w, g in on.items() if w not in told}
@@ -722,8 +803,8 @@ def clothes(para, people, gender, described, undressed):
     return {k: v for k, v in new.items() if v}, off, on, unclear
 
 
-def with_reading(para, people, gender, held):
-    holds, releases, unclear, worn = rst.read(para["text"], people, gender, held)
+def with_reading(para, people, gender, held, here=()):
+    holds, releases, unclear, worn = rst.read(para["text"], people, gender, held, here)
     told = {who for who, _ in para["hold"] + para["release"]}
     return dict(para, hold=[(w, i) for w, i in holds.items() if w not in told] + para["hold"],
                 release=[(w, i) for w, i in releases.items() if w not in told] + para["release"],
@@ -731,13 +812,14 @@ def with_reading(para, people, gender, held):
 
 
 def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor="", from_beat=False, pictures=True):
-    scene, paras = parse_script(prompt, all_beats=bool((anchor or "").strip()))
+    declared = roster([parse_paragraph(p)["text"] for p in paragraphs(memory)], [memory or "", anchor or "", prompt or ""], [])
+    scene, paras = parse_script(prompt, all_beats=bool((anchor or "").strip()), names=declared)
     setting = [parse_paragraph(p) for p in paragraphs(anchor)] + ([scene] if scene else [])
     lead = setting + [parse_paragraph(p) for p in paragraphs(memory)]
     texts = [p["text"] for p in lead + paras]
     people = list(dict.fromkeys(roster([p["text"] for p in lead[len(setting):]], [p["text"] for p in lead], lead + paras)
                                 + rst.agents(texts, _COMMON_CAPS | _NOT_NAMES)))
-    gender = rst.genders(people, [_PICTURE.sub("", t) for t in texts])
+    gender = rst.genders(people, [_PICTURE.sub("", wrd.attributed(t, people)) for t in texts])
     state, undressed = {}, {}
     for k, para in enumerate(lead):
         lead[k] = with_reading(para, _mentions(para["text"], people), gender, state)
@@ -750,24 +832,38 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     pic_of = picture_owners(scene_text, names)
     around, present = _mentions(" ".join(p["text"] for p in setting), names), []
     seen = _mentions(" ".join(p["text"] for p in lead), people)
-    solo_seen, shots, leash_by = set(), [], {}
+    solo_seen, shots, leash_by, shown = set(), [], {}, []
     for i, para in enumerate(paras):
         seen = list(dict.fromkeys(seen + _mentions(para["text"], people)))
-        para = with_reading(para, seen, gender, state)
+        near = list(dict.fromkeys(shown + present)) if i else around
+        para = with_reading(para, seen, gender, state, near)
         dressed = wrd.undress(scene_text, undressed, people)
-        undressed, off, on, unclear = clothes(para, seen, gender, described, undressed)
+        undressed, off, on, unclear = clothes(para, seen, gender, described, undressed, near)
         para = dict(para, unread=para["unread"] + unclear)
         start, _, _ = apply_holds(state, {"release": [], "hold": para["worn"]})
         state, released, added = apply_holds(start, para)
         during = {k: [it for it in v if it not in released.get(k, [])] for k, v in start.items()}
         during = {k: v for k, v in during.items() if v}
         keyed = (i > 0 and not para["cut"]) or (i == 0 and has_first_frame)
-        inframe = present if i > 0 else around
+        inframe = shown if i > 0 else around
         opening = inframe if keyed and not pictures else []
-        named = list(dict.fromkeys(_mentions(para["text"], names) + [who for who, _ in para["hold"]]
-                                   + referred(para["text"], names, gender, around)))
-        cast = (named or present) if para["cut"] else list(dict.fromkeys(present + named))
-        present = [n for n in cast if n not in leavers(para["text"], names) + para["exit"]]
+        told = narration(para["text"])
+        said = present_in(told, names)
+        why = {**{n: "she/he" for n in referred(told, names, gender, around, near)},
+               **{who: "freed" for who, _ in para["release"]}, **{who: "held" for who, _ in para["hold"]}}
+        named = list(dict.fromkeys(said + list(why)))
+        group = not para["cut"] and together(told)
+        if para["cut"]:
+            cast = named or present
+        elif group:
+            cast = list(dict.fromkeys(present + named))
+        else:
+            cast = [n for n in present if n in named] + [n for n in named if n not in present] or shown or present
+        why = {n: why.get(n) or ("everyone" if group else "from the shot before" if n in shown else "in the scene")
+               for n in cast if n not in said}
+        gone = leavers(told, names, " ".join(p["text"] for p in setting)) + para["exit"]
+        present = [n for n in (cast if para["cut"] else dict.fromkeys(present + named)) if n not in gone]
+        shown = [n for n in cast if n not in gone]
         absent = [n for n in names if n not in cast]
         recover = [n for n in cast if n in solo_seen] if not keyed else []
         speech = bool(_SPEECH.search(para["text"]))
@@ -821,7 +917,13 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         joining = [f"{n} (exactly as in {tag_of[n]})" if n in tag_of else n for n in newcomers] + (
             ["the strangers this beat brings in"] if extra else [])
         folk = extra or not (cast + inframe) or any(n not in objects for n in cast + inframe) or bool(_FOLK.search(para["text"]))
-        if keyed:
+        if keyed and any(n not in cast for n in inframe):
+            framed = [f"{n} (exactly as in {tag_of[n]})" if n in tag_of else n for n in cast] + (
+                ["the strangers this beat brings in"] if extra else [])
+            notes.append(f"<Picture {len(shot_refs) + 1}> is the frame this shot opens on: the same place one moment earlier, "
+                         f"carried forward, but this shot frames only {' and '.join(framed)}, and "
+                         f"{'nobody' if folk else 'nothing'} else is in view.")
+        elif keyed:
             notes.append(f"<Picture {len(shot_refs) + 1}> is the frame this shot opens on: the same place and the same "
                          f"{'people' if folk else 'things in it'}, one moment earlier, carried forward" + (
                              f"; {' and '.join(joining)} {'comes' if len(joining) == 1 and not extra else 'come'} into view "
@@ -838,13 +940,13 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
                                          else "lengthened to fit its line" if not para["seconds"] else
                                          "its line needs more than its seconds: line gives it")
         frames = rt.align_frame_count(talk) if talk > frames and not para["seconds"] else frames
-        bound = pose_plan(during, released, added)
+        bound = pose_plan({k: v for k, v in during.items() if k in cast or k not in names}, released, added)
         latch = any(f["latch_limbs"] for f in bound.values())
-        solo = present[0] if len(present) == 1 and present[0] in cast else ""
+        solo = shown[0] if len(shown) == 1 else ""
         solo_seen |= {solo} if solo else set()
         shots.append({"n": i + 1, "prompt": text, "refs": shot_refs, "frames": frames, "keyed": keyed, "fit": fit,
                       "cut": para["cut"], "wordless": not speech, "sounded": sounded, "held": held_line(during),
-                      "cast": cast, "solo": solo, "recover": recover, "bound": bound,
+                      "cast": cast, "why": why, "solo": solo, "recover": recover, "bound": bound,
                       "pictures": [f"{pic_of.get(k, 'unnamed')} (ref_image_{k})" for k in shot_slots],
                       "turned": [f"{r['who']}'s {r['thing']}" for r in _worn_sides(without_absent(dressed, absent, names), cast)],
                       "added": held_line(added), "released": held_line(released),
@@ -1291,7 +1393,7 @@ def shot_line(shot):
     if shot["cut"]:
         bits.append("cut")
     if shot["cast"]:
-        bits.append("cast: " + ", ".join(shot["cast"]))
+        bits.append("cast: " + ", ".join(f"{n} ({shot['why'][n]})" if n in shot.get("why", {}) else n for n in shot["cast"]))
     if shot.get("pictures"):
         bits.append("pictures: " + ", ".join(shot["pictures"]))
     if shot["held"]:
@@ -1381,7 +1483,9 @@ class H3LongVideos:
         if not shots:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
-        info = [f"{w}x{h}, {len(shots)} shots"]
+        stale = [os.path.basename(p) for p, t in _LOADED.items() if os.path.exists(p) and os.path.getmtime(p) > t]
+        info = [f"{w}x{h}, {len(shots)} shots"] + ([f"RESTART COMFYUI: {', '.join(stale)} changed after ComfyUI loaded "
+                                                     f"this node, so this run used the old code"] if stale else [])
         turned = list(dict.fromkeys(t for s in shots for t in s["turned"]))
         if turned:
             info.append("kept the right way round, front and back pinned to the body: " + ", ".join(turned))
