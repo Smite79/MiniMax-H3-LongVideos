@@ -145,10 +145,23 @@ coming off (*Dan pulls the tape off*, *Dan unlocks the cuffs*).
 ### Clothing
 
 The node reads clothes coming off and going back on (*Max takes off her jacket*,
-*Crystal pulls her thong down her legs*, *Crystal puts her jacket back on*). From the
-next shot on, a garment that came off is taken out of that person's description in
-the scene paragraph, the anchor and `character_memory`, so no shot asks for it again.
-It comes back once they put it on.
+*Crystal pulls her thong down her legs*, *Sarah pulls down her skirt*, *Sarah steps out
+of her skirt*, *Sarah lets her skirt fall*, *Sarah drops her skirt*, *Sarah strips
+naked*, *Dan undresses her*, *Crystal puts her jacket back on*), typos such as *slides
+of her skirt* included. A miniskirt is a skirt and a crop top is a top, whichever of the
+two words the description and the beat use. From the next shot on, a garment that came
+off is taken out of that person's description in the scene paragraph, the anchor and
+`character_memory`, so no shot asks for it again. It comes back once they put it on.
+
+- Once nothing they still wear covers a part of the body, every shot they are in says
+  so: *Sarah is naked from the waist down the whole shot: her hips, bottom and crotch
+  are bare.* (or from the waist up, or naked). The shot it comes off in says they stay
+  that way from the moment it is off. A beat that says how they are (*completely
+  naked*, *topless*, *naked from the waist down*) counts from that shot on.
+- A reference picture shows its person in the clothes they had on, so once those differ
+  it is left out of the shots that continue from a frame they are in, which already
+  shows them as they are now. When they come back into view, the picture is for their
+  face and hair only. `info` shows *naked:* for each undressed person.
 
 - A garment belongs to the person its pronoun or name points to, or else to the one
   person whose description mentions it.
@@ -178,6 +191,31 @@ It comes back once they put it on.
   pull line stands in for the fastened line. When she wears a leash and a chained belt,
   the prompt says they are two separate chains, so the belt chain is not drawn running
   out to a hand like a leash.
+
+### Penetration
+
+Once a beat puts him inside her (*allowing his penis to enter her vagina*, *Sarah sinks
+onto his cock*, *Sarah rides him*, *Dan fucks her*, *Dan takes her from behind*, *Sarah
+has sex with Dan*; *into her ass* or *anal* makes it her anus), every shot of the two of
+them says so, in terms of what shows: *Dan's penis is buried deep inside Sarah's vagina
+the whole shot: her crotch and his groin stay pressed tight together, so only the base of
+his penis shows, and their hips rock and grind together as they move.* The shot it starts
+in says it stays buried once it is in. The motion is written as their hips moving, never
+as the penis sliding, because a sliding penis is one the model draws outside her. It lasts until
+a beat ends it: he pulls out, she climbs or gets off him, either of them stands or gets
+up, or one of them leaves. Pulling out and going back in, or standing up while carrying
+her, keeps it. While it lasts, a shot with one of them has the other in it too. His
+cock in her mouth or hand is not this. `info` shows *inside: Dan in Sarah* for those
+shots.
+
+It works for any number of people. Each act is its own: who is inside whom, and where.
+The sentence says which is which: whose cock it is, or who *fucks*, *enters* or *takes
+her from behind*, is the one inside, and who *rides*, *mounts* or *sinks onto* him is
+the one entered, a man as well as a woman. *Him* or *her* is the last man or woman named
+before it. Two men in one woman (*Sarah rides Dan while Jake takes her from behind*) are
+two acts, the second in her other hole unless the beat says which; two couples are two
+pairs; and each act ends on its own (*Jake pulls out* ends only Jake's). Everyone joined
+to someone in a shot is in it.
 
 ### Lines the node reads
 
@@ -214,7 +252,8 @@ The node keeps track of who is present, so people appear only when they should.
 
 - A character is anyone `character_memory` describes, however the memory is laid out:
   `Mara: a tall woman`, `Mara is a tall woman`, `Mara, a tall woman`, `- Mara: …`,
-  `**Mara**: …`, `Mara (25): …`, `Mara - …`, `MARA: …`, `Name: Mara`, or the name alone
+  `**Mara**: …`, `Mara (25): …`, `Mara - …`, `MARA: …`, `mara: …`, `Name: Mara`,
+  `Female: Mara, …`, `The woman: Mara, …`, or the name alone
   on its own line (with or without a picture tag or a colon) and the description on the
   lines under it, as sentences, bullets or fields such as `Hair: …` and `Outfit: …`.
   Everything up to the next name or a blank line belongs to that character, so a shot
@@ -222,6 +261,15 @@ The node keeps track of who is present, so people appear only when they should.
   line belongs to the scene, not to the character above it. Anyone written right before a
   picture tag (`Mara <Picture 1>`) or named on a `hold:` or `exit:` line is a character
   too.
+- So is anyone the scene or the beats treat as a person, even with no memory entry:
+  someone with a body part (*Dan's waist*, *Dan's cock*), someone a beat does something
+  to or with (*rides Dan*, *straddles Dan*, *sits on Dan*, *stands in front of Dan*, *has
+  sex with Dan*), or someone doing what only a person does (*Dan sits*, *Dan smiles*,
+  *Dan strokes himself*). Rain, light, music, places, days and things such as *the
+  Ferrari* are not. Such a character has no description or picture, so a shot with them
+  says they look nothing like the declared characters, and *her* or *him* in a beat
+  where they act on someone (*Dan watches her*) is the other person, which also tells
+  the node who is the woman.
 - A shot holds only the characters its beat names or refers to. Naming someone once does
   not put them in the shots after it. A name that is only mentioned does not count: *a
   letter from Mara*, *a text from Mara*, *Mara's photo*, *thinking about Mara*, *calls

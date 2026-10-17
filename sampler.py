@@ -122,7 +122,8 @@ _GONE = re.compile(r"\s+(?:(?:is|was|has\s+been|had\s+been)\s+(?:still\s+|alread
                    r"elsewhere|nowhere|in\s+(?:another|the\s+other)\s+room|on\s+(?:a\s+trip|vacation|holiday))|(?:has|had)\s+"
                    r"(?:already\s+)?(?:gone|left)|(?:isn't|wasn't)\s+(?:here|home|there|around|back))\b", re.I)
 _BODY = (r"hands?|arms?|face|eyes?|lips|mouth|hair|head|body|legs?|feet|foot|fingers?|shoulders?|back|neck|chest|hips?|waist|"
-         r"knees?|skin|cheeks?|wrists?|ankles?|breath|lap|side|silhouette|shadow")
+         r"knees?|skin|cheeks?|wrists?|ankles?|breath|lap|side|silhouette|shadow|thighs?|crotch|groin|penis|cock|dick|shaft|"
+         r"erection|balls|breasts?|tits|nipples?|ass|bottom|butt|pussy|vagina|clit|belly|stomach|throat")
 _NOT_NAMES = {"She", "He", "They", "It", "Her", "His", "Him", "Their", "The", "A", "An", "This", "That", "With",
               "Like", "As", "And", "Picture", "Setting", "Location", "Place", "Scene", "Style", "Look", "Camera",
               "Lighting", "Light", "Mood", "Time", "Note", "Notes", "Shot", "Audio", "Sound", "Music"}
@@ -404,6 +405,129 @@ def rear_notes(text, cast, gender):
     return out
 
 
+_SHAFT = r"(?:penis|cock|dick|shaft|member|erection|manhood)"
+_WHOSE = r"(?:his|(?-i:[A-Z])[a-z]+['’]s)"
+_NAME = r"(?:her|him|(?-i:[A-Z])[a-z]+)"
+_ENTRY = re.compile(
+    rf"\b(?P<own>{_WHOSE})\s+(?:\w+\s+){{0,2}}?{_SHAFT}\b[^.;!?]{{0,60}}?\b(?:enter(?:s|ed|ing)?|into|inside|"
+    rf"penetrat\w*|pops?|popped|popping|deep\s+in)\b(?:\s+(?P<into>{_NAME})\b(?!['’]))?"
+    rf"|\b(?:sinks?|sank|lowers?\s+herself|lowered\s+herself|lowers?\s+himself|sits?|sat|settles?|settled|slides?|slid|"
+    rf"impales?\s+(?:her|him)self|impaled\s+(?:her|him)self|eases?\s+(?:her|him)self|eased\s+(?:her|him)self)\s+"
+    rf"(?:\w+\s+){{0,2}}?(?:onto|on)\s+(?P<sit>{_WHOSE})\s+(?:\w+\s+){{0,2}}?{_SHAFT}\b"
+    rf"|\b(?:rides?|rode|riding)\s+(?P<rode>{_WHOSE})\s+(?:\w+\s+){{0,2}}?{_SHAFT}\b"
+    rf"|\b(?:rides?|rode|riding|mounts?|mounted)\s+(?P<rid>{_NAME})\b(?!['’])"
+    rf"|\b(?:enters?|entered|entering|penetrates?|penetrated|penetrating|fucks?|fucked|fucking|screws?|screwed|screwing)\s+"
+    rf"(?P<obj>{_NAME})\b(?!['’])"
+    rf"|\b(?:thrusts?|slides?|slid|pushes|pushed|sinks?|sank|slips?|slipped|eases?|eased|drives?|drove|rams?|rammed|"
+    rf"plunges?|plunged)\s+(?:(?:his|himself|\w+)\s+){{0,3}}?(?:into|inside)\s+(?P<obj2>{_NAME})\b"
+    rf"|\btakes?\s+(?P<obj3>{_NAME})\s+from\s+behind\b"
+    rf"|\b(?:has|have|having|had)\s+sex\s+with\s+(?P<with>{_NAME})\b|\b(?:makes?|made|making)\s+love\s+(?:to|with)\s+"
+    rf"(?P<with2>{_NAME})\b|\b(?P<sex>(?:has|have|having|had)\s+sex|(?:makes?|made|making)\s+love)\b", re.I)
+_ORAL = re.compile(r"^\W*(?:\w+\s+){0,3}?(?:mouth|throat|lips|hands?|fists?|palms?|fingers|cleavage|breasts|tits)\b", re.I)
+_ANAL = re.compile(r"\banal(?:ly)?\b|\b(?:ass|asshole|anus|arse|butthole|backdoor)\b", re.I)
+_CLAUSE_END = re.compile(r"[,;]|\b(?:while|whilst|as|and|then|but|before|after|until)\b", re.I)
+_OUT = re.compile(r"\b(?:pulls?|pulled|pulling)\s+(?:himself\s+|his\s+\w+\s+|it\s+)?out\b"
+                  r"|\b(?:slides?|slid|slips?|slipped|eases?|eased|comes?|came)\s+(?:\w+\s+)?out\s+of\s+(?:her|him|"
+                  r"(?-i:[A-Z])[a-z]+)\b|\bwithdraws?\b|\bwithdrew\b|\bdismounts?\b|\bdismounted\b"
+                  r"|\b(?:climbs?|climbed|gets?|got|hops?|hopped|rolls?|rolled|slides?|slid|lifts?\s+herself|lifted\s+herself|"
+                  r"rises?|rose|pulls?\s+away|pulled\s+away|eases?\s+herself|eased\s+herself|steps?|stepped)\s+(?:\w+\s+)?off\s+"
+                  r"(?:of\s+)?(?:him|her|his\s+\w+|(?-i:[A-Z])[a-z]+)\b|\b(?:stands?|stood|gets?|got)\s+up\b", re.I)
+_BACK_IN = re.compile(r"\bback\s+(?:in|into|inside)\b|\b(?:slams?|thrusts?|pushes|sinks?|rams?)\s+(?:\w+\s+)?back\b|"
+                      r"\b(?:lifting|carrying|holding)\s+her\b|\bwith\s+her\b|\bstill\s+(?:inside|in)\b", re.I)
+
+
+def _named_as(tok, sent, cast, gender, exclude=(), at=None):
+    tok = re.sub(r"['’]s$", "", tok or "")
+    who = rst.resolve(tok, cast, gender, exclude=exclude) if tok else ""
+    if who or tok.lower() not in ("his", "him", "her", "he", "she"):
+        return who
+    want = "m" if tok.lower() in ("his", "him", "he") else "f"
+    named = [(m.start(), n) for n in cast if n not in exclude and gender.get(n, want) == want
+             for m in re.finditer(rf"\b{re.escape(n)}\b", sent if at is None else sent[:at])]
+    return max(named)[1] if named else ""
+
+
+def _subject(sent, at, cast, gender):
+    names = "|".join(map(re.escape, cast)) or "(?!)"
+    hits = [m for m in re.finditer(rf"\b({names}|(?i:she|he))\b(?=\s+(?:\w+ly\s+)?(?:then\s+)?[a-z]+(?:s|ed)\b)", sent)
+            if m.start() < at]
+    return _named_as(hits[-1].group(1), sent, cast, gender, at=hits[-1].start()) if hits else ""
+
+
+def _act(m, sent, cast, gender):
+    subject = _subject(sent, m.start(), cast, gender)
+    at = m.start()
+    if m.group("own"):
+        man = _named_as(m.group("own"), sent, cast, gender, (subject,), at)
+        return man, _named_as(m.group("into"), sent, cast, gender, (man,), at) if m.group("into") else subject
+    if m.group("sit") or m.group("rode") or m.group("rid"):
+        return _named_as(m.group("sit") or m.group("rode") or m.group("rid"), sent, cast, gender, (subject,), at), subject
+    if m.group("obj") or m.group("obj2") or m.group("obj3"):
+        return subject, _named_as(m.group("obj") or m.group("obj2") or m.group("obj3"), sent, cast, gender, (subject,), at)
+    other = _named_as(m.group("with") or m.group("with2") or "", sent, cast, gender, (subject,), at) or next(
+        (n for n in cast if n != subject and re.search(rf"\b{re.escape(n)}\b", sent)), "")
+    pair = [n for n in (subject, other) if n] or ([n for n in cast] if len(cast) == 2 else [])
+    if len(pair) != 2:
+        return "", ""
+    man = next((n for n in pair if gender.get(n) == "m"), "") or next((n for n in pair if gender.get(n) != "f"), "")
+    return man, next((n for n in pair if n != man), "")
+
+
+def penetration(text, cast, gender, inside):
+    inside, started = list(inside), []
+    for sent in rst.sentences(_bare(text)):
+        who = list(dict.fromkeys(w for w in (_named_as(t, sent, cast, gender) for _, t in rst.tokens(sent, cast)) if w))
+        if _OUT.search(sent) and not _BACK_IN.search(sent):
+            both = [a for a in inside if a[0] in who and a[1] in who]
+            inside = [a for a in inside if a not in (both or [a for a in inside if not who or len(who) == 1 and who[0] in a[:2]])]
+        for m in _ENTRY.finditer(sent):
+            obj = next((m.group(k) for k in ("obj", "obj2", "obj3", "rid", "with", "with2") if m.group(k)), "")
+            if _ORAL.match(sent[m.end():]) or obj and not _named_as(obj, sent, cast, gender):
+                continue
+            man, taker = _act(m, sent, cast, gender)
+            if not man or not taker or man == taker or any(a[:2] == (man, taker) for a in inside):
+                continue
+            stop = _CLAUSE_END.search(sent, m.end())
+            anal = bool(_ANAL.search(sent[m.start():stop.start() if stop else len(sent)])) or gender.get(taker) == "m" or any(
+                a[1] == taker and a[2] == "vagina" for a in inside)
+            act = (man, taker, "anus" if anal else "vagina")
+            inside.append(act)
+            started.append(act)
+    return inside, started
+
+
+def inside_lines(before, after, started, gender):
+    out = []
+    for m, w, hole in after:
+        her = {"f": "her", "m": "him"}.get(gender.get(w), w)
+        hers = {"f": "her", "m": "his"}.get(gender.get(w), f"{w}'s")
+        his = {"m": "his", "f": "her"}.get(gender.get(m), f"{m}'s")
+        meet = (f"{hers} {'bottom' if hole == 'anus' else 'crotch'} and {his} groin stay pressed tight together, so only the "
+                f"base of {his} penis shows, and their hips rock and grind together as they move")
+        if (m, w, hole) in started:
+            out.append(f"Once {m}'s penis is inside {w}'s {hole}, it stays buried deep inside {her} for the rest of the shot: "
+                       f"{meet}.")
+        elif (m, w, hole) in before:
+            out.append(f"{m}'s penis is buried deep inside {w}'s {hole} the whole shot: {meet}.")
+    return out
+
+
+def bare_lines(who, gender, zones, coming, items):
+    state = {("lower",): "naked from the waist down", ("upper",): "naked from the waist up"}.get(tuple(zones or coming), "naked")
+    parts = {"f": {"naked from the waist down": "her hips, bottom and crotch are bare",
+                   "naked from the waist up": "her breasts are bare",
+                   "naked": "her breasts, hips, bottom and crotch are bare"},
+             "m": {"naked from the waist down": "his hips, bottom and crotch are bare",
+                   "naked from the waist up": "his chest is bare",
+                   "naked": "his chest, hips, bottom and crotch are bare"}}.get(gender.get(who), {})
+    if zones:
+        return [f"{who} is {state} the whole shot" + (f": {parts[state]}." if state in parts else ".")]
+    poss = {"f": "her", "m": "his"}.get(gender.get(who), f"{who}'s")
+    verb = "come" if len(items) > 1 or items == ["clothes"] else "comes"
+    return [f"From the moment {poss} {' and '.join(items)} {verb} off, {who} stays {state} "
+            f"for the rest of the shot."] if coming else []
+
+
 def whole_body(who, gender):
     poss = _POSS.get(gender.get(who), ("their",))[0]
     return f"{who}'s body never twists at the waist: {poss} head, chest, hips and legs always face the same way and turn together."
@@ -578,13 +702,23 @@ _PEOPLE = re.compile(r"\b(?:she|he|they|her|him|his|their|them|herself|himself|t
                      r"cop|maid|waiter|waitress|driver|stranger|intruder|visitor)s?\b", re.I)
 
 
+_OWNED = re.compile(r"\s+(?!(?:and|or|as|while|when|to|from|with|on|in|into|onto|up|down|off|out|over|at|for|by|again|"
+                    r"close|closer|tight|tightly|hard|gently|slowly|softly|now|then|so|until|before|after|from|behind|"
+                    r"against|around|across|through|toward|towards)\b)[a-z]", re.I)
+
+
 def referred(text, names, gender, around=(), here=()):
     out, blocked, said = [], rst.stand_ins(text), present_in(text or "", names)
     for m in re.finditer(r"\b(she|her|herself|he|him|his|himself)\b", text or "", re.I):
         g = "f" if m.group(1).lower() in ("she", "her", "herself") else "m"
-        if g in blocked or any(gender.get(n, g) == g for n in said):
+        start = max(text.rfind(c, 0, m.start()) for c in ".!?\n") + 1
+        lead = re.match(rf"\s*({'|'.join(map(re.escape, names)) or '(?!)'})\s+(?:\w+ly\s+)?[a-z]+(?:s|ed)\b", text[start:])
+        own = m.group(1).lower() in ("her", "him") and not _OWNED.match(text[m.end():])
+        subject = lead.group(1) if lead and own else ""
+        if g in blocked or any(gender.get(n, g) == g for n in said if n != subject):
             continue
         hits = [n for n in names if gender.get(n) == g] + [n for n in here if n not in gender]
+        hits = [n for n in dict.fromkeys(hits) if n != subject]
         hits = hits or [n for n in around if gender.get(n, g) == g]
         if len(hits) == 1 and hits[0] not in out:
             out.append(hits[0])
@@ -625,6 +759,68 @@ def things(names, described):
 _REGISTRY = re.compile(rf"^{_SHIPS}\s+(?=[A-Z])")
 
 
+_ROLE = re.compile(r"^\s*(?:[-*•>#]+\s*|\d+[.)]\s+)?(?:the\s+)?(?:male|female|man|woman|boy|girl|guy|lady|husband|wife|"
+                   r"boyfriend|girlfriend|partner|lover|character|person|lead)(?:\s*\d+)?\s*[:=–—-]\s*\**"
+                   r"((?-i:[A-Z])[a-z'’-]{1,24})\b", re.I | re.M)
+_LOWER_NAME = re.compile(r"^\s*(?:[-*•>#]+\s*|\d+[.)]\s+)?([a-z][a-z'’-]{1,24})\s*:\s*(.*)$", re.M)
+_HUMANISH = re.compile(r"\b(?:man|woman|girl|boy|guy|lady|male|female|he|she|his|her|hair|eyes|years?\s+old|tall|short|"
+                       r"slim|muscular|beard|skin)\b", re.I)
+_HUMAN_DOES = (r"sits?|sat|stands?|stood|kneels?|knelt|smiles?|laughs?|nods?|grins?|moans?|groans?|gasps?|kisses|kissed|"
+               r"whispers?|says?|said|asks?|tells?|watches|watched|strokes?|stroked|leans?|undresses|grabs?|grabbed|pulls?|"
+               r"pulled|pushes|pushed|thrusts?|fucks?|fucked|cums?|sighs?|winks?|shrugs?|stares?|lies|lay|waits?|walks?|"
+               r"reaches?|touches|touched|holds?|held")
+_TOUCHED = (r"rides?|rode|riding|mounts?|mounted|straddles?|straddled|kisses|kissed|grabs?|grabbed|touches|touched|fucks?|"
+            r"fucked|strokes?|stroked|sucks?|sucked|hugs?|hugged|pushes|pushed|pulls?|pulled|faces?|faced|approaches|"
+            r"approached|watches|watched|joins?|joined|undresses|undressed|teases?|teased|licks?|licked|caresses|caressed|"
+            r"(?:sex|love|dances?|danced|sleeps?|slept)\s+with|(?:sits?|sat|lies|lay|lying|climbs?|climbed|leans?|leaned|"
+            r"stands?|stood|kneels?|knelt|crawls?|crawled|moves?|moved|steps?|stepped)\s+(?:down\s+|back\s+|up\s+)?"
+            r"(?:on|onto|astride|in\s+front\s+of|behind|beside|next\s+to|before|between|over|against|toward|towards)")
+
+
+def engaged(texts, known):
+    stop = _COMMON_CAPS | _NOT_NAMES | _WORLDS | set(known)
+    out = []
+    for t in texts:
+        for sent in rst.sentences(_bare(t)):
+            hits = [m.group(1) for m in re.finditer(rf"\b([A-Z][a-z]+)['’]s\s+(?:\w+\s+)?(?:{_BODY})\b", sent)]
+            hits += [m.group(1) for m in re.finditer(rf"\b(?:{_TOUCHED})\s+([A-Z][a-z]+)\b(?!['’])", sent)
+                     if re.search(rf"\b(?:{'|'.join(map(re.escape, known)) or '(?!)'}|she|he|her|him)\b", sent)]
+            hits += [m.group(1) for m in re.finditer(rf"\b([A-Z][a-z]+)\s+(?:\w+ly\s+)?(?:{_HUMAN_DOES})\b", sent)]
+            hits = [n for n in hits if not re.search(rf"\b(?:the|a|an|this|that|his|her|their|my|our|your)\s+{n}\b", sent, re.I)]
+            out += [n for n in hits if n not in stop]
+    return list(dict.fromkeys(out))
+
+
+_HIS = re.compile(rf"\b(?P<n>[A-Z][a-z]+)['’]s\s+(?:\w+\s+)?(?:(?P<m>penis|cock|dick|balls|beard|erection)|"
+                  rf"(?P<f>breasts?|tits|pussy|vagina|clit|bra|skirt|dress))\b")
+
+
+def contrast(texts, names, gender):
+    out = {}
+    for t in texts:
+        for sent in rst.sentences(_bare(t)):
+            for m in _HIS.finditer(sent):
+                if m.group("n") in names and m.group("n") not in gender:
+                    out.setdefault(m.group("n"), "m" if m.group("m") else "f")
+    known = {**out, **gender}
+    for t in texts:
+        for sent in rst.sentences(_bare(t)):
+            here = [n for n in names if re.search(rf"\b{re.escape(n)}\b", sent)]
+            subj = re.match(rf"\s*({'|'.join(map(re.escape, names)) or '(?!)'})\s+(?:\w+ly\s+)?[a-z]+(?:s|ed)\b", sent)
+            obj = next((o for o in re.finditer(r"\b[a-z]+(?:s|ed)\s+(?:\w+\s+){0,2}?(her|him)\b", sent)
+                        if not _OWNED.match(sent[o.end():])), None)
+            if subj and obj:
+                want = "f" if obj.group(1) == "her" else "m"
+                could = [n for n in names if n != subj.group(1) and known.get(n, want) == want]
+                if len(could) == 1 and could[0] not in known:
+                    known[could[0]] = out[could[0]] = want
+            if re.search(r"\bhis\s+(?:penis|cock|dick|balls)\b", sent):
+                men = [n for n in here if known.get(n) != "f"]
+                if len(men) == 1 and men[0] not in known and any(known.get(n) == "f" for n in names):
+                    known[men[0]] = out[men[0]] = "m"
+    return out
+
+
 def roster(sheets, texts, paras):
     names = [_REGISTRY.sub("", m.group(1)) for t in sheets for m in map(_SHEET.match, t.splitlines()) if m]
     names += [m.group(1) for t in sheets for line in t.splitlines() for sent in re.split(r"(?<=[.!?])\s+", line)
@@ -633,6 +829,9 @@ def roster(sheets, texts, paras):
     names += [m.group(1) for t in sheets for line in t.splitlines() if _PICTURE.search(line)
               for m in [_LEAD.match(line)] if m and m.group(1) not in _COMMON_CAPS]
     names += [h for t in sheets for h in map(wrd.header, t.splitlines()) if h and h not in _COMMON_CAPS]
+    names += [m.group(1) for t in sheets for m in _ROLE.finditer(t)]
+    names += [m.group(1).title() for t in sheets for m in _LOWER_NAME.finditer(t)
+              if m.group(1) not in wrd.LABELS | wrd.SCENE and _HUMANISH.search(m.group(2))]
     names += [who for p in paras for who, _ in p["hold"] + p["release"]] + [n for p in paras for n in p["exit"]]
     return [n for n in dict.fromkeys(map(wrd.plain, names)) if n not in _NOT_NAMES and n.lower() not in wrd.LABELS]
 
@@ -710,9 +909,8 @@ def cast_line(cast, names, scene, beat):
         return ""
     if len(cast) == 1:
         return "There is one person in the shot: one body, one face."
-    if len(cast) == 2:
-        return "There are two people in the shot, with one body for each person."
-    return ""
+    count = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}.get(len(cast))
+    return f"There are {count} people in the shot, with one body for each person." if count else ""
 
 
 def without_absent(text, absent, names):
@@ -828,16 +1026,21 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     scene_text = "\n\n".join(p["text"] for p in lead if p["text"])
     described = wrd.descriptions(scene_text, people)
     names = roster([p["text"] for p in lead[len(setting):]], [p["text"] for p in lead], lead + paras)
+    undeclared = [n for n in engaged(texts, names) if n not in names]
+    names += undeclared
+    gender.update(contrast(texts, names, gender))
     objects = things(names, described)
     pic_of = picture_owners(scene_text, names)
     around, present = _mentions(" ".join(p["text"] for p in setting), names), []
     seen = _mentions(" ".join(p["text"] for p in lead), people)
-    solo_seen, shots, leash_by, shown = set(), [], {}, []
+    solo_seen, shots, leash_by, shown, inside = set(), [], {}, [], []
     for i, para in enumerate(paras):
         seen = list(dict.fromkeys(seen + _mentions(para["text"], people)))
         near = list(dict.fromkeys(shown + present)) if i else around
         para = with_reading(para, seen, gender, state, near)
-        dressed = wrd.undress(scene_text, undressed, people)
+        now = wrd.stated(para["text"], seen, gender, described, near)
+        was = {n: list(dict.fromkeys(undressed.get(n, []) + now.get(n, []))) for n in set(undressed) | set(now)}
+        dressed = wrd.undress(scene_text, was, people)
         undressed, off, on, unclear = clothes(para, seen, gender, described, undressed, near)
         para = dict(para, unread=para["unread"] + unclear)
         start, _, _ = apply_holds(state, {"release": [], "hold": para["worn"]})
@@ -859,6 +1062,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
             cast = list(dict.fromkeys(present + named))
         else:
             cast = [n for n in present if n in named] + [n for n in named if n not in present] or shown or present
+        while any(o not in cast for m, w, _ in inside for n, o in ((w, m), (m, w)) if n in cast):
+            cast += list(dict.fromkeys(o for m, w, _ in inside for n, o in ((w, m), (m, w)) if n in cast and o not in cast))
         why = {n: why.get(n) or ("everyone" if group else "from the shot before" if n in shown else "in the scene")
                for n in cast if n not in said}
         gone = leavers(told, names, " ".join(p["text"] for p in setting)) + para["exit"]
@@ -869,7 +1074,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         speech = bool(_SPEECH.search(para["text"]))
         text = "\n\n".join(x for x in (without_absent(dressed, absent, names), dialogue(para["text"])) if x)
         held_in = [n for n in during if i == 0 or n in inframe] if keyed else []
-        drop = absent + held_in + recover + opening
+        changed = [n for n in was if n in inframe] if keyed else []
+        drop = absent + held_in + recover + opening + changed
         text, shot_refs, shot_slots = shot_pictures(text, refs, drop, names)
         tag_of = {pic_of[k]: f"<Picture {i}>" for i, k in enumerate(shot_slots, 1) if k in pic_of}
         sound_text, sounded = snd.sound_line(para["text"], scene_text, speech)
@@ -879,6 +1085,16 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         notes += [f"By the last frame, {who} has {' and '.join(items)} in plain view" + (
             "." if any("leash" in it for it in items) else ", and whoever put it on has let go.")
             for who, items in added.items()]
+        for who in persons:
+            zones = [z for z in wrd.bare(described.get(who, ""), was.get(who, []))
+                     if z in wrd.bare(described.get(who, ""), undressed.get(who, []))]
+            coming = [z for z in wrd.bare(described.get(who, ""), undressed.get(who, [])) if z not in zones]
+            notes += bare_lines(who, gender, zones, coming, off.get(who, []))
+        seen_acts = lambda acts: [a for a in acts if a[0] in persons and a[1] in persons]
+        before = seen_acts(inside)
+        inside, started = penetration(told, persons, gender, inside)
+        notes += inside_lines(before, seen_acts(inside), started, gender)
+        inside = [a for a in inside if a[0] not in gone and a[1] not in gone]
         for who in [w for w in cast if any("leash" in it and " tied " not in it for it in during.get(w, []) + added.get(w, []))]:
             leash_by[who] = leash_holder(para["text"], cast, who, gender) or leash_by.get(who, "")
             if leash_by[who] in cast:
@@ -892,6 +1108,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         notes += hand_notes(para["text"], persons, gender, during) + rear_notes(para["text"], persons, gender)
         setting_text = " ".join(p["text"] for p in setting)
         extra = extras_in(f"{setting_text} {para['text']}") or bool(strangers(para["text"], setting_text, names))
+        unlike = extra or any(n in undeclared for n in persons)
         pulled = pull_notes(para["text"], without_absent(dressed, absent, names), persons, gender,
                             {w: during.get(w, []) + added.get(w, []) for w in persons})
         held_by_pull = {n.split(" keeps its length")[0] for n in pulled}
@@ -912,13 +1129,15 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
             notes.append("Nobody speaks." if any(snd.held_open(g) for g in gags) else
                          "Nobody speaks, and every mouth stays closed.")
         notes += [sound_text, cast_line(persons, names, without_absent(scene_text, absent, names), para["text"]),
-                  stranger_line(persons, names, gender, extra)]
+                  stranger_line(persons, [n for n in names if n not in undeclared], gender, unlike)]
         newcomers = [n for n in cast if n not in inframe] if i > 0 else []
-        joining = [f"{n} (exactly as in {tag_of[n]})" if n in tag_of else n for n in newcomers] + (
+        joining = [f"{n} ({'face and hair' if n in was else 'exactly'} as in {tag_of[n]})" if n in tag_of else n
+                   for n in newcomers] + (
             ["the strangers this beat brings in"] if extra else [])
         folk = extra or not (cast + inframe) or any(n not in objects for n in cast + inframe) or bool(_FOLK.search(para["text"]))
         if keyed and any(n not in cast for n in inframe):
-            framed = [f"{n} (exactly as in {tag_of[n]})" if n in tag_of else n for n in cast] + (
+            framed = [f"{n} ({'face and hair' if n in was else 'exactly'} as in {tag_of[n]})" if n in tag_of else n
+                      for n in cast] + (
                 ["the strangers this beat brings in"] if extra else [])
             notes.append(f"<Picture {len(shot_refs) + 1}> is the frame this shot opens on: the same place one moment earlier, "
                          f"carried forward, but this shot frames only {' and '.join(framed)}, and "
@@ -951,6 +1170,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
                       "turned": [f"{r['who']}'s {r['thing']}" for r in _worn_sides(without_absent(dressed, absent, names), cast)],
                       "added": held_line(added), "released": held_line(released),
                       "clothes_off": held_line(off), "clothes_on": held_line(on),
+                      "naked": {n: z for n in persons for z in [wrd.bare(described.get(n, ""), undressed.get(n, []))] if z},
+                      "inside": [(m, w) for m, w, _ in inside if m in persons and w in persons],
                       "unread": para["unread"] + ([u for q in lead for u in q["unread"]] if i == 0 else []),
                       "latch_after": int(math.ceil(POSE_LATCH_FROM * frames)) if latch else None})
     return shots
@@ -1406,6 +1627,11 @@ def shot_line(shot):
         bits.append(f"clothes off: {shot['clothes_off']}")
     if shot["clothes_on"]:
         bits.append(f"clothes on: {shot['clothes_on']}")
+    if shot.get("naked"):
+        bits.append("naked: " + ", ".join(f"{n} ({' and '.join({'lower': 'waist down', 'upper': 'waist up'}[z] for z in v)})"
+                                          for n, v in shot["naked"].items()))
+    if shot.get("inside"):
+        bits.append("inside: " + ", ".join(f"{m} in {w}" for m, w in shot["inside"]))
     if shot["bound"]:
         mode = "latch" if shot["latch_after"] is not None else "repair"
         bits.append(f"pose {mode}: " + ", ".join(f"{k} {v['arms'] or ''} {v['legs'] or ''}".strip()

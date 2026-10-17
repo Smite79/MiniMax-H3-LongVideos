@@ -425,8 +425,10 @@ def test_presence():
               "Dan wraps duct tape around her mouth.\nhold: Mara, duct tape over her mouth")
     loose = S.plan_shots(taping, 5.0, [None] * 4, False)[0]["prompt"]
     known = S.plan_shots(taping, 5.0, [None] * 4, False, memory="Mara: a woman.\nDan: a man.")[0]["prompt"]
-    check("no head count while someone in the shot is not a declared character",
-          "one person" not in loose and "two people" not in loose and "There are two people in the shot" in known, (loose, known))
+    check("a man the beats show acting is counted in the head count though no memory declares him, and still looks nothing "
+          "like her",
+          "There are two people in the shot" in loose and "Everyone in the shot other than Mara looks nothing like her" in loose
+          and "There are two people in the shot" in known, (loose, known))
     check("a person described as 'a tall woman' is not an extra; a man walking in is",
           not S.extras_in("Mara is a tall woman.") and not S.extras_in("Dan: a man.") and not S.extras_in("Mara, a nurse, waits.")
           and S.extras_in("A man walks in.") and S.extras_in("The guard watches.") and S.extras_in("Her boyfriend calls."))
@@ -516,7 +518,7 @@ def test_strangers():
     check("a continued shot lets the extras in, and only a shot without any keeps everyone else out",
           "carried forward; the strangers this beat brings in come into view during this shot." in shots[1]["prompt"]
           and "carried forward; Crystal and the strangers this beat brings in come into view during this shot."
-          in shots[2]["prompt"] and "carried forward rather than joined by anybody new." in shots[4]["prompt"]
+          in shots[2]["prompt"] and "but this shot frames only Crystal, and nobody else is in view." in shots[4]["prompt"]
           and "There is one person in the shot" in shots[4]["prompt"], [x["prompt"][-400:] for x in shots])
     looks = S.plan_shots("A room.\n\nCrystal waits.", 5.0, [None] * 4, False,
                          memory="Crystal: a slim Asian woman. Long dark hair. Blue eyes.")
@@ -1158,7 +1160,8 @@ def test_reading():
           later[0]["added"] == "Mara: handcuffs on her wrists." and later[1]["held"] == "Mara: handcuffs behind her back."
           and later[1]["released"] == "Mara: handcuffs on her wrists." and later[2]["held"] == "Mara: handcuffs behind her back."
           and "Mara's wrists stay locked together behind the back the whole time." in later[1]["prompt"]
-          and all(x["bound"]["Mara"]["arms"] == "behind the back" for x in later[1:]), [S.shot_line(x) for x in later])
+          and all(x["bound"]["Mara"]["arms"] == "behind the back" for x in later[1:] if "Mara" in x["cast"]),
+          [S.shot_line(x) for x in later])
     placed = S.plan_shots("A cell.\nhold: Mara, handcuffs\n\nMara wears handcuffs behind her back.\n\nDan waits.", 5.0,
                           [None] * 4, False)
     check("a hold with no position takes the one the beat gives from that shot's first frame",
@@ -1371,6 +1374,144 @@ def test_wardrobe():
           got == cases, {d: g for d, g in got.items() if g != cases[d]})
     left = S.wrd.undress("Crystal wears a thong. It is black latex. She has long red hair.", {"Crystal": ["thong"]}, ["Crystal"])
     check("a sentence that only describes the removed thong goes with it", left == "She has long red hair.", left)
+
+def test_undressed():
+    print("\n=== clothes that come off stay off, and he stays inside her ===")
+    people, gender = ["Sarah", "Dan"], {"Sarah": "f", "Dan": "m"}
+    desc = {"Sarah": "Sarah: a woman wearing a black PVC crop top and a black PVC miniskirt."}
+    read = lambda t: S.wrd.read(t, people, gender, desc)[0]
+    check("a skirt comes off however it is written, typos and all, and a miniskirt is the same skirt",
+          all(read(t) == {"Sarah": ["skirt"]} for t in (
+              "Sarah slides off her skirt.", "Sarah slides her skirt off.", "Sarah pulls down her skirt.",
+              "Sarah slides of her skirt.", "Sarah takes off her miniskirt.", "Sarah removes her skirt.",
+              "Sarah steps out of her skirt.", "Sarah lets her skirt fall to the floor.", "Sarah drops her skirt.",
+              "Dan slips her mini skirt off.")),
+          {t: read(t) for t in ("Sarah pulls down her skirt.", "Sarah slides of her skirt.", "Sarah steps out of her skirt.")})
+    check("stripping naked, being undressed or taking off all her clothes takes off everything she wears, and touching, "
+          "lifting or not being naked takes off nothing",
+          read("Sarah strips naked.") == read("Dan undresses her.") == read("Sarah takes off all her clothes.")
+          == {"Sarah": ["crop top", "skirt"]} and read("Sarah is naked from the waist down.") == {"Sarah": ["skirt"]}
+          and read("Sarah lifts her skirt.") == read("Dan pulls her skirt.") == read("Sarah is not naked.") == {})
+    check("a skirt that comes off takes its whole description with it, PVC and all, and a crop top goes with a top",
+          S.wrd.undress(desc["Sarah"], {"Sarah": ["skirt"]}, people) == "Sarah: a woman wearing a black PVC crop top."
+          and S.wrd.undress(desc["Sarah"], {"Sarah": ["top"]}, people) == "Sarah: a woman wearing a black PVC miniskirt.")
+    bare = lambda gone, d=desc["Sarah"]: S.wrd.bare(d, gone)
+    check("she is bare below once nothing covers her there, above once nothing covers her there, and a dress covers both",
+          bare(["skirt"]) == ["lower"] and bare(["top"]) == ["upper"] and bare(["skirt", "top"]) == ["lower", "upper"]
+          and bare(["skirt"], "Sarah wears a skirt over black panties.") == []
+          and bare(["dress"], "Sarah wears a red dress.") == ["lower", "upper"] and bare([]) == [])
+    mem = "Sarah <Picture 1>: a woman with long blonde hair, wearing a black PVC crop top and a black PVC miniskirt.\n" \
+          "Dan: a man with short dark hair."
+    plan = lambda *beats: S.plan_shots("A dim living room with a leather couch.\n\n" + "\n\n".join(beats), 5.0,
+                                       [IMG1, None, None, None], False, memory=mem)
+    notes = lambda x: x["prompt"].split("\n\n")[-1]
+    skirt = plan("Dan sits on the couch.", "Sarah stands up and slides off her skirt.", "Sarah turns around.",
+                 "Sarah grinds against him.", "Sarah puts her skirt back on.", "Sarah smiles.")
+    check("from the shot it comes off in, she stays naked from the waist down, her description loses the skirt, and the "
+          "picture of her in it stays out of shots that continue from her, until she puts it back on",
+          "From the moment her skirt comes off, Sarah stays naked from the waist down" in notes(skirt[1])
+          and all("Sarah is naked from the waist down the whole shot" in notes(x) and "miniskirt" not in x["prompt"]
+                  and not x["refs"] for x in skirt[2:4])
+          and "naked" not in notes(skirt[4]) and "miniskirt" in skirt[5]["prompt"] and skirt[5]["refs"],
+          [S.shot_line(x) for x in skirt])
+    back = plan("Dan sits on the couch.", "Sarah steps out of her skirt.", "Dan pulls out his phone.",
+                "Sarah climbs onto his lap and rides him.")
+    check("when she comes back into view after it is off, her picture is for her face and hair only",
+          "Sarah (face and hair as in <Picture 1>) comes into view" in back[3]["prompt"], notes(back[3]))
+    naked = plan("Sarah kneels on the bed, completely naked.", "Dan kneels behind her.")
+    check("naked as she is in the beat holds the whole shot, from that shot on",
+          all("Sarah is naked the whole shot: her breasts, hips, bottom and crotch are bare." in notes(x)
+              and "crop top" not in x["prompt"] for x in naked), [notes(x) for x in naked])
+    sex = plan("Dan sits on the couch.", "Sarah slides off her skirt.",
+               "Sarah turns around and sits down on Dan's waist, her legs spread, allowing his penis to enter her vagina.",
+               "Sarah grinds on him.", "Dan pulls out halfway and slams back in.", "Dan grabs her hips.", "Sarah climbs off him.",
+               "Sarah smiles.")
+    held = ("Dan's penis is buried deep inside Sarah's vagina the whole shot: her crotch and his groin stay pressed tight "
+            "together, so only the base of his penis shows, and their hips rock and grind together as they move.")
+    check("once he enters her his penis stays inside her in every shot of them until she climbs off, and pulling out "
+          "and going back in is no end",
+          "Once Dan's penis is inside Sarah's vagina, it stays buried deep inside her for the rest of the shot: her crotch "
+          "and his groin stay pressed tight together" in notes(sex[2]) and "sliding" not in notes(sex[2]) + notes(sex[3])
+          and all(held in notes(x) for x in sex[3:6]) and not any("penis" in notes(x) for x in sex[6:])
+          and sex[3]["inside"] == [("Dan", "Sarah")] and "inside: Dan in Sarah" in S.shot_line(sex[3]),
+          [S.shot_line(x) for x in sex])
+    starts = lambda b: [x["inside"] for x in plan("Dan sits on the couch.", "Sarah kneels in front of him.", b)][-1]
+    check("riding him, sinking onto his cock, being fucked or taken from behind, sex and anal all put him inside her; his "
+          "cock in her mouth or hand, or entering a city, does not",
+          all(starts(b) == [("Dan", "Sarah")] for b in (
+              "Sarah climbs onto his lap and rides him.", "Sarah sinks onto Dan's cock.", "Dan fucks her.",
+              "Dan takes her from behind.", "Sarah has sex with Dan.", "Dan slides his cock into her ass.",
+              "Sarah rides Dan's cock."))
+          and all(starts(b) == [] for b in ("Sarah takes his cock into her mouth.", "Sarah strokes his cock in her hand.",
+                                            "Sarah enters Paris."))
+          and "inside Sarah's anus the whole shot: her bottom and his groin stay pressed tight together" in notes(
+              plan("Sarah kneels on the bed.", "Dan slides his cock into her ass.", "Dan fucks her harder.")[2]),
+          {b: starts(b) for b in ("Sarah sinks onto Dan's cock.", "Dan takes her from behind.")})
+    gone = plan("Dan sits on the couch.", "Sarah rides him.", "Dan stands up.", "Sarah rides him again.")
+    check("standing up ends it, and riding him again starts it again",
+          [bool(x["inside"]) for x in gone] == [False, True, False, True]
+          and "Once Dan's penis is inside" in notes(gone[3]), [S.shot_line(x) for x in gone])
+
+
+def test_partner_named():
+    print("\n=== everyone described in the memory, and anyone the beats treat as a person, is a character ===")
+    sarah = "Sarah <Picture 1>: a woman with long blonde hair, wearing a black PVC miniskirt."
+    beats = ("A dim living room with a leather couch.\n\nDan sits on the couch.\n\nSarah stands in front of him.\n\nSarah turns "
+             "around and sits down on Dan's waist, allowing his penis to enter her vagina.")
+    cast = lambda mem: [x["cast"] for x in S.plan_shots(beats, 5.0, [IMG1, IMG2, None, None], False, memory=mem)]
+    forms = ("Dan: a muscular man.", "dan: a muscular man with short dark hair.", "Male: Dan, a muscular man.",
+             "The man: Dan, muscular, short dark hair.", "Name: Dan\nGender: male", "Dan - a muscular man.",
+             "**Dan**: a muscular man.", "Dan <Picture 2>: a muscular man.")
+    check("a man described in the memory is a character however his entry is written, lower case, Male: or The man: included",
+          all(cast(sarah + "\n\n" + f) == [["Dan"], ["Dan", "Sarah"], ["Dan", "Sarah"]] for f in forms),
+          {f: cast(sarah + "\n\n" + f) for f in forms})
+    undeclared = S.plan_shots("A dim living room with a leather couch.\n\nSarah stands in front of the couch.\n\nSarah slides off "
+                              "her skirt.\n\nSarah mounts Dan's waist in reverse cowgirl, allowing his penis to enter vagina."
+                              "\n\nShe gasps.\n\nSarah rides him.", 5.0, [IMG1, None, None, None], False, memory=sarah)
+    check("a man the beats treat as a person is in the shot with her though the memory never names him, and he stays inside her",
+          [x["cast"] for x in undeclared][2:] == [["Sarah", "Dan"]] * 3
+          and all(x["inside"] == [("Dan", "Sarah")] for x in undeclared[2:]), [S.shot_line(x) for x in undeclared])
+    check("a body part, sex, riding, sitting on or standing in front of someone, or doing what people do makes a name a "
+          "person; rain, light, music, cities, days and cars do not",
+          S.engaged(["Sarah sits down on Dan's waist.", "Sarah stands in front of Mike.", "Tom smiles.", "Sarah rides Jake.",
+                     "Sarah has sex with Leo."], ["Sarah"]) == ["Dan", "Mike", "Tom", "Jake", "Leo"]
+          and S.engaged(["Rain falls on the window.", "London sleeps under the rain.", "Candlelight dances over her skin.",
+                         "Sarah looks out over London.", "Sarah meets him on Monday.", "Sarah flies to Paris and waits in Rome.",
+                         "Music plays softly.", "Sarah rides the Metro.", "The Ferrari waits outside."], ["Sarah"]) == [])
+
+
+def test_many():
+    print("\n=== any number of people: each act, each pair and each head count on its own ===")
+    mem = "Sarah <Picture 1>: a woman with long blonde hair.\nMia <Picture 2>: a woman with short red hair."
+    plan = lambda *beats, m=mem: S.plan_shots("A dim bedroom.\n\n" + "\n\n".join(beats), 5.0, [IMG1, IMG2, None, None], False,
+                                             memory=m)
+    notes = lambda x: x["prompt"].split("\n\n")[-1]
+    dp = plan("Sarah kneels on the bed. Dan and Jake stand beside her.",
+              "Sarah climbs onto Dan and rides him while Jake takes her from behind.", "Sarah moans.", "Jake pulls out.",
+              "Sarah keeps riding Dan.")
+    check("two men in one woman are two acts, the second in her other hole, each held until it ends on its own, and "
+          "everyone joined stays in the shot",
+          [x["inside"] for x in dp[1:]] == [[("Dan", "Sarah"), ("Jake", "Sarah")]] * 2 + [[("Dan", "Sarah")]] * 2
+          and "Jake's penis is buried deep inside Sarah's anus the whole shot" in notes(dp[2])
+          and "Dan's penis is buried deep inside Sarah's vagina the whole shot" in notes(dp[3])
+          and sorted(dp[3]["cast"]) == ["Dan", "Jake", "Sarah"], [S.shot_line(x) for x in dp])
+    couples = plan("Dan and Jake sit on the couch.", "Sarah rides Dan.", "Jake fucks Mia from behind.", "Dan pulls out of Sarah.",
+                   "Mia moans.")
+    check("two couples are two pairs: each starts, holds and ends apart, and a shot of one keeps that one's partner",
+          [x["inside"] for x in couples[1:]] == [[("Dan", "Sarah")], [("Jake", "Mia")], [], [("Jake", "Mia")]]
+          and sorted(couples[4]["cast"]) == ["Jake", "Mia"], [S.shot_line(x) for x in couples])
+    men = plan("Dan lies on the bed. Jake kneels behind him.", "Jake slides his cock into Dan.", "Dan groans.", m="")
+    check("a man can be the one entered, in his anus, and the line says his",
+          men[1]["inside"] == men[2]["inside"] == [("Jake", "Dan")]
+          and "Jake's penis is buried deep inside Dan's anus the whole shot: his bottom" in notes(men[2]), [notes(x) for x in men])
+    check("a head count says how many people a shot holds, three or more included",
+          "There are three people in the shot, with one body for each person." in notes(dp[1])
+          and S.cast_line(["A", "B", "C", "D"], ["A", "B", "C", "D"], "", "") == "There are four people in the shot, with "
+          "one body for each person.")
+    check("her in a shot with two women and a man who acts on her tells nobody's gender, and with one woman tells hers",
+          S.contrast(["Dan watches her."], ["Sarah", "Mia", "Dan"], {"Sarah": "f"}) == {}
+          and S.contrast(["Dan watches her."], ["Mia", "Dan"], {}) == {"Mia": "f"})
+
 
 def test_hips():
     print("\n=== tape around the hips ===")
@@ -1665,6 +1806,9 @@ def main():
     test_directive_forms()
     test_reading()
     test_wardrobe()
+    test_undressed()
+    test_partner_named()
+    test_many()
     test_hips()
     test_no_false_removal()
     test_retakes()
