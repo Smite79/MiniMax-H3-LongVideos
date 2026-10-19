@@ -887,6 +887,24 @@ _APP_K = POSE_APP_HUE_BINS * POSE_APP_SAT_BINS + POSE_APP_VAL_BINS
 _APP_R = len(POSE_APP_REGIONS)
 POSE_APP_SIZE = _APP_R * _APP_K
 _HEAD_POINTS = (NOSE, REYE, LEYE, REAR, LEAR)
+HEAD_CROP_HALF = 0.9
+HEAD_CROP_UP = 0.25
+
+
+def head_box(keypoints, width, height):
+    kp = _person(keypoints)
+    hp = [_xy(kp, j) for j in _HEAD_POINTS if _vis(kp, j)] if kp is not None else []
+    neck = _neck(kp) if hp else None
+    if neck is None:
+        return None
+    c = np.mean(hp, axis=0)
+    s = float(np.linalg.norm(c - neck))
+    if s <= 1.0:
+        return None
+    m, half = c + HEAD_CROP_UP * (c - neck), HEAD_CROP_HALF * s
+    x0, y0 = max(0, int(round(m[0] - half))), max(0, int(round(m[1] - half)))
+    x1, y1 = min(int(width), int(round(m[0] + half))), min(int(height), int(round(m[1] + half)))
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
 
 
 def _rgb_u8(image):

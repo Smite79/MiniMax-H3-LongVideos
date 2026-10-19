@@ -1,5 +1,7 @@
 import io
+import json
 import os
+import re
 import sys
 from types import SimpleNamespace
 
@@ -154,8 +156,14 @@ def test_helpers():
                                                    "hyperflow_sigmas": "[1.0, 0.5, 0.0]"} if k == "lora_metadata" else None)
     h = S.hyperflow_lora(hf)
     check("Hyperflow is read from the LoRA's metadata", h and h["sigmas"] == (1.0, 0.5, 0.0) and h["gate"] == 0.25, h)
-    check("...or from the file name in the graph",
-          S.hyperflow_lora(SimpleNamespace(), {"1": {"inputs": {"lora_name": "minimax_h3_hyperflow_8step.safetensors"}}}))
+    import folder_paths
+    was = folder_paths.get_filename_list
+    folder_paths.get_filename_list = lambda kind: ["minimax_h3_hyperflow_8step.safetensors"]
+    try:
+        check("...or from the file name in the graph",
+              S.hyperflow_lora(SimpleNamespace(), {"1": {"inputs": {"lora_name": "minimax_h3_hyperflow_8step.safetensors"}}}))
+    finally:
+        folder_paths.get_filename_list = was
     check("no Hyperflow, no grid", S.hyperflow_lora(SimpleNamespace(), {}) is None)
     sig = S.hyperflow_sigmas(S.HYPERFLOW_SIGMAS, 12.0)
     check("the grid is shifted at 12 and keeps its ends", abs(float(sig[0]) - 1.0) < 1e-6 and float(sig[-1]) == 0.0
@@ -400,7 +408,7 @@ def test_presence():
               "Mara waits.\n\ncut\nA garden. Mara walks along the path.")
     shots = S.plan_shots(script, 10.0, [IMG1, IMG2, None, None], False, memory="Mara: a tall woman.\nDan: a guard.\nSetting: a prison.")
     check("a named exit, a return when named, an exit: line, and a cut",
-          [s["cast"] for s in shots] == [["Dan"], ["Mara"], ["Mara", "Dan"], ["Dan"], ["Mara"], ["Mara"]],
+          [s["cast"] for s in shots] == [["Dan"], ["Mara"], ["Mara", "Dan"], ["Dan", "Mara"], ["Mara"], ["Mara"]],
           [s["cast"] for s in shots])
     p = shots[1]["prompt"]
     check("an absent person's picture, character line and scene sentence stay out",
@@ -459,11 +467,19 @@ def test_beats_decide_presence():
                         memory="Ana <Picture 1>: a woman with long red hair.\nLena: a woman with short blonde hair.",
                         anchor="A small living room in the evening.")
     check("someone named once is not carried into beats that do not name them, refer to them or bring everyone in",
-          [sorted(x["cast"]) for x in pair] == [["Ana", "Lena"], ["Ana"], ["Ana"], ["Ana", "Lena"], ["Ana", "Lena"], ["Ana"],
-                                                ["Ana", "Lena"], ["Ana"], ["Lena"]]
-          and "short blonde hair" not in pair[1]["prompt"] + pair[5]["prompt"]
+          [sorted(x["cast"]) for x in pair] == [["Ana", "Lena"], ["Ana"], ["Ana"], ["Ana", "Lena"], ["Ana", "Lena"],
+                                                ["Ana", "Lena"], ["Ana", "Lena"], ["Ana"], ["Lena"]]
+          and "short blonde hair" not in pair[1]["prompt"]
           and "this shot frames only Ana (exactly as in <Picture 1>), and nobody else is in view." in pair[1]["prompt"],
           [x["cast"] for x in pair])
+    table = S.plan_shots("A bathroom.\n\nSarah and Dana walk in.\n\nSarah lies down on the table.\n\nDana opens the bag."
+                         "\n\nDana takes off Sarah's diaper.\n\nDana walks out.\n\nSarah sits up.\n\nDana comes back in.",
+                         5.0, [IMG1, None, None, None], False, memory="Sarah <Picture 1>: a woman.\nDana: a woman.")
+    check("someone still in the room stays in view through a beat about someone else when a later beat needs them where "
+          "they are, so they never walk back in; someone who walks back in, or has left, comes into view as before",
+          [sorted(x["cast"]) for x in table] == [["Dana", "Sarah"]] * 5 + [["Sarah"], ["Dana"]]
+          and "comes into view" not in table[3]["prompt"] and "this shot frames only Dana" in table[6]["prompt"],
+          [S.shot_line(x) for x in table])
     unnamed = S.plan_shots("A bathroom.\n\nA man opens the door.", 5.0, [None] * 4, False, memory=memory)
     check("a beat with someone in it, named or not, is not called empty", "Nobody is in the shot" not in unnamed[0]["prompt"])
     loose = S.plan_shots("A bathroom. Crystal is inside.\n\nShe looks at the mirror.", 5.0, [None] * 4, False)[0]["prompt"]
@@ -639,7 +655,8 @@ def test_memory_layouts():
     tagged = S.plan_shots("A bar.\n\nMike sits at the bar.\n\nCrystal walks in and sits beside Mike.", 5.0, [IMG1, IMG2, None, None], False,
                           memory="CRYSTAL <Picture 1>: a slim woman.\nMIKE <Picture 2>: a tall man.\nSetting: a dim bar.")
     check("a picture belongs to its block, all-caps names match the beats, and a Setting line is never a character's",
-          [S.shot_line(x).split("pictures: ")[-1] for x in tagged] == ["Mike (ref_image_2)", "Crystal (ref_image_1), Mike (ref_image_2)"]
+          [S.shot_line(x).split("pictures: ")[-1] for x in tagged]
+          == ["Mike (ref_image_2, face and hair)", "Crystal (ref_image_1, face and hair), Mike (ref_image_2, face and hair)"]
           and all("Setting: a dim bar." in x["prompt"] for x in tagged), [S.shot_line(x) for x in tagged])
 
 
@@ -796,6 +813,15 @@ def test_quiet_mouths():
                                     7, 8, "euler", "simple", None, 1.0)
         check("foley_resolution full keeps the old full-size pass", not scaled
               and tuple(seen["samples"].unbind()[0].shape) == (1, 24, 7, 48, 84) and seen["cond"] is cond)
+        lead = {"samples": comfy.nested_tensor.NestedTensor((video, torch.zeros_like(audio)))}
+        S.au.pin_audio_silence(lead, torch.full_like(audio, 2.0), 3)
+        S.foley_pass("m", cond, "n", lead, {"samples": comfy.nested_tensor.NestedTensor((video, audio))},
+                     7, 8, "euler", "simple", None, 0.5, pinned=True)
+        _, a = seen["samples"].unbind()
+        mv, ma = seen["noise_mask"].unbind()
+        check("a spoken line's sound pass keeps the quiet half second before the line",
+              float(mv.max()) == 0.0 and float(ma[..., :3].max()) == 0.0 and float(ma[..., 3:].min()) == 1.0
+              and bool((a[..., :3] == 2.0).all()))
     finally:
         S.sample = saved
 
@@ -902,6 +928,44 @@ def test_pictures_by_checkpoint():
     check("only a ref2va checkpoint takes pictures in every shot; an unknown loader is treated as one",
           S.takes_pictures("m", graph, "9")[0] is False and "10Eros_Max_H3_FL2VA" in S.takes_pictures("m", graph, "9")[1]
           and S.takes_pictures("m", hybrid, "9") == (True, "") and S.takes_pictures("m", None, None) == (True, ""))
+    import folder_paths
+    import tempfile
+    from safetensors.torch import save_file
+    with tempfile.TemporaryDirectory() as tmp:
+        tensor = {"diffusion_model.blocks.0.attn.qkv_proj.lora_A.weight": torch.zeros(1)}
+        save_file({"diffusion_model.time_embedder.proj_in.lora_A.weight": torch.zeros(1)}, os.path.join(tmp, "hyperflow.safetensors"))
+        save_file(tensor, os.path.join(tmp, "student.safetensors"), {"model": "4-step student, LoRA on the T2VA transformer"})
+        save_file(tensor, os.path.join(tmp, "flow.safetensors"), {"tasks": '["t2va", "fl2va", "ref2va"]', "hyperflow": "true",
+                                                                 "hyperflow_gate": "0.25"})
+        save_file(tensor, os.path.join(tmp, "minimax_h3_fl2v_turbo_8step.safetensors"))
+        save_file(tensor, os.path.join(tmp, "style.safetensors"))
+        was = folder_paths.get_full_path, folder_paths.get_filename_list
+        folder_paths.get_full_path = lambda kind, name: os.path.join(tmp, name) if os.path.isfile(os.path.join(tmp, name)) else None
+        folder_paths.get_filename_list = lambda kind: sorted(os.listdir(tmp))
+        on = lambda curve: SimpleNamespace(get_model_object=lambda name: SimpleNamespace(use_adaln_curves=curve))
+        stack = lambda *rows: {"9": {"inputs": {"model": ["8", 0]}}, "3": hybrid["3"], "8": {"inputs": {
+            "model": ["3", 0], "stack_data": json.dumps([{"on": o, "lora": n, "str": st} for n, o, st in rows])}}}
+        try:
+            got = (S.partial_loras(on(True), graph, "9"), S.partial_loras(on(False), graph, "9"),
+                   S.partial_loras(on(True), hybrid, "9"))
+            blind = S.takes_pictures("m", stack(("student.safetensors", True, 1.0), ("style.safetensors", True, 1.0)), "9")
+            named = S.takes_pictures("m", stack(("minimax_h3_fl2v_turbo_8step.safetensors", True, 0.8)), "9")
+            fine = [S.takes_pictures("m", g, "9") for g in (
+                stack(("flow.safetensors", True, 1.0), ("style.safetensors", True, 1.0)),
+                stack(("student.safetensors", False, 1.0), ("minimax_h3_fl2v_turbo_8step.safetensors", True, 0)),
+                {"9": {"inputs": {"model": ["7", 0]}}, "3": hybrid["3"],
+                 "7": {"inputs": {"model": ["3", 0], "lora_name": "student.safetensors", "strength_model": 0}}})]
+            flow = S.hyperflow_lora(SimpleNamespace(), stack(("flow.safetensors", True, 1.0)))
+        finally:
+            folder_paths.get_full_path, folder_paths.get_filename_list = was
+    check("a LoRA trained without reference pictures, found in any loader by its file, keeps a person's picture out of a "
+          "shot that opens on a frame they are in; one trained with them, a style LoRA, or one switched off does not",
+          blind == (False, "student.safetensors was trained without reference pictures") and named[0] is False
+          and all(f == (True, "") for f in fine), (blind, named, fine))
+    check("Hyperflow loaded through a LoRA stack is found, with its gate read from its own file",
+          flow is not None and flow["gate"] == 0.25 and flow["source"] == "flow.safetensors", flow)
+    check("a LoRA with timestep layers on a time-curve checkpoint is named as only partly loaded, and not on a checkpoint "
+          "with a time embedder or without that LoRA", got == (["hyperflow.safetensors"], [], []), got)
     script = "A cell. Mara <Picture 1> waits. Dan <Picture 2> stands guard.\n\nMara paces.\n\nMara sits.\n\ncut\nA garden. Mara walks."
     out, calls = render(script, ref_image_1=IMG1, ref_image_2=IMG1, graph=graph, unique_id="9")
     check("on an FL2VA checkpoint like 10Eros the pictures go in except where she is already in the opening frame",
@@ -1395,6 +1459,39 @@ def test_undressed():
     check("a skirt that comes off takes its whole description with it, PVC and all, and a crop top goes with a top",
           S.wrd.undress(desc["Sarah"], {"Sarah": ["skirt"]}, people) == "Sarah: a woman wearing a black PVC crop top."
           and S.wrd.undress(desc["Sarah"], {"Sarah": ["top"]}, people) == "Sarah: a woman wearing a black PVC miniskirt.")
+    room = {"Sarah is a young woman in a white diaper, standing by the door.": "Sarah is a young woman standing by the door.",
+            "Sarah, in a diaper with the toilet behind her against the wall, waits by the door.":
+            "Sarah, with the toilet behind her against the wall, waits by the door.",
+            "Sarah, in a diaper in the bathroom, waits.": "Sarah, in the bathroom, waits.",
+            "Sarah wears a diaper, pulled up tight, and stands at the sink.": "Sarah stands at the sink.",
+            "Sarah: a woman with a diaper and long hair.": "Sarah: a woman with long hair.",
+            "Sarah wears a diaper with cartoon prints on the front.": "", "Sarah walks in.": "Sarah walks in."}
+    got = {t: S.wrd.undress(t, {"Sarah": ["diaper"]}, people) for t in room}
+    check("a garment that comes off takes only its own words: the room, where she is and what she does stay, and no "
+          "stray 'in' or 'wearing' is left behind",
+          got == room and S.wrd.undress("Sarah wears a red shirt and a blue yukata.", {"Sarah": ["shirt"]}, people)
+          == "Sarah wears a blue yukata.", {t: g for t, g in got.items() if g != room[t]})
+    worn = {"Sarah": "Sarah: a woman wearing a thick white diaper and a pink t-shirt.", "Dan": "Dan: a man wearing a blue yukata."}
+    took = lambda t: S.wrd.read(t, people, gender, worn)[0]
+    check("a diaper, nappy, pull-ups or towel comes off like any garment, a nappy is a diaper, and anything a description says "
+          "they are wearing can come off too",
+          all(took(t) == {"Sarah": ["diaper"]} for t in ("Sarah takes off her diaper.", "Dan removes her diaper.",
+                                                         "Dan untapes her diaper.", "Sarah pulls her diaper down.",
+                                                         "Sarah steps out of her nappy.", "Dan takes off her nappies."))
+          and took("Sarah slides off her pull-ups.") == {"Sarah": ["pull-ups"]} and took("Sarah drops her towel.") == {"Sarah": ["towel"]}
+          and took("Dan takes off his yukata.") == {"Dan": ["yukata"]} and took("Sarah takes off her smile.") == {}
+          and S.wrd.undress(worn["Sarah"], {"Sarah": ["diaper"]}, people) == "Sarah: a woman wearing a pink t-shirt."
+          and S.wrd.bare(worn["Sarah"], ["diaper"]) == ["lower"],
+          {t: took(t) for t in ("Dan untapes her diaper.", "Sarah steps out of her nappy.", "Dan takes off his yukata.")})
+    puts = lambda t: S.clothes(S.parse_paragraph(t), people, gender, worn, {"Sarah": ["diaper"]}, people)[2]
+    check("spoken words never put clothes on or take them off, and putting it on the chair or the bed is not putting it on",
+          all(puts(t) == {} for t in ('"Put your diaper back on," Dan says.', '"I am not putting my diaper back on!" Sarah shouts.',
+                                      "Sarah puts her diaper on the chair.", "Sarah slips her diaper on the floor.",
+                                      "Dan pulls her diaper on the bed.", "Sarah gets her diaper on Dan's lap."))
+          and all(puts(t) == {"Sarah": ["diaper"]} for t in ("Sarah puts her diaper back on.", "Dan puts a fresh diaper on her.",
+                                                             "Sarah puts on her diaper.", "Sarah slides her diaper on and smiles."))
+          and S.clothes(S.parse_paragraph('"Strip naked," Dan orders.'), people, gender, worn, {}, people)[1] == {},
+          {t: puts(t) for t in ('"Put your diaper back on," Dan says.', "Sarah puts her diaper on the chair.")})
     bare = lambda gone, d=desc["Sarah"]: S.wrd.bare(d, gone)
     check("she is bare below once nothing covers her there, above once nothing covers her there, and a dress covers both",
           bare(["skirt"]) == ["lower"] and bare(["top"]) == ["upper"] and bare(["skirt", "top"]) == ["lower", "upper"]
@@ -1407,20 +1504,115 @@ def test_undressed():
     notes = lambda x: x["prompt"].split("\n\n")[-1]
     skirt = plan("Dan sits on the couch.", "Sarah stands up and slides off her skirt.", "Sarah turns around.",
                  "Sarah grinds against him.", "Sarah puts her skirt back on.", "Sarah smiles.")
-    check("from the shot it comes off in, she stays naked from the waist down, her description loses the skirt, and the "
-          "picture of her in it stays out of shots that continue from her, until she puts it back on",
+    check("from the shot it comes off in, she stays naked from the waist down and her description loses the skirt, while "
+          "her picture stays in every shot, for her face and hair only, until she puts it back on",
           "From the moment her skirt comes off, Sarah stays naked from the waist down" in notes(skirt[1])
           and all("Sarah is naked from the waist down the whole shot" in notes(x) and "miniskirt" not in x["prompt"]
-                  and not x["refs"] for x in skirt[2:4])
+                  and x["refs"] and "<Picture 1> is for Sarah's face and hair only: her clothes are as this shot describes "
+                  "them." in notes(x) for x in skirt[2:4])
           and "naked" not in notes(skirt[4]) and "miniskirt" in skirt[5]["prompt"] and skirt[5]["refs"],
           [S.shot_line(x) for x in skirt])
+    said = plan("Sarah stands by the bed.", "Sarah takes off her skirt.", '"I hate that skirt," Sarah says.',
+                "Sarah looks at her skirt on the floor.", "Sarah smiles.")
+    check("every shot gives only her face and hair from her picture, so her clothes come from the words alone; once the "
+          "skirt is off the shot names it no more than the beat does, and lists no body part",
+          all(notes(x).count("skirt") == 0 and "Sarah is naked from the waist down the whole shot." in notes(x)
+              and not re.search(r"\b(?:bottom|butt|crotch|hips|breasts)\b", notes(x)) for x in said[2:])
+          and [x["faces"] for x in said] == [["Sarah"]] * 5
+          and all(x["refs"] and "face and hair" in S.shot_line(x) for x in said)
+          and skirt[5]["faces"] == ["Sarah"] and "clothes on" not in S.shot_line(said[2]),
+          [(S.shot_line(x), notes(x)) for x in said])
+    check("a garment she took off and then names in her line is kept out of the picture's text, the real line kept for "
+          "the sound, and narration that names it is left as it is",
+          "<d>" not in said[2]["unspoken"] and "skirt" not in said[2]["unspoken"].split("\n\n")[2]
+          and "<d>I hate that skirt,</d>" in said[2]["prompt"]
+          and said[2]["unsaid"] == ["skirt"] and "spoken skirt kept out of the picture" in S.shot_line(said[2])
+          and said[3]["unspoken"] == "" and not said[1]["unsaid"], [(x["unsaid"], x["unspoken"][:120]) for x in said])
+    line = ('<d>Look at me. No diapers, panties, pants or underwear for me, just my bra and my dress. Mom can put a '
+            'new diaper on me.</d> She points at her shoes.')
+    out = S.wrd.unsay(line, ["diaper"], {"lower"})
+    check("with her bare from the waist down, a sentence in her line that names anything worn there or over everything, "
+          "or the garment she took off, is said in the picture as her own words before it, the same length, so nothing in "
+          "it is acted out; a line that is only about it is left out of the picture",
+          out == ("<d>Look at me. Look at me Look at me Look at me Look at me Look at. Look at me Look at me Look "
+                  "at.</d> She points at her shoes.", ["diaper", "panties", "pants", "underwear", "dress"])
+          and S.wrd.unsay(line, [], {"upper"})[1] == ["bra", "dress"] and S.wrd.unsay(line, [], set()) == (line, [])
+          and S.wrd.unsay("<d>Where are my Skirts?</d> She looks.", [], {"lower"})[0] == " She looks.", out)
+    out, calls = render('A bedroom.\n\nSarah takes off her skirt.\n\n"Look at me. I hate that skirt," Sarah says.',
+                        ref_image_1=IMG1, character_memory=mem)
+    built = [("<d>Look at me. Look at me Look.</d>" in c["prompt"], "skirt,</d>" in c["prompt"]) for c in calls["cond"]]
+    sounds = [c for c in calls["sample"] if c["foley"] and c["shot"] == 2]
+    check("that shot's picture is made from the line without the word, then its sound from the real line over the "
+          "finished picture",
+          built == [(False, False), (True, False), (False, True)] and len(sounds) == 1
+          and sounds[0]["mask"] == [0.0, 1.0] and "her line's sound made over the finished picture" in out[2],
+          (built, [(c["shot"], c["mask"]) for c in sounds]))
+    heard = "Spoken words are only heard: the shot shows what it describes, not what anyone talks about."
+    check("a shot with a spoken line tells H3 the words are only heard, not shown, and a shot without one does not",
+          heard in said[2]["prompt"] and heard in said[2]["unspoken"] and heard not in said[1]["prompt"]
+          and heard not in said[3]["prompt"], [notes(x) for x in said[1:4]])
+    brand = ("Sarah: she, <Picture 1>, skin-tight shiny white spandex PVC crop top, skin-tight shiny rubber white Pampers "
+             "diaper with Pampers logo.")
+    film = S.plan_shots("A bathroom.\n\nSarah takes off her diaper.\n\nSarah sits down.", 5.0, [IMG1, None, None, None],
+                        False, memory=brand)
+    check("a brand goes with the garment it names, logo and all, the garment's words stop at a comma so the crop top "
+          "stays, and Pampers or Huggies come off as a diaper",
+          S.wrd.undress(brand, {"Sarah": ["diaper"]}, people)
+          == "Sarah: she, <Picture 1>, skin-tight shiny white spandex PVC crop top."
+          and S.wrd.undress("Sarah: a crop top, white diaper.", {"Sarah": ["diaper"]}, people) == "Sarah: a crop top."
+          and S.wrd.undress("Sarah wears Huggies.", {"Sarah": ["diaper"]}, people) == ""
+          and S.wrd.read("Sarah takes off her Pampers.", people, gender, {"Sarah": brand})[0] == {"Sarah": ["diaper"]}
+          and "Pampers" not in film[1]["prompt"] and "crop top" in film[1]["prompt"],
+          (S.wrd.undress(brand, {"Sarah": ["diaper"]}, people), film[1]["prompt"][:300]))
+    layers = ("Sarah: she, <Picture 1>, white crop top, thick white diaper, black leggings with a metal zipper that runs "
+              "between her legs from front to back.\nDana: She, blue jeans.")
+    film = S.plan_shots("A bathroom.\n\nSarah and Dana walk in.\n\nSarah unzips her leggings and slides them down her legs."
+                        "\n\nDana opens the bag next to Sarah and takes out a new Pampers diaper.\n\nDana removes Sarah's diaper."
+                        "\n\nDana fastens the new diaper around Sarah's hips. The diaper is now secured on Sarah's body."
+                        "\n\nSarah smiles.", 5.0, [IMG1, None, None, None], False, memory=layers)
+    line = lambda x: next((ln for ln in x["prompt"].split("\n") if ln.startswith("Sarah:")), "")
+    check("what is worn under something else stays out of sight until that comes off, the shot it comes off in says it "
+          "covers it, a garment's own details go with it, a brand is not a stranger, and fastening a diaper on her or saying "
+          "it is secured on her puts it back on",
+          "diaper" not in line(film[0]) and "leggings" in line(film[0]) and "diaper" in line(film[1])
+          and "leggings" in line(film[1]) and "Her leggings cover her diaper until they come off." in film[1]["prompt"]
+          and line(film[2]).endswith("white crop top, thick white diaper.") and "looks nothing like" not in film[2]["prompt"]
+          and "cast: Sarah, Dana" in S.shot_line(film[3])
+          and "clothes on: Sarah: diaper." in S.shot_line(film[4]) and "naked" not in notes(film[4])
+          and "diaper" in line(film[5]) and S.strangers("Dana takes out a new Pampers diaper and Nike shoes.", "", ["Dana"]) == []
+          and S.strangers("Dana waves at Marco.", "", ["Dana"]) == ["Marco"]
+          and all(S.wrd.read(t, people, gender, worn)[1] == {"Sarah": ["diaper"]} for t in (
+              "Dan fastens a new diaper around her hips.", "Dan tapes the diaper shut.",
+              "The diaper is now secured on Sarah's body."))
+          and all(S.wrd.read(t, people, gender, worn)[1] == {} for t in ("Her diaper is on her bed.",
+                                                                       "Sarah wraps her towel around the pole.")),
+          [(S.shot_line(x), line(x)) for x in film])
+    crop, was = IMG1[:, :8, :8, :].clone(), S.face_crop
+    try:
+        for found in (crop, None):
+            S.face_crop = lambda det, pic: found
+            out, calls = render("A bedroom.\n\nSarah stands by the bed.\n\nSarah takes off her skirt.\n\nSarah smiles.",
+                                ref_image_1=IMG1, character_memory=mem, dwpose=True)
+            sizes = [tuple(c["refs"][0].shape[1:3]) if c["refs"] else None for c in calls["cond"]]
+            full = tuple(IMG1.shape[1:3])
+            check("the picture the model gets is cropped to her face and hair in every shot"
+                  if found is not None else "where no face is found, the whole picture goes in and info says so",
+                  sizes == ([(8, 8)] * 3 if found is not None else [full] * 3)
+                  and (found is not None) != ("Sarah: whole picture used, no face found to crop it to" in out[2]),
+                  (sizes, out[2]))
+    finally:
+        S.face_crop = was
+    box = S.pose.head_box([[50, 40, 1], [50, 60, 1]] + [[0, 0, 0]] * 12 + [[46, 38, 1], [54, 38, 1]], 100, 200)
+    check("the face crop runs from above her hair to her chin, short of her shoulders, and is squared on her head",
+          box is not None and box[1] < 30 and 50 < box[3] < 60 and abs(box[2] - box[0] - box[3] + box[1]) <= 1
+          and S.pose.head_box([[50, 40, 1]] + [[0, 0, 0]] * 17, 100, 200) is None, box)
     back = plan("Dan sits on the couch.", "Sarah steps out of her skirt.", "Dan pulls out his phone.",
-                "Sarah climbs onto his lap and rides him.")
+                "Sarah walks over, climbs onto his lap and rides him.")
     check("when she comes back into view after it is off, her picture is for her face and hair only",
           "Sarah (face and hair as in <Picture 1>) comes into view" in back[3]["prompt"], notes(back[3]))
     naked = plan("Sarah kneels on the bed, completely naked.", "Dan kneels behind her.")
     check("naked as she is in the beat holds the whole shot, from that shot on",
-          all("Sarah is naked the whole shot: her breasts, hips, bottom and crotch are bare." in notes(x)
+          all("Sarah is naked the whole shot." in notes(x)
               and "crop top" not in x["prompt"] for x in naked), [notes(x) for x in naked])
     sex = plan("Dan sits on the couch.", "Sarah slides off her skirt.",
                "Sarah turns around and sits down on Dan's waist, her legs spread, allowing his penis to enter her vagina.",
@@ -1451,6 +1643,77 @@ def test_undressed():
     check("standing up ends it, and riding him again starts it again",
           [bool(x["inside"]) for x in gone] == [False, True, False, True]
           and "Once Dan's penis is inside" in notes(gone[3]), [S.shot_line(x) for x in gone])
+
+
+GARMENTS = ("t-shirt", "shirt", "blouse", "crop top", "tank top", "top", "sweater", "jumper", "hoodie", "cardigan", "jacket", "coat",
+            "blazer", "vest", "dress", "minidress", "skirt", "miniskirt", "gown", "shorts", "trousers", "pants", "hotpants",
+            "sweatpants", "jeans", "leggings", "tights", "stockings", "socks", "shoes", "boots", "heels", "sneakers", "gloves", "hat",
+            "cap", "scarf", "belt", "robe", "bathrobe", "pajamas", "pyjamas", "nightgown", "nightie", "lingerie", "bra", "bralette",
+            "panties", "knickers", "underwear", "briefs", "boxers", "thong", "g-string", "bikini top", "bikini bottoms", "bikini",
+            "swimsuit", "corset", "bodysuit", "catsuit", "jumpsuit", "playsuit", "romper", "leotard", "camisole", "negligee",
+            "chemise", "babydoll", "diaper", "nappy", "pull-ups", "bloomers", "plastic pants", "underpants", "pantyhose", "fishnets",
+            "onesie", "towel", "nightdress", "kimono", "sarong", "bodystocking", "slippers", "sandals", "mittens", "uniform", "apron",
+            "bottoms", "undies", "slacks", "joggers", "trunks", "capris", "culottes", "girdle", "speedos", "jockstrap", "overalls",
+            "dungarees")
+LOWER = {"skirt", "miniskirt", "shorts", "trousers", "pants", "hotpants", "sweatpants", "jeans", "leggings", "tights", "panties",
+         "knickers", "underwear", "briefs", "boxers", "thong", "g-string", "bikini bottoms", "diaper", "nappy", "pull-ups",
+         "bloomers", "plastic pants", "underpants", "pantyhose", "bottoms", "undies", "slacks", "joggers", "trunks", "capris",
+         "culottes", "girdle", "speedos", "jockstrap"}
+UPPER = {"t-shirt", "shirt", "blouse", "crop top", "tank top", "top", "sweater", "jumper", "hoodie", "cardigan", "jacket", "coat",
+         "blazer", "vest", "bra", "bralette", "camisole", "corset", "bikini top"}
+WHOLE = {"dress", "minidress", "gown", "robe", "bathrobe", "pajamas", "pyjamas", "nightgown", "nightie", "lingerie", "bikini",
+         "swimsuit", "bodysuit", "catsuit", "jumpsuit", "playsuit", "romper", "leotard", "negligee", "chemise", "babydoll",
+         "uniform", "onesie", "towel", "nightdress", "kimono", "sarong", "bodystocking", "overalls", "dungarees"}
+
+
+def test_every_garment():
+    print("\n=== every garment comes off, stays off, and goes back on the same way ===")
+    people, gender = ["Sarah", "Dan"], {"Sarah": "f", "Dan": "m"}
+    off = ("Sarah takes off her {g}.", "Sarah takes her {g} off.", "Sarah removes her {g}.", "Sarah pulls off her {g}.",
+           "Her {g} falls to the floor.", "Sarah's {g} comes off.", "Sarah touches her {g}. She takes it off.",
+           "Sarah touches her {g} and wriggles out of it.", "Sarah pushes her {g} down to her ankles.",
+           "Sarah gets her {g} off.",
+           "Sarah slips out of her {g}.", "Dan pulls her {g} off.", "Sarah peels off her {g}.", "Sarah strips off her {g}.",
+           "Dan rips her {g} off.", "Sarah wriggles out of her {g}.", "Sarah sheds her {g}.", "Sarah slides her {g} off.",
+           "Dan takes Sarah's {g} off.", "Sarah drops her {g} to the floor.", "Sarah lets her {g} fall to the floor.",
+           "Sarah quickly takes off her {g}.", "She takes off her red {g}.", "Sarah pulls her {g} over her head.",
+           "Sarah gets out of her {g}.", "Dan lifts her {g} off.", "Sarah kicks off her {g}.", "Dan yanks down her {g}.")
+    on = ("Sarah puts her {g} back on.", "Sarah puts on her {g}.", "Sarah pulls her {g} on.", "Sarah slips into her {g}.",
+          "Dan puts her {g} back on her.", "Sarah steps into her {g}.", "Sarah gets back into her {g}.", "Sarah gets dressed.",
+          "Sarah puts her clothes back on.")
+    never = ('"Take off your {g}," Dan says.', '"Put your {g} back on," Dan says.', "Sarah adjusts her {g}.",
+             "Sarah tugs at her {g}.", "Sarah smooths her {g}.", "Sarah lifts her {g}.", "Sarah puts her {g} on the bed.",
+             "Sarah looks at her {g}.", "Sarah folds her {g}.", "Sarah unbuttons her {g}.", "Sarah pulls her {g} up.",
+             "Sarah hangs her {g} on the door.", "Sarah buttons her {g}.", "Sarah throws her {g} at Dan.",
+             "Sarah holds her {g}. She puts it on the bed.", "Her {g} falls just above her knees.", "Her {g} sags.",
+             "Sarah touches her {g} and Dan pulls her close, taking it slow.", "Her {g} doesn't come off.")
+    wrong = {}
+    for g in GARMENTS:
+        want = S.wrd.garment_of(g)
+        desc = {"Sarah": f"Sarah: a woman wearing red {g} and a silver necklace.", "Dan": f"Dan: a man wearing red {g}."}
+        read = lambda t: S.clothes(S.parse_paragraph(t.format(g=g)), people, gender, desc, {"Sarah": [want]}, people)
+        bad = [t for t in off if read(t)[1] != {"Sarah": [want]}] + [t for t in on if read(t)[0].get("Sarah")]
+        bad += [t for t in never if read(t)[1] or read(t)[2]]
+        bad += ["Dan takes off his {g}."] if read("Dan takes off his {g}.")[1] != {"Dan": [want]} else []
+        left = S.wrd.undress(desc["Sarah"], {"Sarah": [want]}, people)
+        bad += ["strip"] if S.wrd.mentions(left, want) or "necklace" not in left else []
+        zone = ["lower"] if g in LOWER else ["upper"] if g in UPPER else ["lower", "upper"] if g in WHOLE else []
+        bad += ["zone"] if S.wrd.bare(desc["Sarah"], [want]) != zone else []
+        said = lambda gone, zones: S.wrd.unsay(f"<d>Hello there. Where is my {g}?</d>", gone, zones)[0]
+        hit = lambda x: x.startswith("<d>Hello there. Hello there Hello") and not S.wrd.mentions(x, want)
+        bad += ["unsay"] if not hit(said([want], ())) or zone and not hit(said([], zone)) else []
+        film = S.plan_shots(f"A bedroom.\n\nSarah stands by the bed. Dan sits on it.\n\nSarah takes off her {g}.\n\nSarah "
+                            f"smiles at Dan.\n\nDan kisses her.\n\nSarah puts her {g} back on.\n\nSarah waits.", 5.0,
+                            [IMG1, None, None, None], False, memory=f"Sarah <Picture 1>: a woman wearing red {g}.\nDan: a man.")
+        line = lambda x: next((ln for ln in x["prompt"].splitlines() if ln.startswith("Sarah")), "")
+        bad += ["film"] if any(S.wrd.mentions(line(x), want) or not x["refs"] or "face and hair only" not in x["prompt"]
+                               or zone and "naked" not in x["prompt"]
+                               for x in film[2:4]) or not S.wrd.mentions(line(film[5]), want) else []
+        if bad:
+            wrong[g] = bad
+    check(f"all {len(GARMENTS)} garments: every way of taking one off is read, every way of putting it back on, nothing said "
+          "aloud or done to it in passing counts, it leaves the description whole, bares its own part of the body, and stays "
+          "off, its picture kept for the face and hair only, until it goes back on", not wrong, wrong)
 
 
 def test_partner_named():
@@ -1498,7 +1761,8 @@ def test_many():
     couples = plan("Dan and Jake sit on the couch.", "Sarah rides Dan.", "Jake fucks Mia from behind.", "Dan pulls out of Sarah.",
                    "Mia moans.")
     check("two couples are two pairs: each starts, holds and ends apart, and a shot of one keeps that one's partner",
-          [x["inside"] for x in couples[1:]] == [[("Dan", "Sarah")], [("Jake", "Mia")], [], [("Jake", "Mia")]]
+          [x["inside"] for x in couples[1:]] == [[("Dan", "Sarah")], [("Dan", "Sarah"), ("Jake", "Mia")], [("Jake", "Mia")],
+                                                 [("Jake", "Mia")]]
           and sorted(couples[4]["cast"]) == ["Jake", "Mia"], [S.shot_line(x) for x in couples])
     men = plan("Dan lies on the bed. Jake kneels behind him.", "Jake slides his cock into Dan.", "Dan groans.", m="")
     check("a man can be the one entered, in his anus, and the line says his",
@@ -1807,6 +2071,7 @@ def main():
     test_reading()
     test_wardrobe()
     test_undressed()
+    test_every_garment()
     test_partner_named()
     test_many()
     test_hips()

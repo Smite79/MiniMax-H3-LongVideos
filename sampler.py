@@ -514,18 +514,11 @@ def inside_lines(before, after, started, gender):
 
 def bare_lines(who, gender, zones, coming, items):
     state = {("lower",): "naked from the waist down", ("upper",): "naked from the waist up"}.get(tuple(zones or coming), "naked")
-    parts = {"f": {"naked from the waist down": "her hips, bottom and crotch are bare",
-                   "naked from the waist up": "her breasts are bare",
-                   "naked": "her breasts, hips, bottom and crotch are bare"},
-             "m": {"naked from the waist down": "his hips, bottom and crotch are bare",
-                   "naked from the waist up": "his chest is bare",
-                   "naked": "his chest, hips, bottom and crotch are bare"}}.get(gender.get(who), {})
     if zones:
-        return [f"{who} is {state} the whole shot" + (f": {parts[state]}." if state in parts else ".")]
+        return [f"{who} is {state} the whole shot."]
     poss = {"f": "her", "m": "his"}.get(gender.get(who), f"{who}'s")
     verb = "come" if len(items) > 1 or items == ["clothes"] else "comes"
-    return [f"From the moment {poss} {' and '.join(items)} {verb} off, {who} stays {state} "
-            f"for the rest of the shot."] if coming else []
+    return [f"From the moment {poss} {' and '.join(items)} {verb} off, {who} stays {state} for the rest of the shot."] if coming else []
 
 
 def whole_body(who, gender):
@@ -863,6 +856,26 @@ def together(text):
     return any(not _LIMBS.search(text[:m.start()]) for m in _TOGETHER.finditer(text or ""))
 
 
+_ARRIVES = (r"joins?|joined|walks?|walked|comes?|came|returns?|returned|steps?|stepped|moves?|moved|heads?|headed|"
+            r"crosses|crossed|approaches|approached|follows?|followed|enters?|entered|runs?|ran|hurries|hurried|"
+            r"wanders|wandered|strolls?|strolled|rushes|rushed|arrives?|arrived|goes|went")
+
+
+_FRAMES = re.compile(r"\b(?:camera|close[\s-]?ups?|zoom(?:s|ed)?\s+in|frames|framed|focus(?:es|ed)?\s+on)\b", re.I)
+
+
+def stays(name, later, names, here=""):
+    for para in later:
+        told = narration(para["text"])
+        if para["cut"] or name in para["exit"]:
+            return False
+        if name in present_in(told, names):
+            return not re.search(rf"\b{re.escape(name)}\b(?:\s+\w+ly)?\s+(?:{_ARRIVES})\b", told)
+        if name in leavers(told, names, here):
+            return False
+    return False
+
+
 def leavers(text, names, here=""):
     out = []
     for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
@@ -898,7 +911,9 @@ _WORLDS = {"Earth", "Mars", "Venus", "Mercury", "Jupiter", "Saturn", "Uranus", "
 
 
 def strangers(beat, scene, names):
-    stop = _COMMON_CAPS | _NOT_NAMES | _WORLDS | set(names)
+    worn = {w for w in re.findall(r"\b[A-Z][\w'’-]*", beat) if re.fullmatch(wrd.GARMENT, w, re.I)}
+    worn |= set(re.findall(rf"\b([A-Z][\w'’-]*)(?=(?:\s+[A-Z][\w'’-]*)*\s+{wrd.GARMENT}\b)", beat))
+    stop = _COMMON_CAPS | _NOT_NAMES | _WORLDS | set(names) | worn
     mid = [w for s in rst.sentences(_bare(beat)) for w in _CAPS.findall(" ".join(s.split()[1:]))]
     acting = re.findall(rf"\b([A-Z][a-z]+)\s+(?:\w+ly\s+)?(?:{_DOES})\b", f"{beat}\n{scene}")
     return [n for n in dict.fromkeys(mid + acting) if n not in stop]
@@ -985,7 +1000,7 @@ def shot_pictures(text, refs, held_names, names=()):
 
 
 def clothes(para, people, gender, described, undressed, here=()):
-    off, on, unclear = wrd.read(para["text"], people, gender, described, here)
+    off, on, unclear = wrd.read(narration(para["text"]), people, gender, described, here)
     told = {who for who, _ in para["remove"] + para["wear"]}
     off = {w: g for w, g in off.items() if w not in told}
     on = {w: g for w, g in on.items() if w not in told}
@@ -997,7 +1012,7 @@ def clothes(para, people, gender, described, undressed, here=()):
     for who, gone in off.items():
         new.setdefault(who, []).extend(g for g in gone if g not in new.get(who, []))
     for who, back in on.items():
-        new[who] = [g for g in new.get(who, []) if g not in back]
+        new[who] = [] if "clothes" in back else [g for g in new.get(who, []) if not any(wrd.mentions(g, b) for b in back)]
     return {k: v for k, v in new.items() if v}, off, on, unclear
 
 
@@ -1034,14 +1049,18 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     around, present = _mentions(" ".join(p["text"] for p in setting), names), []
     seen = _mentions(" ".join(p["text"] for p in lead), people)
     solo_seen, shots, leash_by, shown, inside = set(), [], {}, [], []
+    setting_text = " ".join(p["text"] for p in setting)
     for i, para in enumerate(paras):
         seen = list(dict.fromkeys(seen + _mentions(para["text"], people)))
         near = list(dict.fromkeys(shown + present)) if i else around
         para = with_reading(para, seen, gender, state, near)
-        now = wrd.stated(para["text"], seen, gender, described, near)
+        now = wrd.stated(narration(para["text"]), seen, gender, described, near)
         was = {n: list(dict.fromkeys(undressed.get(n, []) + now.get(n, []))) for n in set(undressed) | set(now)}
-        dressed = wrd.undress(scene_text, was, people)
         undressed, off, on, unclear = clothes(para, seen, gender, described, undressed, near)
+        hidden = {n: wrd.covered(described.get(n, ""), was.get(n, []), off.get(n, [])) for n in people}
+        uncovered = {n: {g: o for g, o in wrd.covered(described.get(n, ""), was.get(n, [])).items() if g not in hidden[n]}
+                     for n in people}
+        dressed = wrd.undress(scene_text, {n: was.get(n, []) + list(hidden[n]) for n in people}, people)
         para = dict(para, unread=para["unread"] + unclear)
         start, _, _ = apply_holds(state, {"release": [], "hold": para["worn"]})
         state, released, added = apply_holds(start, para)
@@ -1052,6 +1071,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         opening = inframe if keyed and not pictures else []
         told = narration(para["text"])
         said = present_in(told, names)
+        said += [n for n in list(off) + list(on) if n in names and n not in said]
         why = {**{n: "she/he" for n in referred(told, names, gender, around, near)},
                **{who: "freed" for who, _ in para["release"]}, **{who: "held" for who, _ in para["hold"]}}
         named = list(dict.fromkeys(said + list(why)))
@@ -1062,6 +1082,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
             cast = list(dict.fromkeys(present + named))
         else:
             cast = [n for n in present if n in named] + [n for n in named if n not in present] or shown or present
+            cast += [n for n in shown if n not in cast and not _FRAMES.search(told)
+                     and stays(n, paras[i + 1:], names, setting_text)]
         while any(o not in cast for m, w, _ in inside for n, o in ((w, m), (m, w)) if n in cast):
             cast += list(dict.fromkeys(o for m, w, _ in inside for n, o in ((w, m), (m, w)) if n in cast and o not in cast))
         why = {n: why.get(n) or ("everyone" if group else "from the shot before" if n in shown else "in the scene")
@@ -1074,17 +1096,23 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         speech = bool(_SPEECH.search(para["text"]))
         text = "\n\n".join(x for x in (without_absent(dressed, absent, names), dialogue(para["text"])) if x)
         held_in = [n for n in during if i == 0 or n in inframe] if keyed else []
-        changed = [n for n in was if n in inframe] if keyed else []
-        drop = absent + held_in + recover + opening + changed
+        drop = absent + held_in + recover + opening
         text, shot_refs, shot_slots = shot_pictures(text, refs, drop, names)
         tag_of = {pic_of[k]: f"<Picture {i}>" for i, k in enumerate(shot_slots, 1) if k in pic_of}
         sound_text, sounded = snd.sound_line(para["text"], scene_text, speech)
         persons = [n for n in cast if n not in objects]
+        changed = [n for n in persons if was.get(n) or off.get(n)]
+        faces = [pic_of.get(k, "") if pic_of.get(k) in persons else "" for k in shot_slots]
         free = [n for n in persons if n not in during and n not in added]
         notes = held_notes({who: items for who, items in during.items() if who in cast or who not in names}, free)
         notes += [f"By the last frame, {who} has {' and '.join(items)} in plain view" + (
             "." if any("leash" in it for it in items) else ", and whoever put it on has let go.")
             for who, items in added.items()]
+        notes += [f"{tag_of[n]} is for {n}'s face and hair only: {_pronouns(n, gender)[0]} clothes are as this shot "
+                  f"describes them." for n in changed if n in tag_of]
+        notes += [f"{_pronouns(n, gender)[0].capitalize()} {o} cover{'' if re.search(r'[^s]s$', o) else 's'} "
+                  f"{_pronouns(n, gender)[0]} {g} until {'they come' if re.search(r'[^s]s$', o) else 'it comes'} off."
+                  for n in persons for g, o in uncovered.get(n, {}).items()]
         for who in persons:
             zones = [z for z in wrd.bare(described.get(who, ""), was.get(who, []))
                      if z in wrd.bare(described.get(who, ""), undressed.get(who, []))]
@@ -1106,7 +1134,6 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
                           if r["who"] == who and "chain" in (r["back"], r["front"], r["fastened"])]
         leash_by = {w: h for w, h in leash_by.items() if any("leash" in it for it in state.get(w, []))}
         notes += hand_notes(para["text"], persons, gender, during) + rear_notes(para["text"], persons, gender)
-        setting_text = " ".join(p["text"] for p in setting)
         extra = extras_in(f"{setting_text} {para['text']}") or bool(strangers(para["text"], setting_text, names))
         unlike = extra or any(n in undeclared for n in persons)
         pulled = pull_notes(para["text"], without_absent(dressed, absent, names), persons, gender,
@@ -1128,15 +1155,17 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
             gags = [snd.mouth_item(during.get(who, [])) for who in cast]
             notes.append("Nobody speaks." if any(snd.held_open(g) for g in gags) else
                          "Nobody speaks, and every mouth stays closed.")
+        if speech:
+            notes.append("Spoken words are only heard: the shot shows what it describes, not what anyone talks about.")
         notes += [sound_text, cast_line(persons, names, without_absent(scene_text, absent, names), para["text"]),
                   stranger_line(persons, [n for n in names if n not in undeclared], gender, unlike)]
         newcomers = [n for n in cast if n not in inframe] if i > 0 else []
-        joining = [f"{n} ({'face and hair' if n in was else 'exactly'} as in {tag_of[n]})" if n in tag_of else n
+        joining = [f"{n} ({'face and hair' if n in changed else 'exactly'} as in {tag_of[n]})" if n in tag_of else n
                    for n in newcomers] + (
             ["the strangers this beat brings in"] if extra else [])
         folk = extra or not (cast + inframe) or any(n not in objects for n in cast + inframe) or bool(_FOLK.search(para["text"]))
         if keyed and any(n not in cast for n in inframe):
-            framed = [f"{n} ({'face and hair' if n in was else 'exactly'} as in {tag_of[n]})" if n in tag_of else n
+            framed = [f"{n} ({'face and hair' if n in changed else 'exactly'} as in {tag_of[n]})" if n in tag_of else n
                       for n in cast] + (
                 ["the strangers this beat brings in"] if extra else [])
             notes.append(f"<Picture {len(shot_refs) + 1}> is the frame this shot opens on: the same place one moment earlier, "
@@ -1151,6 +1180,11 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         notes += [f"<Picture {len(shot_refs) + k}> shows {who} as {'it looks' if who in objects else 'they look'} now."
                   for k, who in enumerate(recover, 1)]
         text = "\n\n".join(x for x in (text, " ".join(n for n in dict.fromkeys(notes) if n)) if x)
+        gone = {n: was.get(n, []) + off.get(n, []) for n in persons}
+        unspoken, unsaid = wrd.unsay(text, [g for n in persons for g in gone[n] if g != "clothes"],
+                                     {z for n in persons for z in wrd.bare(described.get(n, ""), gone[n])},
+                                     wrd.learned(described))
+        unspoken = unspoken if unsaid else ""
         frames = rt.align_frame_count(round((para["seconds"] or shot_seconds) * rt.H3_FPS))
         if from_beat and not para["seconds"]:
             frames = shot_frames(para["text"], frames, bool(added))
@@ -1163,10 +1197,12 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         latch = any(f["latch_limbs"] for f in bound.values())
         solo = shown[0] if len(shown) == 1 else ""
         solo_seen |= {solo} if solo else set()
-        shots.append({"n": i + 1, "prompt": text, "refs": shot_refs, "frames": frames, "keyed": keyed, "fit": fit,
+        shots.append({"n": i + 1, "prompt": text, "unspoken": unspoken, "unsaid": unsaid, "refs": shot_refs, "faces": faces,
+                      "frames": frames, "keyed": keyed, "fit": fit,
                       "cut": para["cut"], "wordless": not speech, "sounded": sounded, "held": held_line(during),
                       "cast": cast, "why": why, "solo": solo, "recover": recover, "bound": bound,
-                      "pictures": [f"{pic_of.get(k, 'unnamed')} (ref_image_{k})" for k in shot_slots],
+                      "pictures": [f"{pic_of.get(k, 'unnamed')} (ref_image_{k}{', face and hair' if f else ''})"
+                                   for k, f in zip(shot_slots, faces)],
                       "turned": [f"{r['who']}'s {r['thing']}" for r in _worn_sides(without_absent(dressed, absent, names), cast)],
                       "added": held_line(added), "released": held_line(released),
                       "clothes_off": held_line(off), "clothes_on": held_line(on),
@@ -1198,8 +1234,8 @@ def check_vaes(vae, audio_vae):
 CHECKPOINT_KEYS = ("unet_name", "ckpt_name", "model_name")
 
 
-def checkpoint_name(graph, node_id):
-    seen, todo = set(), [str(node_id)]
+def model_chain(graph, node_id):
+    seen, todo, chain = set(), [str(node_id)], []
     while todo and len(seen) < 64:
         nid = todo.pop(0)
         if nid in seen or not isinstance(graph, dict) or not isinstance(graph.get(nid), dict):
@@ -1207,13 +1243,76 @@ def checkpoint_name(graph, node_id):
         seen.add(nid)
         inputs = graph[nid].get("inputs") or {}
         if nid != str(node_id):
-            name = next((v for k, v in inputs.items() if k in CHECKPOINT_KEYS and isinstance(v, str)), None)
-            if name:
-                return name
+            chain.append(inputs)
+            if any(k in CHECKPOINT_KEYS and isinstance(v, str) for k, v in inputs.items()):
+                break
         links = [v for k, v in sorted(inputs.items(), key=lambda kv: kv[0] != "model")
                  if isinstance(v, list) and len(v) == 2 and (k == "model" or nid != str(node_id))]
         todo += [str(v[0]) for v in links]
-    return ""
+    return chain
+
+
+def checkpoint_name(graph, node_id):
+    return next((v for inputs in model_chain(graph, node_id) for k, v in inputs.items()
+                 if k in CHECKPOINT_KEYS and isinstance(v, str)), "")
+
+
+def graph_loras(graph, node_id=None):
+    try:
+        import folder_paths
+        known = set(folder_paths.get_filename_list("loras"))
+    except Exception:
+        return []
+    found = []
+
+    def walk(v, on=True):
+        if isinstance(v, str) and v in known:
+            found.extend([v] if on else [])
+        elif isinstance(v, str) and v[:1] in "[{":
+            try:
+                walk(json.loads(v), on)
+            except ValueError:
+                pass
+        elif isinstance(v, dict):
+            on = on and v.get("on") is not False and v.get("enabled") is not False and not any(
+                v.get(k) in (0, 0.0) for k in ("str", "strength", "strength_model"))
+            for x in v.values():
+                walk(x, on)
+        elif isinstance(v, list) and not (len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], int)):
+            for x in v:
+                walk(x, on)
+    nodes = model_chain(graph, node_id) if node_id is not None else [
+        n.get("inputs") or {} for n in (graph.values() if isinstance(graph, dict) else ()) if isinstance(n, dict)]
+    for inputs in nodes:
+        walk(inputs)
+    return list(dict.fromkeys(found))
+
+
+def lora_file(name):
+    try:
+        import folder_paths
+        return folder_paths.get_full_path("loras", name) or ""
+    except Exception:
+        return ""
+
+
+def partial_loras(model, graph, node_id):
+    try:
+        if not getattr(model.get_model_object("diffusion_model"), "use_adaln_curves", False):
+            return []
+    except Exception:
+        return []
+    return [os.path.basename(n) for n in graph_loras(graph, node_id)
+            if any("time_embedder" in k for k in _safetensors_meta(lora_file(n))[0])]
+
+
+def lora_takes_pictures(name):
+    meta = _safetensors_meta(lora_file(name))[1]
+    if meta.get("tasks"):
+        return "ref2va" in str(meta["tasks"]).lower()
+    said = " ".join([os.path.basename(name)] + [str(meta.get(k, "")) for k in ("model", "base_model", "source",
+                                                                              "resized_from", "source_filename")])
+    return not re.search(r"fl2v|t2va|t2v|\d+[\s_-]?steps?|turbo|lightning|distill|dmad|flashgen|lcm", said, re.I)
 
 
 def takes_pictures(model, graph, node_id):
@@ -1222,6 +1321,9 @@ def takes_pictures(model, graph, node_id):
     name = checkpoint_name(graph, node_id)
     if name and "ref2va" not in name.lower():
         return False, f"{os.path.basename(name)} was not trained on reference pictures (only ref2va checkpoints are)"
+    blind = [os.path.basename(n) for n in graph_loras(graph, node_id) if not lora_takes_pictures(n)]
+    if blind:
+        return False, f"{' and '.join(blind)} {'was' if len(blind) == 1 else 'were'} trained without reference pictures"
     return True, ""
 
 
@@ -1299,23 +1401,24 @@ def hyperflow_lora(model, graph=None):
         meta = get("lora_metadata") if callable(get) else (getattr(model, "attachments", None) or {}).get("lora_metadata")
     except Exception:
         meta = None
-    if isinstance(meta, dict) and str(meta.get("hyperflow", "")).strip().lower() == "true":
-        def num(key, default):
-            try:
-                return float(meta.get(key, default))
-            except (TypeError, ValueError):
-                return default
-        return {"sigmas": _hyperflow_grid(meta.get("hyperflow_sigmas")) or HYPERFLOW_SIGMAS,
-                "shift_video": num("hyperflow_video_shift", HYPERFLOW_SHIFT_VIDEO),
-                "shift_audio": num("hyperflow_audio_shift", HYPERFLOW_SHIFT_AUDIO),
-                "gate": num("hyperflow_gate", 0.0), "source": "LoRA metadata"}
-    for node in (graph.values() if isinstance(graph, dict) else ()):
-        inputs = node.get("inputs") if isinstance(node, dict) else None
-        for key, value in (inputs.items() if isinstance(inputs, dict) else ()):
-            if "lora_name" in str(key).lower() and isinstance(value, str) and "hyperflow" in value.lower():
-                return {"sigmas": HYPERFLOW_SIGMAS, "shift_video": HYPERFLOW_SHIFT_VIDEO,
-                        "shift_audio": HYPERFLOW_SHIFT_AUDIO, "gate": 0.0, "source": value}
-    return None
+    source = "LoRA metadata"
+    flagged = lambda m: isinstance(m, dict) and str(m.get("hyperflow", "")).strip().lower() == "true"
+    if not flagged(meta):
+        source = next((n for n in graph_loras(graph)
+                       if "hyperflow" in n.lower() or flagged(_safetensors_meta(lora_file(n))[1])), "")
+        if not source:
+            return None
+        meta = _safetensors_meta(lora_file(source))[1]
+
+    def num(key, default):
+        try:
+            return float(meta.get(key, default))
+        except (TypeError, ValueError):
+            return default
+    return {"sigmas": _hyperflow_grid(meta.get("hyperflow_sigmas")) or HYPERFLOW_SIGMAS,
+            "shift_video": num("hyperflow_video_shift", HYPERFLOW_SHIFT_VIDEO),
+            "shift_audio": num("hyperflow_audio_shift", HYPERFLOW_SHIFT_AUDIO),
+            "gate": num("hyperflow_gate", 0.0), "source": source}
 
 
 def hyperflow_sigmas(grid, shift_video):
@@ -1518,6 +1621,21 @@ def prepare_model(model, steps, sampler_name, scheduler, sigmas, shift_video, sh
     return model, steps, sampler_name, sigmas, window, notes
 
 
+def face_crop(detector, picture):
+    try:
+        found = detector.detect(picture[:1], stride=1)["people"][0]
+        h, w = int(picture.shape[1]), int(picture.shape[2])
+        boxes = [b for b in (pose.head_box(p, w, h) for p in found) if b]
+    except Exception as e:
+        if _interrupted(e):
+            raise
+        return None
+    if not boxes:
+        return None
+    x0, y0, x1, y1 = max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+    return picture[:1, y0:y1, x0:x1, :].contiguous()
+
+
 def sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas):
     try:
         if sigmas is not None:
@@ -1531,15 +1649,18 @@ def sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, 
         raise
 
 
-def foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas, scale=1.0):
+def foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas, scale=1.0, pinned=False):
     video, audio = out["samples"].unbind()
     small, scaled = video, scale < 1.0 and min(video.shape[-2:]) >= 32
     if scaled:
         size = (video.shape[2],) + tuple(max(2, 2 * round(n * scale / 2)) for n in video.shape[-2:])
         small = torch.nn.functional.interpolate(video.float(), size=size, mode="area").to(video.dtype)
         cond = [[c, {k: v for k, v in d.items() if k not in FOLEY_DROP}] for c, d in cond]
-    lat = dict(latent, samples=comfy.nested_tensor.NestedTensor((small, torch.zeros_like(audio))),
-               noise_mask=comfy.nested_tensor.NestedTensor((torch.zeros_like(small[:, :1]), torch.ones_like(audio[:, :1]))))
+    held = latent.get("noise_mask") if pinned else None
+    sound, keep = ((latent["samples"].unbind()[1], held.unbind()[1]) if held is not None
+                   else (torch.zeros_like(audio), torch.ones_like(audio[:, :1])))
+    lat = dict(latent, samples=comfy.nested_tensor.NestedTensor((small, sound)),
+               noise_mask=comfy.nested_tensor.NestedTensor((torch.zeros_like(small[:, :1]), keep)))
     res = sample(model, cond, negative, lat, seed, steps, sampler_name, scheduler, sigmas)
     return dict(res, samples=comfy.nested_tensor.NestedTensor((video, res["samples"].unbind()[1]))), scaled
 
@@ -1627,6 +1748,8 @@ def shot_line(shot):
         bits.append(f"clothes off: {shot['clothes_off']}")
     if shot["clothes_on"]:
         bits.append(f"clothes on: {shot['clothes_on']}")
+    if shot.get("unsaid"):
+        bits.append(f"spoken {' and '.join(shot['unsaid'])} kept out of the picture")
     if shot.get("naked"):
         bits.append("naked: " + ", ".join(f"{n} ({' and '.join({'lower': 'waist down', 'upper': 'waist up'}[z] for z in v)})"
                                           for n, v in shot["naked"].items()))
@@ -1712,6 +1835,14 @@ class H3LongVideos:
         stale = [os.path.basename(p) for p, t in _LOADED.items() if os.path.exists(p) and os.path.getmtime(p) > t]
         info = [f"{w}x{h}, {len(shots)} shots"] + ([f"RESTART COMFYUI: {', '.join(stale)} changed after ComfyUI loaded "
                                                      f"this node, so this run used the old code"] if stale else [])
+        partial = partial_loras(model, graph, unique_id)
+        if partial:
+            one = len(partial) == 1
+            info.append(f"LORA ONLY PARTLY LOADED: {' and '.join(partial)} {'carries' if one else 'carry'} timestep layers "
+                        f"for a checkpoint with a time embedder, but this checkpoint has a time curve instead, so ComfyUI "
+                        f"leaves those layers out (the 'lora key not loaded: ...time_embedder' lines in the log); use "
+                        f"{'it' if one else 'them'} with a checkpoint that has a time embedder, such as the original FL2VA, "
+                        f"or use a LoRA without timestep layers on this one")
         turned = list(dict.fromkeys(t for s in shots for t in s["turned"]))
         if turned:
             info.append("kept the right way round, front and back pinned to the body: " + ", ".join(turned))
@@ -1758,12 +1889,24 @@ class H3LongVideos:
         handoff = first_frame[:1] if first_frame is not None else None
         detector, carry, size, captured, first_look = None, None, None, {}, None
         try:
+            wanted = {id(r): (r, n) for s in shots for r, n in zip(s["refs"], s["faces"]) if n}
+            crops = {}
+            if wanted and pose is not None and pose.dwpose_status()[0]:
+                detector = pose.PoseDetector()
+                crops = {k: face_crop(detector, r) for k, (r, _) in wanted.items()}
+                detector.close()
+            for k, (r, n) in wanted.items():
+                c = crops.get(k)
+                logging.info("[H3-LongVideos] %s's picture (%dx%d): %s", n, int(r.shape[2]), int(r.shape[1]),
+                             "no face found, whole picture used" if c is None else
+                             f"cropped to face and hair, {int(c.shape[2])}x{int(c.shape[1])}")
             for i, shot in enumerate(shots):
                 started = time.perf_counter()
                 given = handoff if shot["keyed"] else None
-                refs = shot["refs"] + [captured[n] for n in shot["recover"] if n in captured]
+                refs = [r if not n or crops.get(id(r)) is None else crops[id(r)] for r, n in zip(shot["refs"], shot["faces"])]
+                refs += [captured[n] for n in shot["recover"] if n in captured]
                 cond, latent, fc, _ = cnd.build_conditioning(
-                    clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
+                    clip, vae, audio_vae, shot["unspoken"] or shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
                     silent=shot["wordless"] and silence_wordless,
                     lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD)
                 rt._evict_all_but(model, latent)
@@ -1777,6 +1920,8 @@ class H3LongVideos:
                                                   sigmas)
                 imgs = wav = None
                 line = shot_line(shot)
+                whole = [n for r, n in zip(shot["refs"], shot["faces"]) if n and crops.get(id(r)) is None]
+                line += f", {' and '.join(whole)}: whole picture used, no face found to crop it to" if whole else ""
                 shot_carry, carry = (carry if shot["keyed"] else None), None
                 if drafted:
                     small, small_latent, _, _ = cnd.build_conditioning(
@@ -1841,6 +1986,15 @@ class H3LongVideos:
                     else:
                         line += (f", restraint broke: {tries} retake(s), kept "
                                  + ("one where it held" if not n else f"the take with the fewest broken frames ({n})"))
+                if shot["unspoken"]:
+                    said, _, _, _ = cnd.build_conditioning(
+                        clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
+                        lead_seconds=SPEECH_LEAD)
+                    rt._evict_all_but(model, latent)
+                    out, _ = foley_pass(model, said, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas,
+                                        FOLEY_SCALES.get(foley_resolution, 1.0), pinned=True)
+                    wav = None
+                    line += ", her line's sound made over the finished picture"
                 if shot["wordless"] and shot["sounded"] and silence_wordless:
                     rt._evict_all_but(model, latent)
                     out, scaled = foley_pass(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler,

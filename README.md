@@ -147,27 +147,66 @@ coming off (*Dan pulls the tape off*, *Dan unlocks the cuffs*).
 The node reads clothes coming off and going back on (*Max takes off her jacket*,
 *Crystal pulls her thong down her legs*, *Sarah pulls down her skirt*, *Sarah steps out
 of her skirt*, *Sarah lets her skirt fall*, *Sarah drops her skirt*, *Sarah strips
-naked*, *Dan undresses her*, *Crystal puts her jacket back on*), typos such as *slides
-of her skirt* included. A miniskirt is a skirt and a crop top is a top, whichever of the
-two words the description and the beat use. From the next shot on, a garment that came
+naked*, *Dan undresses her*, *Sarah pulls her top over her head*, *Sarah gets out of her
+jeans*, *Her diaper falls to the floor*, *Sarah's skirt comes off*, *She takes it off*,
+*Sarah pushes her pants down to her ankles*, *Crystal puts her jacket back on*, *Sarah
+slips into her dress*, *Dana fastens the diaper around Sarah's hips*, *Dana tapes it
+shut*, *The diaper is now secured on Sarah's body*, *Sarah gets dressed*, which puts back
+everything she took off),
+typos such as *slides of her skirt* included. *It* or *them* is read as the garment
+named just before it. A miniskirt is a skirt, a crop top is a top and a nappy is a
+diaper, whichever word the description and the beat use. Besides the usual clothes,
+underwear, diapers, pull-ups, bottoms, undies, joggers, trunks, overalls, towels and
+the like, anything a description says someone
+is *wearing*, *dressed in* or *clad in* (*wearing a blue yukata*) can come off the same
+way. Only what happens counts, never what someone says (*"Put your diaper back on," Dan
+says.* changes nothing), and putting a garment on a chair, the bed or someone's lap is
+not putting it on. From the next shot on, a garment that came
 off is taken out of that person's description in the scene paragraph, the anchor and
 `character_memory`, so no shot asks for it again. It comes back once they put it on.
 
 - Once nothing they still wear covers a part of the body, every shot they are in says
-  so: *Sarah is naked from the waist down the whole shot: her hips, bottom and crotch
-  are bare.* (or from the waist up, or naked). The shot it comes off in says they stay
-  that way from the moment it is off. A beat that says how they are (*completely
-  naked*, *topless*, *naked from the waist down*) counts from that shot on.
-- A reference picture shows its person in the clothes they had on, so once those differ
-  it is left out of the shots that continue from a frame they are in, which already
-  shows them as they are now. When they come back into view, the picture is for their
-  face and hair only. `info` shows *naked:* for each undressed person.
+  so: *Sarah is naked from the waist down the whole shot.* (or from the waist up, or
+  naked). It names no body part, because a named part is one the model turns her to
+  show. The shot it comes off in says they stay that way from the moment it is off. A
+  beat that says how they are (*completely naked*, *topless*, *naked from the waist
+  down*) counts from that shot on.
+- A reference picture shows its person in the clothes they had on, and H3 copies what it
+  sees, print and all, back onto them. So the picture goes in cropped to their face and
+  hair (see Reference pictures), and once a garment is off the shot also says the picture
+  is for their face and hair only. `info` shows *naked:* for each undressed person.
+- The prompt names the garment no more than the beat does, since every mention is one
+  more pull toward drawing it.
+- A spoken line that names a garment that is off (*"I'm not putting that diaper back
+  on."*), or any clothing for a part of someone in the shot that is bare (*"No
+  underwear, no pants."* once she is naked from the waist down; *clothes* once she is
+  naked), would draw it back on. H3 acts out what is said, so even another word in its
+  place (*so Mom can put a new thing on me*) is acted out, down to an extra pair of
+  arms for someone who is not there. So the shot's picture is made with that whole
+  sentence replaced by the speaker's own words before it, repeated to the same length,
+  and its sound is then made from the real line over the finished picture; the lips
+  match every sentence but that one. A line that is only about it is left out of the
+  picture. `info` says *spoken diaper and underwear kept out of the picture*. Narration
+  that names it (*the diaper on the floor*) is left as it is.
 
 - A garment belongs to the person its pronoun or name points to, or else to the one
   person whose description mentions it.
 - A garment that comes off takes its whole description with it: *a thong made of black
   latex*, *with lace trim*, *cut high on her hips*, *thong underwear*, and a following
   sentence such as *It is black latex.* Nothing of it is left for H3 to paint onto her.
+  Its brand goes too (*white Pampers diaper with Pampers logo*; Pampers, Huggies and
+  GoodNites are diapers). Only the garment's own words go: they stop at a comma, so in
+  *crop top, white Pampers diaper* the crop top stays, and in *in a diaper with the toilet
+  behind her, standing by the door*, the room, where she is and what she does stay. A
+  detail after the garment goes with it (*leggings with a zipper that runs between her
+  legs*) unless it starts with *the*, *her* or someone's name (*with the toilet behind
+  her*).
+- Whoever has something come off or go on in a shot is in that shot (*Dana removes Sarah's
+  diaper*).
+- What is worn under something else (a diaper, underwear or a bra under leggings, jeans,
+  a skirt, a dress, a top) is left out of the description until what covers it comes off,
+  since H3 draws everything a description names, on the outside. The shot it comes off in
+  names both and says *Her leggings cover her diaper until they come off.*
 - When it cannot tell whose it is, the sentence is listed in `info`.
 - Something worn with a detail on one side (*chastity belt with tight rear heavy duty
   security chain going through her ass*, *a dress with a zip down the back*, *a collar
@@ -302,6 +341,13 @@ The node keeps track of who is present, so people appear only when they should.
   unless that room is where the scene paragraph sets the scene.
 - When a continued shot opens on a frame with someone the beat leaves out, the prompt
   says this shot frames only the beat's people.
+- Except: someone still in the room stays in view through beats about others when a
+  later beat needs them where they are (*Sarah lies down on the table.* / *Dana opens the
+  bag.* / *Dana takes off Sarah's diaper.*), so they never drop out and walk back in, which
+  H3 draws as them getting up and coming over. When that later beat has them walk, come
+  back, join or head over (*Lena joins her at the window*), or they leave first, the shots
+  between frame only the beat's people as above. A beat that sets the camera's framing
+  (*close-up*, *the camera frames her face*) always holds only its own people.
 - If the node's files change after ComfyUI loads them, `info` starts with `RESTART COMFYUI`,
   because that run used the old code.
 - In `info`, anyone in a shot whom the beat does not name says why, for example
@@ -336,7 +382,8 @@ mouths, so a scene of ships stays a scene of ships. A person aboard still counts
 beat that mentions a crew, passengers or pilots brings them in as extras.
 
 Extras are welcome: a beat can bring in *a woman*, *a crowd* or a name you did not
-declare. That shot then says everyone other than your characters looks nothing like
+declare (a brand such as *Pampers* or *Nike shoes* is not a name). That shot then says
+everyone other than your characters looks nothing like
 them, with a different face, hair, body and clothes and none of what they wear, so an
 extra is never drawn as a copy of someone in `character_memory`.
 
@@ -401,12 +448,28 @@ continues from a frame they are in, and that frame carries their look. The first
 the shots after a `cut`, and anyone walking into a continued shot still get their
 picture. The node reads which checkpoint is loaded from its own `model` link.
 
+The same goes for a LoRA trained without them, found in any loader on that link
+(ComfyUI's own, a LoRA stack such as DaSiWa's, or any loader that names its LoRA files;
+a slot switched off or at strength 0 does not count). A LoRA whose metadata lists
+`ref2va` was trained on pictures. One whose name or metadata says T2V, FL2V or a
+few-step speed LoRA (*4step*, *turbo*, *lightning*, *distill*, DMAD, FlashGen) was not, and
+`info` names it. Style LoRAs change nothing here.
+
+A person's picture always goes in cropped to their face and hair (found with DWPose), so
+their clothes come only from the words: the clothes in the picture never end up on top of
+the ones the scene describes. `info` marks it *face and hair* under *pictures:*, and says
+when no face could be found and the whole picture went in.
+
 ### Sound
 
 - **Speech:** a shot with a quoted line (`"…"`, `'…'`, `“…”`, `‘…’` or `<d>…</d>`)
   speaks. Every line reaches H3 inside `<d>…</d>`, the speech tags it was trained on,
-  with the words exactly as written. Its first half second is held quiet so the line
-  does not start on the cut.
+  with the words exactly as written, except that a garment that is off is left out of
+  the line the picture is made from (see Clothing). Its first half second is held quiet
+  so the line does not start on the cut.
+- **Words are not acted out:** H3 draws what a line talks about unless told otherwise,
+  so every shot with a line says *Spoken words are only heard: the shot shows what it
+  describes, not what anyone talks about.* What the beat itself describes still happens.
 - **Room to speak:** a shot gets about 2 words a second plus 1.5 seconds for its line,
   even past `shot_seconds`, up to H3's 15 seconds, so words are not rushed or cut off.
   A `seconds:` line still wins. A line too long for one shot is flagged in `info`: split
@@ -502,13 +565,18 @@ the take where it held, or else the take where it broke in the fewest frames. Se
   allocator, restart ComfyUI with `--disable-cuda-malloc`.
   - FastH3 was distilled for text and first-frame shots only, so it gets reference
     pictures only where nobody can be drawn twice (see Reference pictures).
-- **Hyperflow**, detected from the LoRA's metadata or its file name, samples every shot
+- **Hyperflow**, detected from the LoRA's metadata or its file name in any loader (its
+  settings are read from its own file when the loader does not pass them on), samples every shot
   on its own 8-step grid (shift 12/3, `euler`). Leave `sigmas` unwired.
   - Its endpoint conditioning is added back from `hyperflow_endpoint_v1.0.safetensors`
     beside the node, or from the original `minimax_h3_hyperflow_8step_v1.0.safetensors`
     in `models/loras`.
   - That needs a checkpoint with a full time embedder. On curve checkpoints (hybrid
     b25-49, 10Eros, FastH3) Hyperflow runs without it, and `info` says so.
+- **A LoRA with timestep layers** (Hyperflow has them) on a curve checkpoint loads only
+  in part: ComfyUI leaves those layers out. Near the top of `info`, *LORA ONLY PARTLY
+  LOADED* names it; use it on a checkpoint with a full time embedder, such as the original
+  FL2VA, or use a LoRA without timestep layers.
 
 ## Settings
 

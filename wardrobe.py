@@ -11,24 +11,33 @@ GARMENT = (r"(?:t-?shirt|shirt|blouse|crop\s+top|tank\s+top|top|sweater|jumper|h
            r"stockings|socks|shoes|boots|heels|sneakers|gloves|hat|cap|scarf|belt|robe|bathrobe|pajamas|pyjamas|nightgown|"
            r"nightie|lingerie|bra|bralette|panties|knickers|underwear|briefs|boxers|thong|g-string|bikini\s+(?:top|bottoms?)|"
            r"bikini|swimsuit|corset|bodysuit|catsuit|jumpsuit|playsuit|romper|leotard|camisole|negligee|chemise|babydoll|"
-           r"uniform|apron)")
+           r"diapers?|nappies|nappy|pampers|huggies|goodnites|pull-?ups|bloomers|plastic\s+pants|underpants|pantyhose|fishnets|onesies?|towels?|"
+           r"nightdress|kimono|sarong|bodystocking|slippers|sandals|mittens|uniform|apron|bottoms|undies|slacks|joggers|"
+           r"trunks|capris|culottes|girdle|speedos?|jockstrap|overalls|dungarees)")
 _FUSED = r"(?:mini|micro|maxi|midi|hot|sweat|track)"
 _LOWER = (r"skirt|shorts|trousers|pants|jeans|leggings|tights|panties|knickers|underwear|briefs|boxers|thong|g-string|"
-          r"bikini bottoms?")
+          r"bikini bottoms?|diaper|pull-ups|bloomers|plastic pants|underpants|pantyhose|bottoms|undies|slacks|joggers|trunks|"
+          r"capris|culottes|girdle|speedos?|jockstrap")
 _UPPER = (r"t-?shirt|shirt|blouse|crop top|tank top|top|sweater|jumper|hoodie|cardigan|jacket|coat|blazer|vest|bra|bralette|"
           r"bikini top|camisole|corset")
 _WHOLE = (r"dress|gown|robe|bathrobe|pajamas|pyjamas|nightgown|nightie|lingerie|bikini|swimsuit|bodysuit|catsuit|jumpsuit|"
-          r"playsuit|romper|leotard|negligee|chemise|babydoll|uniform|clothes")
+          r"playsuit|romper|leotard|negligee|chemise|babydoll|uniform|onesie|towel|nightdress|kimono|sarong|bodystocking|"
+          r"clothes|overalls|dungarees")
 _TAKE = (r"takes?|took|taking|pulls?|pulled|pulling|slips?|slipped|slides?|slid|peels?|peeled|strips?|stripped|tugs?|"
          r"tugged|yanks?|yanked|rips?|ripped|tears?|tore|cuts?|kicks?|kicked|shrugs?|shrugged|wriggles?|wriggled|"
-         r"lowers?|lowered|works?|worked|eases?|eased")
-_OFF = re.compile(rf"\b(?:remov(?:e|es|ed|ing)|sheds?|drops?|dropped|dropping)\s+(?P<pre>(?:[\w'’-]+\s+){{0,4}}?)"
-                  rf"(?P<g>{GARMENT})\b"
-                  rf"|\b(?:steps?|stepped|stepping|wriggles?|wriggled|wiggles?|wiggled|slips?|slipped|climbs?|climbed|shimmies|"
-                  rf"shimmied)\s+out\s+of\s+(?P<pre3>(?:[\w'’-]+\s+){{0,4}}?)(?P<i>{GARMENT})\b"
-                  rf"|\blets?\s+(?P<pre4>(?:[\w'’-]+\s+){{0,4}}?)(?P<j>{GARMENT})\s+(?:fall|drop|slip|slide|pool)\b"
-                  rf"|\b(?:{_TAKE})\s+(?P<off>(?:off|of|down)\s+)?(?P<pre2>(?:[\w'’-]+\s+){{0,4}}?)(?P<h>{GARMENT})\b"
-                  rf"(?P<tail>\s+(?:off|away|down|free)\b)?", re.I)
+         r"lowers?|lowered|works?|worked|eases?|eased|lifts?|lifted|push(?:es)?|pushed|gets?|got|getting")
+_OFF_RX = (r"\b(?:remov(?:e|es|ed|ing)|sheds?|drops?|dropped|dropping|untap(?:e|es|ed|ing))\s+"
+           r"(?P<pre>(?:[\w'’-]+\s+){{0,4}}?)(?P<g>{g})\b"
+           r"|\b(?:steps?|stepped|stepping|wriggles?|wriggled|wiggles?|wiggled|slips?|slipped|climbs?|climbed|shimmies|"
+           r"shimmied|gets?|got|getting)\s+out\s+of\s+(?P<pre3>(?:[\w'’-]+\s+){{0,4}}?)(?P<i>{g})\b"
+           r"|\blets?\s+(?P<pre4>(?:[\w'’-]+\s+){{0,4}}?)(?P<j>{g})\s+(?:fall|drop|slip|slide|pool)\b"
+           r"|\b(?:{take})\s+(?P<off>(?:off|of|down)\s+)?(?P<pre2>(?:[\w'’-]+\s+){{0,4}}?)(?P<h>{g})\b"
+           r"(?P<tail>\s+(?:off|away|down|free)\b|\s+over\s+(?:her|his|their)\s+head\b)?"
+           r"|\b(?P<pre5>(?:her|his|their|the|(?-i:[A-Z])[a-z]+['’]s)\s+(?:[\w'’-]+\s+){{0,2}}?)(?P<k>{g})\s+"
+           r"(?:(?:comes?|came)\s+(?:off|away|down)|(?:falls?|fell|drops?|dropped|slips?|slipped|slides?|slid|pools?|"
+           r"pooled)\s+(?:off|away|down|free|(?:to|onto)\s+the\s+(?:floor|ground)|(?:to|around)\s+(?:her|his|their)\s+"
+           r"(?:ankles|feet))\b)")
+_OFF = re.compile(_OFF_RX.format(g=GARMENT, take=_TAKE), re.I)
 _NAKED = re.compile(r"\b(?:(?P<act>strips?|stripped|stripping|gets?|got|getting)|is|was|are|stands?|stood|kneels?|knelt|"
                     r"lies|lay|lying|sits?|sat|waits?|remains?|stays?)\s+(?:down\s+)?(?:[\w'’-]+\s+){0,3}?(?:completely\s+|"
                     r"fully\s+|totally\s+|stark\s+)?(?P<n>naked|nude|topless|bottomless)\b"
@@ -37,25 +46,117 @@ _NAKED = re.compile(r"\b(?:(?P<act>strips?|stripped|stripping|gets?|got|getting)
                     r"|\b(?P<act3>takes?|took|taking|strips?|stripped|pulls?|pulled|tears?|tore|rips?|ripped)\s+(?:off\s+)?"
                     r"(?:all\s+(?:of\s+)?)?(?P<own>her|his|(?-i:[A-Z])[a-z]+['’]s)\s+clothes\b", re.I)
 _SHEET = re.compile(r"^\s*([A-Z][\w'’-]{0,24}(?:\s+[A-Z][\w'’-]{0,24}){0,2})\s*:\s*\S")
-_ON = re.compile(rf"\b(?:puts?|putting|pulls?|pulled|slips?|slipped|slides?|slid|gets?|got|tugs?)\s+"
-                 rf"(?P<pre>(?:[\w'’-]+\s+){{0,3}}?)(?P<g>{GARMENT})\s+(?:back\s+)?on\b"
-                 rf"|\b(?:puts?|putting|pulls?|slips?)\s+(?:back\s+)?on\s+(?P<pre2>(?:[\w'’-]+\s+){{0,3}}?)(?P<h>{GARMENT})\b", re.I)
+_ON_RX = (r"\b(?:puts?|putting|pulls?|pulled|slips?|slipped|slides?|slid|gets?|got|tugs?)\s+"
+          r"(?P<pre>(?:[\w'’-]+\s+){{0,3}}?)(?P<g>{g})\s+(?:back\s+)?on\b(?!\s+(?:the|a|an|its|this|that|these|those|"
+          r"some|top|to|onto)\b|\s+(?:his|her|their|my|your|our)\s+(?!(?:and|as|while|then|before|after|again|so|but)\b)"
+          r"[a-z]|\s+(?-i:[A-Z])[a-z]+['’]s\b)"
+          r"|\b(?:puts?|putting|pulls?|slips?)\s+(?:back\s+)?on\s+(?P<pre2>(?:[\w'’-]+\s+){{0,3}}?)(?P<h>{g})\b"
+          r"|\b(?:slips?|slipped|steps?|stepped|wriggles?|wriggled|gets?|got|climbs?|climbed|changes?|changed|shimmies|"
+          r"shimmied)\s+(?:back\s+)?into\s+(?P<pre3>(?:[\w'’-]+\s+){{0,3}}?)(?P<i>{g})\b"
+          r"|\b(?:fasten(?:s|ed|ing)?|tap(?:e|es|ed|ing)|secur(?:e|es|ed|ing)|straps?|strapped|wraps?|wrapped|ties?|tied)\s+"
+          r"(?P<pre4>(?:[\w'’-]+\s+){{0,3}}?)(?P<j>{g})\s+(?:(?:back\s+)?(?:on|around|onto)\s+{body}|(?:shut|closed)\b)"
+          r"|\b(?P<pre5>(?:her|his|their|the|(?-i:[A-Z])[a-z]+['’]s)\s+(?:[\w'’-]+\s+){{0,2}}?)(?P<k>{g})\s+(?:is|are)\s+"
+          r"(?:now\s+)?(?:(?:secured|fastened|taped|strapped|firmly|snugly|back)\s+)*on\s+{body}")
+_BODY = (r"(?:(?:her|him|them)\b(?!\s+[a-z])|(?:her|his|their|(?-i:[A-Z])[a-z]+['’]s)\s+(?:body|hips|waist|bottom|butt|"
+         r"crotch|chest|legs|feet|head)\b|(?-i:[A-Z])[a-z]+\b(?!['’]))")
+_DRESSED = re.compile(r"\b(?:gets?|got|getting)\s+(?:back\s+)?dressed\b|\b(?:puts?|putting|pulls?|slips?)\s+(?:all\s+)?"
+                      r"(?P<own>her|his|their|(?-i:[A-Z])[a-z]+['’]s)\s+clothes\s+(?:back\s+)?on\b|\b(?:puts?|putting)\s+"
+                      r"(?:back\s+)?on\s+(?:all\s+)?(?P<own2>her|his|their|(?-i:[A-Z])[a-z]+['’]s)\s+clothes\b"
+                      r"|\b(?:gets?|got|slips?|climbs?)\s+(?:back\s+)?into\s+(?P<own3>her|his|their)\s+clothes\b"
+                      r"|\bdresses\s+(?P<obj>her|him|(?-i:[A-Z])[a-z]+)\b(?!['’])", re.I)
+_ON = re.compile(_ON_RX.format(g=GARMENT, body=_BODY), re.I)
+_WEARS = re.compile(r"\b(?:wears?|wearing|wore|dressed\s+in|clad\s+in)\s+(?:only\s+|just\s+|nothing\s+but\s+)?"
+                    r"(?P<list>[^.;:!?]+)", re.I)
+_NOT_WORN = {"smile", "frown", "grin", "look", "expression", "makeup", "perfume", "lipstick", "nothing", "anything", "everything",
+             "black", "white", "red", "blue", "green", "pink", "purple", "grey", "gray", "brown", "yellow", "orange", "silver",
+             "gold", "leather", "latex", "lace", "silk", "cotton", "denim", "satin", "velvet", "rubber", "pvc", "vinyl", "tight",
+             "loose", "short", "long", "thick", "thin", "only", "just", "hair", "glasses", "contacts", "tattoos", "piercings",
+             "ring", "rings", "earrings", "necklace", "bracelet", "watch", "jewelry", "jewellery"}
+
+
+def learned(described):
+    out = []
+    for text in (described or {}).values():
+        for m in _WEARS.finditer(text or ""):
+            for part in re.split(r",|\band\b|\bwith\b|\bover\b|\bunder\b", m.group("list"), flags=re.I):
+                words = re.findall(r"[a-z][a-z-]{2,}", part.lower())
+                if words and words[-1] not in _NOT_WORN and not re.fullmatch(rf"{GARMENT}", words[-1], re.I):
+                    out.append(words[-1])
+    return list(dict.fromkeys(out))
+
+
+def _rx(extra):
+    g = GARMENT if not extra else rf"(?:{GARMENT}|{'|'.join(map(re.escape, extra))})"
+    return re.compile(_OFF_RX.format(g=g, take=_TAKE), re.I), re.compile(_ON_RX.format(g=g, body=_BODY), re.I), g
+
+
+_SINGLE = {"nappies": "diaper", "nappy": "diaper", "diapers": "diaper", "pampers": "diaper", "huggies": "diaper",
+           "goodnites": "diaper", "onesies": "onesie", "towels": "towel",
+           "pullups": "pull-ups", "pull ups": "pull-ups"}
 
 
 def garment_of(word):
-    return re.sub(rf"^{_FUSED}(?=(?:dress|skirt|pants)$)", "", re.sub(r"\s+", " ", word.lower()))
+    word = re.sub(rf"^{_FUSED}(?=(?:dress|skirt|pants)$)", "", re.sub(r"\s+", " ", word.lower()))
+    return _SINGLE.get(word, word)
+
+
+def _garment_rx(garment):
+    if garment == "diaper":
+        return r"\b(?:diapers?|napp(?:y|ies)|pampers|huggies|goodnites)\b"
+    stem = re.escape(garment).replace(r"\-", r"[\s-]?")
+    return rf"\b{_FUSED}?" + (rf"{stem[:-1]}(?:y|ies)\b" if garment.endswith("y") else rf"{stem}s?\b")
 
 
 def mentions(text, garment):
-    return bool(re.search(rf"\b{_FUSED}?{re.escape(garment)}s?\b", text or "", re.I))
+    return bool(re.search(_garment_rx(garment), text or "", re.I))
 
 
-def worn(text):
-    return [garment_of(m.group(0)) for m in re.finditer(rf"\b{GARMENT}\b", text or "", re.I)]
+def unsay(text, gone, zones=(), extra=()):
+    found = []
+    covers = lambda g: any(re.fullmatch(rf"{_LOWER if z == 'lower' else _UPPER}|{_WHOLE}", g) for z in zones)
+    rx = re.compile(rf"\b{_rx(extra)[2]}(?:e?s)?\b", re.I)
+    words = lambda s: re.findall(r"[\w'’-]+", s)
+
+    def named(sentence):
+        hits = [w for w in (m.group(0) for m in rx.finditer(sentence))
+                if any(covers(garment_of(w[:len(w) - k])) for k in (0, 1, 2)) or any(mentions(w, g) for g in gone)]
+        found.extend(garment_of(w) for w in hits)
+        return bool(hits)
+
+    def line(d):
+        said = re.split(r"(?<=[.!?])\s+", d.group(1).strip())
+        dirty = [named(s) for s in said]
+        if not any(dirty):
+            return d.group(0)
+        pool = [w for s in said[:dirty.index(True)] for w in words(s)] or [
+            w for s, x in zip(said, dirty) if not x for w in words(s)]
+        if not pool:
+            return ""
+        fill = lambda n: " ".join(pool[k % len(pool)] for k in range(n))
+        return "<d>" + " ".join(s if not x else (lambda f: f[:1].upper() + f[1:] + ".")(fill(len(words(s))))
+                                for s, x in zip(said, dirty)) + "</d>"
+    return re.sub(r"<d>(.*?)</d>", line, text or "", flags=re.S), list(dict.fromkeys(found))
+
+
+def worn(text, extra=()):
+    return [garment_of(m.group(0)) for m in re.finditer(rf"\b{_rx(extra)[2]}\b", text or "", re.I)]
+
+
+_UNDER = (r"bra|bralette|panties|knickers|underwear|briefs|boxers|thong|g-string|diaper|pull-ups|bloomers|plastic pants|"
+          r"underpants|undies|girdle|jockstrap")
+_SHEER = r"lingerie|tights|pantyhose|stockings|fishnets|bodystocking"
+
+
+def covered(described, gone, coming=()):
+    left = [g for g in dict.fromkeys(worn(described, learned({"": described}))) if not any(mentions(g, x) for x in gone)]
+    outer = [g for g in left if g not in coming and not re.fullmatch(rf"{_UNDER}|{_SHEER}", g)]
+    zone = lambda g: _LOWER if re.fullmatch(_LOWER, g) else _UPPER if re.fullmatch(_UPPER, g) else None
+    return {g: next(o for o in outer if re.fullmatch(rf"{zone(g)}|{_WHOLE}", o)) for g in left
+            if re.fullmatch(_UNDER, g) and zone(g) and any(re.fullmatch(rf"{zone(g)}|{_WHOLE}", o) for o in outer)}
 
 
 def bare(described, gone):
-    left = [g for g in worn(described) if not any(mentions(g, x) for x in gone)]
+    left = [g for g in worn(described, learned({"": described})) if not any(mentions(g, x) for x in gone)]
     covers = lambda g, zone: re.fullmatch(rf"{zone}|{_WHOLE}", g) is not None
     return [name for zone, name in ((_LOWER, "lower"), (_UPPER, "upper"))
             if any(covers(g, zone) for g in gone) and not any(covers(g, zone) for g in left)]
@@ -66,28 +167,38 @@ _STOP = {"wears", "wear", "wearing", "worn", "is", "are", "was", "were", "in", "
          "of", "on", "under", "over", "into", "to", "from", "she", "he", "they", "still", "now", "also", "nothing"}
 
 
-_TRAIL = re.compile(rf"(?:\s+(?:underwear|panties|briefs|bottoms?|knickers))?(?:\s*,?\s+(?:made\s+(?:of|from)|of|in|with|"
-                    rf"cut|trimmed|lined|edged|covered|that|which|stretched|clinging|pulled|riding|sitting|hugging)\b"
-                    rf".*?(?=\s*(?:[,;.!?]|\band\s+(?:a|an|the|her|his|their)\b|$)|\s+(?:a|an|the|her|his|their|matching)\s+"
-                    rf"(?:[\w-]+\s+){{0,2}}?(?:{GARMENT})\b))?", re.I)
+_TRAIL = re.compile(rf"(?:\s+(?:underwear|panties|briefs|bottoms?|knickers))?(?P<clause>\s*,?\s+(?P<head>made\s+(?:of|from)|of|"
+                    rf"in|with|cut|trimmed|lined|edged|covered|that|which|stretched|clinging|pulled|riding|hugging)\b"
+                    rf"(?P<rest>.*?)(?=\s*(?:[,;.!?]|\band\s+(?:a|an|the|her|his|their)\b|$)|\s+(?:a|an|the|her|his|their|"
+                    rf"matching)\s+(?:[\w-]+\s+){{0,2}}?(?:{GARMENT})\b))?", re.I)
+_AROUND = re.compile(r"^\s*(?:(?:the|this|that|these|those|her|his|their|my|your|our)\b|(?-i:[A-Z])[\w-]*['’]s\b)", re.I)
+_LEFT = re.compile(r"\b(?:is\s+wearing|wears|wearing|wore|dressed\s+in|clad\s+in|in|with)(?:\s+only|\s+just|"
+                   r"\s+nothing\s+but)?\s*$", re.I)
 _ITS = re.compile(r"^\s*It(?:['’]s|s|\s+(?:is|was|has))\b", re.I)
 
 
-def strip(text, garment):
+def strip(text, garment, extra=(), names=()):
+    more = re.compile(rf"\s*(?:(?:over|under|on\s+top\s+of|with)\s+)?(?:(?!(?:by|at|on|in|into|onto|near|behind|beside|"
+                      rf"against|while|as|with|to|from)\b)[\w'’-]+\s+){{0,5}}?{_rx(extra)[2]}\b", re.I)
+    rx = _garment_rx(garment)
     while True:
-        m = re.search(rf"\b{_FUSED}?{re.escape(garment)}s?\b", text, re.I)
+        m = re.search(rf"{rx}(?:\s+{rx})*", text, re.I)
         if m is None:
             break
         start = m.start()
-        for w in reversed(list(re.finditer(r"[\w'’-]+", text[:start]))[-5:]):
+        chunk = max(text.rfind(c, 0, start) for c in ",;:.!?()[]<>\n") + 1
+        for w in reversed(list(re.finditer(r"[\w'’-]+", text[chunk:start]))[-8:]):
             low = w.group(0).lower()
-            if low in _STOP or (w.group(0)[0].isupper() and not w.group(0).isupper() and low not in _DET):
+            if low in _STOP or w.group(0) in names or re.fullmatch(r"(?-i:[A-Z])[\w-]*['’]s", w.group(0)):
                 break
-            start = w.start()
+            start = chunk + w.start()
             if low in _DET:
                 break
         before, after = text[:start], text[m.end():]
-        after = after[_TRAIL.match(after).end():]
+        t = _TRAIL.match(after)
+        kept = t.group("clause") and t.group("head").lower() in ("of", "in", "with") and _AROUND.search(t.group("rest"))
+        after = after[t.start("clause") if kept else t.end():]
+        loose = kept or re.match(r"\s*(?:[,.;:!?]|$)", after)
         if re.search(r",\s*$", before):
             before = re.sub(r",\s*$", "", before)
         elif re.search(r"\s+and\s*$", before):
@@ -96,9 +207,10 @@ def strip(text, garment):
             after = re.sub(r"^\s*,\s*", " ", after)
         elif re.match(r"\s+and\s+", after):
             after = re.sub(r"^\s+and\s+", " ", after)
+        if _LEFT.search(before):
+            before = _LEFT.sub("", before) if loose and not more.match(after) else before
+            after = re.sub(r"^\s*and\s+", " ", after)
         text = before + after
-    text = re.sub(r"\b(?:wears|wearing|is\s+wearing|dressed\s+in|in|with)(?:\s+only|\s+just|\s+nothing\s+but)?\s*(?=[,.;:!?]|$)",
-                  "", text, flags=re.I)
     text = re.sub(r"\b(wears|wearing|in)\s+(?:over|under|on\s+top\s+of|with)\s+", r"\1 ", text, flags=re.I)
     text = re.sub(r"[ \t]+([,.;:!?])", r"\1", text)
     text = re.sub(r",\s*([.;:!?])", r"\1", text)
@@ -185,7 +297,7 @@ def descriptions(text, people):
 def undress(text, undressed, people):
     if not undressed:
         return text
-    lines = []
+    lines, extra = [], learned({"": text})
     for line, owner in line_owners(text, people):
         sheet = _SHEET.match(line)
         kept, gone = [], False
@@ -196,13 +308,13 @@ def undress(text, undressed, people):
             for n in who:
                 for g in undressed.get(n, []):
                     gone = gone or mentions(s, g)
-                    s = strip(s, g)
+                    s = strip(s, g, extra, people)
             kept.append(s)
         lines.append(" ".join(k for k in kept if k))
     return "\n".join(lines)
 
 
-def nudity(sentence, people, gender, here=(), unclear=None):
+def nudity(sentence, people, gender, here=(), unclear=None, extra=()):
     out = []
     for m in _NAKED.finditer(sentence):
         if re.search(r"\b(?:not|never|half|no\s+longer)\b|n['’]t\b", m.group(0), re.I):
@@ -224,11 +336,12 @@ def nudity(sentence, people, gender, here=(), unclear=None):
 
 
 def stated(text, people, gender, described, here=()):
-    out = {}
+    out, extra = {}, learned(described)
     for sentence in sentences(text):
         for who, zones, state in nudity(sentence, people, gender, here):
             if state:
-                gone = [g for g in worn(described.get(who, "")) if any(re.fullmatch(rf"{z}|{_WHOLE}", g) for z in zones)]
+                gone = [g for g in worn(described.get(who, ""), extra)
+                        if len(zones) == 2 or any(re.fullmatch(rf"{z}|{_WHOLE}", g) for z in zones)]
                 out.setdefault(who, []).extend(g for g in gone or (["clothes"] if len(zones) == 2 else [])
                                                if g not in out.get(who, []))
     return out
@@ -237,20 +350,37 @@ def stated(text, people, gender, described, here=()):
 def read(text, people, gender, described, here=()):
     off, on, unclear, blocked = {}, {}, [], stand_ins(text)
     here = [n for n in people if n in here or re.search(rf"\b{re.escape(n)}\b", text)]
+    extra = learned(described)
+    off_rx, on_rx, _ = _rx(extra)
+    last = ""
     for sentence in sentences(text):
+        named = list(re.finditer(rf"(?:\b(?P<det>her|his|their|the|(?-i:[A-Z])[a-z]+['’]s)\s+(?:[\w'’-]+\s+){{0,2}}?)?"
+                                 rf"\b(?P<g>{_rx(extra)[2]})\b", sentence, re.I))
+        sentence = re.sub(r"\b(?:it|them)\b", lambda m: next(
+            (f"{n.group('det') or 'the'} {n.group('g')}" for n in reversed(named) if n.end() <= m.start()), last) or m.group(0),
+            sentence)
+        last = f"{named[-1].group('det') or 'the'} {named[-1].group('g')}" if named else ""
         for who, zones, _ in nudity(sentence, people, gender, here, unclear):
-            gone = [g for g in worn(described.get(who, "")) if any(re.fullmatch(rf"{z}|{_WHOLE}", g) for z in zones)]
+            gone = [g for g in worn(described.get(who, ""), extra)
+                    if len(zones) == 2 or any(re.fullmatch(rf"{z}|{_WHOLE}", g) for z in zones)]
             for garment in gone or (["clothes"] if len(zones) == 2 else []):
                 if garment not in off.get(who, []):
                     off.setdefault(who, []).append(garment)
-        for rx, out in ((_OFF, off), (_ON, on)):
+        for m in _DRESSED.finditer(sentence):
+            tok = re.sub(r"['’]s$", "", next((m.group(k) for k in ("own", "own2", "own3", "obj") if m.group(k)), "") or "")
+            tok = tok if tok.lower() not in ("their",) else ""
+            tok = tok or next((t for _, t in reversed(tokens(sentence[:m.start()], people))), "")
+            who = resolve(tok, people, gender, here=here) if tok else ""
+            if who and "clothes" not in on.get(who, []):
+                on.setdefault(who, []).append("clothes")
+        for rx, out in ((off_rx, off), (on_rx, on)):
             for m in rx.finditer(sentence):
-                if rx is _OFF and m.group("h") and not (m.group("off") or m.group("tail")):
+                if rx is off_rx and m.group("h") and not (m.group("off") or m.group("tail")):
                     continue
-                key = next(k for k in ("g", "h", "i", "j") if k in rx.groupindex and m.group(k))
+                key = next(k for k in ("g", "h", "i", "j", "k") if k in rx.groupindex and m.group(k))
                 garment = garment_of(m.group(key))
-                own = re.search(r"\b(her|his|their)\b|\b([A-Z][a-z]+)['’]s\b",
-                                m.group({"g": "pre", "h": "pre2", "i": "pre3", "j": "pre4"}[key]) or "")
+                own = re.search(r"\b((?i:her|his|their))\b|\b([A-Z][a-z]+)['’]s\b",
+                                m.group({"g": "pre", "h": "pre2", "i": "pre3", "j": "pre4", "k": "pre5"}[key]) or "")
                 if own and own.group(1) and ({"her": "f", "his": "m"}.get(own.group(1).lower(), "fm") in blocked or
                                              own.group(1).lower() == "their" and blocked):
                     unclear.append(f"whose {garment} in '{sentence.strip()}'")
