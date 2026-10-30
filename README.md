@@ -47,7 +47,7 @@ old workflow still has linked that the node no longer uses are ignored and named
 |---|---|
 | **UNET** | a MiniMax-H3 model — a [hybrid fl2va/ref2va merge](https://huggingface.co/smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models) works best |
 | **CLIP** | H3's text encoder, loader type `minimax` |
-| **VAE** | the H3 **video** VAE |
+| **VAE** | the full H3 **video** VAE (a decoder-only one such as LightVAE cannot start a shot on the last frame) |
 | **audio VAE** | the H3 **audio** VAE — a separate file, and it must be the *converted* one |
 
 ```
@@ -449,7 +449,8 @@ the shots after a `cut`, and anyone walking into a continued shot still get thei
 picture. The node reads which checkpoint is loaded from its own `model` link.
 
 The same goes for a LoRA trained without them, found in any loader on that link
-(ComfyUI's own, a LoRA stack such as DaSiWa's, or any loader that names its LoRA files;
+(ComfyUI's own LoRA loader and LoRA Stack, a LoRA stack such as DaSiWa's, or any loader that
+names its LoRA files;
 a slot switched off or at strength 0 does not count). A LoRA whose metadata lists
 `ref2va` was trained on pictures. One whose name or metadata says T2V, FL2V or a
 few-step speed LoRA (*4step*, *turbo*, *lightning*, *distill*, DMAD, FlashGen) was not, and
@@ -480,7 +481,8 @@ when no face could be found and the whole picture went in.
   has its own vocal sound (*screams*, *gasps*) or a gag holds a mouth open.
 - **Foley and ambience:** such a shot keeps the sounds its beat brings (footsteps, a
   door, cuffs closing, tape tearing) and the ambience of the scene (rain, traffic, a
-  quiet house). Its sound is made in a second, audio-only pass over the finished
+  quiet house). The node never adds a steady hum or whir (a fridge, a strip light, a
+  computer fan) the scene does not name, since it reads as a drone. Its sound is made in a second, audio-only pass over the finished
   picture, so the sound follows what is on screen and has no moving mouths to put a
   voice to. That pass listens to a half-size copy of the picture, which makes it about
   six times cheaper than rendering the shot again, and the picture itself is never
@@ -573,6 +575,26 @@ the take where it held, or else the take where it broke in the fewest frames. Se
     in `models/loras`.
   - That needs a checkpoint with a full time embedder. On curve checkpoints (hybrid
     b25-49, 10Eros, FastH3) Hyperflow runs without it, and `info` says so.
+- **Style LoRAs** (any LoRA that is not a speed LoRA, such as a look or NSFW LoRA) bend
+  H3's sound as well as its picture, because both come from the same layers: a voice
+  warbles, drops out or comes out weak. So a shot with a spoken line has its sound made
+  over the finished picture by the same model without the style LoRA (the speed LoRA
+  stays). A shot without a line keeps it for its sounds, which then match its picture.
+  `info` names the LoRA left out of the lines.
+- **Speed LoRAs** are sampled the way they were trained, whatever `sampler_name` says:
+  - a LoRA whose metadata gives its sampling (DMAD: *4 steps, video shift 12, audio shift
+    2, re-noise step rule*) gets exactly that, a re-noise rule as `lcm`;
+  - FlashGen gets its published recipe: 4 `euler` steps on its own schedule
+    `[1.0, 0.7, 0.4, 0.15, 0.0]` shifted at 12/3;
+  - any other few-step LoRA (*4step*, *8step*, *4to8step*, *turbo*, *lightning*,
+    *distill*, *lcm* in its name) gets `euler` on the steps you set, with no extra audio
+    step: a multistep sampler such as `res_multistep` overshoots on them into halos,
+    blown colour and clipped audio.
+  - Wired `sigmas` override all of this. `info` says what each LoRA got.
+- **PDD Acc** (`MiniMaxH3PDDAccApply` on the model) is sampled the way it was trained:
+  on its own sigmas, with `euler` and shift 12/3, whatever `sampler_name` and the shift
+  widgets say. Wire its `sigmas` output into `sigmas` and its `MODEL` output into `model`;
+  without its sigmas the run stops and says so. `info` says *PDD Acc*.
 - **A LoRA with timestep layers** (Hyperflow has them) on a curve checkpoint loads only
   in part: ComfyUI leaves those layers out. Near the top of `info`, *LORA ONLY PARTLY
   LOADED* names it; use it on a checkpoint with a full time embedder, such as the original

@@ -3,6 +3,7 @@
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
 
+import inspect
 import os
 
 import torch
@@ -20,7 +21,11 @@ def find_node(node_id):
 
 
 def run_node(cls, **kwargs):
-    out = cls.execute(**kwargs) if hasattr(cls, "define_schema") else getattr(cls(), cls.FUNCTION)(**kwargs)
+    fn = cls.execute if hasattr(cls, "define_schema") else getattr(cls(), cls.FUNCTION)
+    params = inspect.signature(fn).parameters
+    if not any(p.kind is p.VAR_KEYWORD for p in params.values()):
+        kwargs = {k: v for k, v in kwargs.items() if k in params}
+    out = fn(**kwargs)
     out = getattr(out, "result", out)
     return out[0] if isinstance(out, (tuple, list)) else out
 
@@ -54,6 +59,7 @@ def upscale_latent(video, model_name, scale):
     try:
         up = run_node(cls, latent={"samples": video}, model_name=model_name,
                       mode={"mode": "scale by multiplier", "scale": float(scale)}, align=32, enable_chunking=True,
+                      enable_temporal_chunking=True, force_unload=True,
                       device="cuda" if cuda else "cpu", precision="fp16" if cuda else "fp32")
         up = up["samples"] if isinstance(up, dict) else up
     except Exception as e:

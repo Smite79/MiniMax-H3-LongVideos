@@ -174,6 +174,27 @@ def test_helpers():
           len(landed) == 6 and 0.0 < landed[-2] < 0.4 and S.insert_audio_landing([1.0, 0.01, 0.0], 12.0, 3.0) == [1.0, 0.01, 0.0])
 
 
+class Patched:
+    def __init__(self, keys):
+        self.wrappers = {S.pe.WrappersMP.DIFFUSION_MODEL: {k: [] for k in keys}}
+        self.model_options = {"transformer_options": {}}
+
+    def clone(self):
+        return self
+
+    def get_model_object(self, name):
+        if name != "model_sampling":
+            raise AttributeError(name)
+        import comfy.model_sampling as ms
+        return type("Flow", (ms.ModelSamplingDiscreteFlow, ms.CONST), {})()
+
+    def add_object_patch(self, *a):
+        pass
+
+    def add_wrapper_with_key(self, *a):
+        pass
+
+
 class FakeDet:
     made = 0
 
@@ -868,6 +889,9 @@ def test_sound_lines():
     check("actions bring their foley, the scene its ambience, and no music",
           sounded and line == "The only sounds are footsteps, a door on its hinges and rain against the glass. "
           "There is no background music.", line)
+    line, sounded = S.snd.sound_line("Mara pours coffee into a mug.", "A small kitchen. A workshop. An office.", False)
+    check("no steady hum or whir of a fridge, a strip light or a computer fan is added that the scene does not ask for",
+          not re.search(r"hum|fan|whirr", line), line)
     line, sounded = S.snd.sound_line("Somewhere a dog barks loudly.", "", False)
     check("a beat that names its own sounds keeps them", sounded and line == "The only sounds are the ones this beat "
           "describes. There is no background music.", line)
@@ -938,6 +962,9 @@ def test_pictures_by_checkpoint():
         save_file(tensor, os.path.join(tmp, "flow.safetensors"), {"tasks": '["t2va", "fl2va", "ref2va"]', "hyperflow": "true",
                                                                  "hyperflow_gate": "0.25"})
         save_file(tensor, os.path.join(tmp, "minimax_h3_fl2v_turbo_8step.safetensors"))
+        save_file(tensor, os.path.join(tmp, "hybrid-4to8step-Turbo_REF2VAHybrid-T8.safetensors"))
+        save_file(tensor, os.path.join(tmp, "dmad.safetensors"), {"sampling": "4 steps, video shift 12, audio shift 2, "
+                                                                            "re-noise step rule, no CFG"})
         save_file(tensor, os.path.join(tmp, "style.safetensors"))
         was = folder_paths.get_full_path, folder_paths.get_filename_list
         folder_paths.get_full_path = lambda kind, name: os.path.join(tmp, name) if os.path.isfile(os.path.join(tmp, name)) else None
@@ -956,12 +983,72 @@ def test_pictures_by_checkpoint():
                 {"9": {"inputs": {"model": ["7", 0]}}, "3": hybrid["3"],
                  "7": {"inputs": {"model": ["3", 0], "lora_name": "student.safetensors", "strength_model": 0}}})]
             flow = S.hyperflow_lora(SimpleNamespace(), stack(("flow.safetensors", True, 1.0)))
+            kinds = {n: S.speed_lora(n) for n in ("student.safetensors", "flow.safetensors", "dmad.safetensors",
+                                                  "minimax_h3_fl2v_turbo_8step.safetensors", "style.safetensors")}
+            save_file({"lora_unet_blocks_0_attn_out_proj.lora_down.weight": torch.zeros(1)},
+                      os.path.join(tmp, "look.safetensors"))
+            entry = lambda keys: (1.0, SimpleNamespace(loaded_keys=set(keys)), 1.0, None, None)
+
+            class Loaded:
+                def __init__(self, patches):
+                    self.patches, self.patches_uuid = patches, "orig"
+
+                def clone(self):
+                    return Loaded({k: list(v) for k, v in self.patches.items()})
+            loaded = Loaded({"w": [entry(["diffusion_model.blocks.0.x.lora_A.weight"]),
+                                   entry(["lora_unet_blocks_0_attn_out_proj.lora_down.weight"])]})
+            voice = S.without_loras(loaded, ["look.safetensors"])
+            same = S.without_loras(loaded, ["style.safetensors"])
+            core = lambda on: S.takes_pictures("m", {"9": {"inputs": {"model": ["8", 0]}}, "3": hybrid["3"], "8": {"inputs": {
+                "model": ["3", 0], "loras.0.lora_name": "student.safetensors", "loras.0.strength": 1.0,
+                "loras.0.enabled": on, "loras.1.lora_name": "style.safetensors", "loras.1.strength": 1.0,
+                "loras.1.enabled": True}}}, "9")[0]
+            rows = (core(False), core(True))
+            hybrid_turbo = S.takes_pictures("m", stack(("hybrid-4to8step-Turbo_REF2VAHybrid-T8.safetensors", True, 1.0)), "9")
+            dmad = S.prepare_model(Patched([]), 8, "res_multistep", "simple", None, 12.0, 3.0,
+                                   stack(("dmad.safetensors", True, 1.0)))
+            own = S.prepare_model(Patched([]), 8, "res_multistep", "simple", torch.tensor([1.0, 0.0]), 12.0, 3.0,
+                                  stack(("dmad.safetensors", True, 1.0)))
+            save_file(tensor, os.path.join(tmp, "minimax_h3_4step_lora_flashgen_v1.0.safetensors"))
+            flash = S.prepare_model(Patched([]), 8, "res_multistep", "simple", None, 10.0, 2.0,
+                                    stack(("minimax_h3_4step_lora_flashgen_v1.0.safetensors", True, 1.0)))
+            turbo = S.prepare_model(Patched([]), 8, "res_multistep", "simple", None, 12.0, 3.0,
+                                    stack(("style.safetensors", True, 0.25), ("minimax_h3_fl2v_turbo_8step.safetensors", True, 1.0)))
+            plain = S.prepare_model(Patched([]), 30, "res_multistep", "simple", None, 12.0, 3.0,
+                                    stack(("style.safetensors", True, 1.0)))
         finally:
             folder_paths.get_full_path, folder_paths.get_filename_list = was
     check("a LoRA trained without reference pictures, found in any loader by its file, keeps a person's picture out of a "
           "shot that opens on a frame they are in; one trained with them, a style LoRA, or one switched off does not",
           blind == (False, "student.safetensors was trained without reference pictures") and named[0] is False
           and all(f == (True, "") for f in fine), (blind, named, fine))
+    check("ComfyUI's own LoRA Stack is read row by row, so a row switched off does not count", rows == (True, False), rows)
+    check("a LoRA is a speed LoRA by its recipe, its name or Hyperflow's flag, and anything else is a style LoRA",
+          kinds == {"student.safetensors": True, "flow.safetensors": True, "dmad.safetensors": True,
+                    "minimax_h3_fl2v_turbo_8step.safetensors": True, "style.safetensors": False}, kinds)
+    check("the sound model is the same model with only the style LoRA's own patches taken off, and nothing is made when "
+          "none of them is on it",
+          voice is not None and len(voice.patches["w"]) == 1 and len(loaded.patches["w"]) == 2
+          and voice.patches_uuid != "orig" and same is None, voice and voice.patches)
+    tops = lambda r: r[0].model_options["transformer_options"]
+    grid = [12 * x / (1 + 11 * x) for x in (1.0, 0.7, 0.4, 0.15, 0.0)]
+    check("FlashGen, whose file carries no recipe, gets the one it was trained with: 4 euler steps on its own schedule "
+          "shifted at 12/3",
+          flash[1:3] == (4, "euler") and all(abs(a - b) < 1e-5 for a, b in zip(flash[3].tolist(), grid))
+          and tops(flash)["minimax_h3_sigma_shift_video"] == 12.0 and tops(flash)["minimax_h3_sigma_shift_audio"] == 3.0,
+          flash[1:])
+    check("any few-step speed LoRA, stacked with a style LoRA or not, is sampled with euler on the steps set and no "
+          "extra audio step, and without one the sampler set is kept",
+          turbo[1:3] == (8, "euler") and turbo[3] is None and len(turbo[4]) == 9
+          and "a multistep sampler overshoots" in " ".join(turbo[5])
+          and plain[1:3] == (30, "res_multistep") and len(plain[4]) == 31, (turbo[1:], plain[2], len(plain[4])))
+    check("a speed LoRA built for a ref2va checkpoint keeps the pictures, turbo or not", hybrid_turbo == (True, ""),
+          hybrid_turbo)
+    check("a LoRA whose metadata gives its sampling is sampled that way, steps, shifts and a re-noise rule as lcm, unless "
+          "sigmas are wired",
+          dmad[1:3] == (4, "lcm") and dmad[3] is None and tops(dmad)["minimax_h3_sigma_shift_audio"] == 2.0
+          and len(dmad[4]) == 5 and "the way it was trained" in " ".join(dmad[5])
+          and own[1:3] == (8, "res_multistep") and tops(own)["minimax_h3_sigma_shift_audio"] == 3.0, (dmad[1:], own[1:]))
     check("Hyperflow loaded through a LoRA stack is found, with its gate read from its own file",
           flow is not None and flow["gate"] == 0.25 and flow["source"] == "flow.safetensors", flow)
     check("a LoRA with timestep layers on a time-curve checkpoint is named as only partly loaded, and not on a checkpoint "
@@ -1062,6 +1149,30 @@ def test_memory():
     big = S.h3_activations([1, 24, 72, 48, 84])
     check("a 10 s shot at 1344x768 reserves about 9.4 GB for activations instead of ComfyUI's under 1 GB",
           9.0e9 < big < 10.0e9, big)
+    packed = S.h3_activations([1, 1, 24 * 72 * 48 * 84 + 32 * 2 * 300])
+    check("the same shot reserves the same when ComfyUI hands over its video and audio packed into one row",
+          abs(packed - big) < 0.01 * big, (packed, big))
+
+    pdd = S.prepare_model(Patched(["minimax_h3_pdd_acc"]), 8, "res_multistep", "simple", torch.tensor([1.0, 0.5, 0.0]),
+                          10.0, 2.0, {})
+    try:
+        S.prepare_model(Patched(["minimax_h3_pdd_acc"]), 8, "res_multistep", "simple", None, 12.0, 3.0, {})
+        unwired = ""
+    except ValueError as e:
+        unwired = str(e)
+    check("a model with PDD Acc on it is sampled the way PDD was trained, euler at shift 12/3 on its own sigmas, and its "
+          "sigmas left unwired stops the run with what to wire",
+          pdd[2] == "euler" and pdd[0].model_options["transformer_options"]["minimax_h3_sigma_shift_video"] == 12.0
+          and pdd[0].model_options["transformer_options"]["minimax_h3_sigma_shift_audio"] == 3.0
+          and pdd[3].tolist() == [1.0, 0.5, 0.0] and "wire its sigmas output" in unwired, (pdd[1:], unwired))
+    try:
+        S.check_vaes(SimpleNamespace(first_stage_model=SimpleNamespace(decoder=1)), None)
+        half = ""
+    except RuntimeError as e:
+        half = str(e)
+    check("a decoder-only video VAE is refused with what to wire instead",
+          "no encoder" in half and S.check_vaes(SimpleNamespace(first_stage_model=SimpleNamespace(decoder=1, encoder=1)),
+                                                None) is None, half)
 
 
 def test_grading():
@@ -1545,7 +1656,7 @@ def test_undressed():
     check("that shot's picture is made from the line without the word, then its sound from the real line over the "
           "finished picture",
           built == [(False, False), (True, False), (False, True)] and len(sounds) == 1
-          and sounds[0]["mask"] == [0.0, 1.0] and "her line's sound made over the finished picture" in out[2],
+          and sounds[0]["mask"] == [0.0, 1.0] and "the line's sound made over the finished picture" in out[2],
           (built, [(c["shot"], c["mask"]) for c in sounds]))
     heard = "Spoken words are only heard: the shot shows what it describes, not what anyone talks about."
     check("a shot with a spoken line tells H3 the words are only heard, not shown, and a shot without one does not",
@@ -1587,6 +1698,19 @@ def test_undressed():
           and all(S.wrd.read(t, people, gender, worn)[1] == {} for t in ("Her diaper is on her bed.",
                                                                        "Sarah wraps her towel around the pole.")),
           [(S.shot_line(x), line(x)) for x in film])
+    keep = S.graph_loras, S.speed_lora, S.without_loras
+    S.graph_loras, S.speed_lora, S.without_loras = (lambda g, n=None: ["look.safetensors"]), (lambda n: False), \
+        (lambda m, names: "voice")
+    try:
+        out, calls = render('A kitchen.\n\nMara pours coffee.\n\n"Lovely," Mara says.', ref_image_1=IMG1,
+                            character_memory=mem)
+    finally:
+        S.graph_loras, S.speed_lora, S.without_loras = keep
+    passes = [(c["shot"], c["model"]) for c in calls["sample"] if c["foley"]]
+    check("with a style LoRA on, a spoken line's sound is made over its finished picture by the model without it, while "
+          "a shot without a line keeps it for its sounds so they match its picture, and info says so",
+          passes == [(1, "base"), (2, "voice")] and all(c["model"] == "base" for c in calls["sample"] if not c["foley"])
+          and "spoken lines made without look.safetensors" in out[2], (passes, out[2][:300]))
     crop, was = IMG1[:, :8, :8, :].clone(), S.face_crop
     try:
         for found in (crop, None):

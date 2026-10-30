@@ -280,7 +280,7 @@ def _evict_all_but(keep_model, latent=None):
     except Exception:
         pass
 
-_PIN_SUBSETS = ("weights", "patches", "weights-loaded", "patches-loaded")
+_PIN_SUBSETS = ("weights", "patches", "weights-loaded", "patches-loaded", "weights-fast", "patches-fast")
 
 
 def _pinned_bytes(patcher):
