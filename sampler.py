@@ -14,7 +14,6 @@ import os
 import re
 import sys
 import time
-import uuid
 
 import torch
 import nodes
@@ -57,8 +56,8 @@ HANDOFF_LATENT_TAIL = 8
 SHOT_LENGTHS = ["from the beat", "fixed"]
 BEAT_BASE_SEC = 0.8
 SECONDS_PER_ACTION = 2.2
-WORDS_PER_SEC = 2.0
-SPEECH_PAD = 1.5
+WORDS_PER_SEC = 3.5
+SPEECH_PAD = 2.5
 MIN_AUTO_FRAMES = 73
 
 H3_TOKEN_BYTES = 120 * 1024
@@ -180,6 +179,17 @@ def spoken_words(text):
 
 def narration(text):
     return _SPEECH.sub(lambda m: " " * len(m.group(0)), text or "")
+
+
+_SAYS = re.compile(r"(?:[A-Z][\w'’-]*|she|he|they)\s+(?:\w+ly\s+)?(?:says?|said|asks?|asked|tells?|told|whispers?|"
+                   r"whispered|shouts?|shouted|repl(?:y|ies|ied)|answers?|answered|calls?|called|yells?|yelled|adds?|"
+                   r"added|murmurs?|murmured|mutters?|muttered|orders?|ordered|begs?|begged|instructs?|instructed)"
+                   r"(?:\s+(?:to|at)\s+(?:[A-Z][\w'’-]*|her|him|them))?\s*[:,.!?]?", re.I)
+
+
+def talk_only(text):
+    told = narration(text)
+    return bool(_SPEECH.search(text or "")) and not re.sub(r"[\s.,:;!?]", "", _SAYS.sub("", told))
 
 
 def dialogue(text):
@@ -1159,7 +1169,9 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
             notes.append("Nobody speaks." if any(snd.held_open(g) for g in gags) else
                          "Nobody speaks, and every mouth stays closed.")
         if speech:
-            notes.append("Spoken words are only heard: the shot shows what it describes, not what anyone talks about.")
+            notes.append("This shot is only the line being spoken: everyone stays where and as they are."
+                         if talk_only(para["text"]) else
+                         "Spoken words are only heard: the shot shows what it describes, not what anyone talks about.")
         notes += [sound_text, cast_line(persons, names, without_absent(scene_text, absent, names), para["text"]),
                   stranger_line(persons, [n for n in names if n not in undeclared], gender, unlike)]
         newcomers = [n for n in cast if n not in inframe] if i > 0 else []
@@ -1332,26 +1344,6 @@ def lora_recipe(graph):
     speed = next((n for n in graph_loras(graph) if _SPEED.search(os.path.basename(n))), None)
     return {"steps": None, "sampler": "euler", "shift_video": None, "shift_audio": None,
             "source": os.path.basename(speed)} if speed else None
-
-
-def speed_lora(name):
-    meta = _safetensors_meta(lora_file(name))[1]
-    base = os.path.basename(name).lower()
-    said = " ".join([base] + [str(meta.get(k, "")) for k in ("model", "source", "source_filename", "resized_from")])
-    return bool(_SPEED.search(said) or "hyperflow" in base or any(k in base for k in LORA_RECIPES)
-                or meta.get("sampling") or str(meta.get("hyperflow", "")).lower() == "true")
-
-
-def without_loras(model, names):
-    keys = set().union(*(_safetensors_meta(lora_file(n))[0] for n in names)) if names else set()
-    if not keys or not isinstance(getattr(model, "patches", None), dict):
-        return None
-    m = model.clone()
-    m.patches = {k: [e for e in v if not set(getattr(e[1], "loaded_keys", None) or ()) & keys] for k, v in m.patches.items()}
-    if sum(map(len, m.patches.values())) == sum(map(len, model.patches.values())):
-        return None
-    m.patches_uuid = uuid.uuid4()
-    return m
 
 
 def partial_loras(model, graph, node_id):
@@ -1942,11 +1934,6 @@ class H3LongVideos:
         model, steps, sampler_name, sigmas, window, notes = prepare_model(
             model, steps, sampler_name, scheduler, sigmas, shift_video, shift_audio, graph)
         info += notes
-        styles = [n for n in graph_loras(graph, unique_id) if not speed_lora(n)]
-        voice = without_loras(model, styles)
-        if voice is not None:
-            info.append(f"spoken lines made without {' and '.join(os.path.basename(n) for n in styles)}: a style LoRA bends "
-                        f"a voice as well as the picture, so a line's sound is made over its finished picture without it")
         pose_ok, checks = False, False
         if limbs and pose is None:
             info.append(f"pose control off: {POSE_IMPORT_ERROR}")
@@ -2069,13 +2056,13 @@ class H3LongVideos:
                     else:
                         line += (f", restraint broke: {tries} retake(s), kept "
                                  + ("one where it held" if not n else f"the take with the fewest broken frames ({n})"))
-                if shot["unspoken"] or (voice is not None and not shot["wordless"]):
-                    said = cnd.build_conditioning(
+                if shot["unspoken"]:
+                    said, _, _, _ = cnd.build_conditioning(
                         clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
-                        lead_seconds=SPEECH_LEAD)[0] if shot["unspoken"] else cond
-                    rt._evict_all_but(voice or model, latent)
-                    out, _ = foley_pass(voice or model, said, negative, latent, out, seed, steps, sampler_name, scheduler,
-                                        sigmas, FOLEY_SCALES.get(foley_resolution, 1.0), pinned=True)
+                        lead_seconds=SPEECH_LEAD)
+                    rt._evict_all_but(model, latent)
+                    out, _ = foley_pass(model, said, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas,
+                                        FOLEY_SCALES.get(foley_resolution, 1.0), pinned=True)
                     wav = None
                     line += ", the line's sound made over the finished picture"
                 if shot["wordless"] and shot["sounded"] and silence_wordless:

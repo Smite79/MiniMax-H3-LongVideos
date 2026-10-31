@@ -471,8 +471,12 @@ when no face could be found and the whole picture went in.
 - **Words are not acted out:** H3 draws what a line talks about unless told otherwise,
   so every shot with a line says *Spoken words are only heard: the shot shows what it
   describes, not what anyone talks about.* What the beat itself describes still happens.
-- **Room to speak:** a shot gets about 2 words a second plus 1.5 seconds for its line,
-  even past `shot_seconds`, up to H3's 15 seconds, so words are not rushed or cut off.
+  A beat that is only someone talking (*Dana says to Sarah: "Lie down."*) says *This shot
+  is only the line being spoken: everyone stays where and as they are.* instead.
+- **Room to speak:** a shot gets about 3.5 words a second, H3's own pace, plus 2.5 seconds
+  (H3 starts talking about 2 seconds in) for its line, even past `shot_seconds`, up to
+  H3's 15 seconds. No more: time left over after a line is filled with made-up talk or with
+  acting the words out.
   A `seconds:` line still wins. A line too long for one shot is flagged in `info`: split
   it across beats.
 - **No talking without a line:** every shot without a quoted line renders its picture
@@ -575,12 +579,6 @@ the take where it held, or else the take where it broke in the fewest frames. Se
     in `models/loras`.
   - That needs a checkpoint with a full time embedder. On curve checkpoints (hybrid
     b25-49, 10Eros, FastH3) Hyperflow runs without it, and `info` says so.
-- **Style LoRAs** (any LoRA that is not a speed LoRA, such as a look or NSFW LoRA) bend
-  H3's sound as well as its picture, because both come from the same layers: a voice
-  warbles, drops out or comes out weak. So a shot with a spoken line has its sound made
-  over the finished picture by the same model without the style LoRA (the speed LoRA
-  stays). A shot without a line keeps it for its sounds, which then match its picture.
-  `info` names the LoRA left out of the lines.
 - **Speed LoRAs** are sampled the way they were trained, whatever `sampler_name` says:
   - a LoRA whose metadata gives its sampling (DMAD: *4 steps, video shift 12, audio shift
     2, re-noise step rule*) gets exactly that, a re-noise rule as `lcm`;

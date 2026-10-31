@@ -299,7 +299,8 @@ def test_render():
     print("\n=== render chain ===")
     out, calls = render(SCRIPT)
     video, audio, info = out[0], out[1], out[2]
-    fc = [S.rt.align_frame_count(48)] * 2 + [S.rt.align_frame_count(144)] + [S.rt.align_frame_count(48)] * 3
+    fc = [S.rt.align_frame_count(48)] * 2 + [S.rt.align_frame_count(144)] + [S.rt.align_frame_count(67)] + \
+        [S.rt.align_frame_count(48)] * 2
     keyed_after_first = 4
     check("every shot sampled once with the node's seed",
           [c["shot"] for c in calls["sample"] if not c["foley"]] == [1, 2, 3, 4, 5, 6] and all(c["seed"] == 7 for c in calls["sample"]))
@@ -381,13 +382,14 @@ def test_speech():
         check(f"{line} reaches H3 inside its own speech tags", S.dialogue(line) == want, S.dialogue(line))
     quiet = S.plan_shots("A cell.\n\nDan's hands shake. She doesn't look up.", 5.0, [None] * 4, False)[0]
     check("apostrophes alone are not a line", quiet["wordless"] and "<d>" not in quiet["prompt"], quiet["prompt"])
-    long = "Dan says \"" + " ".join(["word"] * 40) + ".\""
+    long = "Dan says \"" + " ".join(["word"] * 60) + ".\""
     shot = S.plan_shots("A cell.\n\n" + long, 5.0, [None] * 4, False)[0]
     check("a line that needs more than one shot can hold gets the longest shot and says to split it",
           shot["frames"] == S.rt.MAX_FRAMES and "split it across beats" in S.shot_line(shot), S.shot_line(shot))
     ten = S.plan_shots("A cell.\n\nDan says \"one two three four five six seven eight nine ten.\"", 4.0, [None] * 4, False)[0]
-    check("a ten-word line gets about 6.5 seconds even when shot_seconds is 4",
-          ten["frames"] == S.rt.align_frame_count(round(6.5 * 24)) and "lengthened to fit its line" in S.shot_line(ten),
+    check("a ten-word line gets about 5.4 seconds, H3's own pace with room before and after, even when shot_seconds is 4",
+          ten["frames"] == S.rt.align_frame_count(round((10 / 3.5 + 2.5) * 24))
+          and "lengthened to fit its line" in S.shot_line(ten),
           (ten["frames"], S.shot_line(ten)))
     told = S.plan_shots("A cell.\n\nDan says \"one two three four five six seven eight nine ten.\"\nseconds: 3", 4.0,
                         [None] * 4, False)[0]
@@ -404,12 +406,12 @@ def test_shot_length():
     twelve = S.rt.align_frame_count(288)
     beat = [s["frames"] for s in S.plan_shots(script, 15.0, [None] * 4, False, from_beat=True)]
     check("from the beat: one action, three actions, a spoken line, a restraint going on, an explicit length",
-          beat == [73, 175, 158, 124, twelve], beat)
+          beat == [73, 175, 124, 124, twelve], beat)
     capped = [s["frames"] for s in S.plan_shots(script, 5.0, [None] * 4, False, from_beat=True)]
     check("shot_seconds caps every estimate except a spoken line's, and seconds: still wins",
-          capped == [73, 124, 158, 124, twelve], capped)
-    fixed = [s["frames"] for s in S.plan_shots(script, 5.0, [None] * 4, False)]
-    check("fixed gives every shot shot_seconds, unless its line needs longer", fixed == [124, 124, 158, 124, twelve], fixed)
+          capped == [73, 124, 124, 124, twelve], capped)
+    fixed = [s["frames"] for s in S.plan_shots(script, 4.0, [None] * 4, False)]
+    check("fixed gives every shot shot_seconds, unless its line needs longer", fixed == [107, 107, 124, 107, twelve], fixed)
     check("a beat with nothing to stage gets one action's worth", S.shot_frames("Silence.", 362, False) == 73)
     out, _ = render(script, plan_only=True, seconds=15.0)
     fixed_out, _ = render(script, plan_only=True, seconds=15.0, shot_length="fixed")
@@ -983,22 +985,6 @@ def test_pictures_by_checkpoint():
                 {"9": {"inputs": {"model": ["7", 0]}}, "3": hybrid["3"],
                  "7": {"inputs": {"model": ["3", 0], "lora_name": "student.safetensors", "strength_model": 0}}})]
             flow = S.hyperflow_lora(SimpleNamespace(), stack(("flow.safetensors", True, 1.0)))
-            kinds = {n: S.speed_lora(n) for n in ("student.safetensors", "flow.safetensors", "dmad.safetensors",
-                                                  "minimax_h3_fl2v_turbo_8step.safetensors", "style.safetensors")}
-            save_file({"lora_unet_blocks_0_attn_out_proj.lora_down.weight": torch.zeros(1)},
-                      os.path.join(tmp, "look.safetensors"))
-            entry = lambda keys: (1.0, SimpleNamespace(loaded_keys=set(keys)), 1.0, None, None)
-
-            class Loaded:
-                def __init__(self, patches):
-                    self.patches, self.patches_uuid = patches, "orig"
-
-                def clone(self):
-                    return Loaded({k: list(v) for k, v in self.patches.items()})
-            loaded = Loaded({"w": [entry(["diffusion_model.blocks.0.x.lora_A.weight"]),
-                                   entry(["lora_unet_blocks_0_attn_out_proj.lora_down.weight"])]})
-            voice = S.without_loras(loaded, ["look.safetensors"])
-            same = S.without_loras(loaded, ["style.safetensors"])
             core = lambda on: S.takes_pictures("m", {"9": {"inputs": {"model": ["8", 0]}}, "3": hybrid["3"], "8": {"inputs": {
                 "model": ["3", 0], "loras.0.lora_name": "student.safetensors", "loras.0.strength": 1.0,
                 "loras.0.enabled": on, "loras.1.lora_name": "style.safetensors", "loras.1.strength": 1.0,
@@ -1023,13 +1009,6 @@ def test_pictures_by_checkpoint():
           blind == (False, "student.safetensors was trained without reference pictures") and named[0] is False
           and all(f == (True, "") for f in fine), (blind, named, fine))
     check("ComfyUI's own LoRA Stack is read row by row, so a row switched off does not count", rows == (True, False), rows)
-    check("a LoRA is a speed LoRA by its recipe, its name or Hyperflow's flag, and anything else is a style LoRA",
-          kinds == {"student.safetensors": True, "flow.safetensors": True, "dmad.safetensors": True,
-                    "minimax_h3_fl2v_turbo_8step.safetensors": True, "style.safetensors": False}, kinds)
-    check("the sound model is the same model with only the style LoRA's own patches taken off, and nothing is made when "
-          "none of them is on it",
-          voice is not None and len(voice.patches["w"]) == 1 and len(loaded.patches["w"]) == 2
-          and voice.patches_uuid != "orig" and same is None, voice and voice.patches)
     tops = lambda r: r[0].model_options["transformer_options"]
     grid = [12 * x / (1 + 11 * x) for x in (1.0, 0.7, 0.4, 0.15, 0.0)]
     check("FlashGen, whose file carries no recipe, gets the one it was trained with: 4 euler steps on its own schedule "
@@ -1658,10 +1637,22 @@ def test_undressed():
           built == [(False, False), (True, False), (False, True)] and len(sounds) == 1
           and sounds[0]["mask"] == [0.0, 1.0] and "the line's sound made over the finished picture" in out[2],
           (built, [(c["shot"], c["mask"]) for c in sounds]))
+    still = "This shot is only the line being spoken: everyone stays where and as they are."
+    talks = [S.talk_only(t) for t in ('Dana says to Sarah: "OK, take off your leggings."', '"Lift up your butt," Dana says.',
+                                      'She whispers to him: "Lie down."', 'Dana says to Sarah: "Lift up." Sarah lifts up.',
+                                      'Dana turns to Sarah and says: "Lie down."', 'Sarah lies down.')]
+    check("a beat that is only someone talking tells H3 everyone stays where and as they are, and a beat with anything "
+          "else in it keeps its actions",
+          talks == [True, True, True, False, False, False]
+          and still in S.plan_shots('A room.\n\nDana says to Sarah: "OK, take off your leggings."', 5.0, [None] * 4,
+                                    False)[0]["prompt"], talks)
     heard = "Spoken words are only heard: the shot shows what it describes, not what anyone talks about."
-    check("a shot with a spoken line tells H3 the words are only heard, not shown, and a shot without one does not",
-          heard in said[2]["prompt"] and heard in said[2]["unspoken"] and heard not in said[1]["prompt"]
-          and heard not in said[3]["prompt"], [notes(x) for x in said[1:4]])
+    mixed = S.plan_shots('A room.\n\nSarah picks up her skirt and says: "I hate this."', 5.0, [None] * 4, False)[0]["prompt"]
+    check("a spoken line with actions in its beat tells H3 the words are only heard, not shown; a beat that is only the "
+          "line says everyone stays as they are; a shot without a line says neither",
+          heard in mixed and still not in mixed and still in said[2]["prompt"] and still in said[2]["unspoken"]
+          and heard not in said[2]["prompt"] and not any(n in said[1]["prompt"] + said[3]["prompt"] for n in (heard, still)),
+          [notes(x) for x in said[1:4]] + [mixed])
     brand = ("Sarah: she, <Picture 1>, skin-tight shiny white spandex PVC crop top, skin-tight shiny rubber white Pampers "
              "diaper with Pampers logo.")
     film = S.plan_shots("A bathroom.\n\nSarah takes off her diaper.\n\nSarah sits down.", 5.0, [IMG1, None, None, None],
@@ -1698,19 +1689,6 @@ def test_undressed():
           and all(S.wrd.read(t, people, gender, worn)[1] == {} for t in ("Her diaper is on her bed.",
                                                                        "Sarah wraps her towel around the pole.")),
           [(S.shot_line(x), line(x)) for x in film])
-    keep = S.graph_loras, S.speed_lora, S.without_loras
-    S.graph_loras, S.speed_lora, S.without_loras = (lambda g, n=None: ["look.safetensors"]), (lambda n: False), \
-        (lambda m, names: "voice")
-    try:
-        out, calls = render('A kitchen.\n\nMara pours coffee.\n\n"Lovely," Mara says.', ref_image_1=IMG1,
-                            character_memory=mem)
-    finally:
-        S.graph_loras, S.speed_lora, S.without_loras = keep
-    passes = [(c["shot"], c["model"]) for c in calls["sample"] if c["foley"]]
-    check("with a style LoRA on, a spoken line's sound is made over its finished picture by the model without it, while "
-          "a shot without a line keeps it for its sounds so they match its picture, and info says so",
-          passes == [(1, "base"), (2, "voice")] and all(c["model"] == "base" for c in calls["sample"] if not c["foley"])
-          and "spoken lines made without look.safetensors" in out[2], (passes, out[2][:300]))
     crop, was = IMG1[:, :8, :8, :].clone(), S.face_crop
     try:
         for found in (crop, None):
