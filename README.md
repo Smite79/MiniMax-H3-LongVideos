@@ -417,7 +417,12 @@ carried through the rest of the shot. Nothing later in a shot is forced onto ano
 frame's tones, so someone stepping in, the lights going down or the camera turning keep
 their own look. A continued shot that opens washed out gets its colour back the same way.
 A black frame, or a shot that does not pick up where the last one ended, is left as
-rendered. Each continued shot's numbers (how its opening came out against the frame it
+rendered. H3 also creeps more saturated and contrasty within a shot, and each shot hands
+its last frame on, so that creep would add up shot after shot. So when a shot ends more
+than 3% more saturated or contrasty than the scene's look (its first shot, or the first
+after a `cut`), the excess is eased out across the shot, from nothing at its first frame,
+and it hands on a frame at the scene's look. A shot that gets darker or paler is never
+touched. Each continued shot's numbers (how its opening came out against the frame it
 continues from, whether it was graded, and its finished look against shot 1) go to the
 ComfyUI log.
 

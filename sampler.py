@@ -1957,7 +1957,7 @@ class H3LongVideos:
         acc = rt.FrameAccumulator(sum(s["frames"] for s in shots), rt._image_out_dtype(), True)
         audio_parts, sr = [], 44100
         handoff = first_frame[:1] if first_frame is not None else None
-        detector, carry, size, captured, first_look = None, None, None, {}, None
+        detector, carry, size, captured, first_look, anchor = None, None, None, {}, None, None
         try:
             wanted = {id(r): (r, n) for s in shots for r, n in zip(s["refs"], s["faces"]) if n}
             crops = {}
@@ -2099,8 +2099,11 @@ class H3LongVideos:
                 grade = rt.shot_grade(given, opening, imgs[-1]) if imgs.shape[0] > 1 else None
                 if grade is not None:
                     rt.grade_frames(imgs, grade)
-                    if pre is not None:
-                        hand = rt.match_frame(hand.clone(), grade[2])
+                if anchor is None or given is None:
+                    anchor = rt.look(given if given is not None else imgs[0])
+                held = rt.hold_look(imgs, anchor)
+                if pre is not None and (grade is not None or held):
+                    hand = rt.match_frame(hand.clone(), rt.tone(imgs[-1]))
                 seen = rt.look(imgs[-1])
                 first_look = first_look or seen
                 if raw and ref and seen and first_look:
@@ -2110,7 +2113,8 @@ class H3LongVideos:
                                  "graded" if grade is not None else "left as rendered",
                                  seen[0] / first_look[0], seen[1] / max(first_look[1], 1e-6))
                 if seen and first_look:
-                    info[at] += (f", {'graded onto the frame it continues from, ' if grade is not None else ''}look against "
+                    info[at] += (f", {'graded onto the frame it continues from, ' if grade is not None else ''}"
+                                 f"{'creep in saturation or contrast eased back to the scene, ' if held else ''}look against "
                                  f"shot 1: contrast {seen[0] / first_look[0]:.2f}, colour "
                                  f"{seen[1] / max(first_look[1], 1e-6):.2f}")
                 handoff = (hand if pre is not None else imgs[-1:]).detach().clamp(0.0, 1.0).to("cpu", copy=True)

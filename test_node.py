@@ -1170,6 +1170,17 @@ def test_grading():
         return rt._rgb(y).clamp(0, 1)
     sat = lambda img: float((rt._ycc(img)[..., 1:] - 0.5).abs().mean())
     con = lambda img: float(rt._ycc(img)[..., 0].std())
+    creep = torch.stack([burn(orig, 0.25 * i / 11) for i in range(12)])
+    start, anchor = creep[0].clone(), rt.look(orig)
+    held = rt.hold_look(creep, anchor)
+    end = rt.look(creep[-1])
+    fading = torch.stack([burn(orig, -0.25 * i / 11) for i in range(12)])
+    kept = fading.clone()
+    check("a shot that burns as it runs is eased back to the scene's look by its last frame, from nothing at its first "
+          "frame, and one that only fades is left alone",
+          held and torch.allclose(creep[0], start, atol=1e-5) and end[0] <= anchor[0] * 1.035 and end[1] <= anchor[1] * 1.035
+          and not rt.hold_look(fading, anchor) and torch.equal(fading, kept),
+          (anchor, end))
     def chain(frame):
         key, look = orig.clone(), None
         for n in range(12):

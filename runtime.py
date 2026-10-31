@@ -468,6 +468,7 @@ GRADE_FLAT = 0.02
 GRADE_MEDIAN = 0.12
 GRADE_WASHED = 0.85
 GRADE_FLOOR = 1.0 / 255.0
+HOLD_TOL = 0.03
 _YCC = torch.tensor([[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5], [0.5, -0.418688, -0.081312]])
 _RGB = torch.linalg.inv(_YCC)
 _MID = torch.tensor([0.0, 0.5, 0.5])
@@ -547,6 +548,27 @@ def grade_frames(frames, grade, chunk=16):
         y = (lo + (pos - i0) * (hi - lo)).view_as(x)
         frames[a:a + k, ..., :3] = _rgb(y).clamp(0.0, 1.0).to(frames.device, frames.dtype)
     return frames
+
+
+def hold_look(frames, anchor, chunk=16):
+    n = int(frames.shape[0])
+    end = look(frames[-1]) if n > 1 and anchor else None
+    if not end:
+        return False
+    gs = min(1.0, anchor[0] * (1 + HOLD_TOL) / max(end[0], 1e-6))
+    gc = min(1.0, anchor[1] * (1 + HOLD_TOL) / max(end[1], 1e-6))
+    if gs >= 1.0 and gc >= 1.0:
+        return False
+    dev = mm.get_torch_device() if torch.cuda.is_available() else frames.device
+    for a in range(0, n, max(1, int(chunk))):
+        x = _ycc(frames[a:a + chunk, ..., :3].to(dev, torch.float32))
+        k = int(x.shape[0])
+        t = (torch.arange(a, a + k, dtype=torch.float32, device=dev) / (n - 1)).view(k, 1, 1, 1)
+        m = x[..., :1].mean(dim=(1, 2), keepdim=True)
+        x[..., :1] = (x[..., :1] - m) * (1 + (gs - 1) * t) + m
+        x[..., 1:] = (x[..., 1:] - 0.5) * (1 + (gc - 1) * t) + 0.5
+        frames[a:a + k, ..., :3] = _rgb(x).clamp(0.0, 1.0).to(frames.device, frames.dtype)
+    return True
 
 
 def look(img):
