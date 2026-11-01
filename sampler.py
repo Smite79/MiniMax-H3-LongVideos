@@ -1046,7 +1046,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
     people = list(dict.fromkeys(roster([p["text"] for p in lead[len(setting):]], [p["text"] for p in lead], lead + paras)
                                 + rst.agents(texts, _COMMON_CAPS | _NOT_NAMES)))
     gender = rst.genders(people, [_PICTURE.sub("", wrd.attributed(t, people)) for t in texts])
-    state, undressed = {}, {}
+    state, undressed, extras = {}, {}, {}
     for k, para in enumerate(lead):
         lead[k] = with_reading(para, _mentions(para["text"], people), gender, state)
         state, _, _ = apply_holds(state, lead[k])
@@ -1070,6 +1070,10 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         now = wrd.stated(narration(para["text"]), seen, gender, described, near)
         was = {n: list(dict.fromkeys(undressed.get(n, []) + now.get(n, []))) for n in set(undressed) | set(now)}
         undressed, off, on, unclear = clothes(para, seen, gender, described, undressed, near)
+        had = extras
+        extras, _, took = wrd.additions(narration(para["text"]), seen, gender, described, extras, near, wrd.learned(described))
+        extras = {n: [x for x in v if "clothes" not in off.get(n, []) or not re.search(wrd.GARMENT, x, re.I)]
+                  for n, v in extras.items()}
         hidden = {n: wrd.covered(described.get(n, ""), was.get(n, []), off.get(n, [])) for n in people}
         uncovered = {n: {g: o for g, o in wrd.covered(described.get(n, ""), was.get(n, [])).items() if g not in hidden[n]}
                      for n in people}
@@ -1123,6 +1127,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
             for who, items in added.items()]
         notes += [f"{tag_of[n]} is for {n}'s face and hair only: {_pronouns(n, gender)[0]} clothes are as this shot "
                   f"describes them." for n in changed if n in tag_of]
+        notes += [f"{n} wears {' and '.join(keep)}." for n in persons
+                  for keep in [[x for x in had.get(n, []) if x not in took.get(n, [])]] if keep]
         notes += [f"{_pronouns(n, gender)[0].capitalize()} {o} cover{'' if re.search(r'[^s]s$', o) else 's'} "
                   f"{_pronouns(n, gender)[0]} {g} until {'they come' if re.search(r'[^s]s$', o) else 'it comes'} off."
                   for n in persons for g, o in uncovered.get(n, {}).items()]
@@ -1957,7 +1963,8 @@ class H3LongVideos:
         acc = rt.FrameAccumulator(sum(s["frames"] for s in shots), rt._image_out_dtype(), True)
         audio_parts, sr = [], 44100
         handoff = first_frame[:1] if first_frame is not None else None
-        detector, carry, size, captured, first_look, anchor = None, None, None, {}, None, None
+        detector, carry, size, captured, first_look, anchor, boost = None, None, None, {}, None, None, None
+        grain = hand_grain = None
         try:
             wanted = {id(r): (r, n) for s in shots for r, n in zip(s["refs"], s["faces"]) if n}
             crops = {}
@@ -1973,10 +1980,11 @@ class H3LongVideos:
             for i, shot in enumerate(shots):
                 started = time.perf_counter()
                 given = handoff if shot["keyed"] else None
+                fed = rt.precompensate(given, boost) if given is not None else None
                 refs = [r if not n or crops.get(id(r)) is None else crops[id(r)] for r, n in zip(shot["refs"], shot["faces"])]
                 refs += [captured[n] for n in shot["recover"] if n in captured]
                 cond, latent, fc, _ = cnd.build_conditioning(
-                    clip, vae, audio_vae, shot["unspoken"] or shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
+                    clip, vae, audio_vae, shot["unspoken"] or shot["prompt"], w, h, shot["frames"], handoff=fed, refs=refs,
                     silent=shot["wordless"] and silence_wordless,
                     lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD)
                 rt._evict_all_but(model, latent)
@@ -1995,7 +2003,7 @@ class H3LongVideos:
                 shot_carry, carry = (carry if shot["keyed"] else None), None
                 if drafted:
                     small, small_latent, _, _ = cnd.build_conditioning(
-                        clip, vae, audio_vae, shot["prompt"], *draft_size(w, h), shot["frames"], handoff=given, refs=refs,
+                        clip, vae, audio_vae, shot["prompt"], *draft_size(w, h), shot["frames"], handoff=fed, refs=refs,
                         silent=shot["wordless"] and silence_wordless,
                         lead_seconds=0.0 if shot["wordless"] else SPEECH_LEAD, text=cond)
                     sketch = sample(model, small, negative, small_latent, seed, steps, sampler_name, scheduler, sigmas)
@@ -2058,7 +2066,7 @@ class H3LongVideos:
                                  + ("one where it held" if not n else f"the take with the fewest broken frames ({n})"))
                 if shot["unspoken"]:
                     said, _, _, _ = cnd.build_conditioning(
-                        clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=given, refs=refs,
+                        clip, vae, audio_vae, shot["prompt"], w, h, shot["frames"], handoff=fed, refs=refs,
                         lead_seconds=SPEECH_LEAD)
                     rt._evict_all_but(model, latent)
                     out, _ = foley_pass(model, said, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas,
@@ -2096,25 +2104,45 @@ class H3LongVideos:
                 imgs = up.fit(imgs, *size)
                 opening = imgs[1] if given is not None and imgs.shape[0] > 2 else imgs[0]
                 raw, ref = rt.look(opening), rt.look(given) if given is not None else None
+                raw_end, fed_look = rt.look(imgs[-1]), rt.look(fed) if fed is not None else None
+                if raw and fed_look:
+                    gain = (raw[0] / fed_look[0], raw[1] / max(fed_look[1], 1e-6))
+                    boost = gain if boost is None else tuple((a + b) / 2 for a, b in zip(boost, gain))
                 grade = rt.shot_grade(given, opening, imgs[-1]) if imgs.shape[0] > 1 else None
                 if grade is not None:
                     rt.grade_frames(imgs, grade)
                 if anchor is None or given is None:
                     anchor = rt.look(given if given is not None else imgs[0])
                 held = rt.hold_look(imgs, anchor)
+                if grain is None or given is None:
+                    grain = rt.texture(opening)
+                rough = rt.texture(imgs[-1], grain[1]) if grain else None
+                smoothed = rt.hold_texture(imgs, grain)
                 if pre is not None and (grade is not None or held):
                     hand = rt.match_frame(hand.clone(), rt.tone(imgs[-1]))
+                if pre is not None:
+                    hand_grain = rt.texture(hand) if hand_grain is None or given is None else hand_grain
+                    rt.hold_texture(hand, hand_grain)
                 seen = rt.look(imgs[-1])
                 first_look = first_look or seen
                 if raw and ref and seen and first_look:
                     logging.info("[H3-LongVideos] shot %d: rendered opening against the frame it continues from: contrast "
-                                 "%.2f, colour %.2f; %s; finished look against shot 1: contrast %.2f, colour %.2f",
+                                 "%.2f, colour %.2f; rendered end against shot 1: contrast %.2f, colour %.2f; %s; finished "
+                                 "look against shot 1: contrast %.2f, colour %.2f; texture against the scene: rendered end %.2f, "
+                                 "finished %.2f",
                                  shot["n"], raw[0] / ref[0], raw[1] / max(ref[1], 1e-6),
+                                 raw_end[0] / first_look[0] if raw_end else 0.0,
+                                 raw_end[1] / max(first_look[1], 1e-6) if raw_end else 0.0,
                                  "graded" if grade is not None else "left as rendered",
-                                 seen[0] / first_look[0], seen[1] / max(first_look[1], 1e-6))
+                                 seen[0] / first_look[0], seen[1] / max(first_look[1], 1e-6),
+                                 rough[0] / grain[0] if rough else 0.0,
+                                 rt.texture(imgs[-1], grain[1])[0] / grain[0] if rough else 0.0)
                 if seen and first_look:
                     info[at] += (f", {'graded onto the frame it continues from, ' if grade is not None else ''}"
-                                 f"{'creep in saturation or contrast eased back to the scene, ' if held else ''}look against "
+                                 f"{'creep in saturation or contrast eased back to the scene, ' if held else ''}"
+                                 f"{'texture building up on smooth surfaces eased back to the scene, ' if smoothed else ''}"
+                                 f"{'started from a frame toned down for the boost H3 adds, ' if fed is not given else ''}"
+                                 f"look against "
                                  f"shot 1: contrast {seen[0] / first_look[0]:.2f}, colour "
                                  f"{seen[1] / max(first_look[1], 1e-6):.2f}")
                 handoff = (hand if pre is not None else imgs[-1:]).detach().clamp(0.0, 1.0).to("cpu", copy=True)

@@ -203,6 +203,14 @@ off is taken out of that person's description in the scene paragraph, the anchor
   her*).
 - Whoever has something come off or go on in a shot is in that shot (*Dana removes Sarah's
   diaper*).
+- Anything put on someone that their description does not have stays on them: a garment
+  (*Sarah puts on a red hat*) or something worn (*Dana puts a pink bow in Sarah's hair*,
+  *Dana clips a necklace around her neck*, *Dana puts a bib on her*: a bow, ribbon,
+  necklace, bracelet, ring, earrings, glasses, pacifier, bib, hair clip and the like). From
+  the next shot on, every shot they are in says so (*Sarah wears a pink bow in her hair.*),
+  whether or not they were in view in between, until a beat takes it off (*Dana takes the
+  bow out of Sarah's hair*). Stripping naked takes off the clothes, not the jewellery.
+  Hands, cups and wipes are not additions; restraints have their own handling.
 - What is worn under something else (a diaper, underwear or a bra under leggings, jeans,
   a skirt, a dress, a top) is left out of the description until what covers it comes off,
   since H3 draws everything a description names, on the outside. The shot it comes off in
@@ -422,7 +430,22 @@ its last frame on, so that creep would add up shot after shot. So when a shot en
 than 3% more saturated or contrasty than the scene's look (its first shot, or the first
 after a `cut`), the excess is eased out across the shot, from nothing at its first frame,
 and it hands on a frame at the scene's look. A shot that gets darker or paler is never
-touched. Each continued shot's numbers (how its opening came out against the frame it
+touched. Each shot also starts from the last frame of the one before, decoded and encoded again,
+and H3 takes everything in that frame as real: its small flaws are copied and built on,
+shot after shot, until surfaces turn blotchy and crusty, like a picture saved as a JPEG
+over and over. H3 also opens each continued shot a little rougher than the frame it was
+given. So when a shot opens or ends with more than 3% more texture on its smooth surfaces
+(skin, walls, cloth) than the scene's opening, the excess is eased out at that end and
+blended across the shot in between, leaving edges and outlines as they are. Both ends of
+every shot sit at the scene's texture, so shots join without a jump and the frame each one
+hands on is back at the scene's texture.
+Those corrections act on finished frames, so they do not stop H3 itself from drifting:
+each continued shot comes out of H3 more saturated and contrasty than the frame it was
+given. So the node measures that boost on every continued shot (averaged over the
+run) and hands the next shot a frame toned down by it, which H3 then brings back up to the
+true look. That frame is trimmed from the video. The log gives each shot's rendered
+opening and rendered end, before any correction, next to its finished look, and its
+texture against the scene before and after it is held. Each continued shot's numbers (how its opening came out against the frame it
 continues from, whether it was graded, and its finished look against shot 1) go to the
 ComfyUI log.
 

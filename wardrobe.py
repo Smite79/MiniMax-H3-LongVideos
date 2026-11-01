@@ -138,6 +138,62 @@ def unsay(text, gone, zones=(), extra=()):
     return re.sub(r"<d>(.*?)</d>", line, text or "", flags=re.S), list(dict.fromkeys(found))
 
 
+ACCESSORY = (r"(?:bows?|ribbons?|necklaces?|bracelets?|anklets?|rings?|earrings?|crowns?|tiaras?|bonnets?|headbands?|hairbands?|"
+             r"hair\s*clips?|barrettes?|scrunchies|scrunchie|flowers?|garlands?|leis?|glasses|sunglasses|masks?|pacifiers?|"
+             r"dummies|dummy|bibs?|wristbands?|watch(?:es)?|chokers?|pendants?|lockets?|ties|tie|badges?|brooch(?:es)?|bandages?|"
+             r"plasters?|wigs?|veils?|headphones|earplugs|sash(?:es)?|capes?|cloaks?|shawls?|garters?|pins?|clips?)")
+_PART = (r"hair|head|neck|throat|wrists?|ankles?|fingers?|thumbs?|ears?|face|eyes|mouth|nose|lips|waist|hips|chest|breasts?|"
+         r"arms?|legs?|thighs?|feet|foot|toes?|cheeks?|forehead|shoulders?|belly|tummy")
+_PUT = (r"puts?|putting|places?|placed|placing|slips?|slipped|clips?|clipped|ties?|tied|fastens?|fastened|pins?|pinned|hangs?|"
+        r"hung|straps?|strapped|buckles?|buckled|sets?|loops?|looped|drapes?|draped|pops?|popped|slides?|slid|wraps?|wrapped")
+_NP = rf"(?P<np>(?:a|an|the|some|his|her|their|(?-i:[A-Z])[a-z]+['’]s)\s+(?:[\w'’-]+\s+){{{{0,3}}}}?(?P<item>{{g}}))"
+_ADDS = (rf"\b(?:{_PUT})\s+{_NP}\s+(?P<prep>on|onto|in|into|around|over|to|through)\s+(?P<own>her|his|their|"
+         rf"(?-i:[A-Z])[a-z]+['’]s)\s+(?P<part>{_PART})\b",
+         rf"\b(?:{_PUT})\s+on\s+{_NP}",
+         rf"\b(?:{_PUT})\s+{_NP}\s+(?:back\s+)?(?:on|onto)\s+(?P<obj>her|him|them|(?-i:[A-Z])[a-z]+)\b(?!['’]|\s+[a-z])",
+         rf"\b(?:{_PUT})\s+{_NP}\s+(?:back\s+)?on\b(?=\s*(?:[,.;!?]|and\b|$))")
+_TAKES = (rf"\b(?:removes?|removed|removing|unclips?|unclipped|unties?|untied|unfastens?|unfastened|unbuckles?|unbuckled)\s+{_NP}",
+          rf"\b(?:takes?|took|taking|pulls?|pulled|slips?|slipped|plucks?|plucked|tugs?|tugged)\s+{_NP}\s+(?:off|out|away|from)\b",
+          rf"\b(?:takes?|took|taking|pulls?|pulled|slips?|slipped)\s+(?:off|out)\s+{_NP}")
+
+
+def _head(word):
+    return garment_of(re.sub(r"(?<=[^s])e?s$", "", word.lower()) if word.lower() not in ("glasses", "sunglasses") else word)
+
+
+def additions(text, people, gender, described, extras, here=(), extra=()):
+    new, put, took = {k: list(v) for k, v in extras.items()}, {}, {}
+    item = rf"(?:{ACCESSORY}|{_rx(extra)[2]})"
+    pos = lambda who: {"f": "her", "m": "his"}.get(gender.get(who), "their")
+    for sentence in sentences(text):
+        subject = lambda at: next((t for _, t in reversed(tokens(sentence[:at], people))), "")
+        for k, pat in enumerate(_ADDS):
+            for m in re.finditer(pat.format(g=item), sentence, re.I):
+                d = m.groupdict()
+                actor = subject(m.start())
+                tok = re.sub(r"['’]s$", "", d.get("own") or d.get("obj") or "")
+                who = (resolve(tok, people, gender, exclude=[actor] if tok.lower() in ("her", "his", "him", "their", "them")
+                               else (), here=here) if tok else resolve(actor, people, gender, here=here) if actor else "")
+                if not who or (re.fullmatch(GARMENT, d["item"], re.I) and mentions(described.get(who, ""), d["item"])):
+                    continue
+                np = re.sub(r"^(?:the|some)\s+(\S)", lambda x: ("" if re.search(r"[^s]s$", d["item"], re.I) else "an "
+                            if x.group(1).lower() in "aeiou" else "a ") + x.group(1), d["np"], flags=re.I)
+                phrase = np + (f" {d['prep']} {pos(who)} {d['part']}" if d.get("part") else "")
+                if not any(_head(d["item"]) == _head(re.findall(r"[\w'’-]+", x)[-1]) or _head(d["item"]) in x
+                           for x in new.get(who, [])):
+                    new.setdefault(who, []).append(phrase)
+                    put.setdefault(who, []).append(phrase)
+        for pat in _TAKES:
+            for m in re.finditer(pat.format(g=item), sentence, re.I):
+                head = _head(m.group("item"))
+                for who, have in new.items():
+                    gone = [x for x in have if re.search(rf"\b{re.escape(m.group('item'))}\b", x, re.I) or
+                            any(_head(w) == head for w in re.findall(r"[\w'’-]+", x))]
+                    new[who] = [x for x in have if x not in gone]
+                    took.setdefault(who, []).extend(gone) if gone else None
+    return {k: v for k, v in new.items() if v}, put, took
+
+
 def worn(text, extra=()):
     return [garment_of(m.group(0)) for m in re.finditer(rf"\b{_rx(extra)[2]}\b", text or "", re.I)]
 

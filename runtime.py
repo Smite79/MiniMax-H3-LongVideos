@@ -469,6 +469,8 @@ GRADE_MEDIAN = 0.12
 GRADE_WASHED = 0.85
 GRADE_FLOOR = 1.0 / 255.0
 HOLD_TOL = 0.03
+TEX_SCALE = 128
+BOOST_MAX = 1.25
 _YCC = torch.tensor([[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5], [0.5, -0.418688, -0.081312]])
 _RGB = torch.linalg.inv(_YCC)
 _MID = torch.tensor([0.0, 0.5, 0.5])
@@ -571,6 +573,78 @@ def hold_look(frames, anchor, chunk=16):
     return True
 
 
+def _blur(x, s):
+    r = int(3 * s) + 1
+    k = torch.exp(-0.5 * (torch.arange(-r, r + 1, dtype=x.dtype, device=x.device) / s) ** 2)
+    k = (k / k.sum()).view(1, 1, 1, -1)
+    x = torch.nn.functional.conv2d(torch.nn.functional.pad(x, (r, r, 0, 0), mode="reflect"), k)
+    return torch.nn.functional.conv2d(torch.nn.functional.pad(x, (0, 0, r, r), mode="reflect"), k.transpose(2, 3))
+
+
+def _grain(y, thr=None):
+    base = _blur(y, max(1.0, int(y.shape[-2]) / TEX_SCALE))
+    g = torch.zeros_like(base)
+    g[..., 1:-1, 1:-1] = torch.hypot(base[..., 2:, 1:-1] - base[..., :-2, 1:-1], base[..., 1:-1, 2:] - base[..., 1:-1, :-2])
+    thr = max(float(g.median()), 1e-6) if thr is None else thr
+    return y - base, 1 / (1 + (g / thr) ** 4), thr
+
+
+def _rough(y, thr=None):
+    d, m, thr = _grain(y, thr)
+    return float((d.abs() * m).sum() / m.sum().clamp(min=1e-6)), thr
+
+
+def texture(img, thr=None):
+    x = img[:1] if img.dim() == 4 else img.unsqueeze(0)
+    if x.dim() != 4 or int(x.shape[-1]) < 3 or min(int(x.shape[1]), int(x.shape[2])) < 16:
+        return None
+    return _rough(_ycc(x[..., :3].float())[..., :1].permute(0, 3, 1, 2), thr)
+
+
+def _cut(y, thr, goal):
+    if _rough(y, thr)[0] <= goal:
+        return 0.0
+    d, m, _ = _grain(y, thr)
+    lo, cut = 0.0, 1.0
+    for _ in range(10):
+        mid = (lo + cut) / 2
+        lo, cut = (mid, cut) if _rough(y - mid * d * m, thr)[0] > goal else (lo, mid)
+    return cut
+
+
+def hold_texture(frames, anchor, chunk=16):
+    n = int(frames.shape[0])
+    if not anchor or n == 0 or int(frames.shape[-1]) < 3 or min(int(frames.shape[1]), int(frames.shape[2])) < 16:
+        return False
+    dev = mm.get_torch_device() if torch.cuda.is_available() else frames.device
+    luma = lambda i: _ycc(frames[i:i + 1, ..., :3].to(dev, torch.float32))[..., :1].permute(0, 3, 1, 2)
+    goal = anchor[0] * (1 + HOLD_TOL)
+    c1 = _cut(luma(n - 1), anchor[1], goal)
+    c0 = _cut(luma(0), anchor[1], goal) if n > 1 else c1
+    if c0 == c1 == 0.0:
+        return False
+    for a in range(0, n, max(1, int(chunk))):
+        x = _ycc(frames[a:a + chunk, ..., :3].to(dev, torch.float32))
+        k = int(x.shape[0])
+        t = torch.arange(a, a + k, dtype=torch.float32, device=dev) / max(1, n - 1)
+        d, m, _ = _grain(x[..., :1].permute(0, 3, 1, 2), anchor[1])
+        x[..., 0] -= (c0 + (c1 - c0) * t).view(k, 1, 1) * (d * m)[:, 0]
+        frames[a:a + k, ..., :3] = _rgb(x).clamp(0.0, 1.0).to(frames.device, frames.dtype)
+    return True
+
+def precompensate(frame, boost):
+    sc, kc = (min(BOOST_MAX, max(1.0, float(b))) for b in boost) if boost else (1.0, 1.0)
+    if sc == kc == 1.0:
+        return frame
+    x = frame.clone()
+    y = _ycc(x[..., :3].float())
+    m = y[..., :1].mean(dim=(-3, -2), keepdim=True)
+    y[..., :1] = (y[..., :1] - m) / sc + m
+    y[..., 1:] = (y[..., 1:] - 0.5) / kc + 0.5
+    x[..., :3] = _rgb(y).clamp(0.0, 1.0).to(x.dtype)
+    return x
+
+
 def look(img):
     q = tone(img)
     return None if _flat(q) else (float(q[0][-2] - q[0][1]), float((q[1:] - 0.5).abs().mean()))
@@ -582,15 +656,3 @@ def match_frame(frame, target):
         return frame
     lut = _lut(q, target)
     return grade_frames(frame, (lut, lut))
-    g0, o0 = (t[:c].float().to(frames.device) for t in start)
-    g1, o1 = (t[:c].float().to(frames.device) for t in end)
-    for a in range(0, n, max(1, int(chunk))):
-        x = frames[a:a + chunk, ..., :c].float()
-        k = int(x.shape[0])
-        t = (torch.arange(a, a + k, dtype=torch.float32, device=frames.device)
-             / max(1, n - 1)).view(k, 1)
-        g = torch.exp(g0 + (g1 - g0) * t).view(k, 1, 1, c)
-        o = (o0 + (o1 - o0) * t).view(k, 1, 1, c)
-        m = x.mean(dim=(1, 2), keepdim=True)
-        frames[a:a + k, ..., :c] = ((x - m) * g + m + o).clamp(0.0, 1.0).to(frames.dtype)
-    return frames

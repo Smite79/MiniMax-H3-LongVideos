@@ -1176,11 +1176,42 @@ def test_grading():
     end = rt.look(creep[-1])
     fading = torch.stack([burn(orig, -0.25 * i / 11) for i in range(12)])
     kept = fading.clone()
+    big = torch.nn.functional.interpolate(orig.permute(2, 0, 1)[None], size=(288, 504), mode="bilinear")[0].permute(1, 2, 0)
+    frame = big[None].clone()
+    toned = rt.precompensate(frame, (1.02, 1.06))
+    want = rt.look(frame)
+    got = rt.look(toned)
+    check("the frame a shot starts from is toned down by the boost H3 was seen to add, so the shot lands on the true "
+          "look, and with no boost it is handed over as it is",
+          abs(got[1] / want[1] - 1 / 1.06) < 0.01 and abs(got[0] / want[0] - 1 / 1.02) < 0.01
+          and rt.precompensate(frame, None) is frame and rt.precompensate(frame, (0.98, 0.99)) is frame
+          and torch.equal(frame, big[None]), (got, want))
     check("a shot that burns as it runs is eased back to the scene's look by its last frame, from nothing at its first "
           "frame, and one that only fades is left alone",
           held and torch.allclose(creep[0], start, atol=1e-5) and end[0] <= anchor[0] * 1.035 and end[1] <= anchor[1] * 1.035
           and not rt.hold_look(fading, anchor) and torch.equal(fading, kept),
           (anchor, end))
+    gen = torch.Generator().manual_seed(7)
+    noise = lambda s: rt._blur(torch.randn(1, 1, 288, 504, generator=gen), s)[0, 0, ..., None].expand(-1, -1, 3)
+    clean = (torch.linspace(0.2, 0.7, 504).view(1, -1, 1).expand(288, -1, 3) + 0.02 * noise(1.0)).clone()
+    clean[100:200, 150:300] += 0.25
+    mottle = noise(2.5)
+    crust = torch.stack([(clean + 0.06 * i / 11 * mottle).clamp(0, 1) for i in range(12)])
+    first, grain = crust[0].clone(), rt.texture(clean)
+    smooth = rt.hold_texture(crust, grain)
+    step = lambda x: float(x[120:180, 160:290].mean() - x[120:180, 310:440].mean())
+    calm = crust[:1].clone()
+    rough = torch.stack([(clean + 0.06 * mottle).clamp(0, 1)] * 6)
+    opened = rt.hold_texture(rough, grain)
+    check("a shot whose smooth surfaces turn blotchy as it runs is eased back to the scene's texture by its last frame, "
+          "a shot that opens blotchy is held from its first frame, edges keep their strength, and a shot no rougher "
+          "than the scene is left alone",
+          smooth and torch.allclose(crust[0], first, atol=1e-5)
+          and rt.texture(crust[-1], grain[1])[0] <= grain[0] * 1.035 and abs(step(crust[-1]) / step(clean) - 1) < 0.02
+          and opened and max(rt.texture(f, grain[1])[0] for f in rough) <= grain[0] * 1.035
+          and not rt.hold_texture(calm, grain) and torch.equal(calm, crust[:1]),
+          (grain, rt.texture(crust[-1], grain[1]), [rt.texture(f, grain[1]) for f in rough[:1]],
+           step(crust[-1]) / step(clean)))
     def chain(frame):
         key, look = orig.clone(), None
         for n in range(12):
@@ -1700,6 +1731,27 @@ def test_undressed():
           and all(S.wrd.read(t, people, gender, worn)[1] == {} for t in ("Her diaper is on her bed.",
                                                                        "Sarah wraps her towel around the pole.")),
           [(S.shot_line(x), line(x)) for x in film])
+    bow = S.plan_shots("A bedroom.\n\nDana puts a pink bow in Sarah's hair.\n\nDana walks to the window and opens it.\n\n"
+                       "Sarah smiles.\n\nDana takes the bow out of Sarah's hair.\n\nSarah waits.", 5.0,
+                       [IMG1, None, None, None], False, memory="Sarah <Picture 1>: a woman in a blue dress.\nDana: a woman.")
+    worn_bow = "Sarah wears a pink bow in her hair."
+    two = ["Sarah", "Dana"], {"Sarah": "f", "Dana": "f"}
+    dress = {"Sarah": "Sarah: a woman in a blue dress."}
+    reads = {}
+    for t in ("Dana puts a bib on her.", "Sarah puts the glasses on.", "Sarah puts on a red hat.",
+              "Dana clips a silver necklace around Sarah's neck.", "Dana puts her hand on Sarah's shoulder.",
+              "Dana puts the cup on the table.", "Sarah puts her dress back on.", "Dana puts the wipe on Sarah's belly."):
+        reads[t] = S.wrd.additions(t, *two, dress, {}, two[0])[0].get("Sarah", [])
+    check("anything put on someone that their description does not have stays on them in every shot after, in view or not, "
+          "until a beat takes it off; hands, cups, wipes and their own clothes are not additions",
+          [worn_bow in x["prompt"] for x in bow] == [False, True, True, False, False]
+          and reads == {"Dana puts a bib on her.": ["a bib"], "Sarah puts the glasses on.": ["glasses"],
+                        "Sarah puts on a red hat.": ["a red hat"],
+                        "Dana clips a silver necklace around Sarah's neck.": ["a silver necklace around her neck"],
+                        "Dana puts her hand on Sarah's shoulder.": [], "Dana puts the cup on the table.": [],
+                        "Sarah puts her dress back on.": [], "Dana puts the wipe on Sarah's belly.": []}
+          and S.wrd.additions("Sarah takes off her hat.", *two, dress, {"Sarah": ["a red hat"]}, two[0])[0] == {},
+          ([worn_bow in x["prompt"] for x in bow], reads))
     crop, was = IMG1[:, :8, :8, :].clone(), S.face_crop
     try:
         for found in (crop, None):
