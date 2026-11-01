@@ -434,9 +434,12 @@ touched. Each shot also starts from the last frame of the one before, decoded an
 and H3 takes everything in that frame as real: its small flaws are copied and built on,
 shot after shot, until surfaces turn blotchy and crusty, like a picture saved as a JPEG
 over and over. H3 also opens each continued shot a little rougher than the frame it was
-given. So when a shot opens or ends with more than 3% more texture on its smooth surfaces
-(skin, walls, cloth) than the scene's opening, the excess is eased out at that end and
-blended across the shot in between, leaving edges and outlines as they are. Both ends of
+given. The scene's texture is taken from its first shot (the roughest of that shot's first,
+middle and last frames, since a shot's very first frame comes out smoother than the rest),
+and that shot is never touched. When a later shot opens or ends with more than 3% more
+texture on its smooth surfaces (skin, walls, cloth) than that, the excess is eased out at that end and
+blended across the shot in between, leaving edges and outlines as they are and never taking
+out more than half of a surface's fine texture. Both ends of
 every shot sit at the scene's texture, so shots join without a jump and the frame each one
 hands on is back at the scene's texture.
 Those corrections act on finished frames, so they do not stop H3 itself from drifting:
@@ -518,7 +521,7 @@ when no face could be found and the whole picture went in.
   picture, so the sound follows what is on screen and has no moving mouths to put a
   voice to. That pass listens to a half-size copy of the picture, which makes it about
   six times cheaper than rendering the shot again, and the picture itself is never
-  touched. Set `foley_resolution` to *full* for a full-size pass. A beat that describes
+  touched. Set `foley_resolution` to *quarter* for a faster pass, or *full* for a full-size one. A beat that describes
   its own sounds keeps those, and a scene paragraph that describes sounds (*Full battle
   sounds.*) keeps them in every shot, with the beat's own sounds added.
 - **No music:** every shot says there is no background music, unless its beat or the
@@ -646,7 +649,7 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 | `latent_upscale`, `latent_upscale_scale` | upscale each shot in latent space, and by how much |
 | `upscale`, `upscale_model`, `upscale_target_short_edge` | upscale the finished video |
 | `ambient_audio`, `ambient_level` | an audio bed looped under the whole soundtrack, and how loud |
-| `foley_resolution` | the size of the picture copy the sound pass listens to: *half* (about six times faster) or *full* |
+| `foley_resolution` | the size of the picture copy the sound pass listens to: *quarter* (fastest, sounds line up a little less tightly with the picture), *half* (about six times faster than *full*) or *full* |
 
 ## Outputs
 

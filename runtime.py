@@ -470,6 +470,7 @@ GRADE_WASHED = 0.85
 GRADE_FLOOR = 1.0 / 255.0
 HOLD_TOL = 0.03
 TEX_SCALE = 128
+TEX_CUT = 0.5
 BOOST_MAX = 1.25
 _YCC = torch.tensor([[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5], [0.5, -0.418688, -0.081312]])
 _RGB = torch.linalg.inv(_YCC)
@@ -601,11 +602,18 @@ def texture(img, thr=None):
     return _rough(_ycc(x[..., :3].float())[..., :1].permute(0, 3, 1, 2), thr)
 
 
+
+def scene_texture(frames):
+    end = texture(frames[-1])
+    if end is None:
+        return None
+    return max(texture(frames[i], end[1])[0] for i in (0, int(frames.shape[0]) // 2, -1)), end[1]
+
 def _cut(y, thr, goal):
     if _rough(y, thr)[0] <= goal:
         return 0.0
     d, m, _ = _grain(y, thr)
-    lo, cut = 0.0, 1.0
+    lo, cut = 0.0, TEX_CUT
     for _ in range(10):
         mid = (lo + cut) / 2
         lo, cut = (mid, cut) if _rough(y - mid * d * m, thr)[0] > goal else (lo, mid)

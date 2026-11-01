@@ -23,6 +23,11 @@ SOUND_CUE = re.compile(
     r"scuff(?:s|ing|ed)?|crunch(?:es|ing|ed)?|thump(?:s|ing|ed)?|patter(?:s|ing)?|whirr?(?:s|ing)?|"
     r"whine(?:s|d)?|whining|rumbl(?:e|es|ing)|growl(?:s|ing)?|roar(?:s|ing)?|chime(?:s|d)?|ticking|"
     r"knock(?:s|ing)?|tap(?:s|ping)?|whoosh(?:es|ing)?|sizzl(?:e|es|ing))\b", re.I)
+_WORN = re.compile(r"\b((?:her|his|their|my|your|our|its|the|an?|of|with|wears?|wore|wearing)\s+"
+                   r"(?:(?!(?:door)?bells?\b|phones?\b|alarms?\b|clocks?\b)[\w'’-]+\s+){0,2}?)"
+                   r"(?:pants(?!\s+(?:heavily|hard|softly|quietly|loudly|for)\b)|rings?)\b"
+                   r"|\bbangs\b(?!\s+(?:on|against|into|at|the|an?|her|his|their|its|shut|open|loudly|hard|down|away|"
+                   r"around|together)\b)", re.I)
 _BREATH = re.compile(r"\bbreath(?:s|es|ing)?\b|\bbreathe[sd]?\b", re.I)
 _BREATH_TAKEN = re.compile(
     r"\b(?:takes?|took|taking|draws?|drew|drawing|catch(?:es)?|caught|suck(?:s|ed)?|pull(?:s|ed)?|lets?\s+out|"
@@ -134,16 +139,20 @@ def _join(items):
 
 
 def described(text):
-    hits = [m.group(0) for m in SOUND_CUE.finditer(text or "")]
+    hits = [m.group(0) for m in SOUND_CUE.finditer(_plain(text))]
     return bool(hits) and not (all(_BREATH.fullmatch(h) for h in hits) and _BREATH_TAKEN.search(text))
 
 
+def _plain(text):
+    return _WORN.sub(r"\1clothes", text or "")
+
+
 def vocal(text):
-    return any(re.search(p, text or "", re.I) for p, _ in VOCALS)
+    return any(re.search(p, _plain(text), re.I) for p, _ in VOCALS)
 
 
 def foley(text):
-    out = []
+    text, out = _plain(text), []
     for pat, phrase in VOCALS + FOLEY:
         if len(out) < MAX_SOUNDS and phrase not in out and re.search(pat, text or "", re.I):
             out.append(phrase)

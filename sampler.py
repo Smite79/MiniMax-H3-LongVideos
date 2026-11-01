@@ -64,7 +64,7 @@ H3_TOKEN_BYTES = 120 * 1024
 H3_FIXED_BYTES = 1024 ** 3
 H3_TOKEN_VALUES = 96
 PDD_ACC_KEY = "minimax_h3_pdd_acc"
-FOLEY_SCALES = {"half": 0.5, "full": 1.0}
+FOLEY_SCALES = {"quarter": 0.25, "half": 0.5, "full": 1.0}
 FOLEY_DROP = ("minimax_keyframes", "minimax_refs", "minimax_visual_cond_noise_aug")
 FAST_H3_SHIFT_VIDEO = 10.0
 FAST_H3_VSA_KEEP = 0.10
@@ -2115,7 +2115,7 @@ class H3LongVideos:
                     anchor = rt.look(given if given is not None else imgs[0])
                 held = rt.hold_look(imgs, anchor)
                 if grain is None or given is None:
-                    grain = rt.texture(opening)
+                    grain = rt.scene_texture(imgs)
                 rough = rt.texture(imgs[-1], grain[1]) if grain else None
                 smoothed = rt.hold_texture(imgs, grain)
                 if pre is not None and (grade is not None or held):

@@ -899,6 +899,14 @@ def test_sound_lines():
           "describes. There is no background music.", line)
     check("a spoken shot is told there is no background music",
           S.snd.sound_line("Dan walks in.", "", True) == ("There is no background music.", False))
+    worn = ("Sarah pulls down her pants.", "A woman with short hair and bangs.", "She takes off her rings.",
+            "a ring gag", "a pair of pants")
+    heard = ("Mara pants.", "The dog pants heavily.", "He bangs on the door.", "The doorbell rings.", "Her phone rings.")
+    check("clothes, jewellery and hair that share a word with a sound (her pants, her rings, a ring gag, bangs) get no "
+          "sound pass and no panting, while someone panting, a fist banging on a door or a phone ringing still do",
+          not any(S.snd.described(t) or S.snd.vocal(t) for t in worn) and all(S.snd.described(t) for t in heard)
+          and S.snd.sound_line("Sarah folds her pants.", "A bedroom. Sarah has bangs and wears rings.", False)[1] is False,
+          [(t, S.snd.described(t), S.snd.vocal(t)) for t in worn + heard])
     check("nothing to hear, nothing said, and no music", S.snd.sound_line("Mara thinks.", "", False)
           == ("There is no background music.", False))
     check("music the beat or the scene asks for is allowed",
@@ -1204,12 +1212,15 @@ def test_grading():
     rough = torch.stack([(clean + 0.06 * mottle).clamp(0, 1)] * 6)
     opened = rt.hold_texture(rough, grain)
     check("a shot whose smooth surfaces turn blotchy as it runs is eased back to the scene's texture by its last frame, "
-          "a shot that opens blotchy is held from its first frame, edges keep their strength, and a shot no rougher "
-          "than the scene is left alone",
+          "a shot that opens blotchy is held from its first frame, edges keep their strength, a shot no rougher "
+          "than the scene is left alone, and the scene's texture is the roughest of its first shot's first, middle "
+          "and last frames, so that shot is never touched",
           smooth and torch.allclose(crust[0], first, atol=1e-5)
           and rt.texture(crust[-1], grain[1])[0] <= grain[0] * 1.035 and abs(step(crust[-1]) / step(clean) - 1) < 0.02
           and opened and max(rt.texture(f, grain[1])[0] for f in rough) <= grain[0] * 1.035
-          and not rt.hold_texture(calm, grain) and torch.equal(calm, crust[:1]),
+          and not rt.hold_texture(calm, grain) and torch.equal(calm, crust[:1])
+          and rt.scene_texture(crust)[0] == max(rt.texture(crust[i], rt.texture(crust[-1])[1])[0] for i in (0, 6, -1))
+          and not rt.hold_texture(crust, rt.scene_texture(crust)),
           (grain, rt.texture(crust[-1], grain[1]), [rt.texture(f, grain[1]) for f in rough[:1]],
            step(crust[-1]) / step(clean)))
     def chain(frame):
