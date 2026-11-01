@@ -1216,13 +1216,22 @@ def test_grading():
           "than the scene is left alone, and the scene's texture is the roughest of its first shot's first, middle "
           "and last frames, so that shot is never touched",
           smooth and torch.allclose(crust[0], first, atol=1e-5)
-          and rt.texture(crust[-1], grain[1])[0] <= grain[0] * 1.035 and abs(step(crust[-1]) / step(clean) - 1) < 0.02
-          and opened and max(rt.texture(f, grain[1])[0] for f in rough) <= grain[0] * 1.035
+          and rt.texture(crust[-1], *grain[1:])[0] <= grain[0] * 1.035 and abs(step(crust[-1]) / step(clean) - 1) < 0.02
+          and opened and max(rt.texture(f, *grain[1:])[0] for f in rough) <= grain[0] * 1.035
           and not rt.hold_texture(calm, grain) and torch.equal(calm, crust[:1])
-          and rt.scene_texture(crust)[0] == max(rt.texture(crust[i], rt.texture(crust[-1])[1])[0] for i in (0, 6, -1))
+          and rt.scene_texture(crust)[0] == max(rt.texture(crust[i], *rt.texture(crust[-1])[1:])[0] for i in (0, 6, -1))
           and not rt.hold_texture(crust, rt.scene_texture(crust)),
-          (grain, rt.texture(crust[-1], grain[1]), [rt.texture(f, grain[1]) for f in rough[:1]],
+          (grain, rt.texture(crust[-1], *grain[1:]), [rt.texture(f, *grain[1:]) for f in rough[:1]],
            step(crust[-1]) / step(clean)))
+    zipped = clean.clone()
+    zipped[20:270, 400:412] += (torch.arange(20, 270) // 2 % 2 * 0.6 - 0.3).view(-1, 1, 1)
+    worn = torch.stack([(zipped + 0.06 * mottle).clamp(0, 1)] * 6)
+    teeth = lambda x: float((x[22:268, 402:410, 0] - x[22:268, 402:410, 0].mean()).abs().mean())
+    sharp, blotchy = teeth(worn[-1]), rt.texture(worn[-1], *grain[1:])[0]
+    check("sharp detail such as a zipper's teeth keeps its strength while the faint blotchy texture around it is eased out",
+          rt.hold_texture(worn, grain) and teeth(worn[-1]) / sharp > 0.95
+          and rt.texture(worn[-1], *grain[1:])[0] <= grain[0] * 1.035 < blotchy,
+          (teeth(worn[-1]) / sharp, blotchy / grain[0], rt.texture(worn[-1], *grain[1:])[0] / grain[0]))
     def chain(frame):
         key, look = orig.clone(), None
         for n in range(12):
@@ -1376,6 +1385,15 @@ def test_reading():
           and placed[1]["held"] == "Mara: handcuffs behind her back.", [S.shot_line(x) for x in placed])
     people, gender = ["Mara", "Dan"], {"Mara": "f", "Dan": "m"}
     read = lambda t, held=None: S.rst.read(t, people, gender, held or {})[0]
+    desc = ("Mara: she, 30, mouth tightly {} shut, lying on her back on a steel table, ankles shackled to the bottom corners "
+            "of the table, hands handcuffed together above her head and chained down to the top of the table.")
+    bound = {"Mara": ["handcuffs above her head to the top", "shackles on her ankles to the bottom",
+                      "chains on her wrists above her head to the top", "duct tape over her mouth"]}
+    check("a description that names each restraint with its own body part puts each one only there: tape over the mouth "
+          "stays off the wrists and ankles, taped or duct taped, and the ankle shackles stay off the wrists",
+          all(read(desc.format(w)) == bound for w in ("taped", "duct taped", "gaffer taped"))
+          and read("Mara: she, 30, wrists zip tied together behind her back.") == {"Mara": ["zip ties on her wrists behind her back"]},
+          [read(desc.format(w)) for w in ("taped", "duct taped")])
     leashed = "a collar around her neck, with a chain leash clipped to it"
     check("a leash goes with the collar it is clipped to, never as chains on her wrists",
           all(read(t) == {"Mara": [leashed]} for t in ("Dan locks a collar around her neck and clips a chain leash to it.",
@@ -1754,14 +1772,23 @@ def test_undressed():
               "Dana puts the cup on the table.", "Sarah puts her dress back on.", "Dana puts the wipe on Sarah's belly."):
         reads[t] = S.wrd.additions(t, *two, dress, {}, two[0])[0].get("Sarah", [])
     check("anything put on someone that their description does not have stays on them in every shot after, in view or not, "
-          "until a beat takes it off; hands, cups, wipes and their own clothes are not additions",
+          "until a beat takes it off, and in the shot it goes on it stays on once it is on, without the restraint "
+          "wording; zippers and patches count, attached, sewn or put on, and so does a beat that says it is put on; "
+          "hands, cups, wipes, their own shoes and things set down are not additions",
           [worn_bow in x["prompt"] for x in bow] == [False, True, True, False, False]
           and reads == {"Dana puts a bib on her.": ["a bib"], "Sarah puts the glasses on.": ["glasses"],
                         "Sarah puts on a red hat.": ["a red hat"],
                         "Dana clips a silver necklace around Sarah's neck.": ["a silver necklace around her neck"],
                         "Dana puts her hand on Sarah's shoulder.": [], "Dana puts the cup on the table.": [],
                         "Sarah puts her dress back on.": [], "Dana puts the wipe on Sarah's belly.": []}
-          and S.wrd.additions("Sarah takes off her hat.", *two, dress, {"Sarah": ["a red hat"]}, two[0])[0] == {},
+          and S.wrd.additions("Sarah takes off her hat.", *two, dress, {"Sarah": ["a red hat"]}, two[0])[0] == {}
+          and [S.wrd.additions(t, ["Sarah", "Dana"], {"Sarah": "f", "Dana": "m"}, dress, {}, two[0])[1].get("Sarah")
+               for t in ("Dana attaches a zipper to Sarah's back.", "A zipper is put on her body.",
+                         "Dana sews a zipper onto Sarah's dress.", "A bow is tied in Sarah's hair.")]
+          == [["a zipper on her back"], ["a zipper on her body"], ["a zipper on her dress"], ["a bow in her hair"]]
+          and "Once it is on, Sarah keeps a pink bow in her hair for the rest of the shot." in bow[0]["prompt"]
+          and not re.search(r"plain view|let go", bow[0]["prompt"])
+          and S.wrd.additions("Sarah fits her shoes on and adds a box to the shelf.", *two, dress, {}, two[0])[1] == {},
           ([worn_bow in x["prompt"] for x in bow], reads))
     crop, was = IMG1[:, :8, :8, :].clone(), S.face_crop
     try:
@@ -1794,6 +1821,13 @@ def test_undressed():
                "Sarah turns around and sits down on Dan's waist, her legs spread, allowing his penis to enter her vagina.",
                "Sarah grinds on him.", "Dan pulls out halfway and slams back in.", "Dan grabs her hips.", "Sarah climbs off him.",
                "Sarah smiles.")
+    pair, sexes = ["Dan", "Sarah"], {"Dan": "m", "Sarah": "f"}
+    check("pushing a tool or an object into someone or into part of them is not penetration, while thrusting, or pushing "
+          "his penis or himself into her, still is",
+          all(S.penetration(t, pair, sexes, [])[1] == [] for t in (
+              "Dan pushes the circular end into Sarah's body.", "Dan pushes the iron into her body.", "Dan slides into her bed."))
+          and all(S.penetration(t, pair, sexes, [])[1] == [("Dan", "Sarah", "vagina")] for t in (
+              "Dan thrusts into Sarah.", "Dan pushes his cock into Sarah.", "Dan slides himself into her.")))
     held = ("Dan's penis is buried deep inside Sarah's vagina the whole shot: her crotch and his groin stay pressed tight "
             "together, so only the base of his penis shows, and their hips rock and grind together as they move.")
     check("once he enters her his penis stays inside her in every shot of them until she climbs off, and pulling out "

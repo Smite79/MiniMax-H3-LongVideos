@@ -206,7 +206,11 @@ off is taken out of that person's description in the scene paragraph, the anchor
 - Anything put on someone that their description does not have stays on them: a garment
   (*Sarah puts on a red hat*) or something worn (*Dana puts a pink bow in Sarah's hair*,
   *Dana clips a necklace around her neck*, *Dana puts a bib on her*: a bow, ribbon,
-  necklace, bracelet, ring, earrings, glasses, pacifier, bib, hair clip and the like). From
+  necklace, bracelet, ring, earrings, glasses, pacifier, bib, hair clip, zipper, patch and
+  the like), however the beat puts it (*attaches a zipper to her back*, *sews a patch onto
+  Sarah's dress*, *a zipper is put on her body*). The shot it goes on in says she keeps it
+  once it is on (*Once it is on, Sarah keeps a zipper on her back for the rest of the
+  shot.*), so it does not vanish partway through. From
   the next shot on, every shot they are in says so (*Sarah wears a pink bow in her hair.*),
   whether or not they were in view in between, until a beat takes it off (*Dana takes the
   bow out of Sarah's hair*). Stripping naked takes off the clothes, not the jewellery.
@@ -438,8 +442,9 @@ given. The scene's texture is taken from its first shot (the roughest of that sh
 middle and last frames, since a shot's very first frame comes out smoother than the rest),
 and that shot is never touched. When a later shot opens or ends with more than 3% more
 texture on its smooth surfaces (skin, walls, cloth) than that, the excess is eased out at that end and
-blended across the shot in between, leaving edges and outlines as they are and never taking
-out more than half of a surface's fine texture. Both ends of
+blended across the shot in between. Only faint, blotchy texture is eased out: edges,
+outlines and sharp detail such as a zipper's teeth, stitching or print are left as they
+are, and no more than half of a surface's faint texture is ever taken out. Both ends of
 every shot sit at the scene's texture, so shots join without a jump and the frame each one
 hands on is back at the scene's texture.
 Those corrections act on finished frames, so they do not stop H3 itself from drifting:

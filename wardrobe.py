@@ -141,17 +141,21 @@ def unsay(text, gone, zones=(), extra=()):
 ACCESSORY = (r"(?:bows?|ribbons?|necklaces?|bracelets?|anklets?|rings?|earrings?|crowns?|tiaras?|bonnets?|headbands?|hairbands?|"
              r"hair\s*clips?|barrettes?|scrunchies|scrunchie|flowers?|garlands?|leis?|glasses|sunglasses|masks?|pacifiers?|"
              r"dummies|dummy|bibs?|wristbands?|watch(?:es)?|chokers?|pendants?|lockets?|ties|tie|badges?|brooch(?:es)?|bandages?|"
-             r"plasters?|wigs?|veils?|headphones|earplugs|sash(?:es)?|capes?|cloaks?|shawls?|garters?|pins?|clips?)")
+             r"plasters?|wigs?|veils?|headphones|earplugs|sash(?:es)?|capes?|cloaks?|shawls?|garters?|pins?|clips?|zippers?|patch(?:es)?)")
 _PART = (r"hair|head|neck|throat|wrists?|ankles?|fingers?|thumbs?|ears?|face|eyes|mouth|nose|lips|waist|hips|chest|breasts?|"
-         r"arms?|legs?|thighs?|feet|foot|toes?|cheeks?|forehead|shoulders?|belly|tummy")
+         r"arms?|legs?|thighs?|feet|foot|toes?|cheeks?|forehead|shoulders?|belly|tummy|body|back|torso|stomach|crotch|"
+         r"bottom")
 _PUT = (r"puts?|putting|places?|placed|placing|slips?|slipped|clips?|clipped|ties?|tied|fastens?|fastened|pins?|pinned|hangs?|"
-        r"hung|straps?|strapped|buckles?|buckled|sets?|loops?|looped|drapes?|draped|pops?|popped|slides?|slid|wraps?|wrapped")
+        r"hung|straps?|strapped|buckles?|buckled|sets?|loops?|looped|drapes?|draped|pops?|popped|slides?|slid|wraps?|wrapped|"
+        r"attach(?:es|ed|ing)?|sews?|sewed|sewn|sewing")
 _NP = rf"(?P<np>(?:a|an|the|some|his|her|their|(?-i:[A-Z])[a-z]+['’]s)\s+(?:[\w'’-]+\s+){{{{0,3}}}}?(?P<item>{{g}}))"
 _ADDS = (rf"\b(?:{_PUT})\s+{_NP}\s+(?P<prep>on|onto|in|into|around|over|to|through)\s+(?P<own>her|his|their|"
-         rf"(?-i:[A-Z])[a-z]+['’]s)\s+(?P<part>{_PART})\b",
+         rf"(?-i:[A-Z])[a-z]+['’]s)\s+(?P<part>{_PART}|{GARMENT})\b",
          rf"\b(?:{_PUT})\s+on\s+{_NP}",
          rf"\b(?:{_PUT})\s+{_NP}\s+(?:back\s+)?(?:on|onto)\s+(?P<obj>her|him|them|(?-i:[A-Z])[a-z]+)\b(?!['’]|\s+[a-z])",
-         rf"\b(?:{_PUT})\s+{_NP}\s+(?:back\s+)?on\b(?=\s*(?:[,.;!?]|and\b|$))")
+         rf"\b(?:{_PUT})\s+{_NP}\s+(?:back\s+)?on\b(?=\s*(?:[,.;!?]|and\b|$))",
+         rf"{_NP}\s+(?:is|are|was|were|gets?|got)\s+(?:being\s+)?(?:{_PUT})\s+(?P<prep>on|onto|in|into|around|over|to)\s+"
+         rf"(?P<own>her|him|his|them|their|(?-i:[A-Z])[a-z]+(?:['’]s)?)(?:\s+(?P<part>{_PART}|{GARMENT}))?\b")
 _TAKES = (rf"\b(?:removes?|removed|removing|unclips?|unclipped|unties?|untied|unfastens?|unfastened|unbuckles?|unbuckled)\s+{_NP}",
           rf"\b(?:takes?|took|taking|pulls?|pulled|slips?|slipped|plucks?|plucked|tugs?|tugged)\s+{_NP}\s+(?:off|out|away|from)\b",
           rf"\b(?:takes?|took|taking|pulls?|pulled|slips?|slipped)\s+(?:off|out)\s+{_NP}")
@@ -178,7 +182,9 @@ def additions(text, people, gender, described, extras, here=(), extra=()):
                     continue
                 np = re.sub(r"^(?:the|some)\s+(\S)", lambda x: ("" if re.search(r"[^s]s$", d["item"], re.I) else "an "
                             if x.group(1).lower() in "aeiou" else "a ") + x.group(1), d["np"], flags=re.I)
-                phrase = np + (f" {d['prep']} {pos(who)} {d['part']}" if d.get("part") else "")
+                np = re.sub(r"^An?\b", lambda x: x.group(0).lower(), np)
+                prep = {"to": "on", "onto": "on", "into": "in"}.get(d.get("prep", "").lower(), d.get("prep"))
+                phrase = np + (f" {prep} {pos(who)} {d['part']}" if d.get("part") else "")
                 if not any(_head(d["item"]) == _head(re.findall(r"[\w'’-]+", x)[-1]) or _head(d["item"]) in x
                            for x in new.get(who, [])):
                     new.setdefault(who, []).append(phrase)

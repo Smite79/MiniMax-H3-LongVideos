@@ -197,7 +197,7 @@ def _wearer(sentence, toks, m, mode, people, gender, blocked=(), here=()):
         obj = None
     own = obj is not None and re.match(r"\s+own\b", sentence[obj[0] + len(obj[1]):], re.I)
     obj = obj[1] if obj else None
-    passive = mode in ("state", "worn") or (mode in ("verb", "noun") and first.endswith(("ed", "bound"))
+    passive = mode in ("state", "worn") or (mode in ("verb", "noun") and m.group(0).split()[-1].lower().endswith(("ed", "bound"))
                                             and (obj is None or _AUX.search(before) is not None))
     if mode in ("state", "it"):
         token, actor = m.group("who"), ""
@@ -272,9 +272,12 @@ def read(text, people, gender, held, here=()):
                 if not who:
                     unclear.append(f"who wears the {kind} in '{sentence.strip()}'")
                     continue
-                pos, anchor = _POS.search(after) or _POS.search(sentence), _ANCHOR.search(after)
-                scope = _CLAUSE.split(lead + sentence[m.start():] if mode == "worn" else
-                                      sentence[span[0]:] if mode in ("state", "it") else after)[0]
+                prior = re.search(rf"\b(?:{_PART}|ankle|wrist)\s+(?:(?:\w+ly|together)\s+)?(?:(?:duct|gaffer|packing|zip|cable)\s+)?$",
+                                  before, re.I) if mode == "verb" else None
+                clause = re.split(r"[,;]", after)[0] if prior else after
+                pos, anchor = _POS.search(clause) or (None if prior else _POS.search(sentence)), _ANCHOR.search(clause)
+                scope = prior.group(0) + m.group(0) + clause if prior else _CLAUSE.split(
+                    lead + sentence[m.start():] if mode == "worn" else sentence[span[0]:] if mode in ("state", "it") else after)[0]
                 scope = m.group(0) + scope if key == "collar" and mode in ("noun", "verb") else scope
                 already = passive and _described(mode, m, lead, before, after, verb)
                 known = owner(held.get(who, []) + holds.get(who, [])) or {"f": "her", "m": "his"}.get(gender.get(who), "")

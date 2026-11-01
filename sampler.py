@@ -432,7 +432,8 @@ _ENTRY = re.compile(
     rf"|\b(?:enters?|entered|entering|penetrates?|penetrated|penetrating|fucks?|fucked|fucking|screws?|screwed|screwing)\s+"
     rf"(?P<obj>{_NAME})\b(?!['’])"
     rf"|\b(?:thrusts?|slides?|slid|pushes|pushed|sinks?|sank|slips?|slipped|eases?|eased|drives?|drove|rams?|rammed|"
-    rf"plunges?|plunged)\s+(?:(?:his|himself|\w+)\s+){{0,3}}?(?:into|inside)\s+(?P<obj2>{_NAME})\b"
+    rf"plunges?|plunged)\s+(?:(?:his|himself|\w+ly|deep(?:er)?|hard|stiff|erect|throbbing|{_SHAFT})\s+){{0,3}}?"
+    rf"(?:into|inside)\s+(?P<obj2>{_NAME})\b(?!['’]|\s+(?:body|bed|room|arms|lap|car|tent|sleeping|seat)\b)"
     rf"|\btakes?\s+(?P<obj3>{_NAME})\s+from\s+behind\b"
     rf"|\b(?:has|have|having|had)\s+sex\s+with\s+(?P<with>{_NAME})\b|\b(?:makes?|made|making)\s+love\s+(?:to|with)\s+"
     rf"(?P<with2>{_NAME})\b|\b(?P<sex>(?:has|have|having|had)\s+sex|(?:makes?|made|making)\s+love)\b", re.I)
@@ -1071,7 +1072,7 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         was = {n: list(dict.fromkeys(undressed.get(n, []) + now.get(n, []))) for n in set(undressed) | set(now)}
         undressed, off, on, unclear = clothes(para, seen, gender, described, undressed, near)
         had = extras
-        extras, _, took = wrd.additions(narration(para["text"]), seen, gender, described, extras, near, wrd.learned(described))
+        extras, put, took = wrd.additions(narration(para["text"]), seen, gender, described, extras, near, wrd.learned(described))
         extras = {n: [x for x in v if "clothes" not in off.get(n, []) or not re.search(wrd.GARMENT, x, re.I)]
                   for n, v in extras.items()}
         hidden = {n: wrd.covered(described.get(n, ""), was.get(n, []), off.get(n, [])) for n in people}
@@ -1125,6 +1126,8 @@ def plan_shots(prompt, shot_seconds, refs, has_first_frame, memory="", anchor=""
         notes += [f"By the last frame, {who} has {' and '.join(items)} in plain view" + (
             "." if any("leash" in it for it in items) else ", and whoever put it on has let go.")
             for who, items in added.items()]
+        notes += [f"Once {'it is' if re.match(r'an?\b', x, re.I) else 'they are'} on, {n} keeps {x} for the rest of the shot."
+                  for n, have in put.items() for x in have if x not in added.get(n, [])]
         notes += [f"{tag_of[n]} is for {n}'s face and hair only: {_pronouns(n, gender)[0]} clothes are as this shot "
                   f"describes them." for n in changed if n in tag_of]
         notes += [f"{n} wears {' and '.join(keep)}." for n in persons
@@ -2116,7 +2119,7 @@ class H3LongVideos:
                 held = rt.hold_look(imgs, anchor)
                 if grain is None or given is None:
                     grain = rt.scene_texture(imgs)
-                rough = rt.texture(imgs[-1], grain[1]) if grain else None
+                rough = rt.texture(imgs[-1], *grain[1:]) if grain else None
                 smoothed = rt.hold_texture(imgs, grain)
                 if pre is not None and (grade is not None or held):
                     hand = rt.match_frame(hand.clone(), rt.tone(imgs[-1]))
@@ -2136,7 +2139,7 @@ class H3LongVideos:
                                  "graded" if grade is not None else "left as rendered",
                                  seen[0] / first_look[0], seen[1] / max(first_look[1], 1e-6),
                                  rough[0] / grain[0] if rough else 0.0,
-                                 rt.texture(imgs[-1], grain[1])[0] / grain[0] if rough else 0.0)
+                                 rt.texture(imgs[-1], *grain[1:])[0] / grain[0] if rough else 0.0)
                 if seen and first_look:
                     info[at] += (f", {'graded onto the frame it continues from, ' if grade is not None else ''}"
                                  f"{'creep in saturation or contrast eased back to the scene, ' if held else ''}"
