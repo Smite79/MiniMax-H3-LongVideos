@@ -3,9 +3,7 @@
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
 
-import glob
 import math
-import os
 import sys
 import time
 
@@ -25,8 +23,6 @@ NATIVE = {"16:9": (1344, 768), "9:16": (768, 1344), "4:3": (1024, 768), "3:4": (
           "21:9": (1536, 672), "9:21": (672, 1536)}
 FOLEY = {"off": 0.0, "quarter": 0.25, "half": 0.5, "full": 1.0}
 RECALL = " <Picture {}> is this same place a little earlier, with {} in view: {} {} exactly as there on coming back into view."
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_LOADED = {p: os.path.getmtime(p) for p in glob.glob(os.path.join(_HERE, "*.py")) if not os.path.basename(p).startswith("test_")}
 
 
 def show(node_id, lines):
@@ -99,10 +95,7 @@ class H3LongVideos:
         if not shots:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
-        stale = [os.path.basename(p) for p, t in _LOADED.items() if os.path.exists(p) and os.path.getmtime(p) > t]
         info = [f"{w}x{h}, {len(shots)} shots"] + warn
-        info += [f"RESTART COMFYUI: {', '.join(stale)} changed after ComfyUI loaded this node, so this run used the old "
-                 f"code"] if stale else []
         info += [f"LORA ONLY PARTLY LOADED: {', '.join(part)} carries timestep layers this checkpoint has no place for"
                  for part in [modelprep.partial(model, graph, unique_id)] if part]
         info += [f"{why}, so no earlier frame of the scene is fed back in when a face comes back into view"] if not refs_ok else []
@@ -116,7 +109,7 @@ class H3LongVideos:
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
         total = sum(s["frames"] - (1 if s["keyed"] and i else 0) for i, s in enumerate(shots))
         detector = faces.Detector() if faces.available() else None
-        crops, store, used, waves, sr, memo = {}, None, 0, [], 44100, {}
+        crops, store, used, waves, sr, memo, hushed = {}, None, 0, [], 44100, {}, {}
         try:
             wanted = sorted({k for s in shots for k, face in zip(s["refs"], s["faces"]) if face})
             info += ["the pictures went in whole: cropping them to face and hair needs comfyui_controlnet_aux and its DWPose "
@@ -150,9 +143,16 @@ class H3LongVideos:
                     chain.make_room(model, latent)
                     out = chain.foley(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas, scale,
                                       muffles or None)
+                if scale and shot["hush"]:
+                    if shot["hush"] not in hushed:
+                        hushed[shot["hush"]] = clip.encode_from_tokens_scheduled(clip.tokenize(shot["hush"]))
+                    chain.make_room(model, latent)
+                    out = chain.foley(model, hushed[shot["hush"]], negative, latent, out, seed, steps, sampler_name, scheduler, sigmas,
+                                      scale, chain.gaps(lines + muffles, shot["frames"] / planner.FPS))
                 took.append(time.perf_counter())
                 del cond, latent
                 imgs, wave, sr = chain.decode(vae, audio_vae, out, keep=(vae, audio_vae))
+                wave = chain.unvoice(wave, sr, lines + muffles) if shot["mute"] else wave
                 took.append(time.perf_counter())
                 del out
                 opening = imgs[1] if given is not None and len(imgs) > 2 else imgs[0]

@@ -15,6 +15,7 @@ SETTLE = 1.5
 RUSH = 1.15
 WORDS_PER_SEC = 2.8
 SAY_SLACK = 0.6
+SENTENCE_PAUSE = 0.35
 MUFFLE_MAX = 2.5
 MUFFLE_SOUND = 1.5
 CUE_GAP = 0.4
@@ -36,6 +37,7 @@ _HEAD = re.compile(rf"^\s*(?:[-*•>#]+\s*|\d+[.)]\s+)?(?:\*\*|__)?(?P<name>{NAM
 _TAGGED = re.compile(r"(\(\s*)?<\s*picture[\s_\-]*(\d+)\s*>(\s*\))?", re.I)
 _SPEECH = re.compile(r"\"[^\"]*\"|“[^”]*”|<\s*d\s*>.*?<\s*/\s*d\s*>"
                      r"|(?<![\w'’])['‘](?=[^\s'‘’])(?:[^'‘’\n]|(?<=\w)['’](?=\w))+?(?<=[^\s'‘’])['’](?![\w'’])", re.S | re.I)
+_STOP = re.compile(r"(?<=[.!?])(?<!\.\.\.)(?<!Mr\.)(?<!Ms\.)(?<!Dr\.)(?<!St\.)(?<!Mrs\.)\s+(?=[\"“‘']?[A-Z0-9])")
 _EDGES = re.compile(r"^\s*(?:<\s*d\s*>|[\"“'‘])|(?:<\s*/\s*d\s*>|[\"”'’])\s*$", re.I)
 _SAYS = (r"says?|said|asks?|asked|chants?|chanted|whispers?|whispered|murmurs?|murmured|mutters?|muttered|growls?|growled|hiss(?:es)?|hissed|"
          r"snaps?|snapped|shouts?|shouted|yells?|yelled|screams?|screamed|cries|cried|sobs?|sobbed|pleads?|pleaded|begs?|begged|"
@@ -120,7 +122,15 @@ _ITEMS = r"seat|side|door|window|license|licence|office|house|home|room|car|truc
          r"daughter|son|mother|father|girlfriend|boyfriend|friend|family"
 _GOES = re.compile(r"(?:\s+(?:in|on|with|wearing|holding)\s+(?:[\w'’-]+\s+){0,3}?[\w'’-]+)?(?:\s+\w+ly)?\s+(?:leaves|walks\s+(?:out|away|off|past|by)|runs\s+(?:out|off|away|past|by)|hurries\s+(?:out|off|"
                    r"away|past|by)|drives\s+(?:off|away|past|by)|passes(?:\s+by)?|disappears|exits|goes\s+(?:out|away))\b", re.I)
-_MUSIC = re.compile(r"\b(?:music|song|sings?|singing|band|radio|playlist|piano|guitar|melody)\b", re.I)
+_MUSIC = re.compile(r"\b(?:music|song|sings?|singing|(?:live|rock|jazz|brass|wedding|marching|cover)\s+band|band\s+play(?:s|ing)?|"
+                    r"radio|playlist|piano|guitar|melody)\b", re.I)
+_VOCAL = re.compile(rf"\b(?:{_NOISE}|screaming|shrieking|yelling|shouting|crying|sobbing|moaning|groaning|whimpering|whining|squealing|"
+                    r"yelping|grunting|mumbling|murmuring|humming|wailing|howling|pleading|begging|laugh(?:s|ed|ing)?|"
+                    r"giggl(?:e|es|ed|ing)|chuckl(?:e|es|ed|ing)|sigh(?:s|ed|ing)?|gasp(?:s|ed|ing)?|cough(?:s|ed|ing)?|"
+                    r"whistl(?:e|es|ed|ing))\b", re.I)
+_TONES = re.compile(r"\b(?:bark(?:s|ed|ing)?|meow(?:s|ed|ing)?|purr(?:s|ed|ing)?|chirp(?:s|ed|ing)?|tweet(?:s|ed|ing)?|birdsong|"
+                    r"sirens?|horns?|honk(?:s|ed|ing)?|bells?|chimes?|alarms?|beep(?:s|ed|ing)?|rings|ringing|ringtone|kettle|"
+                    r"whistles?)\b", re.I)
 _CROTCH = r"crotch|groin|vagina|pussy|vulva|labia|genitals|privates|penis"
 _BETWEEN = re.compile(r"\bbetween\s+[\w'’-]+\s+(?:legs|thighs)\b", re.I)
 _BODY = (("mouth", r"mouth|lips|jaw"), ("eyes", r"eyes"), ("wrists", r"wrists?|hands|arms"), ("ankles", r"ankles?|feet|foot|legs|knees"),
@@ -383,6 +393,9 @@ _INMOUTH = re.compile(r"\b(?:in|into|inside|between|past)\s+(?:her|his|their|[\w
 _OVER = re.compile(r"\b(?:over|across|around)\s+(?:her|his|their|[\w-]+['’]s)\s+(?:\w+\s+)?(?:mouth|lips|eyes|face|head)\b", re.I)
 _PUTAWAY = re.compile(r"\b(?:puts?|sets?|lays?|places?|tosses?|drops?|throws?|stows?|pockets?|hangs?)\s+(?:[\w'’-]+\s+){0,3}?"
                       r"(?:back|away|down|aside)\b(?!\s+(?:on|over|around|across|between)\b)", re.I)
+_SHOWN = re.compile(rf"^(?:[^,]{{0,60}},\s+)?\W*(?:(?:{_LEADS}|\w+ly)\W+)*(?:(?-i:[A-Z])[\w'’-]*|she|he|they)\s+(?:\w+ly\s+)?"
+                    rf"(?:(?:holds?|held|picks?|picked)\s+(?:[\w'’-]+\s+){{0,4}}?(?:up|out)\b|(?:shows?|showed|dangles?|dangled|"
+                    rf"waves?|waved|produces?|produced|brandish(?:es|ed)|reach(?:es|ed)\s+for)\b)", re.I)
 _SOON = re.compile(r"\b(?:moments?|seconds?|instant)\s+later\b", re.I)
 _STILL = re.compile(rf"\b(?:is|are|was|were|been|sits?|sat|lies|lay|lays|stands?|stood|kneels?|knelt|remains?|stays?|stayed|ends?\s+up)"
                     rf"\b(?:\s+[\w'’,-]+){{0,4}}?\s+(?:{_STATE})\b|\b(?:with\s+)?(?:her|his|their)\s+(?:wrists|hands|ankles|feet|mouth|"
@@ -440,6 +453,14 @@ _OBJ_NEXT = re.compile(r"\s*(?:[^\w\s'’]|$|(?:a|an|the|this|that|these|those|s
                        r"alone|go|upside|flat|awake|steady|naked|nude)\b)", re.I)
 _CAUSE = re.compile(r"\b(?:let|lets|letting|make|makes|made|making|help|helps|helped|helping|watch|watches|watched|watching|see|sees|"
                     r"saw|hear|hears|heard|feel|feels|felt|have|has|had)\s+$", re.I)
+_HUSH = "Nobody speaks, and every mouth stays closed."
+_WORDLESS = "Nobody says a word."
+_SOUND = "All the sound comes from the scene itself: its natural ambience and the real sounds of what happens in it."
+_PRONE = re.compile(r"\bface[\s-]?down\b|\bon(?:to)?\s+(?:her|his|their)\s+(?:stomach|front|belly)\b|\bprone\b", re.I)
+_GAZE = re.compile(r"\b(?:(?:look|turn|talk|call|shout|yell|whisper|laugh|wink)(?:s|ed|ing)?|(?:star|glanc|smil|wav)(?:e|es|ed|ing)|"
+                   r"grin(?:s|ned|ning)?|nod(?:s|ded|ding)?|speak(?:s|ing)?|spoke|say(?:s|ing)?|said)\s+(?:\w+ly\s+)?(?:back\s+|over\s+|"
+                   r"up\s+|down\s+)?(?:at|to|toward|towards)\s+$|\b(?:watch(?:es|ed|ing)?|eye[sd]?|tells?|told|asks?|asked|thanks?|"
+                   r"thanked)\s+$", re.I)
 _CUT_AT = re.compile(r"[,;:—–]|\b(?:and|but|then|while|as|when|until|before|after|because|so|or|once|if|though|although|since|"
                      r"whereas|who|which)\b", re.I)
 _DETS = {"her", "his", "their", "the", "a", "an", "its", "s", "off", "up", "down", "and", "of", "with", "to", "over", "on", "into", "out",
@@ -479,7 +500,8 @@ _FOOT = (("hop", r"hop(?:s|ped|ping)?|jump(?:s|ed|ing)?(?!\s+over)"), ("kick", r
          ("lie", r"lies|lying|(?:lay|lays|laying|lie)\s+(?:down|back|flat|still|on|in|face)|curl(?:s|ed|ing)?\s+up|sleep(?:s|ing)|slept|"
                  r"(?:rolls?|rolled|rolling|turns?|turned)\s+(?:over\s+)?(?:onto|on)\s+(?:her|his|their)\s+(?:side|back|front|stomach|belly)|"
                  r"(?:falls?|fell|collaps(?:es|ed)|drop(?:s|ped)|sinks?|sank|slump(?:s|ed)|tumbl(?:es|ed)|pushed|thrown|shoved|tossed|laid)"
-                 r"\s+(?:back\s+|down\s+|flat\s+)?(?:onto|on|across|into)\s+(?:the|a|an|her|his|their)\s+(?:[\w-]+\s+)?"
+                 r"\s+(?:back\s+|down\s+|flat\s+|face[\s-]?(?:down|up|first)\s+|facedown\s+)?(?:onto|on|across|into)\s+"
+                 r"(?:the|a|an|her|his|their)\s+(?:[\w-]+\s+)?"
                  r"(?:bed|floor|ground|mattress|cot|couch|sofa)\b|(?:falls?|fell)\s+flat"),
          ("stand", r"stand(?:s|ing)?|stood|(?:gets?|got|getting)\s+up|(?:to|on)\s+(?:her|his|their)\s+feet"),
          ("walk", rf"(?:{_STRIDE})\b|(?:{_HEADS})\s+(?:\w+ly\s+)?(?:{_DIRS})\b"))
@@ -503,7 +525,7 @@ _BINDS = re.compile(rf"\b(?:hand)?cuff|\bshackl|\b(?:{_KEPT})\b|\b(?:{_KIT})\b\s
                     rf"(?:her|his|their|[\w-]+['’]s)\s+(?:ankles|knees|legs|feet)\b", re.I)
 _PARTICLE = re.compile(r"(?:\s+(?:and\s+)?(?:up|down|out|back|forth|away|high|higher|aside)"
                        r"(?!\s+(?:the|a|an|her|his|their|its|this|that)\b))*", re.I)
-_SELF =r"bend|bent|stretch|straighten|flex|point|wiggl|kick|stamp|stomp|tap|swing|swung|curl|tuck|draw|drew|rub|squeez|clench|" \
+_SELF = r"bend|bent|stretch|straighten|flex|point|wiggl|kick|stamp|stomp|tap|swing|swung|curl|tuck|draw|drew|rub|squeez|clench|" \
         r"shak|shook|bounc|rock|shift|plant|brac|scrap|pedal|pump|scissor|paddl|flutter|tens|strain|thrash|flail|cross"
 _GO = rf"(?:{_SELF}|ris|rose|lift|rais|com|came|go|went|jerk|twitch|trembl|buckl|fl[iy]|flew|shoot|shot|thump|pound|bang|scrabbl|" \
       r"slid|drag|drop|fall|fell|squirm|wriggl|writh|struggl|dangl|wav|press|push|pull|dig|dug|lower|bring|brought|roll|twist|turn|" \
@@ -608,6 +630,10 @@ def _sentences(text):
     return out
 
 
+def _say(q):
+    return SAY_SLACK + len(q.split()) / WORDS_PER_SEC + SENTENCE_PAUSE * len(_STOP.findall(q))
+
+
 def timeline(lines, marks=(), packed=False):
     cues, end, after = [], SPEECH_LEAD - CUE_GAP, 0
     for ln in lines:
@@ -615,7 +641,7 @@ def timeline(lines, marks=(), packed=False):
         after = max(after, ln["end"])
         if ln["thought"]:
             continue
-        long = ln.get("long") or SAY_SLACK + len(ln["q"].split()) / WORDS_PER_SEC
+        long = ln.get("long") or _say(ln["q"])
         start = max(end + CUE_GAP, (end if cues else SPEECH_LEAD) + wait)
         cues.append((round(start, 2), round(start + (min(MUFFLE_MAX, long) if ln["gag"] else long), 2),
                      "muffle" if ln["gag"] else "line"))
@@ -917,10 +943,12 @@ def voiced(text, lines, call, names=()):
         w, q, item, last = ln["who"], ln["q"], ln["gag"], len(ln["edit"]) - 1
         verb = "says" if re.fullmatch(r"tries|tried|manages?|managed|starts?|started|begins?|began", ln["verb"], re.I) else ln["verb"]
         say = f"thinks, silently and with closed lips: {q}" if ln["thought"] else \
-            f"lets out a muffled, closed-mouth mmmph through the {gagword(item)}" if item else f"{verb}: <d>{q}</d>"
+            f"lets out a muffled, closed-mouth mmmph through the {gagword(item)}" if item else \
+            f"{verb}: " + f" {w} continues: ".join(f"<d>{x}</d>" for x in _STOP.split(q))
         for j, (s, e) in enumerate(ln["edit"]):
             gone = re.match(rf"\s+(?:in|into|through|behind|against|around|past|under)\s+(?:the|her|his|their)\s+(?:[\w-]+\s+){{0,2}}?"
-                            rf"(?:(?:tape|gag)\b|{_CLOTH.pattern})", text[e:], re.I) if item and j == last else None
+                            rf"(?:(?:tape|gag)\b|{_CLOTH.pattern})", text[e:], re.I) if item and j == last else \
+                re.match(r"\.(?!\.)", text[e:]) if j == last and re.search(r"[.!?]$", q) else None
             e = e + gone.end() if gone else e
             piece = (call(w) if last and not j else say if last else f"{call(w)} {say}") if w else \
                 f"<d>{q}</d>" if j == last else text[s:e]
@@ -1164,7 +1192,7 @@ def _anchor(clause, upto, context="", gear=""):
     lies = not _OVERHEAD.search(to) and ((bool(re.search(r"\bdown\s+$", lead, re.I)) or prep != "to")
                                          and bool(_LIE_ON.search(to) or _FLOOR.search(to)) or bool(_LIE_ON.search(to) or _BEDPART.search(to))
                                          and (flat or not cues) or bool(_FLOOR.search(to)) and flat)
-    face = lies and bool(re.search(r"\bface[\s-]down\b|\bon\s+(?:her|his|their)\s+(?:stomach|front|belly)\b", whole, re.I))
+    face = lies and bool(_PRONE.search(whole))
     pos = "spread apart" if re.search(r"\bspread|\bcorners?\b|\bbed\s?posts\b", f"{clause} {to}", re.I) else \
         "above {p} head" if re.search(r"head\s?board", to) or _OVERHEAD.search(to) else "at {p} sides" if lies else \
         "behind {p} back" if _SEAT.search(to) and not _ARMREST.search(to) else \
@@ -1283,6 +1311,11 @@ def clean(seg, article=True):
     seg = re.sub(r"^[^\W\d_]+\s*:\s*", "", seg.strip())
     text = re.sub(r"\s+(?:underneath|beneath)$", "", _REL.sub("", _LEAD.sub("", seg)).rstrip(" .!?;,"), flags=re.I)
     return text if article else re.sub(r"^(?:her|his|their|the|a|an|some)\s+", "", text, flags=re.I)
+
+
+def _owned(seg, person):
+    text = clean(seg)
+    return text if re.match(r"(?:her|his|their|the|a|an|some)\s", text, re.I) else f"{pron(person, 1)} {text}"
 
 
 def _on(desc, off):
@@ -1599,7 +1632,7 @@ def _linking(x, w, p, on=True):
     if not on:
         return f"{'unlocks' if strand == 'chain' else 'unties'} the separate short {strand} that joins " \
                f"{re.sub(r'\b(?:her|his|their)\b', w, to, count=1)} to {_point(x, p, front)} and takes it away"
-    lead = "" if _band(x) else f"bends {w} knees and draws {p} feet up " + \
+    lead = "" if _band(x) else f"bends {w} knees and lifts {_low(x, p)} together up " + \
         ("toward " if "in front of" in _link(x)[0] else f"behind {_OBJ.get(p, p)} toward ") + f"{p} hands, then "
     to = re.sub(r"\b(?:her|his|their)\b", p if lead else w, to, count=1)
     return f"{lead}{'padlocks' if strand == 'chain' else 'ties'} a separate short {strand} from " \
@@ -1638,7 +1671,11 @@ def _takes(kind, x, items=()):
     return {"tear": 3, "lift": 3, "back": 2}.get(kind, 0)
 
 
-def _taped(x, w, p, sent):
+def _still(p, flat):
+    return f"{p} legs straight and flat where they lie" if flat else "both feet resting where they are"
+
+
+def _taped(x, w, p, sent, flat=False):
     spot = (_spots(x) or ["mouth"])[0]
     if spot in ("mouth", "eyes") and not re.search(r"\baround\s+(?:her|his|their|[\w-]+['’]s)\s+head\b", sent, re.I):
         return f"tears a strip off the roll of duct tape and presses it flat over {w} {spot}", False
@@ -1649,13 +1686,13 @@ def _taped(x, w, p, sent):
             f"passing it from one hand to the other behind {p} back, so the tape lies flat around {p} {spot}"
             if spot in _BANDS else
             f"carries the roll of duct tape around {w} head, over {p} {spot}" if spot in ("mouth", "eyes") else
-            f"holds {w} {spot} pressed together, both feet resting where they are, and winds the duct tape around and around them"
+            f"holds {w} {spot} pressed together, {_still(p, flat)}, and winds the duct tape around and around them"
             if spot in ("ankles", "knees", "legs") and not _tied(x) else
             f"winds the duct tape around {w} {spot}{pos}, turning the roll around them"
             + (f", then tapes them to {_tied(x)['to']}" if _tied(x) else "")), True
 
 
-def _bind_step(x, nm, w, p, dp, on=True, laid=False):
+def _bind_step(x, nm, w, p, dp, on=True, laid=False, flat=False):
     gear, spot = _gear(x), (sorted(_places(x)) or ["wrists"])[0]
     thing = "the " + re.sub(r"^(?:a|an|the)\s+", "", re.split(r"\s+(?:stuffed\s+in|tied\s+over)\s+", x)[0])
     if " stuffed in " in x:
@@ -1683,7 +1720,7 @@ def _bind_step(x, nm, w, p, dp, on=True, laid=False):
         return join([s for s in (lay, put, f"{do} {p if lay or put else w} {spot} to {tied['to']}") if s]), True
     if spot in ("ankles", "knees", "legs") and not tied and not pos and gear != "a spreader bar":
         put = _FEET.get(gear, "fastens the {g} around both of them together").format(g=gear, one=_PAIR[spot])
-        return f"holds {w} {spot} pressed together, both feet resting where they are, and {put}", laid
+        return f"holds {w} {spot} pressed together, {_still(p, flat)}, and {put}", laid
     bring = {f"at {p} sides": f"arms down to {p} sides", f"at {p} waist": f"hands to {p} waist"}.get(
         pos, f"hands down {pos}" if pos.startswith("between") else f"arms {pos}")
     lead = f"spreads {w} {limbs} apart and " if pos == "spread apart" else f"brings {w} {bring} and " if pos and arm else ""
@@ -1749,12 +1786,12 @@ def _doing(changes, people, call, held=None, stance=None):
             continue
         actor, p = who if mine else doer, pron(people.get(who, {}))
         w = p if mine else f"{call(who)}'s"
-        low = _stoop(x, w, call(who), mine, "lie" if who in laid else stance.get(who), stance.get(actor) == "kneel") \
-            if kind in ("hold", "release") else ""
+        pose = "lie" if who in laid else stance.get(who)
+        low = _stoop(x, w, call(who), mine, pose, stance.get(actor) == "kneel") if kind in ("hold", "release") else ""
         q = w if not low else p if mine or pron(people.get(actor, {})) != p else f"{who}'s" if who in people else w
         bend = lambda s: s if not low else f"{low}, {s}" if " and " in s else f"{low} and {s}"
         if tape:
-            step, rolled = _taped(x, q, p, sent)
+            step, rolled = _taped(x, q, p, sent, pose == "lie")
             step = bend(step)
             rolls[(actor, who)] = rolls.get((actor, who), False) or rolled
         elif kind in ("hold", "release") and _band(x) and (_crotch(x) or _lashed(x) or was):
@@ -1766,7 +1803,8 @@ def _doing(changes, people, call, held=None, stance=None):
         elif was:
             step = _linking(x if _link(x) else was, w, p, bool(_link(x)))
         elif kind in ("hold", "release"):
-            step, done = _bind_step(x, call(who), p if cut else q, p, pron(people.get(actor, {})), kind == "hold", who in laid)
+            step, done = _bind_step(x, call(who), p if cut else q, p, pron(people.get(actor, {})), kind == "hold", who in laid,
+                                    pose == "lie")
             step = ", then ".join([_linking(y, w, p, False) for y in cut] + [step if cut else bend(step)]
                                   + ([_linking(x, p, p)] if kind == "hold" and _link(x) else []))
             laid |= {who} if done else set()
@@ -1791,9 +1829,10 @@ def _doing(changes, people, call, held=None, stance=None):
               f"{cap(call(a))} keeps the roll whole in {pron(people.get(a, {}))} other hand, outside {n}'s body."
               for (a, n), rolled in rolls.items()]
     notes += [f"{cap(call(a))}'s own mouth stays empty." for a in stuffed]
+    gear = any(kind in ("hold", "release") for kind, *_ in changes) or any(held.values())
     notes += [f"It all happens at natural, real-life speed, one step after another, over about {max(1, round(total))} seconds: no "
-              f"step is skipped, sped up or cut short, and no restraint or piece of clothing appears, vanishes or changes by itself."] \
-        if total else []
+              f"step is skipped, sped up or cut short, and no {'restraint or ' * gear}piece of clothing appears, vanishes or changes "
+              f"by itself."] if total else []
     return notes
 
 
@@ -1898,31 +1937,36 @@ def _rest(text, done, keep, people):
 
 def _parts(text, read, room, people, took, garb, held=None, slow=None):
     told, units = narration(text), []
+    fresh = lambda k, who, x: k == "hold" and _hogged(x) and _TIED_TO.sub("", x) not in (held or {}).get(who, [])
     for a, b, secs, talk in _pace(text, read, took, slow):
         evs = [e for e in read if e[2] == told[a:b].strip()]
-        atoms = [(k, who, x, sent, doer) for k, arg, sent, doer in evs for who, items in [split_tag(arg, people, _GARB.get(k, False))]
-                 for x in items or (garb(who) if k == "remove" else [])]
+        atoms = [(k, who, y, sent, doer) for k, arg, sent, doer in evs for who, items in [split_tag(arg, people, _GARB.get(k, False))]
+                 for x in items or (garb(who) if k == "remove" else [])
+                 for y in ([_TIED_TO.sub("", x), x] if fresh(k, who, x) else [x])]
         span = lambda t: _takes(t[0], t[2], (held or {}).get(t[1], []))
         free = [t for t in atoms if t[4] and span(t)]
-        if secs + talk <= room or len(free) < 2:
-            units.append((text[a:b], evs, secs + talk))
+        hog = {t[2] for t in free if fresh(*t[:3])}
+        if not hog and (secs + talk <= room or len(free) < 2):
+            units.append((text[a:b], evs, secs + talk, False))
             continue
         chunks, used = [[t for t in atoms if t[0] == "have"]], 0.0
         for t in free:
-            if used and used + span(t) > room:
+            if used and (used + span(t) > room or t[2] in hog):
                 chunks, used = chunks + [[]], 0.0
             chunks[-1].append(t)
             used += span(t)
         last = [t for t in atoms if t not in free and t[0] != "have" or t in chunks[-1]]
         left, said = secs + talk - sum(span(t) for t in atoms if t not in last), \
             _rest(text[a:b], [t for c in chunks[:-1] for t in c if t[0] != "have"], last, people)
-        units += [(_said(_merged(c), people, held), _merged(c), sum(map(span, c))) for c in chunks[:-1]]
-        units.append((said, _merged([t[:3] + (said.strip(), t[4]) for t in last] if said != text[a:b] else last), left))
-    if sum(u[2] for u in units) <= room * RUSH:
+        said = re.sub(rf"\s+with\s+(?:another|a\s+second|a|an|the|her|his|their)\s+(?:pair\s+of\s+|set\s+of\s+)?(?:{_KIT})\b", "", said,
+                      flags=re.I) if hog else said
+        units += [(_said(_merged(c), people, held), _merged(c), sum(map(span, c)), False) for c in chunks[:-1]]
+        units.append((said, _merged([t[:3] + (said.strip(), t[4]) for t in last] if said != text[a:b] else last), left, bool(hog)))
+    if sum(u[2] for u in units) <= room * RUSH and not any(u[3] for u in units):
         return []
     parts, used = [[]], 0.0
     for u in units:
-        if parts[-1] and used + u[2] > room:
+        if parts[-1] and (used + u[2] > room or u[3]):
             parts, used = parts + [[]], 0.0
         parts[-1].append(u)
         used += u[2]
@@ -1953,9 +1997,10 @@ def _footwork(text, n, cast, people):
              re.compile(rf"(?P<w>{anyone})(?=\s+(?:\w+ly\s+)?(?!(?:towards|always|afterwards|backwards|forwards|sideways|upstairs|"
                         rf"downstairs|perhaps|unless|besides)\b)(?:[a-z]+(?:s|ed)|went|came|ran|knelt|sat|stood|lay|got)\b)", re.I))
     make = re.compile(rf"\b(?:{_MAKE})\s+(?P<w>{anyone}|her\b|him\b|them\b)\s+(?:to\s+)?(?:\w+ly\s+)?$", re.I)
-    led = re.compile(rf"\b(?P<v>{_LED}|sits?|sat|seats?|seated)\s+(?P<w>{anyone}|her\b|him\b|them\b)\s+(?:\w+ly\s+)?(?:(?:down\s+|"
-                     rf"over\s+)?(?:on|onto|to)\s+(?:her|his|their)\s+(?P<k>knees|feet|side|back|front|stomach|belly)\b|"
-                     rf"(?P<d>{_DIRS}|on|onto)\b(?P<to>.{{0,40}}))", re.I)
+    led = re.compile(rf"\b(?P<v>{_LED}|sits?|sat|seats?|seated)\s+(?P<w>{anyone}|her\b|him\b|them\b)\s+(?:\w+ly\s+)?"
+                     rf"(?:(?P<f>face[\s-]?(?:down|up)|facedown)\b\s*|face[\s-]?first\s+)?(?:(?:down\s+|over\s+)?(?:on|onto|to)\s+"
+                     rf"(?:her|his|their)\s+(?P<k>knees|feet|side|back|front|stomach|belly)\b|(?P<d>{_DIRS}|on|onto)\b(?P<to>.{{0,40}})|"
+                     rf"(?(f)|(?!)))", re.I)
     tried = re.compile(r"\b(?:tr(?:y|ies|ied|ying)|attempts?|attempted|struggles?|struggled|wants?|wanted|fights?)\s+to\s+(?:\w+ly\s+)?$|"
                        r"\b(?:can(?:no|['’])?t|cannot|unable\s+to)\s+(?:\w+ly\s+)?$", re.I)
     out, plain = [], narration(text)
@@ -1987,7 +2032,8 @@ def _footwork(text, n, cast, people):
         for m in led.finditer(sent):
             if by_(m.group("w"), m.start()) and not any(a < m.end() and m.start() < b for a, b in taken):
                 to = m.group("to") or ""
-                kind = {"knees": "kneel", "feet": "stand"}.get((m.group("k") or "").lower(), "lie" if m.group("k") else None) or (
+                kind = "lie" if m.group("f") else {"knees": "kneel", "feet": "stand"}.get((m.group("k") or "").lower(),
+                                                                                          "lie" if m.group("k") else None) or (
                     "sit" if re.search(r"\b(?:(?:arm)?chair|stool|bench|couch|sofa|seat|lap)\b", to, re.I) else
                     "lie" if re.search(r"\b(?:bed|floor|ground|mattress|cot|rug|carpet)\b", to, re.I) else
                     "stairs" if re.match(rf"(?:up|down)\s+{_FLIGHT}", f"{m.group('d')}{to}", re.I) else
@@ -2048,8 +2094,8 @@ def _low(x, p):
 
 
 def _drawn(x, p, o, stay=False):
-    bent, up = ("stay bent", "stay drawn up") if stay else ("bent", "drawn up")
-    return f"{p} knees {bent} and {p} feet {up} " + (f"toward {p} hands" if "in front of" in _link(x)[0] else
+    bent, up = ("stay bent", "stay raised together") if stay else ("bent", "raised together")
+    return f"{p} knees {bent} and {_low(x, p)} {up} " + (f"toward {p} hands" if "in front of" in _link(x)[0] else
                                                       f"behind {o}, close to {p} hands")
 
 
@@ -2241,11 +2287,13 @@ def _pose(nm, per, was, new, did=(), pose=None, joined=False, face=False):
             also = f" and held to the back of {lashed} by a separate short {_link(ring)[1]}" if lashed else \
                 f" and {done(wrist)} to {hold['to']}" if hold and not seat and not around else ""
             k = max((j for j, q in enumerate(did) if q in ("kneel", "sit", "lie", "stand")), default=-1)
-            back = (did[k] if k >= 0 else pose) == "lie" and not face and not seat and not around
+            lying = (did[k] if k >= 0 else pose) == "lie" and not seat and not around
             out.append((f"{name} sits on {hold['to']}, {done(wrist)} to it {w}. " if seat else "")
                        + f"{name}'s arms stay pulled behind {p} back{around} {w}, with {p} wrists locked together behind {o}{also}: "
-                       + (f"lying on {p} back, {s} {'lie' if s == 'they' else 'lies'} on {p} arms, both arms run down behind {o} under "
-                          f"{p} body, and {p} hands stay locked together under the small of {p} back, hidden beneath {o}. " if back else
+                       + (f"lying face down, both {p} arms lie along {p} back at their full length, and {p} hands stay locked together "
+                          f"on top of the small of {p} back, in plain view from above and from either side. " if lying and face else
+                          f"lying on {p} back, {s} {'lie' if s == 'they' else 'lies'} on {p} arms, both arms run down behind {o} under "
+                          f"{p} body, and {p} hands stay locked together under the small of {p} back, hidden beneath {o}. " if lying else
                           f"{p} shoulders are drawn back, both arms run at their full length from {p} shoulders down behind {o}, and {p} "
                           f"hands rest together at the small of {p} back. From the front, {p} body hides {p} hands; seen from the side or "
                           f"from behind, both arms and both hands are in plain view, whole and locked together. ")
@@ -2445,6 +2493,7 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
     gone, raised, fresh, freed_now = {n: list(off.get(n, [])) for n in cast}, {n: list(lifted.get(n, [])) for n in cast}, set(), set()
     cut_now = set()
     duct, actor, meek, topic, last, prev = bool(re.search(r"\bduct\b", text or "", re.I)), None, None, None, None, []
+    said_verb = None
     seen, watchers = _thing(narration(before)), set()
     ends = [narration(before)[a:b] for a, b in _sentences(before or "")]
     carry = [[(g, a) for _, _, g, a in r] for r in _runs(ends[-1], _clothes(ends[-1], names))][-1:] if ends else []
@@ -2573,7 +2622,7 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
             r"\baround\s+(?:her|his|their|[\w-]+['’]s)\s+head\b", c, re.I) else ["wrists", "ankles"] if hog or re.search(
             r"\bspread[\s-]?eagle", c, re.I) else [])
         if not own and not target.search(c) and (_PREP.search(c) and not freed or _SOURCES.search(c) and not _UNDO.search(c)
-                                                 or _PUTAWAY.search(c)):
+                                                 or _PUTAWAY.search(c) or _SHOWN.search(c)):
             return
         loose = bool(freed) or _loosens(c)
         if loose and ref and re.search(r"\broll\b", ref.group(0), re.I) and not own:
@@ -2720,7 +2769,8 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
         if link and base >= 0 and not re.search(r"\bseparate\b", c, re.I):
             at = (onto or ring or hooked) if tied else next((m for m in _LINK.finditer(c) if m["a"] or m["c"]), None)
             end = base + len(re.sub(r"[\s.!?…\"”’]+$", "", c))
-            edits.extend([(base + at.end(), base + at.end(), 0, f" with a separate short {link[1]}")] if isinstance(at, re.Match) else
+            edits.extend(([] if re.match(r"\s+(?:with|using)\b", c[at.end():], re.I) else
+                          [(base + at.end(), base + at.end(), 0, f" with a separate short {link[1]}")]) if isinstance(at, re.Match) else
                          [] if tied else [(end, end, 0, f", {p} ankles held to {link[0]} by a separate short {link[1]}")])
         for x in made:
             twin = next((y for y in have.get(who, []) if (still or family(x) & family(y)) and _places(x) & _places(y)), None)
@@ -2762,32 +2812,44 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
             fresh.update(new)
             got.append([last[1], who, new, sent, doer])
 
-    def owner(pre, post, g, kind, doer, sure):
+    def owner(pre, post, g, kind, doer, sure, before=""):
         m = re.search(rf"(?-i:\b({names}))['’]s\s+(?:own\s+)?$", pre) or \
             re.search(rf"\b(?:{_HANDLE})\s+(?:\w+ly\s+)?(?-i:({names}))\b(?!['’])", pre, re.I) or \
             re.match(rf"(?:\s+[\w'’-]+){{0,3}}?\s+(?:on|onto|off|from|over|around)\s+(?-i:({names}))\b", post, re.I)
         if m:
-            return m.group(1)
+            return [m.group(1)]
         if re.search(r"\b(?:her|his|their)\s+own\s+$", pre, re.I):
-            return doer
-        mine = re.search(r"\b(her|his)\s+$", pre, re.I)
-        sex = ("f" if mine.group(1).lower() == "her" else "m") if mine else ""
-        if mine and doer and doer not in cast and ones.get(doer, sex) in (sex, ""):
-            return None
+            return [doer] if doer else []
+        mine = re.search(r"\b(her|his|their)\s+$", pre, re.I)
+        sex = {"her": "f", "his": "m"}.get(mine.group(1).lower(), "") if mine else ""
+        if sex and doer and doer not in cast and ones.get(doer, sex) in (sex, ""):
+            return []
         fits = lambda n: not sex or people.get(n, {}).get("sex") in (sex, "", None)
         own = [n for n in cast if wears(n, g) and fits(n)] or [n for n in cast if kind in ("remove", "tear", "lift") and wears(n, g, True)
                                                                and fits(n)]
-        if kind in ("wear", "back") and doer and doer not in cast and not re.search(
-                rf"\b(?:on|onto|over|around)\s+(?:her|him|them|(?-i:{names}))\b", post, re.I):
-            return None
+        said = before + pre
+        group = [n for n in own if re.search(rf"(?-i:\b{re.escape(n)})\b", said)]
+        if mine and not sex and (len(group) > 1 or len(own) > 1 and re.search(r"\b(?:they|both)\b", said, re.I)):
+            return group if len(group) > 1 else own
+        onto = re.search(r"\b(?:on|onto|over|around)\s+(her|him|his|them)\b", post, re.I)
+        to = {"her": "f", "him": "m", "his": "m"}.get(onto.group(1).lower(), "") if onto else ""
+        across = [n for n in cast if n != doer and to and people.get(n, {}).get("sex") == to]
+        if kind in ("wear", "back") and doer in people and to and people[doer].get("sex") != to and len(across) == 1:
+            return across
+        if kind in ("wear", "back") and doer and doer not in cast and not onto and not re.search(
+                rf"\b(?:on|onto|over|around)\s+(?-i:{names})\b", post, re.I):
+            return []
         if kind in ("wear", "back"):
             had = [n for n in cast if (is_off(n, g) or any(_same(g, x) for x, _ in raised.get(n, []))) and fits(n)]
             if len(had) == 1:
-                return had[0]
+                return had
             if not had and not own:
-                return other(doer, sure) if re.search(r"\b(?:on|onto|over|around)\s+(?:her|him|them)\b", post, re.I) else doer
+                return [x for x in [other(doer, sure) if onto else doer] if x]
         pick = [n for n in own if have.get(n) and n != doer]
-        return own[0] if len(own) == 1 else pick[0] if len(pick) == 1 and doer else None
+        hit = [n for n in own if n != doer and any(not _GAZE.search(said[:x.start()]) for x in
+                                                   re.finditer(rf"(?-i:\b{re.escape(n)})\b(?!['’])", said))]
+        return own[:1] if len(own) == 1 else pick if len(pick) == 1 and doer else hit if len(hit) == 1 else \
+            [doer] if doer in own else []
 
     def on_now(who, skip=()):
         return sorted((clean(s, False) for s in _on(people[who]["desc"], gone[who]) + [w for w in worn.get(who, []) if not is_off(who, w)]
@@ -2815,7 +2877,7 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
                f"{'it stays' if not _many([y for gs in groups.values() for y in gs]) else 'they stay'}"
 
     def clothes(sent, c, doer, sure, base):
-        nonlocal topic
+        nonlocal topic, said_verb
         stop, marked = base + len(re.sub(r"[\s.!?…\"”’]+$", "", c)), set()
 
         def hands(who):
@@ -2855,6 +2917,7 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
             return
         for start, end, items in runs:
             it = items is None
+            held = topic[2] if it and topic and topic[0] == "clothes" and len(topic) > 2 else []
             items = items or (topic[1] if topic and (topic[0] == "clothes" or topic[0] == "theirs" and doer in cast) else carry)
             pre, post = c[:start], c[end:]
             if not items or re.search(rf"\b(?:{_FOLKS})\s+(?:in|wearing|dressed\s+in)\s+(?:(?:a|an|the|her|his|their)\s+)?"
@@ -2869,16 +2932,22 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
                 edits.extend([(base + end, base + end, 0, left_on(groups, pron(people[who])))] if groups else [])
                 hands(who) if who in people else None
                 continue
-            vm = next((v for v in reversed(list(re.finditer(rf"\b(?:{_HANDLE})\b", pre, re.I))) if path.match(pre[v.end():])), None)
-            of, be = None, None
+            vm = next((v for v in reversed(list(re.finditer(rf"\b(?:{_HANDLE})\b", pre, re.I))) if path.match(pre[v.end():])
+                       and not (re.search(r"(?:ed|torn|shorn|undone)$", v.group(0), re.I) and re.search(
+                           r"\b(?:a|an|the|her|his|their|its|this|that|[\w-]+['’]s)\s+$", pre[:v.start()], re.I))), None)
+            of, be, again = None, None, None
             if vm:
                 verb, part, of = vm.group(0), path.match(pre[vm.end():]).group("part"), path.match(pre[vm.end():]).group("of")
+            elif said_verb and said_verb[0] == sent and re.fullmatch(
+                    rf"\W*(?:(?:and\s+)?then\s+|and\s+|or\s+)?(?:her|his|their|(?-i:{names})['’]s)\s+(?:own\s+)?", pre, re.I):
+                again = said_verb
             else:
                 be = _GBE.match(post)
                 if not be:
                     continue
                 verb, part, post = be.group("v"), None, post[be.end():]
-            kind, where = _change(verb, part, post, of)
+            verb, kind, where = again[1:] if again else (verb, *_change(verb, part, post, of))
+            said_verb = (sent, verb, kind, where) if vm and kind else said_verb
             torn = re.fullmatch(_GVERBS[0][1], verb, re.I)
             if kind == "lift" and torn:
                 cut_now.add(_stem(g))
@@ -2886,84 +2955,89 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
             if not kind or kind in ("remove", "tear") and any(is_off(n, g) for n in cast) and not re.search(
                     rf"(?:\b(?:her|his|their)|(?-i:\b(?:{names}))['’]s)\s+(?:own\s+)?$", pre, re.I):
                 continue
-            who, many = owner(pre, post, g, kind, doer, sure), "are" if _many([g]) else "is"
-            if who not in cast and doer and doer not in cast:
+            whos = held if held and kind not in ("wear", "back") else owner(pre, post, g, kind, doer, sure, sent[:max(0, sent.find(c))])
+            whos = [w for w in whos if w in cast]
+            topic, many = ("clothes", items, whos), "are" if _many([g]) else "is"
+            if not whos and doer and doer not in cast:
                 topic = ("theirs", items)
                 continue
-            if kind in ("remove", "tear") and _INMOUTH.search(c[end:]) and not (who and wears(who, g)):
+            if kind in ("remove", "tear") and _INMOUTH.search(c[end:]) and not any(wears(w, g) for w in whos):
                 continue
-            if not who:
+            if not whos:
                 if doer in cast + [None] and (not any(is_off(n, g) for n in cast) or kind in ("wear", "back")):
                     missed.append((sent, f"could not tell whose {g} {'these are' if many == 'are' else 'this is'}; name the person, "
                                          f"as in \"{example}'s {g}\""))
                 continue
-            p, up = pron(people.get(who, {})), [w for x, w in raised.get(who, []) if _same(x, g)]
-            names_ = [real(who, x, kind != "wear") for x, _ in items]
-            if kind in ("wear", "back"):
-                if wears(who, g) and not up or kind == "back" and not up and not is_off(who, g):
-                    continue
-                kind = "wear"
-            elif is_off(who, g) and not wears(who, g):
-                if kind == "lift":
-                    missed.append((sent, f"{who}'s {g} {many} already off"))
-                continue
-            if kind in ("remove", "tear"):
-                groups = strip(who, names_, sent, doer, kind == "tear")
-                hands(who) if kind == "remove" else None
-                said = (lambda gs: c[start:end]) if it else (lambda gs: join([a + x for (x, a), y in zip(items, names_) if y in gs]))
-                free = [y for y in names_ if not any(y in gs for gs in groups.values())]
-                if groups and vm:
-                    mid = pre[vm.end():start]
-                    pm, tail = path.match(mid), _GONE.match(c, end).end()
-                    bare = re.sub(r"\s+", " ", mid[:pm.start("part")] + mid[pm.end("part"):]) if pm.group("part") else mid
-                    det = re.search(r"(?:\b(?:her|his|their)|[\w-]+['’]s)\s+$", bare)
-                    det = det.group(0) if det else ""
-                    act = lambda w: {"pulls": "leaves", "pulled": "left", "pulling": "leaving", "pull": "leave"}.get(
-                        _pulls(verb), "leaves") if w.startswith("on ") else _pulls(verb)
-                    edits.append((base + vm.start(), base + tail, 0, (f"{verb}{mid}{said(free)}{c[end:tail]} and " if free else "")
-                                  + " and ".join(f"{act(w)}{bare if not k else ' ' + det}{said(gs)} {w}"
-                                                 for k, (w, gs) in enumerate(groups.items()))))
-                elif groups and not next(iter(groups)).startswith("on "):
-                    edits.append((base + end + be.start("v"), base + _GONE.match(c, end + be.end()).end(), 0,
-                                  f"{_pulls(verb)} {next(iter(groups))}"))
-                continue
-            if kind == "lift":
-                zone, way = _zone(g), where.split(" ")[0]
-                lower = zone == {"lower"} and not _SKIRT.search(g)
-                if up and way in ("up", "down") and not up[0].startswith(way) and (where in ("up", "down") or lower and way == "up"):
+            asked, wanted = kind, where
+            for j, who in enumerate(whos):
+                kind, where = asked, wanted
+                p, up = pron(people.get(who, {})), [w for x, w in raised.get(who, []) if _same(x, g)]
+                names_ = [real(who, x, kind != "wear") for x, _ in items]
+                if kind in ("wear", "back"):
+                    if wears(who, g) and not up or kind == "back" and not up and not is_off(who, g):
+                        continue
                     kind = "wear"
-                elif lower and way == "up" or up and (where in ("", "up", "down") or re.search(r"\bstill\b", c, re.I)):
+                elif is_off(who, g) and not wears(who, g):
+                    if kind == "lift" and not it:
+                        missed.append((sent, f"{who}'s {g} {many} already off"))
                     continue
+                if kind in ("remove", "tear"):
+                    groups = strip(who, names_, sent, doer, kind == "tear")
+                    hands(who) if kind == "remove" else None
+                    said = (lambda gs: c[start:end]) if it else (lambda gs: join([a + x for (x, a), y in zip(items, names_) if y in gs]))
+                    free = [y for y in names_ if not any(y in gs for gs in groups.values())]
+                    if groups and vm and not j:
+                        mid = pre[vm.end():start]
+                        pm, tail = path.match(mid), _GONE.match(c, end).end()
+                        bare = re.sub(r"\s+", " ", mid[:pm.start("part")] + mid[pm.end("part"):]) if pm.group("part") else mid
+                        det = re.search(r"(?:\b(?:her|his|their)|[\w-]+['’]s)\s+$", bare)
+                        det = det.group(0) if det else ""
+                        act = lambda w: {"pulls": "leaves", "pulled": "left", "pulling": "leaving", "pull": "leave"}.get(
+                            _pulls(verb), "leaves") if w.startswith("on ") else _pulls(verb)
+                        edits.append((base + vm.start(), base + tail, 0, (f"{verb}{mid}{said(free)}{c[end:tail]} and " if free else "")
+                                      + " and ".join(f"{act(w)}{bare if not k else ' ' + det}{said(gs)} {w}"
+                                                     for k, (w, gs) in enumerate(groups.items()))))
+                    elif groups and be and not j and not next(iter(groups)).startswith("on "):
+                        edits.append((base + end + be.start("v"), base + _GONE.match(c, end + be.end()).end(), 0,
+                                      f"{_pulls(verb)} {next(iter(groups))}"))
+                    continue
+                if kind == "lift":
+                    zone, way = _zone(g), where.split(" ")[0]
+                    lower = zone == {"lower"} and not _SKIRT.search(g)
+                    if up and way in ("up", "down") and not up[0].startswith(way) and (where in ("up", "down") or lower and way == "up"):
+                        kind = "wear"
+                    elif lower and way == "up" or up and (where in ("", "up", "down") or re.search(r"\bstill\b", c, re.I)):
+                        continue
+                    else:
+                        said, low = where, ("thighs", "knees", "calves", "ankles", "feet", "floor")
+                        where = f"down to {p} waist" if where == "down" and "upper" in zone else "" if where in ("up", "down") else \
+                            re.sub(r"\b(?:her|his|their)\b", p, where)
+                        bar, deep = _stuck(g, have.get(who, []), people.get(who, {})), re.findall(rf"\b({'|'.join(low)})\b", where)
+                        if bar.startswith("on "):
+                            missed.append((None, _cant(who, names_, people.get(who, {}), bar)))
+                            edits.extend([(stop, stop, 0, f", but {p} {g} {'stay' if _many([g]) else 'stays'} {bar}")] if not j else [])
+                            continue
+                        if bar.startswith("down") and deep and max(map(low.index, deep)) >= low.index(
+                                {"legs": "knees"}.get(bar.split()[-1], bar.split()[-1])):
+                            at, where = c.find(said, end), bar
+                            edits.extend([(base + at, base + at + len(said), 0, bar)] if at >= 0 and not j else [])
+                        if up and pulled(f"{g} {where}".strip(), people.get(who, {}))[1] == up[0]:
+                            continue
+                if kind == "wear" and not j and re.fullmatch(_GVERBS[5][1], verb, re.I) and doer and doer != who and wears(doer, g) \
+                        and re.search(r"\b(?:her|his|their)\s+(?:own\s+)?$", pre, re.I):
+                    names_ = [real(doer, x) for x, _ in items]
+                    gone.setdefault(doer, []).extend(names_)
+                    got.append(["remove", doer, names_, sent, doer])
+                if kind == "wear":
+                    gone[who] = [x for x in gone.get(who, []) if not any(_same(x, y) for y in names_)]
+                    raised[who] = [x for x in raised.get(who, []) if not any(_same(x[0], y) for y in names_)]
                 else:
-                    said, low = where, ("thighs", "knees", "calves", "ankles", "feet", "floor")
-                    where = f"down to {p} waist" if where == "down" and "upper" in zone else "" if where in ("up", "down") else \
-                        re.sub(r"\b(?:her|his|their)\b", p, where)
-                    bar, deep = _stuck(g, have.get(who, []), people.get(who, {})), re.findall(rf"\b({'|'.join(low)})\b", where)
-                    if bar.startswith("on "):
-                        missed.append((None, _cant(who, names_, people.get(who, {}), bar)))
-                        edits.append((stop, stop, 0, f", but {p} {g} {'stay' if _many([g]) else 'stays'} {bar}"))
-                        continue
-                    if bar.startswith("down") and deep and max(map(low.index, deep)) >= low.index(
-                            {"legs": "knees"}.get(bar.split()[-1], bar.split()[-1])):
-                        at, where = c.find(said, end), bar
-                        edits.extend([(base + at, base + at + len(said), 0, bar)] if at >= 0 else [])
-                    if up and pulled(f"{g} {where}".strip(), people.get(who, {}))[1] == up[0]:
-                        continue
-            if kind == "wear" and re.fullmatch(_GVERBS[5][1], verb, re.I) and doer and doer != who and wears(doer, g) and re.search(
-                    r"\b(?:her|his|their)\s+(?:own\s+)?$", pre, re.I):
-                names_ = [real(doer, x) for x, _ in items]
-                gone.setdefault(doer, []).extend(names_)
-                got.append(["remove", doer, names_, sent, doer])
-            if kind == "wear":
-                gone[who] = [x for x in gone.get(who, []) if not any(_same(x, y) for y in names_)]
-                raised[who] = [x for x in raised.get(who, []) if not any(_same(x[0], y) for y in names_)]
-            else:
-                raised[who] = [x for x in raised.get(who, []) if not any(_same(x[0], y) for y in names_)] + \
-                    [pulled(f"{y} {where}".strip(), people.get(who, {})) for y in names_]
-            hands(who)
-            got.append([kind, who, [f"{y} {where}".strip() for y in names_] if kind == "lift" else
-                        [(a or ("" if _many([y]) else "an " if y[:1].lower() in "aeiou" else "a ")) + y for y, (_, a) in zip(names_, items)]
-                        if kind == "wear" else names_, sent, doer])
+                    raised[who] = [x for x in raised.get(who, []) if not any(_same(x[0], y) for y in names_)] + \
+                        [pulled(f"{y} {where}".strip(), people.get(who, {})) for y in names_]
+                hands(who)
+                got.append([kind, who, [f"{y} {where}".strip() for y in names_] if kind == "lift" else
+                            [(a or ("" if _many([y]) else "an " if y[:1].lower() in "aeiou" else "a ")) + y
+                             for y, (_, a) in zip(names_, items)] if kind == "wear" else names_, sent, doer])
 
     for a, b in _sentences(text):
         sent = told[a:b].strip()
@@ -3040,7 +3114,7 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
     for e in got:
         e[3] = moved.get(e[3], e[3])
     missed = [(moved.get(s, s), why) for s, why in missed]
-    final = {}
+    final, whole = {}, {i for i, (k, _, x, *_) in enumerate(got) if k == "remove" and not x}
     for i, (k, w, x, *_) in enumerate(got):
         for y in x if k in ("remove", "tear", "lift", "wear") else ():
             final[(w, _stem(pulled(y, {})[0] if k == "lift" else y))] = (i, y)
@@ -3050,7 +3124,7 @@ def read_beat(text, cast, people, held, off, worn, lifted, before="", crowd=None
                 k == "wear" and w in people and worn_rx(y).search(undress(people[w]["desc"], off.get(w, [])))
                 and not any(_same(y, z) for z, _ in lifted.get(w, [])))]
     return [(k, f"{w}, {('; ' if k in ('hold', 'have', 'release') else ', ').join(x)}" if x else w, s, d)
-            for k, w, x, s, d in got if x or k == "remove"], list(dict.fromkeys(missed)), text
+            for i, (k, w, x, s, d) in enumerate(got) if x or i in whole], list(dict.fromkeys(missed)), text
 
 
 def _after(off, worn, lifted, stripped, raised, back, dressed):
@@ -3222,7 +3296,7 @@ def plan(prompt, memory="", anchor="", shot_seconds=10.0, from_beat=True, first_
             per, desc = people[n], people[n]["desc"]
             hid = hidden(desc, off.get(n, []), worn.get(n, []), lifted.get(n, []))
             look = [undress(desc, off.get(n, []), hid)]
-            look += [f"{n} also wears {w}." for w in worn.get(n, [])]
+            look += [f"{n} also wears {_owned(w, per)}." for w in worn.get(n, [])]
             ups = lifted.get(n, [])
             look += [f"{cap(pron(per))} {g} {'are' if _many([g]) else 'is'} pulled {where}"
                      f"{_leaving(per, _bares(g, where) - set().union(*(_bares(*u) for u in ups[k + 1:])), desc, off.get(n, []),
@@ -3230,14 +3304,15 @@ def plan(prompt, memory="", anchor="", shot_seconds=10.0, from_beat=True, first_
                      for k, (g, where) in enumerate(ups)]
             vis = [s for s in _on(desc, off.get(n, [])) if s not in hid] + worn.get(n, [])
             look += [f"{side} the waist, {pron(per, 0)} {'wear' if pron(per, 0) == 'they' else 'wears'} only "
-                     f"{join([clean(s) for s in vis if zone in _zone(s)])}."
+                     f"{join([_owned(s, per) for s in vis if zone in _zone(s)])}."
                      for zone, side in (("upper", "Above"), ("lower", "Below"))
                      if any(zone in _zone(g) for g in off.get(n, []) if g != "*") and any(zone in _zone(s) for s in vis)]
             feet = _ankle_item(through.get(n, []))
             look += [_feet_look(feet, per)] if feet else []
             look += [_belt_look(x in through.get(n, []), per, belt) for x in through.get(n, []) + added.get(n, [])
                      if _gear(x) == "a chastity belt"][:1]
-            text = " ".join(x for x in look if x).strip()
+            look = [x.strip() for x in look if x and x.strip()]
+            text = " ".join(x if k == len(look) - 1 or _ends(x) else f"{x}." for k, x in enumerate(look))
             mine = sorted(k for k, who in owner.items() if who == n)
             pic = per["head"] or (mine[0] if mine and not re.search(_PIC, desc, re.I) else None)
             head = f" <Picture {pic}>" if pic else ""
@@ -3300,8 +3375,8 @@ def plan(prompt, memory="", anchor="", shot_seconds=10.0, from_beat=True, first_
             p_, o_, s_ = pron(per), pron(per, 2), pron(per, 0)
             kept = [x for x in added.get(n, []) if any(_swapped(x, [y]) for y in held.get(n, []))]
             seen = " ".join(story + [told])
-            down = [m.end() for m in re.finditer(r"\bface[\s-]down\b|\bon\s+(?:her|his|their)\s+(?:stomach|front|belly)\b", seen, re.I)]
-            up = [m.end() for m in re.finditer(r"\bon\s+(?:her|his|their)\s+back\b|\bface[\s-]up\b", seen, re.I)]
+            down = [m.end() for m in _PRONE.finditer(seen)]
+            up = [m.end() for m in re.finditer(r"\bon(?:to)?\s+(?:her|his|their)\s+back\b|\bface[\s-]?up\b", seen, re.I)]
             posed, behind = _pose(call(n), per, was + kept, [x for x in added.get(n, []) if x not in kept],
                                   [k for k, *_ in gait.get(n, [])], before.get(n), joined, bool(down) and (not up or down[-1] > up[-1]))
             notes += posed
@@ -3388,22 +3463,26 @@ def plan(prompt, memory="", anchor="", shot_seconds=10.0, from_beat=True, first_
         same = len({pal.get(n, {}).get("sex", "") for n in talkers}) == 1
         one = pal.get(talkers[0], {}) if talkers else {}
         unseen = {v["label"] for v in extras.values() if v["kind"] == "heard"}
-        notes += [f"Only {talker(talkers[0])} speaks in this shot, in {own(talkers[0])}: nobody in the shot moves their lips with "
-                  f"{'it' if len(spoken) == 1 else 'them'}."] if len(talkers) == 1 and talkers[0] in unseen else \
-            [f"Only {talker(talkers[0])} speaks in this shot, in {own(talkers[0])}: {pron(one)} lips move only while "
+        live = "with natural, expressive intonation and real emotion, the way people really talk"
+        quiet = [n for n in cast if n not in talkers and n not in hushed]
+        hush = f" {cap(join([talker(n) for n in quiet]))} {'listens' if len(quiet) == 1 else 'listen'} with closed lips." if quiet else ""
+        notes += [f"Only {talker(talkers[0])} speaks in this shot, in {own(talkers[0])}, {live}: nobody in the shot moves their lips "
+                  f"with {'it' if len(spoken) == 1 else 'them'}."] if len(talkers) == 1 and talkers[0] in unseen else \
+            [f"Only {talker(talkers[0])} speaks in this shot, in {own(talkers[0])}, {live}: {pron(one)} lips move only while "
              f"{pron(one, 0)} {'says' if pron(one, 0) != 'they' else 'say'} {'the line' if len(spoken) == 1 else 'the lines'}, "
-             f"and nobody else's lips move."] if len(talkers) == 1 else \
+             f"and every word of {'it' if len(spoken) == 1 else 'them'} is "
+             f"{ {'her': 'hers', 'his': 'his'}.get(pron(one, 1), 'theirs')}.{hush}"] if len(talkers) == 1 else \
             [f"{cap(join([talker(n) for n in talkers]))} speak in this shot, each in "
-             f"{pron(pal.get(talkers[0], {})) if same else 'their'} own voice and each saying only "
-             f"{pron(pal.get(talkers[0], {})) if same else 'their'} own lines; nobody else's lips move."] if talkers else []
+             f"{pron(pal.get(talkers[0], {})) if same else 'their'} own voice, {live}, and each saying only "
+             f"{pron(pal.get(talkers[0], {})) if same else 'their'} own lines.{hush}"] if talkers else []
         notes += [f"{cap(talker(n))} makes only a muffled, closed-mouth mmmph through the {gagword(g)}, with no words."
                   for n, g in hushed.items()]
         heard = [x for x in ("the line" if len(spoken) == 1 else "the lines" if spoken else "",
                              "the muffled sounds" if hushed else "") if x]
-        notes.append(f"Apart from {' and '.join(heard)}, everyone stays silent." if heard else
-                     "Nobody speaks, and every mouth stays closed.")
-        if not _MUSIC.search(" ".join(lead + [p["text"]])):
-            notes.append("There is no background music.")
+        scene = " ".join(lead + [p["text"]])
+        music, vocal = bool(_MUSIC.search(scene)), bool(_VOCAL.search(scene))
+        notes.append(f"Apart from {' and '.join(heard)}, everyone stays silent." if heard else _WORDLESS if vocal else _HUSH)
+        notes += [] if music else [_SOUND]
         xs = [v for v in extras.values() if v["here"] and not v["where"]]
         apart = [v for v in extras.values() if v["here"] and v["where"]]
         counts = [None if v["noun"] == "someone" or not v["here"] else v["count"] for v in extras.values() if not v["where"]]
@@ -3514,6 +3593,9 @@ def plan(prompt, memory="", anchor="", shot_seconds=10.0, from_beat=True, first_
         shots.append({"n": i + 1, "beat": p["beat"], "prompt": text, "frames": frames, "keyed": keyed, "cut": p["cut"], "cast": cast,
                       "refs": [k - 1 for k in refs], "faces": [k in owner for k in refs],
                       "silent": silence and not any(k == "line" for _, _, k in cues), "cues": cues, "changed": changes, "coming": coming,
+                      "hush": "\n\n".join([y for y in (re.sub(_PIC, "", x, flags=re.I).strip() for x in lead) if y]
+                                           + [_HUSH + ("" if music else " " + _SOUND)]) if cues else "",
+                      "mute": (silence or bool(cues)) and not (music or vocal and not cues or _TONES.search(scene)),
                       "line": ", ".join(bits), "read": [(k, a) for k, a, *_ in read],
                       "said": [(ln["who"], ln["q"], bool(ln["gag"])) for ln in lines if not ln["thought"]]})
         warn += [f"shot {i + 1}: '{u}' was not read" for u in p["unread"]]

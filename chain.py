@@ -27,6 +27,7 @@ PINS = ("weights", "patches", "weights-loaded", "patches-loaded", "weights-fast"
 POOL, POINTS, LUT = 256, 33, 1024
 JUMP, FLAT, MEDIAN, WASHED, FLOOR = (0.15, 0.08, 0.08), 0.02, 0.12, 0.85, 1.0 / 255.0
 TOL, LIFT, BOOST = 0.03, 1.25, 1.25
+VOICE_LO, VOICE_HI, VOICED, LOUDER = 75, 400, 0.5, 3.0
 FINE, CRISP_TOL, CRISP_MIN, CRISP_STEP = 400, 0.05, 0.6, 4
 FRESH_SCALE, FRESH_FINE, FRESH_MARGIN, FRESH_STEP = 96, 256, 24, 6
 FRESH_LO, FRESH_STILL, FRESH_HI, FRESH_LEVEL, FRESH_DARK = 0.04, 0.06, 0.10, 0.3, 0.02
@@ -77,6 +78,38 @@ def spans(audio, cues):
     for a, b in cues:
         mask[..., round(a * AUDIO_FPS):round(b * AUDIO_FPS)] = 1.0
     return mask
+
+
+def gaps(cues, length):
+    out, at = [], 0.0
+    for a, b in sorted(cues):
+        out += [(at, a)] if a > at else []
+        at = max(at, b)
+    return out + ([(at, length)] if length > at else [])
+
+
+def unvoice(wave, sr, keep):
+    x = wave.mean(dim=1)[0].float()
+    hop, win = sr // 100, sr // 25
+    if x.numel() < win:
+        return wave
+    frames = x.unfold(0, win, hop)
+    frames = frames - frames.mean(dim=1, keepdim=True)
+    ac = torch.fft.irfft(torch.fft.rfft(frames, n=2 * win).abs() ** 2, n=2 * win)[:, :win]
+    peak = ac[:, sr // VOICE_HI:sr // VOICE_LO + 1].max(dim=1).values / ac[:, 0].clamp(min=1e-12)
+    rms = frames.pow(2).mean(dim=1).sqrt()
+    t = torch.arange(len(rms), device=rms.device) * hop / sr
+    gap = torch.ones_like(rms, dtype=torch.bool)
+    for a, b in keep:
+        gap &= (t + win / sr <= a) | (t >= b)
+    if not bool(gap.any()):
+        return wave
+    floor = torch.quantile(rms[gap], 0.2)
+    voiced = (peak > VOICED) & (rms > LOUDER * floor) & gap
+    voiced = (torch.nn.functional.max_pool1d(voiced.float()[None, None], 17, 1, 8)[0, 0] > 0) & gap
+    gain = torch.where(voiced, (floor / rms.clamp(min=1e-9)).clamp(max=1.0), torch.ones_like(rms))
+    gain = torch.nn.functional.avg_pool1d(gain[None, None], 5, 1, 2, count_include_pad=False)
+    return wave * torch.nn.functional.interpolate(gain, size=int(wave.shape[-1]), mode="linear")[0, 0].to(wave)
 
 
 def build(clip, vae, audio_vae, text, w, h, frames, handoff=None, refs=(), memory=None, silent=False, cues=(), memo=None):
