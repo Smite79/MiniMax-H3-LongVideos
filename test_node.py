@@ -1345,6 +1345,45 @@ def test_undress_bound():
           (beat(off), notes(off), beat(own), notes(own), notes(shoes), beat(front), notes(lying), back["line"], beat(back)))
 
 
+def test_skirts():
+    print("\n=== a skirt has no legs to pull down, so bound legs never stop it, and a beat split into shots says each thing once ===")
+    mem = ("Sarah: a young woman with long blonde hair, in a white blouse, a short denim skirt, black panties and white sneakers.\n"
+           "Dana: a woman with short black hair, in a red dress and black heels.")
+    jeans = mem.replace("a short denim skirt", "blue jeans")
+    room = "A cellar with a steel table, a wooden chair, a bed and a staircase.\n\n"
+    cuffed = "Dana pushes Sarah face down onto the floor and cuffs her wrists behind her back.\n\n"
+    hog = "Dana lifts both of Sarah's legs and hogties her with another set of handcuffs"
+    story = lambda cast, *b: P.plan(room + "\n\n".join(b), cast)
+    said = lambda shots: [s["prompt"].split("\n\n")[-2] for s in shots[1:]]
+    ankles = "Sarah lies on the bed, her ankles handcuffed together."
+    skirt, warn = story(mem, ankles, "Dana takes off Sarah's skirt.")
+    pants, pwarn = story(jeans, ankles, "Dana takes off Sarah's jeans.")
+    free = story(mem, "Sarah stands by the table.", "Dana takes off Sarah's skirt.")[0]
+    check("a skirt comes off over the hips of a woman with cuffed ankles, her legs left exactly as they are and no warning, while "
+          "jeans still stop above the cuffs and a free woman's skirt still slides down her legs",
+          "opens blonde-haired Sarah's short denim skirt at the waist and slides it off her hips and away, leaving her bound legs "
+          "exactly as they are." in notes(skirt[-1])
+          and not any(w in skirt[-1]["prompt"] for w in ("down her legs", "just above the handcuffs")) and not warn
+          and "pulls blonde-haired Sarah's blue jeans down to just above the handcuffs on her ankles" in notes(pants[-1])
+          and any("blue jeans cannot come off past her bound legs" in w for w in pwarn)
+          and "slides it down her legs and off over her feet" in notes(free[-1]), (notes(skirt[-1]), warn, notes(pants[-1]), pwarn))
+    hogged = story(mem, cuffed + hog + ".", "Dana removes Sarah's skirt.")[0]
+    check("a skirt comes off a hogtied woman without her bound legs being pulled on",
+          "slides it off her hips and away, leaving her bound legs exactly as they are" in notes(hogged[-1])
+          and not any(w in hogged[-1]["prompt"] for w in ("down her legs", "just above the handcuffs")), notes(hogged[-1]))
+    first = said(story(mem, cuffed + "Dana removes Sarah's skirt, then lifts both of Sarah's legs and hogties her with another set "
+                                     "of handcuffs.")[0])
+    last = said(story(mem, cuffed + hog + ", then removes Sarah's skirt.")[0])
+    check("a removal first in a beat with a hogtie is said once, before the ankles are cuffed, and the hogtie then goes on without it",
+          len(first) == 2 and first[0].startswith("Dana takes off Sarah's short denim skirt") and first[0].endswith("Dana cuffs Sarah's "
+          "ankles together.") and first[1].startswith("Dana lifts both of Sarah's legs and hogties") and "skirt" not in first[1], first)
+    check("a removal last in a beat with a hogtie comes in a shot of its own after the hogtie, which neither cuffs the ankles a "
+          "second time nor lifts the legs again",
+          len(last) == 3 and last[0] == "Dana cuffs Sarah's ankles together." and last[1].startswith("Dana bends Sarah's knees")
+          and "cuffs Sarah's ankles" not in last[1] and last[2].startswith("Dana removes Sarah's skirt")
+          and not any(w in last[2] for w in ("lifts", "hogtie")), last)
+
+
 def test_belt():
     print("\n=== a chastity belt stays on once it is on, with its picture in every shot, and nothing comes off from under it ===")
     mem = ("Sarah <Picture 1>: a young woman with long blonde hair, in a white blouse and black panties.\n"
@@ -1592,6 +1631,7 @@ def main():
     test_chain()
     test_ankles()
     test_undress_bound()
+    test_skirts()
     test_belt()
     test_apart()
     test_links()

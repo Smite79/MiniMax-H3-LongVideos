@@ -263,7 +263,8 @@ _UNDRESS = ((r"gloves|hats?|caps?|scarf|scarves|glasses", 2, "takes off {w} {g}"
             (_WHOLE, 6, "slides {w} {g} off {p} shoulders and all the way down {p} body, and off over {p} feet",
              "pulls {w} {g} up over {p} head and off {p} arms"),
             (_UP_COVER, 4, "pulls {w} {g} up over {p} head and off {p} arms", ""),
-            (r"(?:mini)?skirts?|sarongs?", 4, "opens {w} {g} at the waist and slides {it} down {p} legs and off over {p} feet", ""),
+            (r"(?:mini)?skirts?", 4, "opens {w} {g} at the waist and slides {it} down {p} legs and off over {p} feet",
+             "opens {w} {g} at the waist and slides {it} off {p} hips and away, leaving {p} bound legs exactly as they are"),
             (_LOW_COVER, 6, "opens {w} {g} at the waist and pulls {it} down {p} legs and off over {p} feet", ""),
             (r"socks|stockings|tights|pantyhose", 5, "rolls {w} {g} down {p} legs and off {p} feet", "pulls {w} {g} off {p} feet"),
             (r"bras?|bralettes?", 4, "unhooks {w} {g} and slides the straps off {p} shoulders and down {p} arms", ""),
@@ -1574,7 +1575,7 @@ def _stuck(g, bonds, per):
         return f"on under {p} chastity belt"
     if "upper" in _zone(g) and any("wrists" in parts(x) for x in bonds):
         return f"open and down off {p} shoulders" if _OPENS.search(g) else f"up above {p} {_chest(per)}"
-    if _zone(g) != {"lower"} or not legs:
+    if _zone(g) != {"lower"} or not legs or _SKIRT.search(g):
         return ""
     gear = re.sub(r"^an?\s+", "", _gear(legs))
     spot = next(s for s in ("thighs", "knees", "legs", "ankles", "feet") if s in _places(legs) or s == "feet")
@@ -1941,6 +1942,11 @@ def _pace(text, events, took, slow=None):
     return out
 
 
+def _raising(clause, done):
+    return bool(re.search(r"\b(?:lifts?|raises?|bends?|folds?|draws?)\b", clause, re.I)) and not _gears(clause) and bool(
+        set(_spots(clause)) & {"ankles", "knees", "legs", "thighs"}) and any(t[0] == "hold" and _hogged(t[2]) for t in done)
+
+
 def _rest(text, done, keep, people):
     seps = list(_CLAUSE.finditer(text))
     spans = list(zip([0] + [m.end() for m in seps], [m.start() for m in seps] + [len(text)]))
@@ -1956,6 +1962,7 @@ def _rest(text, done, keep, people):
         if hit or gone and gone[-1] == k - 1 and more(said(k)) and not kept(said(k)):
             gone.append(k)
             left = [t for t in left if t not in hit]
+    gone += [k for k in range(len(spans) - 1) if k not in gone and k + 1 in gone and _raising(said(k), done)]
     stay, (who, doer) = [k for k in range(len(spans)) if k not in gone], (keep[0][1], keep[0][4]) if keep else (None, None)
     if left or not gone or not stay or not doer or _SPEECH.search(text) or stay[0] and re.match(r"\w+ing\b", said(stay[0])):
         return text
@@ -1998,11 +2005,16 @@ def _parts(text, read, room, people, took, garb, held=None, slow=None):
             chunks[-1].append(t)
             used += span(t)
         last = [t for t in atoms if t not in free and t[0] != "have" or t in chunks[-1]]
+        first = {("hold", t[1], _TIED_TO.sub("", t[2])) for t in free if fresh(*t[:3])}
         left, said = secs + talk - sum(span(t) for t in atoms if t not in last), \
-            _rest(text[a:b], [t for c in chunks[:-1] for t in c if t[0] != "have"], last, people)
+            _rest(text[a:b], [t for c in chunks[:-1] for t in c if t[0] != "have" and t[:3] not in first], last, people)
         said = re.sub(rf"\s+with\s+(?:another|a\s+second|a|an|the|her|his|their)\s+(?:pair\s+of\s+|set\s+of\s+)?(?:{_KIT})\b", "", said,
                       flags=re.I) if hog else said
-        units += [(_said(_merged(c), people, held), _merged(c), sum(map(span, c)), False) for c in chunks[:-1]]
+        seen = {w: list(v) for w, v in (held or {}).items()}
+        for c in chunks[:-1]:
+            units.append((_said(_merged(c), people, seen), _merged(c), sum(map(span, c)), False))
+            for k, who, y, *_ in c:
+                seen[who] = _put(seen.get(who, []), [y]) if k == "hold" else seen.get(who, [])
         units.append((said, _merged([t[:3] + (said.strip(), t[4]) for t in last] if said != text[a:b] else last), left, bool(hog)))
     if sum(u[2] for u in units) <= room * RUSH and not any(u[3] for u in units):
         return []
