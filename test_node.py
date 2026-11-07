@@ -226,6 +226,33 @@ def test_speech():
           and round(long["cues"][0][1] - long["cues"][0][0], 2) == round(P.SAY_SLACK + 11 / P.WORDS_PER_SEC + 2 * P.SENTENCE_PAUSE, 2)
           and "with natural, expressive intonation and real emotion" in notes(long)
           and "Black-haired Dana listens with closed lips." in notes(long), (long["prompt"], long["cues"]))
+    close = said('Dana pulls Sarah close and whispers, "Don\'t make a sound. Nobody can hear you."')
+    split = said('"Did you really think you could run?" Dana asks. "Nobody is coming. Stop struggling."')
+    check("a long line stays with the one who speaks it, not the one named before the speech verb, and a line split by its tag "
+          "stays with its speaker",
+          "Black-haired Dana pulls Sarah close and whispers: <d>Don't make a sound.</d> Dana continues: <d>Nobody can hear you.</d>"
+          in close["prompt"] and [w for w, _, _ in split["said"]] == ["Dana", "Dana"]
+          and [w for w, _, _ in said('Sarah turns to Dana and asks, "Why? I trusted you."')["said"]] == ["Sarah"]
+          and [w for w, _, _ in said('Sarah says to Dana: "Listen to me. Please."')["said"]] == ["Sarah"]
+          and [w for w, _, _ in said('Dana grabs Sarah\'s wrists. "Let go of me! You\'re hurting me!"')["said"]] == ["Sarah"]
+          and [w for w, _, _ in said('Sarah asks, "Where were you?" Dana says, "At work."')["said"]] == ["Sarah", "Dana"]
+          and [w for w, _, _ in said('"Hi," Sarah says, "how are you?"')["said"]] == ["Sarah", "Sarah"], (close["prompt"], split["said"]))
+    turns = P.plan("A room.\n\nDana and Sarah stand by the bed.\n\nSarah faces Dana. \"I found the letters. I know about her. Don't lie to "
+                   "me. Five years of lies. I want the truth.\" Dana sighs. \"It meant nothing. She meant nothing. I made a mistake. I was "
+                   "lonely. Please forgive me.\"", mem)[0]
+    spoken = [(w, "sighs: <d>" in sh["prompt"], "Dana sighs." in sh["prompt"]) for sh in turns for w, _, _ in sh["said"]]
+    check("a sentence of reaction after a quote that ends in a full stop is not its speech tag, even when the beat is split into shots, "
+          "so each of two long lines stays with its own speaker",
+          spoken == [("Sarah", False, True), ("Dana", False, False)] and "Blonde-haired Sarah says: <d>I found the letters.</d>"
+          in turns[-2]["prompt"], (spoken, [sh["prompt"][-900:] for sh in turns[-2:]]))
+    asked = P.plan("A room.\n\nDana and Sarah stand by the bed.\n\nSarah asks, \"Where were you last night?\"\n\n"
+                   "\"At work. I told you.\"", mem)[0]
+    check("a quote on a paragraph of its own, straight after a question, is the answer of the other person",
+          [w for sh in asked for w, _, _ in sh["said"]] == ["Sarah", "Dana"], [sh["said"] for sh in asked])
+    label = said('SARAH: "Where were you? I waited for hours."'), said('Dana (whispering): "Hold still. Please."')
+    check("a speaker's name in capitals, or with a direction in brackets, before a colon and a quote is read as the speaker",
+          label[0]["said"][0][0] == "Sarah" and label[1]["said"][0][0] == "Dana"
+          and "Black-haired Dana says (whispering): <d>Hold still.</d>" in label[1]["prompt"], (label[0]["said"], label[1]["prompt"]))
     quiet = said("Dana walks to the window.")
     check("the sound is said as what is heard, never as music that is not there",
           "All the sound comes from the scene itself" in notes(quiet) and "music" not in quiet["prompt"], notes(quiet))

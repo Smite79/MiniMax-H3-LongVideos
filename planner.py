@@ -50,6 +50,9 @@ _SAYS = (r"says?|said|asks?|asked|chants?|chanted|whispers?|whispered|murmurs?|m
          r"counters?|countered|goes\s+on|went\s+on|tries|tried|manages?|managed|starts?|started|begins?|began|croaks?|croaked|"
          r"rasps?|rasped|wheezes?|wheezed|squeaks?|squeaked|yelps?|yelped|whines?|whined|mimics?|mimicked|mocks?|mocked|"
          r"(?:shoots?|shot|fires?|fired|snaps?|snapped)\s+back|(?:calls?|called|cries|cried)\s+(?:out|after)")
+_TRIES = re.compile(r"tries|tried|manages?|managed|starts?|started|begins?|began|continues?|continued", re.I)
+_SOUNDS = re.compile(r"laughs?|laughed|giggles?|giggled|sighs?|sighed|sneers?|sneered|scoffs?|scoffed|grunts?|grunted|"
+                     r"gasps?|gasped|sobs?|sobbed|moans?|moaned|groans?|groaned|chokes?|choked", re.I)
 _MEEKSAY = re.compile(r"\b(?:mumbles?|mumbled|whimpers?|whimpered|pleads?|pleaded|begs?|begged|sobs?|sobbed|moans?|moaned|groans?|"
                       r"groaned|protests?|protested|gasps?|gasped|cries|cried|squeals?|squealed|chokes?|choked|panted|yelps?|yelped|"
                       r"croaks?|croaked|whines?|whined|squeaks?|squeaked|wheezes?|wheezed|rasps?|rasped)\b", re.I)
@@ -463,6 +466,19 @@ _GAZE = re.compile(r"\b(?:(?:look|turn|talk|call|shout|yell|whisper|laugh|wink)(
                    r"thanked)\s+$", re.I)
 _CUT_AT = re.compile(r"[,;:—–]|\b(?:and|but|then|while|as|when|until|before|after|because|so|or|once|if|though|although|since|"
                      r"whereas|who|which)\b", re.I)
+_AIMED = re.compile(rf"(?<![\w'’-])(?!(?:{_LEADS}|\w+ly|and|but|so|or|nor|yet|as|while|whilst|when|because|after|before|until|once|"
+                    rf"if|though|although|since|where|whereas)\b)[a-z]+\s+$")
+_ROUGH = re.compile(r"\b(?:grabs?|grabbed|seizes?|seized|pushes|pushed|shoves?|shoved|pulls?|pulled|drags?|dragged|yanks?|yanked|"
+                    r"holds?|held|pins?|pinned|restrains?|restrained|ties|tied|binds?|bound|(?:hand)?cuffs?|(?:hand)?cuffed|tapes?|taped|"
+                    r"gags?|gagged|slaps?|slapped|hits?|punch(?:es|ed)?|kicks?|kicked|chokes?|choked|squeezes?|squeezed|twists?|twisted|"
+                    r"forces?|forced|presses|pressed|lifts?|lifted|throws?|threw|shakes?|shook|slams?|slammed|clamps?|clamped|grips?|"
+                    r"gripped|chains?|chained)\b", re.I)
+_PLEAD = re.compile(r"\b(?:let\s+me\s+go|let\s+go\s+of\s+me|get\s+(?:off|away\s+from)\s+me|leave\s+me\s+alone|"
+                    r"don['’]?t\s+(?:hurt|touch)\s+me|(?:you['’]re|you\s+are)\s+hurting\s+me|untie\s+me|help\s+me(?!\s+[a-z])|"
+                    r"please\s+(?:don['’]?t|stop|no))\b", re.I)
+_REPLY = re.compile(r"\W*(?:(?:yes|yeah|yep|yup|no|nope|nah|maybe|perhaps|sure|fine|okay|ok)\b\W|(?:somewhere|nowhere|nothing|nobody|"
+                    r"no\s+one|because)\b(?!\s+(?:is|are|was|were|will|would|can|could|has|have|had|knows?|cares?|comes?|gets?|goes)\b))",
+                    re.I)
 _DETS = {"her", "his", "their", "the", "a", "an", "its", "s", "off", "up", "down", "and", "of", "with", "to", "over", "on", "into", "out",
          "from", "back", "some", "more", "my", "your", "aside", "open", "it", "them", "him", "own", "both", "this", "that"}
 _CUES = (rf"{_APPLY}|takes?|took|pulls?|pulled|rips?|ripped|tears?|tore|yanks?|yanked|slips?|slipped|lifts?|lifted|raises?|raised|"
@@ -649,15 +665,19 @@ def timeline(lines, marks=(), packed=False):
     return cues
 
 
-def voices(text, cast, people, start, events, prior=None, crowd=None, before=""):
+def voices(text, cast, people, start, events, prior=None, crowd=None, before="", ahead=""):
     told, spans, ago = narration(text), list(_SPEECH.finditer(text or "")), narration(before) + "\n"
+    heads = [s.start() for s in spans[1:]] + ([len(told)] if _SPEECH.match(ahead.lstrip()) else [])
     names = "|".join(re.escape(n) for n in sorted(cast, key=len, reverse=True)) or "(?!)"
+    caps = "|".join(re.escape(n.upper()) for n in sorted(cast, key=len, reverse=True)) or "(?!)"
     refer, extra = _folk_ref(crowd, people, cast)
     ones = {v["label"]: v["sex"] for v in (crowd or {}).values() if v["count"] == 1}
     here = [v["label"] for v in (crowd or {}).values() if v["count"] == 1 and v["here"]]
     speaker = lambda raw: (lambda lab: lab if lab in ones or lab in cast or not lab else f"one of {lab}")(extra(raw))
     who = rf"(?:(?-i:{names})|she|he|they|{refer})"
     lines, said, edge = [], prior if prior in cast else None, 0
+    query = _EDGES.sub("", (_SPEECH.findall(before or "") or [""])[-1]).strip()
+    asks = {"q": query, "who": said, "post": False} if said and query.endswith("?") else None
     sex = lambda n: people.get(n, {}).get("sex", "") if n in people else ones.get(n, "")
 
     def gag(n, at):
@@ -695,28 +715,43 @@ def voices(text, cast, people, start, events, prior=None, crowd=None, before="")
         before, after = told[lo:m.start()], told[m.end():hi]
         tag = re.match(rf"\s*[,.!?;:—–-]*\s*(?:(?P<a>{who})\s+(?:\w+ly\s+)?(?P<va>{_SAYS}|thinks?|thought|wonders?|wondered)|"
                        rf"(?P<vb>{_SAYS})\s+(?P<b>(?-i:{names})|{refer}))\b", after, re.I)
-        script = re.search(rf"(?-i:\b({names}))\s*:\s*$", before)
+        verb_after = (tag.group("va") or "") if tag else ""
+        to_do = bool(tag) and bool(re.match(rf"\s+to\s+(?!(?:{_SAYS}|speak|talk)\b)", after[tag.end():], re.I))
+        reacts = bool(tag) and k < len(heads) and bool(re.search(r"(?<!\.)\.$", q)) and bool(
+            re.fullmatch(r"\s*[^.!?]+[.!?]\s*", told[m.end():heads[k]]))
+        tag = None if tag and (_TRIES.fullmatch(verb_after) and to_do or _SOUNDS.fullmatch(verb_after) and reacts) else tag
+        script = re.fullmatch(rf"[^a-z]*?(?-i:\b({names}|{caps}))\s*(?:\(([^()]*)\)\s*)?[:—–-]\s*", before)
         verb = ([v for v in re.finditer(rf"\b(?:{_SAYS})\b", before, re.I)] or [None])[-1]
-        lead = ([t for t in re.finditer(rf"\b{who}\b(?!['’])", before[:verb.start()], re.I)
-                 if len(before[t.end():verb.start()].split()) <= 8] or [None])[-1] if verb and re.fullmatch(
-            r"[\s,:—–-]*(?:\w+ly\s*)?(?:(?:to|at|into|through|against|in|from|toward|towards)\s+[\w'’ -]+?)?[\s,:—–-]*"
-            r"(?:(?:something|what)\s+(?:that\s+)?(?:sounds?|sounded)\s+like|something\s+like)?[\s,:—–-]*", before[verb.end():],
-            re.I) else None
-        if tag:
-            raw, v, edit = tag.group("a") or tag.group("b"), tag.group("va") or tag.group("vb"), [(m.start(), m.end() + tag.end())]
-        elif script:
-            raw, v, edit = script.group(1), "says", [(lo + script.start(), m.end())]
+        aim = re.fullmatch(rf"[\s,:—–-]*(?:\w+ly\s*)?(?:(?P<o>him|her|them|(?-i:{names}))\b(?!['’])\s*(?:\w+ly\s*)?)?"
+                           rf"(?:(?:to|at|into|through|against|in|from|toward|towards)\s+(?P<t>[\w'’ -]+?))?[\s,:—–-]*"
+                           rf"(?:(?:something|what)\s+(?:that\s+)?(?:sounds?|sounded)\s+like|something\s+like)?[\s,:—–-]*",
+                           before[verb.end():], re.I) if verb else None
+        near = [t for t in re.finditer(rf"\b{who}\b(?!['’])", before[:verb.start()], re.I)
+                if len(before[t.end():verb.start()].split()) <= 16] if aim else []
+        lead = ([t for t in near if not _AIMED.search(before[:t.start()]) or re.fullmatch(r",?\s+who\s+(?:\w+ly\s+)?",
+                                                                                          before[t.end():verb.start()])] or [None])[-1]
+        heard, post = told[edge:m.start()], bool(tag) and not (script or lead)
+        hearer = rf"\s+(?:to\s+|at\s+)?(?:(?-i:({names}))\b(?!['’])|({refer})(?![\w'’])|(?:him|her|them)\b(?![\w'’]|\s+[a-z]))"
+        listener = re.match(hearer, after[tag.end():], re.I) if post else \
+            re.fullmatch(rf"(?-i:({names}))", aim.group("o") or aim.group("t") or "") if lead and not script else None
+        said_to = listener.group(listener.lastindex) if listener and listener.lastindex else None
+        said_to = said_to if said_to in cast else speaker(said_to) if said_to else None
+        if script:
+            raw = next((n for n in cast if n.upper() == script.group(1).upper()), script.group(1))
+            v, edit = "says" + (f" ({script.group(2).strip()})" if script.group(2) else ""), [(lo + script.start(1), m.end())]
         elif lead:
             raw, v, edit = lead.group(0), verb.group(0), [(lo + lead.start(), lo + lead.end()), (lo + verb.start(), m.end())]
+        elif tag:
+            raw, v, edit = tag.group("a") or tag.group("b"), tag.group("va") or tag.group("vb"), [
+                (m.start(), m.end() + tag.end() + (listener.end() if listener else 0))]
         else:
             raw, v, edit = None, "says", [(m.start(), m.end())]
-        heard = told[edge:m.start()]
-        listener = re.match(rf"\s+(?:to\s+|at\s+)?(?-i:({names}))\b(?!['’])", after[tag.end():]) if tag else None
         mum = {n for n in cast if re.search(rf"(?-i:\b{re.escape(n)})\b[^.!?]*?\b(?:(?:clamps?|presses?|purses?|seals?|keeps?)\s+"
                                             rf"(?:her|his|their)\s+(?:lips|mouth)\s+(?:shut|closed|together|tight)|says?\s+nothing|"
                                             rf"stays?\s+(?:silent|quiet)|refuses?\s+to\s+(?:speak|answer|talk))", heard, re.I)}
-        skip = set(re.findall(rf"(?-i:\b({names}))\b(?!\s+(?:I|you|we|he|she|they|it)\b)", q)) | mum | (
-            {listener.group(1)} if listener else set())
+        aimed = {t.group(0) for t in near if t.group(0) in cast and lead and t.start() > lead.start() and _AIMED.search(before[:t.start()])}
+        skip = set(re.findall(rf"(?-i:\b({names}))\b(?!\s+(?:I|you|we|he|she|they|it)\b)", q)) | mum | aimed | (
+            {said_to} if said_to else set())
         words = re.findall(r"[a-z’']+", q.lower())
         sound = bool(words) and bool(re.fullmatch(r"[mnhgpfk]*[aeiou]?[mnhgpfk]+", words[0]) and re.search(
             r"mph|mf|ngh|mmm|nnn|mmh|hmph|nnh|mmn", words[0]))
@@ -730,11 +765,13 @@ def voices(text, cast, people, start, events, prior=None, crowd=None, before="")
             fit = [n for n in cast + (list(ones) if gender else here) if n not in skip and (not gender or sex(n) in (gender, ""))]
             muted = [n for n in fit if n in gagged]
             ok = fit if meek or sound else [n for n in fit if n not in gagged] or fit
-            prev = lines[-1] if lines and not re.search(rf"(?-i:\b(?:{names}))\b|\b(?:she|he|they)\b|\b(?:{refer})", heard, re.I) else None
+            named_ = re.search(rf"(?-i:\b(?:{names}))\b|\b(?:she|he|they)\b|\b(?:{refer})", heard, re.I)
+            prev = None if named_ else lines[-1] if lines else asks
             if sound and len(muted) == 1:
                 name = muted[0]
             elif raw is None and prev and prev["who"]:
-                asked = prev["q"].rstrip().endswith("?") or q.endswith("?") and re.search(r"\byou\b", q, re.I)
+                asked = (prev["q"].rstrip().endswith("?") or lines and q.endswith("?") and re.search(r"\byou\b", q, re.I)) and not (
+                    prev["post"] and not heard.strip(" ,.;:—–-") and not _REPLY.match(q) and lines[-2:][0]["who"] == prev["who"])
                 rest = [n for n in ok if n != prev["who"] and not gag(n, m.start())]
                 called = [n for n in re.findall(rf"(?-i:\b({names}))\b", prev["q"]) if n in rest]
                 name = (called[0] if called else rest[0] if len(rest) == 1 else acted(m.start(), rest) or None if rest
@@ -742,16 +779,20 @@ def voices(text, cast, people, start, events, prior=None, crowd=None, before="")
                 name = (rest[0] if len(rest) == 1 else None) if name and gag(name, m.start()) and not (sound or plea) else name
             else:
                 last = acted(m.start(), fit)
-                name = last if last and last in muted and plea else ok[0] if len(ok) == 1 else acted(m.start(), ok)
+                scene = re.split(r"(?<=[.!?])\s+", told[:m.start()].strip())[-1]
+                hurt = [n for n in ok if n != last and re.search(rf"(?-i:\b{re.escape(n)})\b|\b{'her' if sex(n) == 'f' else 'hi[ms]'}\b",
+                                                                 scene, re.I)] if last and _ROUGH.search(scene) and _PLEAD.search(q) else []
+                name = hurt[0] if len(hurt) == 1 else last if last and last in muted and plea else ok[0] if len(ok) == 1 else \
+                    acted(m.start(), ok)
                 freed = [n for n in ok if any(k == "release" and "mouth" in parts(arg) and split_tag(arg, people)[0] == n
                                               and 0 <= told.find(sent) < m.start() for k, arg, sent in events)]
                 name = name or (freed[0] if len(freed) == 1 and name is None else None)
         name = name or (cast[0] if len(cast) == 1 else None)
         muffle = re.search(r"\b(?:through|into|behind|against)\s+(?:the|her|his|their)\s+(?:[\w-]+\s+){0,2}?(tape|gag|cloth|rag|"
-                           r"socks?|panties|scarf)\b", before[verb.end():] if lead and not tag and not script else after[:tag.end() + 40]
-                           if tag else "", re.I)
+                           r"socks?|panties|scarf)\b", before[verb.end():] if lead and not script else after[:tag.end() + 40]
+                           if post else "", re.I)
         lines.append({"q": q, "who": name, "verb": v, "edit": edit, "gag": (gag(name, m.start()) or (muffle.group(1) if muffle else None))
-                      if name else None,
+                      if name else None, "post": post,
                       "thought": bool(re.fullmatch(r"thinks?|thought|wonders?|wondered", v, re.I)), "at": lo, "end": edit[-1][1]})
         said, edge = name or said, edit[-1][1]
     noises = []
@@ -941,7 +982,8 @@ def voiced(text, lines, call, names=()):
     text, edits = text or "", []
     for ln in lines:
         w, q, item, last = ln["who"], ln["q"], ln["gag"], len(ln["edit"]) - 1
-        verb = "says" if re.fullmatch(r"tries|tried|manages?|managed|starts?|started|begins?|began", ln["verb"], re.I) else ln["verb"]
+        verb = "says" if re.fullmatch(r"tries|tried|manages?|managed|starts?|started|begins?|began|tells?|told", ln["verb"], re.I) \
+            else ln["verb"]
         say = f"thinks, silently and with closed lips: {q}" if ln["thought"] else \
             f"lets out a muffled, closed-mouth mmmph through the {gagword(item)}" if item else \
             f"{verb}: " + f" {w} continues: ".join(f"<d>{x}</d>" for x in _STOP.split(q))
@@ -952,7 +994,7 @@ def voiced(text, lines, call, names=()):
             e = e + gone.end() if gone else e
             piece = (call(w) if last and not j else say if last else f"{call(w)} {say}") if w else \
                 f"<d>{q}</d>" if j == last else text[s:e]
-            piece += "." if item and j == last and re.search(r"[.!?]$", q) and re.match(r"\s+(?-i:[A-Z])", text[e:]) else ""
+            piece += "." if item and j == last and re.search(r"[.!?]$", q) and re.match(r"\s+[\"“‘']?(?-i:[A-Z])", text[e:]) else ""
             edits.append((s, e, piece))
     edits += [x for x in names if not any(a < x[1] and x[0] < b for a, b, _ in edits)]
     out, at = [], 0
@@ -3324,7 +3366,8 @@ def plan(prompt, memory="", anchor="", shot_seconds=10.0, from_beat=True, first_
         call = lambda n: name.get(n, n)
         events = [(k, a, s) for k, a, s, _ in read] + [(k, f"{w}, {'; '.join(x or held.get(w, []))}", "")
                                                        for k, done in (("hold", holds), ("release", frees)) for w, x in done if tagged]
-        lines, noises = voices(p["text"], cast, people, held, events, voice, extras, paras[i - 1]["text"] if i else "")
+        nxt = paras[i + 1] if i + 1 < len(paras) and paras[i + 1]["beat"] == p["beat"] else {}
+        lines, noises = voices(p["text"], cast, people, held, events, voice, extras, paras[i - 1]["text"] if i else "", nxt.get("text", ""))
         for ln in lines:
             ln["who"], ln["gag"] = p.get("heard", {}).get(ln["q"], (ln["who"], ln["gag"]))
         sounds = sorted(lines + noises, key=lambda ln: (ln["at"], ln["end"]))
