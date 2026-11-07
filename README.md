@@ -53,618 +53,704 @@ old workflow still has linked that the node no longer uses are ignored and named
 ```
 UNETLoader ─┐                     images ─> Video Combine / Save Video
 CLIPLoader ─┼─> H3-LongVideos  ─> audio  ─┘
-VAELoader ──┘                     info   ─> Show Text
+VAELoader ──┘                     info   ─> Preview as Text
 ```
 
-`prompt` is an input socket — wire a multiline text node into it.
+`prompt` is an input socket — wire a multiline text node into it. Show `info` and
+`script` with ComfyUI's own **Preview as Text** node (*utilities*), which refreshes on
+every run. While a video renders, the node itself shows the plan and the shot it is on,
+live.
 
 Turn on **`plan_only`** to see the exact text every shot will get, without rendering.
 
 ## Writing the prompt
 
-Paragraphs are separated by a blank line.
+Every paragraph is a beat, and a beat is one shot unless it needs more time than one shot
+holds (see *Real-life speed* below). Each shot starts on the last frame of the shot before,
+so the scene runs on without a break.
 
-- The **first paragraph is the scene** when it only describes: where it takes place, who
-  the characters are and what they look like (*is a tall woman*, *has red hair*, *wears a
-  grey hoodie*, or someone introduced with their picture tag). It opens every shot, and
-  does not put anyone in a shot: the beats do. A sentence in it about someone who is not
-  in a shot is left out of that shot.
-- When someone in the first paragraph does something (*Sarah and Dana sit on the couch
-  talking*, *Sarah is lying on the bed*, *Dana cuffs Sarah's wrists*), when anyone
-  speaks, or when the camera moves, the first paragraph is the **first shot** instead,
-  and nothing of it is repeated in the others.
-- **Every other paragraph is one shot**, sent word for word.
-- A prompt with a single paragraph is one shot.
-- **`anchor`** (optional) is framing for the whole film: look, camera, lighting,
-  location. It goes at the front of every shot. When it is filled in, every paragraph
-  of the prompt is a shot and there is no scene paragraph.
-- **`character_memory`** (optional) is who is in the film and what they wear. It
-  follows the scene in every shot.
+- **The scene:** a first paragraph that names none of your characters and has no spoken
+  line (*An office at night.*) is the scene, kept at the top of every shot. Text in
+  `anchor` is kept at the top of every shot too, and with an anchor every paragraph is a
+  shot.
+- **Characters** go in `character_memory`: `Name: description`, `Name - description`,
+  `**Name**: …`, `- Name: …`, or the name alone on a line with the description on the
+  lines under it (`Hair: …`, `Outfit: …` lines included), up to a blank line. Any name
+  works: *Zoë*, *Anne-Marie*, *O'Brien*, *McKenzie*, *Mary Jane*, *SARAH*.
+- **Speech:** anything in quotes is spoken. Each line gets a stretch of sound of its own,
+  about as long as the line takes to say, placed after the actions the beat puts before
+  it; the sound before, between and after the lines is held silent, so nothing is babbled
+  around them. A shot is lengthened to fit its lines. A shot without a line is made silent
+  and gets its sound afterwards (see Sound).
+- **Who says it:** every line goes to its speaker: the said-tag (*"…," she whispers*,
+  *Dana says, "…"*), a name and a colon (*Dana: "…"*), or, with no tag, whoever acts right
+  before the line; a line that carries on stays with the same speaker. *She* or *he* is the
+  only woman or man in view, otherwise whoever just acted (also an unnamed person, see Who
+  is in each shot), and a plain *says* never goes to
+  someone whose mouth is taped or gagged. The prompt then writes the line as *black-haired
+  Dana whispers: \<d>…\</d>* and tells H3 that only she speaks and nobody else's lips
+  move. A line from someone taped or gagged becomes a muffled, closed-mouth *mmmph* with no
+  words, in a short stretch of sound of its own (see Sound): a gag sound
+  (*"Mmph!"*) or her own plea (*"Let me go!"*) is hers, a line spoken to her (*"Nobody can
+  hear you"*) is the other one's. Whoever a line calls by name (*"Look at me, May"*) or a
+  tag names as the listener (*she tells Mia*) is not the speaker, and an untagged answer to
+  a question comes from the one asked. A quoted thought (*Sarah thinks*) is not spoken. A
+  voice the description gives (*Voice: low and husky*, *a soft, breathy voice*) goes with
+  every line that person says. `info` lists who says each line, and flags a line it cannot
+  place: name who says it.
+- **Real-life speed:** every shot is as long as what happens in it takes in real life,
+  and never shorter than 5.2 seconds, the shortest clip H3 was trained on. Each action
+  gets about 2.2 seconds (*Dana stands, walks to the door and opens it* is three), a
+  speech tag (*she says*) gets none beyond its line, and everything that goes on or comes
+  off gets its own real time: handcuffs about 5 seconds, a ball gag 5, a blindfold 4, rope
+  8, tape over her mouth 3 and around her waist 8, a crotch chain 7, a little more when it
+  is fastened to something; shoes 3, a top 4, a blouse or jeans 6, a bra 4, panties 3.
+  Walking, climbing stairs or hopping with her ankles bound takes about 6 seconds, since
+  she can only take tiny or hobbled steps.
+  *Dana strips Sarah naked* takes as long as everything she has on. A clause that only
+  finishes the restraint before it (*...and locks it*, *knotting it twice*, *and pulls
+  them off*) is part of that restraint's time, not an action of its own. A beat that needs
+  more than `shot_seconds` runs on into the next shot instead of being rushed: it is split
+  between sentences, and a sentence that holds too much on its own (*strips her naked*,
+  *cuffs her, gags her and blindfolds her*) is split garment by garment or restraint by
+  restraint. A crotch chain is never split: it always goes on whole in one shot. Each
+  earlier part gets a short sentence saying only what happens in it (*Dana takes off
+  Sarah's black heels, white blouse and black skirt.*) and keeps everyone the beat brings
+  in, unnamed people too (*Two masked men…*), the last part keeps your sentence as written
+  minus the restraints an earlier part already put on or took off (*Dana cuffs Sarah's
+  hands behind her back and puts a crotch chain on her, locking it to her handcuffs*
+  becomes *Dana puts a crotch chain on Sarah, locking it to her handcuffs*), and every line
+  keeps the speaker the whole beat gives it. `info` marks these shots *beat 4, part 1 of
+  2*. A beat up to about 15% over `shot_seconds` stays one shot.
+  A shot that still has more to do than time for (one long sentence of plain actions, or
+  a `seconds:` line that is too short) is flagged in `info`.
+- **`cut`** on its own line starts the next shot fresh instead of on the last frame.
+- **`seconds: 12`** sets one shot's length and keeps the beat in one shot.
+
+### Restraints and clothes
+
+The node reads what goes on, comes off or is pulled out of the way from your beats, and
+carries it from shot to shot. It reads a change only when the sentence makes clear who it
+happens to:
+
+- a name on the body part or garment: *Dana cuffs Sarah's hands behind her back*,
+  *Dana straps Sarah's wrists to the bed frame*, *Dana pulls Sarah's pajama bottoms off*;
+- a name after the verb: *Dana cuffs Sarah*, *snaps the handcuffs on Sarah*, *cuffs
+  herself to the bed frame*;
+- *his* or *her* when only one man or one woman is in view;
+- *their* after two names, or two names on one body part, on both of them (*Sarah and Dana
+  sit on the floor, their ankles handcuffed together*, *tapes Mia's and Zoë's mouths
+  shut*);
+- an *as* or *while* part with its own name has its own doer, whatever the first part
+  does (*Sarah kicks and struggles as Dana handcuffs her ankles together* has Dana cuff
+  Sarah's ankles, and *Luis kicks his legs as Dana pulls his jeans off* has Dana take them
+  off);
+- otherwise a bare *her* goes to the one not doing it (*Dana tapes her mouth shut* tapes
+  Sarah), and a name something is done to never becomes the one doing the next thing
+  (*Dana strips Sarah naked and chains her waist* chains Sarah, with Dana doing it, and so
+  does *Dana leaves Sarah tied to the chair and gags her*); *she* means the only woman in
+  view, or, with more than one, the one acting rather than the one watching or
+  struggling, whichever name came last (*Dana watches as Sarah struggles. She gags her.*
+  and *Dana pins Sarah down while Sarah struggles, and gags her* both have Dana gag
+  Sarah); a sentence that starts with *she* and names one of two people is about the
+  other (*She shoves the panties into Sarah's mouth* is Dana), and so is a *she* after an
+  opening *-ing* part with *her* in it (*Sarah sobs. Ignoring her, she ties the rope.* is
+  Dana); a *she* who falls, screams or struggles right after someone acts on her is the one
+  acted on, unless the one struggling was already her (*Dana pushes Sarah down. She falls,
+  handcuffed.* cuffs Sarah); each *, and Lena…* or *,
+  and she…* has its own doer (*Mia opens her mouth, and Lena pushes the gag in* is Lena;
+  *a stranger hands his coat to Chloe, and she puts it on* puts it on Chloe); a
+  restraint told without a doer (*her mouth is sealed with tape, and O'Brien rubs it
+  down*) is put on by whoever that sentence has acting, goes on in the shot when it
+  happens *a moment later*, and is already on her when nobody else is named and her own
+  wrists are bound; more tape on *her* goes to whoever is already restrained, and someone
+  whose wrists are bound cannot put anything on anyone;
+- a garment goes to the one whose description has it (*Dana pulls her tank top up*
+  lifts Sarah's when only Sarah wears a tank top), and one worn by someone unnamed (*next
+  to a stranger in a torn shirt*) is nobody's in the cast;
+- *it*, *them*, *the other* and *does the same* carry on with the last restraint or
+  garment, and a garment or cloth from the beat before still counts when it goes into or
+  over a mouth (*Ethan peels off his socks.* then *He jams them into Zoe's mouth.*); a
+  torn-off *strip* or *piece* is tape;
+- *bound and gagged*, *is cuffed*, *her taped wrists*, *Sarah sits on the bed, handcuffed*,
+  *walks Luis down the corridor in handcuffs*, *shuffles in wearing leg irons*, *Sarah,
+  shackled at the ankles, ...*, *bound hand and foot*, *Sarah wears a crotch chain* and
+  *with her panties stuffed in her mouth* say it is already on, on the one the sentence is
+  about, and so does a sentence about the restraint itself (*The chain around Sarah's waist
+  runs between her legs and up to her handcuffs*) or one that says it is on with nobody
+  doing it (*Sarah's waist is wrapped in chains*);
+- a list of restraints puts each one where it goes (*puts Sarah in a belly chain, handcuffs
+  and leg irons*: a chain around her waist, handcuffs behind her back, leg irons on her
+  ankles), and a spot named after a comma takes the restraint before it (*zip-ties her
+  wrists, then her ankles*).
+
+Once the node knows who a *her* or *his* means, the beat H3 gets says the name (*Dana
+pulls off Sarah's panties and stuffs them into her mouth* reaches H3 as *... stuffs them
+into Sarah's mouth*), so H3 does not have to guess whose mouth or wrists *her* means.
+
+Body spots include the crotch: *between her legs* or her crotch by any name. Tape around
+her waist and between her legs is two things on her (*duct tape around her waist*,
+*duct tape sealed over her crotch, between her legs*), and both stay on.
+
+**Crotch chain.** A crotch chain has two parts: a waist chain locked tight around her
+waist like a belt, and a center chain locked to the front of the waist chain below her
+navel and to the back of it at the small of her back, running under her crotch, pulled
+tight over her vagina, and up between her buttocks, so all of it stays at her hips. Name
+it (*Dana puts a crotch chain on Sarah*, *crotch-chains her*, *Sarah wears a crotch
+chain*) or tell it as a chain around her waist and between her legs (*wraps chains around
+Sarah's waist and between her legs*, *runs a chain between her legs*, *chains her waist
+and crotch*): either way it is one thing on her (*a crotch chain locked tight around her
+waist, its center chain pulled tight under her crotch and over her vagina from the front
+of her waist to the small of her back*), and every shot she wears it in says what it is,
+that all of it stays at her hips, and that the center chain stays taut and centered and
+never hangs loose, slips to one side or sags. It goes on in one step, in one shot: the one
+putting it on takes a separate crotch chain from their pocket, wraps its waist chain tight
+around her waist, runs its center chain from the front of the waist chain under her crotch,
+centers it tight over her vagina, brings it up between her buttocks to the small of her
+back and padlocks it to the back of the waist chain. Someone kneeling at her feet stands up
+behind her first, and with her ankles bound the step ends with them staying just as they
+are (*Marcus stands up behind Sarah, takes a separate crotch chain from his pocket, ...,
+while her handcuffed ankles stay just as they are*). In test renders, a shot that opened
+with his hands still on her ankle cuffs had him take the chain off her ankles and pull it
+up her legs as the crotch chain, so whoever kneels or crouches to put something on lets go
+and stands back up before the shot ends (see *Bound ankles*). Its center chain is never said
+to run *down between her legs*: with her ankles cuffed, H3 took the short chain between her
+ankle cuffs for it. A man's goes over his
+crotch. Rope around her waist and between her legs is a crotch rope, put on the same way
+and tied off to the back of the waist rope in a knot. A chain already around her waist
+becomes a crotch chain when a later beat runs it between her legs: a center chain is
+hooked to the front of it, run under her crotch and padlocked to the back. Taking it off
+unlocks the padlock, pulls the center chain out from under her crotch and takes it off her
+waist.
+
+Locked to her handcuffs (*puts a crotch chain on Sarah and locks it to her handcuffs
+behind her back*, *wraps chains around her waist and between her legs and chains them to
+her handcuffs*, *padlocks her handcuffs to the back of the crotch chain*, *chaining her
+cuffed hands to it*, *ties it to her wrists* for rope), it is linked to them by a separate
+short chain of its own (a rope for rope), padlocked from the chain between her handcuffs
+to the back of the crotch chain once the crotch chain is on, and the beat itself says so
+(*... locks it to her handcuffs behind her back with a separate short chain.*). The crotch
+chain is never passed through her handcuffs, and the chain between her cuffs is never part
+of it. The shot says her cuffed hands are held to the back of the crotch chain by that
+separate short chain; with her hands cuffed in front, it goes to the front of the crotch
+chain and her elbows bend. The cuffs it is linked to are never a second pair, and if
+nothing has cuffed her yet, they are on her from the start. Cuffs put on to a crotch chain
+already on her (*cuffs her hands behind her back to the crotch chain*) close first, then
+the short chain is padlocked on; linking them later (*Dana locks the crotch chain to her
+handcuffs*, *padlocks her handcuffs to the back of her crotch chain*) does just that.
+Taking the crotch chain off or uncuffing her takes the short chain away first, and
+*unlocks the crotch chain from her handcuffs* takes away only the short chain. A chain
+around her waist alone (*wraps a chain around her waist and locks it to her handcuffs*,
+*padlocks her handcuffs to the back of the waist chain*) is linked to her cuffs the same
+way.
+
+**Chastity belt.** A chastity belt (*Dana locks a chastity belt on Sarah*, *fastens a
+chastity belt around her waist*, *Sarah, locked in a chastity belt, ...*, *wears a chastity
+belt*) is locked on until a beat unlocks it (*Dana unlocks Sarah's chastity belt and takes
+it off*). Every shot that starts with it on says so in her description line, before the
+beat (*Her chastity belt is locked on her, its band around her waist and its shield between
+her legs over her crotch.*), and no line about her being naked leaves it out. Its picture,
+when you give one, goes in every shot from the one it goes on in: put the picture's tag
+next to the words anywhere, in a beat (*Dana locks the chastity belt <Picture 3> on
+Sarah*), in `anchor` or in `character_memory` (*<Picture 3> is a steel chastity belt.*);
+her own picture is never taken for it. Panties or tights under it stay on until it comes
+off (*Dana pulls off Sarah's panties* becomes *Dana leaves Sarah's panties on under her
+chastity belt*, and *strips her naked* leaves them on under it), and clothes over it come
+off as usual while it stays locked.
+
+**Bound ankles.** Handcuffs on her ankles (*cuffs her ankles*, *cuffs her feet together*,
+*ankle cuffs*, *leg cuffs*), leg irons (*leg irons*, *shackles*, *ankle chains*, *ankle
+shackles*, *fetters*, *a hobble chain*, *in irons*), a chain, rope, tape, a zip tie or
+straps around her ankles, knees or legs, and a spreader bar all hold her ankles. Every
+shot that starts with them on says so in her description line, before the beat (*Her
+ankles are handcuffed together.*), so H3 reads whatever the beat has her do with her ankles
+already bound. The shot then says what holds them, where, and how far apart her feet can
+be: *a pair of rigid steel cuffs is locked around them just above her feet, joined by
+their own short chain of a few links that never stretches, bends or gets longer, so her
+ankles stay a few centimetres apart at most and her legs stay pressed together and always
+move together, both at once*; leg irons are a pair of steel shackles just above her feet
+with their own heavy chain, about forty centimetres long, that never stretches; rope, tape,
+zip ties or a chain are tied, wound or wrapped tight around them just above her feet (or
+around her knees). Saying the cuffs as solid steel down at her feet keeps H3 from turning
+them into a crotch chain she also wears: described only as a chain that runs between her
+ankles, they melted into it. A spreader bar holds her feet about
+sixty centimetres apart. Putting them on holds her
+ankles together first (*holds her ankles pressed together, both feet resting where they
+are, and closes one cuff around each ankle with a click, the short chain between them, then
+lets go and stands back up*), so the next shot does not open with hands on the cuffs.
+*Unties her legs* or *frees her feet* takes off whatever holds her ankles or knees, and
+uncuffing her wrists takes off only the cuffs on her wrists. Clothes on her legs stay on,
+pulled down to just above whatever binds them (see *Clothes against restraints*).
+
+**Separate restraints.** Every restraint keeps a chain of its own: the handcuffs on her
+wrists and the cuffs on her ankles are each joined by their own short chain, and a crotch
+chain has its own. When she is restrained in more than one place (her wrists, her ankles,
+a crotch chain or a chain around her waist, a chastity belt), every shot says they are
+separate pieces with nothing joining one to another (*The handcuffs on Sarah's wrists, the
+handcuffs on her ankles and her crotch chain are separate restraints, each on its own with
+nothing joining it to another.*), to keep H3 from adding a chain from her cuffs to her
+ankles or to her crotch chain. A link a beat makes is named as the one separate short
+chain between them (*... and the only link between any of them is a separate short chain
+from the chain between her handcuffs to the back of her crotch chain.*). A join the node
+does not draw (*locks her collar to her handcuffs*) leaves the line out from that beat on,
+and so does a join in `anchor` or `character_memory`.
+
+**Hogtie.** Her ankles linked to her wrists (*padlocks Sarah's ankle cuffs to her
+handcuffs*, *chains her ankles to her wrists*, *ties her wrists to her ankles*, *padlocks
+the chain between her ankle cuffs to her handcuffs*, *hogties her*, *hogties her with
+rope*, *Sarah lies on the floor, hogtied*) is a separate short chain (a rope for rope)
+from the chain between her handcuffs to the chain between her ankle cuffs, and both cuffs
+keep their own chains. Whatever her wrists or ankles still lack goes on first, behind her
+back (rope for a plain *hogtied*). The beat says how (*Dana padlocks Sarah's ankle cuffs
+to her handcuffs with a separate short chain.*, *Dana hogties Sarah, her ankles held to
+her handcuffs behind her back by a separate short chain.*), the one doing it bends her
+knees and draws her feet up behind her toward her hands before padlocking the short chain
+on, and every shot after says so in her description line and in the shot (*A separate
+short chain runs from the chain between her ankle cuffs to the chain between her
+handcuffs, so her knees stay bent and her feet stay drawn up behind her, close to her
+hands, the whole time.*). *Unlocks the chain between her wrists and ankles*, *unhooks her
+ankle cuffs from her handcuffs* or *unties the hogtie* takes away only the short chain;
+uncuffing her wrists or her ankles takes it away first. A later beat that only mentions
+her ankle cuffs leaves the link on.
+
+**Legs, as written.** Legs that are free stay exactly as the beat says them, and a bound
+pair is said once, as one pair. Pair words the node used to add (*both her legs*, *one in
+each hand*, *one cuff on each ankle*, *her feet side by side*, *her left leg and her right
+leg*) had H3 draw a second, mirrored pair of legs, so none of them is ever added, bound or
+not: *Sarah kicks her legs* and *Luis grabs her ankles and lifts her legs up* go to H3 as
+written. *Her legs* on a bound woman gets her name when it could be either of two women.
+
+Whenever the beat moves her bound legs, the beat itself says how, right where it happens,
+so H3 reads the movement and the restraint together. Her legs that move get *together*
+right after them, and the end of that part of the sentence says what holds them: *Sarah
+lifts her legs together into the air, her ankles handcuffed together.*; *Luis grabs her by
+her ankles, her ankles handcuffed together, and lifts her legs up together.* A beat that
+moves her without naming her legs (*Sarah struggles and kicks*) gets the same ending
+(*Sarah struggles, her ankles handcuffed together, and kicks.*). One leg, foot, ankle or
+knee of a bound pair becomes the pair (*lifts one leg* becomes *lifts her legs*, *grabs her
+by the ankle* becomes *grabs her by her ankles*), since neither can move without the other,
+and info lists each change. Toes and heels are left alone, since heels are also shoes.
+That covers anything she does with her legs, knees, feet or ankles (*raises her legs*,
+*moves both ankles up and down*, *pulls her knees up to her chest*, *kicks*, *struggles*,
+*squirms*, *crawls*), anything someone else does with them (*Dana grabs her ankles*,
+*drags her by the feet*, *lifts her legs onto the bed*), and getting up, sitting up,
+rolling over, curling up or going down on her knees. So does any change from how she was
+at the end of the beat before: standing there and then *lies on the floor* (also *lays*,
+*laid*, *is laying*, *lay face down*, *fell onto the floor*, *Dana lays her on the
+floor*, *sits her on the couch*) is her going down, and the shot says how she lies once
+she is down. Two people bound alike in one
+sentence each get their own, by name (*Sarah and Dana kick their legs together, Sarah's
+ankles handcuffed together, Dana's ankles handcuffed together.*). Walking, or being led or marched, she goes *in tiny
+shuffling steps, her ankles handcuffed together* (*in short, hobbled steps* in leg irons,
+*waddling with both legs held wide apart* with a spreader bar); on stairs, *one stair at a
+time, both feet together on each stair*. Leg irons let her feet move apart as far as the
+chain reaches, so one leg alone stays as written, and they get *her ankles joined by the
+heavy chain of the shackles*. Words that only describe her
+bound ankles (*lies on the floor with her ankles handcuffed together*, *sits with her
+ankles zip-tied*, *in leg irons*) are left as written. All of it is said as what H3 should
+show: a line like *never one leg alone* would put *one leg alone* in front of H3. For the
+same reason nobody else in the shot is said to have free legs: H3 ties words to names only
+loosely, and *legs are free* sat right beside her bound legs. Only while her legs stay
+still does the shot say how she kneels, sits, lies or stands with them (*She lies with
+her legs together.*): that pose next to a beat that moves her legs
+had H3 move one leg and leave the other lying still.
+
+Putting them on, the one doing it crouches at her feet (kneels, if she is lying or the beat
+says so; behind her if she is kneeling; bends down if she does it herself), holds her
+ankles pressed together, both feet resting where they are, and only then puts the
+restraint on, so neither leg is lifted to the one doing it; taking them off starts the
+same way. Cuffs put on while she
+fights it (*Sarah kicks and struggles as Dana handcuffs her ankles together*) go on all the
+same. Fastened to something, she stays there: ankles cuffed to the legs of a chair seat her
+on it with her knees bent, and chained to a post or a ring in the floor her feet stay at
+it. One ankle chained to something (*chains her left ankle to the bed frame*) leaves her
+other leg free, and she can move as far as the chain reaches. A beat that needs her legs
+apart while they are bound (*crosses her legs*, *spreads her legs*, *straddles the chair*,
+*steps over it*, *runs for the stairs*), or has her walk while they are fastened to
+something, is flagged in `info`: H3 would break the restraint or draw her an extra leg.
+*Tries to run* is not flagged.
+
+When tape goes on, the shot says who holds the roll and how the tape goes on: around her
+waist or hips the roll is carried all the way round her body, passed from one hand to the
+other behind her back; between her legs the tape runs from the front of her waist down and
+up to the back; around wrists or ankles it is wound round them, then taped to whatever they
+are fastened to (*Rose tapes Will to his office chair*); over her mouth a strip is
+torn off and pressed flat. The roll stays whole in that person's hand and outside her body,
+and is torn off and put down once the tape is on, so H3 never pushes it into her.
+
+Everything that goes on or comes off is spelled out step by step, in the order the beat
+gives, by the person doing it and the way it really happens: *brings Sarah's arms behind
+her back and closes one cuff around her left wrist with a click, then the other around her
+right wrist*; *crouches at her feet, holds her ankles pressed together, both feet resting
+where they are, and wraps the rope several times around both of them together, cinches it
+between them and ties it off in a firm knot*; *pushes the
+ball into her mouth behind her teeth, pulls the strap around behind her head and buckles
+it*; *lays Sarah down on her back on the table, lays her arms flat on it at her sides and
+chains her wrists to the table*; *wraps the rope around her waist and ties it off in a firm
+knot*; *unbuttons her white blouse from the top down and slides it off her shoulders and
+down her arms*; *opens her jeans at the waist and pulls them down her legs and off over her
+feet*; *unlocks the handcuffs with a small key and takes them off her wrists*. Clothes
+taken off with no order given (*strips her naked*, *strips her down to her panties*,
+*undresses her*, *removes her clothes*, *takes her clothes off*) come off in a real order:
+jacket, shoes, top, skirt or trousers, stockings, bra, panties; *rips her clothes off*
+tears them off and takes her shoes off whole. The
+shot then says it all happens at natural, real-life speed, one step after another, over
+about so many seconds, with no step skipped, sped up or cut short, and no restraint or
+piece of clothing appearing, vanishing or changing by itself, so H3 is never left to guess
+how a garment comes off or a restraint goes on. A shot where nothing goes on or comes off
+says that everything happens at natural, real-life speed. A change from a tag line names
+nobody doing it, so it gets that speed line but no steps.
+
+Something comes off only when the sentence says so about that thing: *peels the tape off
+Sarah's mouth* takes off the mouth tape and nothing else, *uncuffs her* or *frees her
+ankles* take off what is there, and a gag or blindfold pulled down around her neck, pushed
+up onto her forehead or spat out is off. *Dana peels the tape off* when Sarah has tape in
+more than one place is flagged in `info` and nothing comes off: name the spot. Unlocking
+*one cuff* leaves her cuffed; *re-cuffs her hands in front* or *cuffs her to the headboard
+instead* moves the cuffs.
+
+Underwear, socks, a rag or any cloth stuffed into her mouth is a gag made of that thing
+(*black panties stuffed in her mouth as a gag*), and if someone was wearing it, it comes
+off them. The shot says the one doing it pushes it into her mouth with their fingers and
+that their own mouth stays empty. A scarf or bandana tied over her mouth or eyes is a gag
+or blindfold made of it. Pulling it *out of her mouth* takes the gag off.
+
+Bound wrists go where the words on the restraint put them (*cuffs her hands in front of
+her*, *between her legs*, *at her waist*), where restraints she already has hold them, and
+behind her back when nothing says; where someone stands does not count (*Dana stands in
+front of Sarah and cuffs her wrists* puts them behind her back). A place for her hands is
+never a second restraint: *cuffs Sarah's hands between her legs* brings her hands down
+between her legs and cuffs her wrists, with nothing on her crotch, and *at her waist* puts
+nothing around her waist. Handcuffs on *her arms* go on her wrists, and hands someone uses
+(*Dana uses both hands to pull the chain between her legs*) are that person's own. A beat
+where someone whose wrists are bound behind her back uses her hands (*Sarah wipes her
+eyes*) is flagged in `info`: H3 would bring her hands forward to do it.
+
+A restraint fastened to something stays fastened to it: *chained to the table*, *chained
+down on a table*, *strapped to the gurney*, *her wrists chained to it*, *tied to the
+bedposts*, *chained to its corners*, *tied spread-eagle on the bed*. On a table, bed,
+bench, cot or gurney she lies on her back on it (or on her front, *face down*), her arms
+down on it at her sides unless the beat says *above her head* or *spread* (*corners* and
+*bedposts* spread them), and the shot says the chains run straight down to it and her arms
+and legs stay down on it and never rise into the air. She sits instead when the story so
+far has her sitting at it (*Sarah sits at the table, her wrists chained to it* keeps her
+forearms on the tabletop), or standing by it. Tied to a chair or armchair, she sits on it
+with her wrists behind its back; tied to its arms (*ties her wrists to the arms of the
+chair*, *cuffs him to its wooden arm*), she sits on it with her forearms resting along
+them and her hands down on them. The arm of a chair is never her arm. On the floor her
+hands stay down at the floor. Her arms go up only when the beat hangs her from above
+(*hangs from the ceiling*, *chained to the beam*). Lying face down on a bed in handcuffs
+(*Sarah lies face down on the bed, her wrists handcuffed behind her back*) is not being
+fastened to it; *chained face down to the bed* is. Somewhere she walks, hops or is led to
+is never something she is fastened to (*walks to the post in handcuffs*, *hops to the door
+with her ankles cuffed*), and parts chained *together* are chained to each other, not to
+what she lies on (*Sarah lies on the floor, her ankles chained together*). A closing
+*chained down* or *tied down* (*Sarah lies on the bed, chained down.*) fastens her to what
+she lies on.
+
+A garment comes off when it is taken *off*, *over her head*, *out of*, or ends *on the
+floor*; it is *torn off* when it is cut, ripped or torn off, which works past cuffs. It is
+pulled out of the way and stays on when it goes *up*, *down*, *aside*, *open* or *off her
+shoulders*, and goes back on with *back on*, *back down*, *closed* or *into place*; one put
+*back in the drawer*, *on the chair* or thrown at her stays off. *Strips her down to her
+thong* takes off everything but the thong. The garment is named the way the description
+names it (*tank top* in the beat becomes *white tank top*), and *pants*, *top*, *shirt* or
+*underwear* mean the one garment of that kind she has on (*pants* takes off her jeans, *top*
+her t-shirt and not the jacket over it). A garment her description does not have is
+flagged in `info` and nothing is said about it in the prompt.
+
+Nothing changes for a struggle, a touch, a look or a try (*Sarah tries to pull free of the
+cuffs*, *Dana runs a finger over the tape*), for gear that is picked up, put down or put
+back (*takes the handcuffs off the nightstand*, *tears a strip off the roll*), or for a
+person who is moved (*pushes her off the bed*, *lays her back down*, *sits up in her
+pajamas*). Every change read is listed in that shot's `info` line with the sentence it came
+from. A sentence it cannot place is named in `info` with the reason, and nothing is
+carried from it: name the person or the spot, or add a tag line.
+
+### Tag lines
+
+A tag line in a beat replaces what the beat would be read as. It goes under the beat (or
+at the end of its last sentence), names the person first, and puts several things in one
+line with `;`:
 
 ```
-A dim cell with a cot. Mara <Picture 1> is a tall woman in a grey dress. Dan <Picture 2> is a guard in a dark uniform.
+Dana grabs a roll of duct tape. She wraps it tightly around Sarah's mouth.
+hold: Sarah, duct tape over her mouth
 
-Mara sits on the cot and stares at the door.
+Dana lifts Sarah's shirt.
+lift: Sarah, shirt
 
-Dan handcuffs her wrists behind her back.
-hold: Mara, handcuffs behind her back
+Dana pulls down Sarah's leggings.
+remove: Sarah, leggings; thong
 
-Dan presses duct tape over her mouth.
-hold: Mara, duct tape over her mouth
+Dana peels the tape off.
+release: Sarah, duct tape
 
-Dan says "Not a sound." He walks out.
+Dana walks out of the room.
+exit: Dana
 ```
 
-### Restraints
-
-The node reads restraints and gags from your beats and carries them from shot to shot:
-handcuffs, zip ties, rope, chains, shackles, duct tape, gags and ball gags, blindfolds and
-collars. It reads them being put on (*Dan handcuffs her wrists behind her back*, *Dan
-grabs Mara's wrists and cuffs them*, *Dan takes out the handcuffs and snaps them onto her
-wrists*, *Dan wraps duct tape around her mouth*), already on (*her wrists cuffed behind
-her back*, *Mara sits in handcuffs*, *Mara sits with duct tape over her mouth*), and
-coming off (*Dan pulls the tape off*, *Dan unlocks the cuffs*).
-
-- Whoever does it is never the one restrained. In *Dan grabs Mara and cuffs her* the
-  cuffs go on Mara, and in *Dan gags her* the pronoun is read as the one other person
-  present.
-- Something put on during a beat is in plain view at the end of that shot and held from
-  the next. Something a beat describes as already on is held from that shot's first frame.
-- When it cannot tell who is meant, it lists the sentence in `info` instead of guessing.
-  Add a `hold:` line for those.
-- Handcuffs, zip ties, shackles, ball gags or blindfolds that a beat mentions but that
-  could not be placed on anyone (*Dan carries handcuffs on his belt*) are listed in `info`
-  as not read. If they belong on someone, add a `hold:` line.
-- Something comes off only when a beat takes it off directly (*removes the tape*,
-  *peels the tape off her hips*). Mentioning it, or cutting more tape, does not count.
-  When more than one piece could be meant, the sentence is listed in `info` instead.
-- Each shot's line in `info` says what goes on, what is held, and what comes off.
-- *Behind her* right after her hands, wrists, arms or the cuffing (*Dan cuffs her hands
-  behind her*) counts as behind her back. When cuffs were first read with no position
-  (*Dan cuffs her*), a later beat that gives one (*her hands cuffed behind her back*)
-  moves them there from that shot on. Cuffs with no position at all are drawn wherever
-  the model likes, usually in front, so say where they go.
-- Wrists held behind the back or in front stay locked together for the whole shot. When
-  someone else in the shot does something with their hands (*Mike grabs the chain and
-  pulls it*), the prompt says it is Mike who does it, with his own hands, while her hands
-  stay still, so she does not slip free to do it herself. That line is left out when she
-  does something with her own hands, or when the beat is about her hands.
-- A leash goes with the collar it is clipped to (*Dan clips a chain leash to her collar*,
-  *Mara kneels in a collar and chain leash*). While it is on, each shot names the hand
-  holding it (*The leash runs from Mara's collar to Dan's hand.*), taken from the beat
-  that has someone hold, lead, pull or clip it, so the other end is never drawn on a
-  stranger. Unclipping the leash leaves the collar on.
-- Whenever someone in a shot is held, the prompt names everyone else in it as wearing
-  none of it, so a collar, cuffs or a leash are not copied onto them.
-- Tape, rope or chain wrapped around the body, torso, chest or arms to the sides, or
-  around the hips, waist or between the legs, is carried as wound all the way around,
-  front and back, so later shots do not shrink it to strips on the front. These wraps
-  get no pose. A wrap around her with no body part named counts as a torso wrap. Legs
-  tied together count as the ankles.
-
-### Clothing
-
-The node reads clothes coming off and going back on (*Max takes off her jacket*,
-*Crystal pulls her thong down her legs*, *Sarah pulls down her skirt*, *Sarah steps out
-of her skirt*, *Sarah lets her skirt fall*, *Sarah drops her skirt*, *Sarah strips
-naked*, *Dan undresses her*, *Sarah pulls her top over her head*, *Sarah gets out of her
-jeans*, *Her diaper falls to the floor*, *Sarah's skirt comes off*, *She takes it off*,
-*Sarah pushes her pants down to her ankles*, *Crystal puts her jacket back on*, *Sarah
-slips into her dress*, *Dana fastens the diaper around Sarah's hips*, *Dana tapes it
-shut*, *The diaper is now secured on Sarah's body*, *Sarah gets dressed*, which puts back
-everything she took off),
-typos such as *slides of her skirt* included. *It* or *them* is read as the garment
-named just before it. A miniskirt is a skirt, a crop top is a top and a nappy is a
-diaper, whichever word the description and the beat use. Besides the usual clothes,
-underwear, diapers, pull-ups, bottoms, undies, joggers, trunks, overalls, towels and
-the like, anything a description says someone
-is *wearing*, *dressed in* or *clad in* (*wearing a blue yukata*) can come off the same
-way. Only what happens counts, never what someone says (*"Put your diaper back on," Dan
-says.* changes nothing), and putting a garment on a chair, the bed or someone's lap is
-not putting it on. From the next shot on, a garment that came
-off is taken out of that person's description in the scene paragraph, the anchor and
-`character_memory`, so no shot asks for it again. It comes back once they put it on.
-
-- Once nothing they still wear covers a part of the body, every shot they are in says
-  so: *Sarah is naked from the waist down the whole shot.* (or from the waist up, or
-  naked). It names no body part, because a named part is one the model turns her to
-  show. The shot it comes off in says they stay that way from the moment it is off. A
-  beat that says how they are (*completely naked*, *topless*, *naked from the waist
-  down*) counts from that shot on.
-- A reference picture shows its person in the clothes they had on, and H3 copies what it
-  sees, print and all, back onto them. So the picture goes in cropped to their face and
-  hair (see Reference pictures), and once a garment is off the shot also says the picture
-  is for their face and hair only. `info` shows *naked:* for each undressed person.
-- The prompt names the garment no more than the beat does, since every mention is one
-  more pull toward drawing it.
-- A spoken line that names a garment that is off (*"I'm not putting that diaper back
-  on."*), or any clothing for a part of someone in the shot that is bare (*"No
-  underwear, no pants."* once she is naked from the waist down; *clothes* once she is
-  naked), would draw it back on. H3 acts out what is said, so even another word in its
-  place (*so Mom can put a new thing on me*) is acted out, down to an extra pair of
-  arms for someone who is not there. So the shot's picture is made with that whole
-  sentence replaced by the speaker's own words before it, repeated to the same length,
-  and its sound is then made from the real line over the finished picture; the lips
-  match every sentence but that one. A line that is only about it is left out of the
-  picture. `info` says *spoken diaper and underwear kept out of the picture*. Narration
-  that names it (*the diaper on the floor*) is left as it is.
-
-- A garment belongs to the person its pronoun or name points to, or else to the one
-  person whose description mentions it.
-- A garment that comes off takes its whole description with it: *a thong made of black
-  latex*, *with lace trim*, *cut high on her hips*, *thong underwear*, and a following
-  sentence such as *It is black latex.* Nothing of it is left for H3 to paint onto her.
-  Its brand goes too (*white Pampers diaper with Pampers logo*; Pampers, Huggies and
-  GoodNites are diapers). Only the garment's own words go: they stop at a comma, so in
-  *crop top, white Pampers diaper* the crop top stays, and in *in a diaper with the toilet
-  behind her, standing by the door*, the room, where she is and what she does stay. A
-  detail after the garment goes with it (*leggings with a zipper that runs between her
-  legs*) unless it starts with *the*, *her* or someone's name (*with the toilet behind
-  her*).
-- Whoever has something come off or go on in a shot is in that shot (*Dana removes Sarah's
-  diaper*).
-- Anything put on someone that their description does not have stays on them: a garment
-  (*Sarah puts on a red hat*) or something worn (*Dana puts a pink bow in Sarah's hair*,
-  *Dana clips a necklace around her neck*, *Dana puts a bib on her*: a bow, ribbon,
-  necklace, bracelet, ring, earrings, glasses, pacifier, bib, hair clip, zipper, patch and
-  the like), however the beat puts it (*attaches a zipper to her back*, *sews a patch onto
-  Sarah's dress*, *a zipper is put on her body*). The shot it goes on in says she keeps it
-  once it is on (*Once it is on, Sarah keeps a zipper on her back for the rest of the
-  shot.*), so it does not vanish partway through. From
-  the next shot on, every shot they are in says so (*Sarah wears a pink bow in her hair.*),
-  whether or not they were in view in between, until a beat takes it off (*Dana takes the
-  bow out of Sarah's hair*). Stripping naked takes off the clothes, not the jewellery.
-  Hands, cups and wipes are not additions; restraints have their own handling.
-- What is worn under something else (a diaper, underwear or a bra under leggings, jeans,
-  a skirt, a dress, a top) is left out of the description until what covers it comes off,
-  since H3 draws everything a description names, on the outside. The shot it comes off in
-  names both and says *Her leggings cover her diaper until they come off.*
-- When it cannot tell whose it is, the sentence is listed in `info`.
-- Something worn with a detail on one side (*chastity belt with tight rear heavy duty
-  security chain going through her ass*, *a dress with a zip down the back*, *a collar
-  with a ring at the front*) is stated the right way round in every shot that person is
-  in. The detail can be written in the same sentence or the next (*A chain is attached
-  to the back of the belt.*), with or without *a* or *her*. A chastity belt gets this
-  even with no detail written. Each side is pinned to a place on the body: for a belt or
-  anything on the hips, the front low on the belly and the back on the backside, with a
-  fastened chain or strap between the buttocks up to the small of the back; for a
-  collar, the throat and the nape of the neck; for a dress or top, the chest and between
-  the shoulder blades. It turns with them, and their body never twists at the waist.
-  That keeps the front of a belt from being drawn on their backside when they are seen
-  from behind, or after it leaves the frame. `info` names each thing kept this way.
-- A chain, strap or cord on something worn that is described as fastened or on one side
-  (*a chain on the back that keeps it secured to her body*, *a rear chain*) is said to
-  stay fastened at both ends, snug against them, in every shot, so it never comes back
-  hanging or dragging on the floor. One you describe as hanging is left as you wrote it.
-  A beat that pulls it (*Dan pulls her up by the chain*), or pulls a leash, says it keeps
-  its length: the links are solid and never stretch, and the pull moves her by the belt
-  or collar instead, unless the beat itself breaks, cuts or unclips it. In that shot the
-  pull line stands in for the fastened line. When she wears a leash and a chained belt,
-  the prompt says they are two separate chains, so the belt chain is not drawn running
-  out to a hand like a leash.
-
-### Penetration
-
-Once a beat puts him inside her (*allowing his penis to enter her vagina*, *Sarah sinks
-onto his cock*, *Sarah rides him*, *Dan fucks her*, *Dan takes her from behind*, *Sarah
-has sex with Dan*; *into her ass* or *anal* makes it her anus), every shot of the two of
-them says so, in terms of what shows: *Dan's penis is buried deep inside Sarah's vagina
-the whole shot: her crotch and his groin stay pressed tight together, so only the base of
-his penis shows, and their hips rock and grind together as they move.* The shot it starts
-in says it stays buried once it is in. The motion is written as their hips moving, never
-as the penis sliding, because a sliding penis is one the model draws outside her. It lasts until
-a beat ends it: he pulls out, she climbs or gets off him, either of them stands or gets
-up, or one of them leaves. Pulling out and going back in, or standing up while carrying
-her, keeps it. While it lasts, a shot with one of them has the other in it too. His
-cock in her mouth or hand is not this. `info` shows *inside: Dan in Sarah* for those
-shots.
-
-It works for any number of people. Each act is its own: who is inside whom, and where.
-The sentence says which is which: whose cock it is, or who *fucks*, *enters* or *takes
-her from behind*, is the one inside, and who *rides*, *mounts* or *sinks onto* him is
-the one entered, a man as well as a woman. *Him* or *her* is the last man or woman named
-before it. Two men in one woman (*Sarah rides Dan while Jake takes her from behind*) are
-two acts, the second in her other hole unless the beat says which; two couples are two
-pairs; and each act ends on its own (*Jake pulls out* ends only Jake's). Everyone joined
-to someone in a shot is in it.
-
-### Lines the node reads
-
-These lines are taken out of the text before the model sees it. `hold:` and `release:`
-correct the restraint reading, and `remove:` and `wear:` the clothing reading. For the
-person they name, they replace whatever was read from that beat.
-
-| line | what it does |
+| tag | what it does |
 |---|---|
-| `hold: Name, item; item` | Name is wearing or bound with these items. From the next shot on, every prompt states `Name: item; item.`, that it all stays on for the whole shot, and where held wrists or ankles stay, until the item comes off. |
-| `release: Name, item` | the item comes off in this shot. `release: Name` takes everything off Name. |
-| `seconds: 6` | this shot's length, whatever `shot_length` says. |
-| `remove: Name, garment` | the garment comes off in this shot and leaves Name's description from the next shot on. |
-| `wear: Name, garment` | the garment goes back on, and back into the description from the next shot on. |
-| `exit: Name` | Name leaves during this shot and is gone from the next. A named exit such as `Dan walks out` is read without it; use it for anything else, such as `He leaves.` |
-| `cut` | this shot starts fresh instead of on the previous shot's last frame. Use it for a new place or time. |
+| `hold: Name, item` | the item goes on during this shot and stays on until a `release:` |
+| `release: Name, item` | the item comes off during this shot; `release: Name` takes everything off |
+| `remove: Name, garment` | the garment comes off during this shot and is gone from the description after it. List several with commas or *and*; `bottoms`, `top` and `underwear` take off what the description has there; `remove: Name`, `clothes` or `all her clothes` take everything off |
+| `wear: Name, garment` | the garment goes on during this shot and stays on; for a garment that was lifted, it is pulled back into place |
+| `lift: Name, garment` | the garment is pulled out of the way during this shot and stays on, pulled, until a `wear:` or `remove:`. By default a top goes up above her breasts, bottoms go down to her knees, a skirt or dress goes up to her waist and a jacket or robe falls open; say where to change it (`lift: Sarah, pajama bottoms to her ankles`). `pull:` is the same tag |
+| `tear: Name, garment` | like `remove:`, but cut or torn off, so it comes off even past cuffed wrists or bound ankles |
+| `exit: Name` | the person leaves during this shot and is out of the shots after it |
 
-A `hold:` line in the scene paragraph, the anchor or the character memory means the
-person starts the video already held.
+A `hold:`, `wear:`, `remove:`, `tear:` or `lift:` line in `character_memory` is on from the first shot.
 
-The node also reads these lines when they are written on the same line as the
-sentence, as their own paragraph, with a dash or colon after the name, or without the
-comma. A line it still cannot read, such as a hold with no name, is listed in `info`.
+**Layers:** underwear that another garment covers (a thong under pajama bottoms, a bra
+under a shirt) is left out of the description, so H3 does not draw it showing through or
+peeking out. It shows once what covers it comes off or is lifted, and that shot says so
+(*Under them, Sarah has a black thong on, now in plain view.*). A sheer, see-through or
+open garment hides nothing.
 
-In a `hold:` line, write each item the way it should look: `handcuffs behind her back`,
-`wrists zip tied in front`, `rope around her ankles`, `duct tape over her mouth`.
-The shot where an item goes on is described by your own sentence, and it closes with
-the item in plain view at its last frame. The item joins the held line from the shot
-after, so it is not drawn before the action happens.
+**Clothes against restraints:** a top, bra or dress cannot come off past cuffed or tied
+wrists, and jeans, a skirt, panties, tights or any other bottoms cannot come off past
+whatever binds her ankles, knees or thighs. Removing one of these anyway pulls it out of
+the way instead, still on her and with the restraint locked, and `info` says so: up above
+her breasts, or down to just above what binds her legs (*down to just above the handcuffs
+on her ankles*, *down to just above the rope around her knees*), so the restraint stays
+in plain view. The beat itself says so too, so H3 never reads that the garment comes off:
+*Luis pulls off her jeans* becomes *Luis pulls her jeans down to just above the handcuffs
+on her ankles*, *takes off her sneakers and her jeans* becomes *takes off her sneakers and
+pulls her jeans down to just above the handcuffs on her ankles*, and *strips her naked*,
+*undresses her* or *removes her clothes* gets *, her blue jeans and black panties pulled
+down to just above the handcuffs on her ankles, where they stay*. This counts restraints
+put on earlier in the same beat (*cuffs her ankles together and pulls her jeans off*). A
+garment pulled down past what binds her legs (*pulls her jeans down to her ankles* with
+her knees tied) stops just above it the same way. With her ankles bound, her shoes slip
+off with her feet staying together, never one foot at a time,
+and a dress comes off over her head. Release the restraint in an earlier beat to take
+the garment off, or have it cut or torn off (`tear:`), which needs no release. Whatever
+can come off still does, and the shot says the restraints stay locked while it comes off.
+
+With her wrists cuffed or tied, every change to her clothes says in the beat itself that
+her hands stay where they are (*Dana pulls Sarah's sweatpants down and off, with Sarah's
+hands still locked together behind her back.*), and so do the steps. Standing, she steps
+out of her bottoms one foot after the other with her hands still locked, so H3 never frees
+a hand to keep her balance (*pulls them down her legs to her ankles, and Sarah steps out
+of them one foot at a time, with Sarah's hands still locked
+together behind her back*); lying or sitting, they come off over her feet. Taking off her
+own bottoms she pushes them down over her hips and wriggles out of them, and her shoes she
+pushes off with her feet, never with her hands. A beat that starts with *it* or *them*
+for the garment the beat before ended on (*Dana pulls them back up.*) is read as that
+garment.
+
+Every shot then tells H3, in plain words:
+
+- what each person has on and that it stays on (*Sarah: handcuffs behind her back; duct
+  tape over her mouth. All of it stays on, exactly as described, for the whole shot.*),
+  what goes on or comes off by the last frame and who has let go (*Dana and Rose
+  have let go*; nobody lets go of what she put on herself), and that the others are free
+  where she is not, except for their legs (*Dana's mouth is empty and uncovered and her
+  hands are free.*);
+  nothing behind her back is asked to be *in plain view*;
+- each step of what goes on or comes off, by the person doing it, at natural, real-life
+  speed (see above); who holds the roll when tape goes on, how it goes around her, and
+  that the roll stays whole and outside her body; that someone who pushes a gag into her
+  mouth keeps their own mouth empty;
+- that someone with a taped or gagged mouth cannot speak;
+- where every bound limb is, at its full length, from every side the camera can see it:
+  behind her back, her arms run from her shoulders down behind her to her hands at the
+  small of her back, hidden by her body from the front and in plain view, whole and locked
+  together, from the side or behind, whatever she does in the shot; lying on her back, she
+  lies on her arms, her locked hands hidden under the small of her back (told she was in
+  plain view from the side, a woman lying on her back got her arms laid free at her sides
+  in a test render); bound ankles say what
+  holds them, how far apart her feet can be and how she walks, kneels, sits, lies, stands
+  or struggles with them (see *Bound ankles*); fastened to a table or bed, she lies on it
+  with her arms and legs down on it, as above; all of it holds while clothes come off or
+  are lifted;
+- for everyone who is bound, that wherever the camera looks she is whole and in natural
+  proportion: head, shoulders, both arms and hands, torso, hips, both legs and feet, each
+  at its natural size, joined to her body the natural way, so a camera that moves to her
+  legs or comes round behind her finds them where they belong;
+- that handcuffs and chains are rigid steel: the short chain between the cuffs and every
+  chain link keep their length and never stretch;
+- that a lifted garment stays on, pulled where it is, and what that leaves bare;
+- what is left once a garment is off (*Below the waist, she wears only a black thong.*);
+- *naked from the waist down*, *from the waist up* or *completely naked* once the
+  garments her description gave for that part of the body are all off, with any tape or
+  rope still on that part named (*apart from the duct tape sealed over her crotch*).
+
+When two or more people without a picture are in view, these lines tell them apart by
+the hair their description gives (*Mara: long red hair* makes *red-haired Mara*).
+
+`info` lists, for every shot, who is in it and what is on, goes on and comes off, so a
+missing or misspelled tag shows up before you render (turn on `plan_only`). A garment
+that is not in the person's description (*pants* when it says *leggings*) is flagged,
+since only the description's own word can be taken out of it. A tag that
+names someone with no character line is applied as written and flagged in `info`.
 
 ### Who is in each shot
 
-The node keeps track of who is present, so people appear only when they should.
+A character is in the scene from the first beat that names them (outside of quotes)
+until their `exit:` line. Everyone in the scene stays in view: every shot tells the
+camera to keep their faces in frame, since a face that leaves the frame is drawn anew
+when it comes back. Bound ankles leave the frame the same way, most of all when she lies
+on the floor, and come back without their restraint, so anyone whose ankles, knees or
+legs are bound in the shot is kept in frame down to them (*The camera keeps the faces of
+Sarah and Dana in frame for the whole shot, and stays far enough back to keep all of
+Sarah in frame too, down to her handcuffed ankles.*). A beat that directs the camera
+itself (*close-up*, *the camera frames her face*, *we see her legs*, *a shot of her
+feet*) gets no camera line. After a `cut`, a shot holds the people its beat names. Every
+shot also says how many people it holds, one body each.
 
-- A character is anyone `character_memory` describes, however the memory is laid out:
-  `Mara: a tall woman`, `Mara is a tall woman`, `Mara, a tall woman`, `- Mara: …`,
-  `**Mara**: …`, `Mara (25): …`, `Mara - …`, `MARA: …`, `mara: …`, `Name: Mara`,
-  `Female: Mara, …`, `The woman: Mara, …`, or the name alone
-  on its own line (with or without a picture tag or a colon) and the description on the
-  lines under it, as sentences, bullets or fields such as `Hair: …` and `Outfit: …`.
-  Everything up to the next name or a blank line belongs to that character, so a shot
-  they are not in leaves all of it out. A `Setting:`, `Location:`, `Mood:` or similar
-  line belongs to the scene, not to the character above it. Anyone written right before a
-  picture tag (`Mara <Picture 1>`) or named on a `hold:` or `exit:` line is a character
-  too.
-- So is anyone the scene or the beats treat as a person, even with no memory entry:
-  someone with a body part (*Dan's waist*, *Dan's cock*), someone a beat does something
-  to or with (*rides Dan*, *straddles Dan*, *sits on Dan*, *stands in front of Dan*, *has
-  sex with Dan*), or someone doing what only a person does (*Dan sits*, *Dan smiles*,
-  *Dan strokes himself*). Rain, light, music, places, days and things such as *the
-  Ferrari* are not. Such a character has no description or picture, so a shot with them
-  says they look nothing like the declared characters, and *her* or *him* in a beat
-  where they act on someone (*Dan watches her*) is the other person, which also tells
-  the node who is the woman.
-- A shot holds only the characters its beat names or refers to. Naming someone once does
-  not put them in the shots after it. A name that is only mentioned does not count: *a
-  letter from Mara*, *a text from Mara*, *Mara's photo*, *thinking about Mara*, *calls
-  Mara on the phone*, *waiting for Mara*, *hears Mara upstairs*, *before Mara gets home*,
-  *Mara is at work*, *Mara has left*, *screams for Mara*, `Mara (V.O.):`, and any name,
-  *she* or *he* inside spoken words (*"Mara, where are you?"*). *Walks over to Mara*,
-  *takes the keys from Mara*, *calls Mara over*, *kneels before Mara*, *Mara's hand* or
-  Mara speaking outside the quotes (*"Stop!" Mara begs*) do. So does anyone the beat cuffs, tapes, ties or frees, and someone
-  a beat calls *her* or *him*, when they are the only woman or man among the characters,
-  unless the beat already names someone that *her* or *him* can mean (*The Aurora
-  raises her sails as she leaves port* does not bring in another ship), or has an
-  unnamed person they could mean (*A waitress brings him a drink. She smiles.*, *A man
-  knocks on her door. He waits.*, *the receptionist*, *someone*): then the pronoun is
-  that person and no declared character is brought in. Cuffs or clothes on such a
-  pronoun (*A woman walks in. Dan handcuffs her.*) are listed in `info` instead of being
-  put on a declared character. *Mara, a slim woman* or *Dan is a man* describe a named
-  character and do not count as an unnamed person.
-- A character whose memory never says *woman*, *man*, *she* or *he* can still be the one
-  *her* or *his* means, so *Dana drops her bag* stays Dana's shot and never brings in the
-  only character known to be a woman. A *She …* or *Her …* sentence in a character's own
-  memory lines gives their gender. *Her own wrists* are the wrists of whoever is doing the
-  cuffing, and *her hoodie* is the hoodie of whoever memory says wears one.
-- Everyone still in the scene is in the shot when the beat says *both of them*, *each
-  other*, *the two of them*, *everyone*, *the others* or *they … together*, or names
-  nobody and says *they*. *Her wrists crossed over each other* does not count.
-- A beat that names nobody (*The lights flicker.*, or *She sighs.* with two women in the
-  scene) keeps the people the shot before it showed.
-- People stay in the scene until they leave: walking or heading out, off, away or home,
-  or going upstairs, downstairs, to bed or into another room (*into the bathroom*),
-  unless that room is where the scene paragraph sets the scene.
-- When a continued shot opens on a frame with someone the beat leaves out, the prompt
-  says this shot frames only the beat's people.
-- Except: someone still in the room stays in view through beats about others when a
-  later beat needs them where they are (*Sarah lies down on the table.* / *Dana opens the
-  bag.* / *Dana takes off Sarah's diaper.*), so they never drop out and walk back in, which
-  H3 draws as them getting up and coming over. When that later beat has them walk, come
-  back, join or head over (*Lena joins her at the window*), or they leave first, the shots
-  between frame only the beat's people as above. A beat that sets the camera's framing
-  (*close-up*, *the camera frames her face*) always holds only its own people.
-- If the node's files change after ComfyUI loads them, `info` starts with `RESTART COMFYUI`,
-  because that run used the old code.
-- In `info`, anyone in a shot whom the beat does not name says why, for example
-  `cast: Sarah, Dana (from the shot before)`: *she/he*, *held*, *freed*, *everyone*,
-  *from the shot before* or *in the scene*.
-- The scene paragraph and the anchor describe people but do not put them in a shot.
-- A beat with nobody in it (*The camera pans across the empty bathroom*) says that nobody
-  is in the shot.
-- After a `cut`, only the people that beat names are present.
+**Unnamed people** (*a man*, *the guard*, *two women*, *a crowd*, *someone*) are kept
+apart from your named characters. In a shot whose beat names them, they are counted in
+the head count (*There are three people in the shot: Sarah, Dana and the man*), and the
+shot says each of them is a different person who moves only as the beat describes, in
+their own way and at their own pace, never copies the named characters' movements,
+actions or words, and that nothing done to one side is done to the other. A later beat
+that does not name them says nothing about them (nobody is added to or taken out of the
+picture), and *the man* there still means the same man; he is gone once he leaves (*the
+man walks out*, *a stranger walks past*) or after a `cut`. *The woman* or *the guard*
+means a named character when a named character's description fits (*Dana: a prison
+guard*), unless the beat describes someone new (*the man in the cowboy hat*).
 
-For someone who is not present:
+**He and she are your named characters.** Wherever *she*, *he*, *her*, *him* or *his* in
+a beat can only mean one of your named characters, the beat H3 gets says the name, so H3
+never draws a second copy of a character for the pronoun: *Sarah walks in. She sits
+down.* reaches H3 as *Sarah walks in. Sarah sits down.*, and *He takes her hand* as *Jake
+takes Sarah's hand*. A *she* is the woman the sentence before was about (*Sarah grabs
+Dana. She pushes her away.* is Sarah pushing Dana), or the one acted on when she only
+reacts (*Dana pushes Sarah onto the bed. She screams.* is Sarah); *her* right after her
+own name stays *her* (*Sarah brushes her hair*). A pronoun that could mean either of two
+people (*Sarah and Dana sit. She laughs.*) or an unnamed person (*A man walks in. He
+sits.*) is left as you wrote it: name the person to be sure.
 
-- their picture is left out
-- their `character_memory` line is left out
-- any scene sentence that is only about them is left out, along with the sentences
-  after it that start with *she* or *he* and so are about them too. When only a side
-  clause is about them (*A harbour at dawn, where the Aurora sits at anchor.*), just
-  that clause goes and the place stays (*A harbour at dawn.*)
+**Nobody is brought in who is not there.** An unnamed person seen on a screen (*a man on
+her computer screen*, *a woman on the news*, *Sarah is on a video call with a man*), heard
+on a phone or off screen (*a man on the phone*, *a man's voice calls from the hallway*), or
+shown in a photo or poster is not counted and is said to be only on the screen, only a
+voice or only a picture, never in the room, a different person from your named characters
+with a face of their own; the shot also says your named characters are in the room, never
+on that screen. Your named characters are always in the room. The man on the screen stays
+on it in the next beats (*the man laughs*) until the call ends (*she hangs up*, *closes
+the laptop*, *turns off the TV*). Someone only talked about or thought of (*calls a
+doctor*, *tells Dana about a man*, *a text from a man*, *dreams of a man*), a thing named
+after a person (*the driver's seat*, *a man's jacket on the chair*, *a cop car*,
+*man-made*) and a reflection (*Dana in the mirror*) bring in nobody. `info` lists unnamed
+people as *unnamed:*, with where they are (*the man on the computer screen*).
 
-When everyone in a shot is a declared character, a shot with one or two people also
-says how many are in it. The count is left out whenever someone else might be there:
-a name that is not declared, or *a guard*, *the man*, *a crowd*. Words that only
-describe someone (*a slim Asian woman*, *Blue eyes.*) do not count as another person.
-Declare every character, with a `character_memory` line or a picture tag, so the
-guarding covers them all.
-
-A character does not have to be a person. One whose description first names a ship,
-vehicle, planet, robot or animal (`Valiant <Picture 1>: a long white starship`, `Rex: a
-big dog`) is treated as a thing: it is never counted as a person, and a shot with only
-things in it says there are no people anywhere in it, with no talk of bodies, faces or
-mouths, so a scene of ships stays a scene of ships. A person aboard still counts, and a
-beat that mentions a crew, passengers or pilots brings them in as extras.
-
-Extras are welcome: a beat can bring in *a woman*, *a crowd* or a name you did not
-declare (a brand such as *Pampers* or *Nike shoes* is not a name). That shot then says
-everyone other than your characters looks nothing like
-them, with a different face, hair, body and clothes and none of what they wear, so an
-extra is never drawn as a copy of someone in `character_memory`.
-
-### Continuity
-
-Every shot that starts on the previous shot's last frame says so in its prompt: the
-same place and the same people, one moment earlier, with nobody new joining, or, when
-the beat brings someone in, with that person coming into view and nobody else. When the
-beat brings in extras, they come into view too. That
-frame reaches H3 as a picture, and a picture the prompt does not mention is read as
-another person.
-
-After a `cut`, someone who was last seen alone is given that frame as their current
-look, in place of their portrait. Their clothes and anything held on them carry over.
-
-When a beat shows someone from behind (*the camera moves behind Crystal*, *her back to
-the camera*, *she faces away from the camera*, *a rear view of Crystal*), the prompt
-says they face away from the camera from head to feet, so their back and the back of
-everything they wear show, and that their body never twists at the waist. That keeps a
-belt or harness from being drawn back to front when the shot continues from a frame
-that showed its front, without turning only half of them around. Say what the back of
-an item looks like (*a chain hanging from the back*) so it can be drawn.
-
-H3 comes out a little more saturated and contrasty each time it continues from a frame,
-and left alone that burns the picture more with every shot. The first shot, and the
-first shot after a `cut`, are left as rendered and set the look. Every shot that
-continues from a frame is graded where it picks up: the first frame you see is matched
-to the frame it continues from (brightness, contrast, saturation and the shape of the
-shadows and highlights), since both show the same moment, and that same correction is
-carried through the rest of the shot. Nothing later in a shot is forced onto another
-frame's tones, so someone stepping in, the lights going down or the camera turning keep
-their own look. A continued shot that opens washed out gets its colour back the same way.
-A black frame, or a shot that does not pick up where the last one ended, is left as
-rendered. H3 also creeps more saturated and contrasty within a shot, and each shot hands
-its last frame on, so that creep would add up shot after shot. So when a shot ends more
-than 3% more saturated or contrasty than the scene's look (its first shot, or the first
-after a `cut`), the excess is eased out across the shot, from nothing at its first frame,
-and it hands on a frame at the scene's look. A shot that gets darker or paler is never
-touched. Each shot also starts from the last frame of the one before, decoded and encoded again,
-and H3 takes everything in that frame as real: its small flaws are copied and built on,
-shot after shot, until surfaces turn blotchy and crusty, like a picture saved as a JPEG
-over and over. H3 also opens each continued shot a little rougher than the frame it was
-given. The scene's texture is taken from its first shot (the roughest of that shot's first,
-middle and last frames, since a shot's very first frame comes out smoother than the rest),
-and that shot is never touched. When a later shot opens or ends with more than 3% more
-texture on its smooth surfaces (skin, walls, cloth) than that, the excess is eased out at that end and
-blended across the shot in between. Only faint, blotchy texture is eased out: edges,
-outlines and sharp detail such as a zipper's teeth, stitching or print are left as they
-are, and no more than half of a surface's faint texture is ever taken out. Both ends of
-every shot sit at the scene's texture, so shots join without a jump and the frame each one
-hands on is back at the scene's texture.
-Those corrections act on finished frames, so they do not stop H3 itself from drifting:
-each continued shot comes out of H3 more saturated and contrasty than the frame it was
-given. So the node measures that boost on every continued shot (averaged over the
-run) and hands the next shot a frame toned down by it, which H3 then brings back up to the
-true look. That frame is trimmed from the video. The log gives each shot's rendered
-opening and rendered end, before any correction, next to its finished look, and its
-texture against the scene before and after it is held. Each continued shot's numbers (how its opening came out against the frame it
-continues from, whether it was graded, and its finished look against shot 1) go to the
-ComfyUI log.
+Unnamed people can be men, boys, women or girls, so *she* or *he* right after an unnamed
+woman, girl, man or boy acts means them, even beside named women or men (*A woman grabs
+Sarah. She cuffs her hands…* reaches H3 as *The woman cuffs Sarah's hands…*). A line
+tagged with an unnamed person (*"Come with me," the man says*), or a *he* or *she* right
+after one acts, is that person's: the prompt writes *The man says: <d>…</d>* and no named
+character's lips move; a voice on a phone or off screen moves nobody's lips. Something an
+unnamed person does to a named character is read as usual and says who did it (*the man
+has let go*); something done to an unnamed person lands on nobody named.
 
 ### Reference pictures
 
-Wire up to four pictures into `ref_image_1` … `ref_image_4` and refer to them in the text
-as `<Picture 1>` … `<Picture 4>`. A tag with no picture wired is removed.
+Wire up to four pictures into `ref_image_1` … `ref_image_4` and tag each one
+`<Picture 1>` … `<Picture 4>` beside a name or anywhere in that person's lines in
+`character_memory` (`Sarah <Picture 1>: …`, `Sarah: <Picture 1> …`, `Sarah (<Picture 1>):
+…`), or beside the name in a beat (`Sarah <Picture 1> walks in.`). A tag in the scene or
+anchor that belongs to nobody goes in every shot. A person's picture goes in, cropped to
+face and hair (found with
+DWPose from `comfyui_controlnet_aux`, with `ckpts/hr16/yolox-onnx/yolox_l.torchscript.pt`
+and `ckpts/hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt`), in
+every shot they are in, so their clothes come only from the words and their face stays
+theirs from shot to shot. This holds on every checkpoint and LoRA, also ones not trained on
+pictures (anything but ref2va). Tags are renumbered for each shot, and the frame a shot
+opens on is the picture after them.
 
-A tag belongs to the name it sits beside, or else to the one name on its line or
-sentence, so a `character_memory` line can carry it anywhere: `Aurora <Picture 1>:`,
-`HMS Aurora - <Picture 1>:`, `<Picture 1>: HMS Aurora, …`, `HMS Aurora, a three-masted
-frigate (<Picture 1>).` A memory line with a tag declares the one it is about, so its
-picture goes only into the shots that one is in. Each shot's line in `info` lists the
-pictures it sends and whose they are (`pictures: Aurora (ref_image_1)`).
+### Continuity
 
-Once a person is held, their own picture (written right after their name, as in
-`Mara <Picture 1>`) is left out of shots that start on a frame they are already in. A
-portrait without the cuffs or the tape pulls them back off. In the shot where they come
-in, the picture still goes in. After a `cut` the picture comes back, unless a later frame
-of them stands in for it.
-
-The pictures work on every checkpoint and LoRA. The hybrid b25-49 (`fl2va_ref2va`) and any
-checkpoint whose file name says `ref2va` were trained on them and get them in every shot.
-FL2VA checkpoints, such as the base `minimax_h3_fl2va` and 10Eros, and FastH3 were not:
-when a person is already in the frame a shot opens on and their picture comes in as well,
-they draw that person twice. So on those, a person's picture is left out of a shot that
-continues from a frame they are in, and that frame carries their look. The first shot,
-the shots after a `cut`, and anyone walking into a continued shot still get their
-picture. The node reads which checkpoint is loaded from its own `model` link.
-
-The same goes for a LoRA trained without them, found in any loader on that link
-(ComfyUI's own LoRA loader and LoRA Stack, a LoRA stack such as DaSiWa's, or any loader that
-names its LoRA files;
-a slot switched off or at strength 0 does not count). A LoRA whose metadata lists
-`ref2va` was trained on pictures. One whose name or metadata says T2V, FL2V or a
-few-step speed LoRA (*4step*, *turbo*, *lightning*, *distill*, DMAD, FlashGen) was not, and
-`info` names it. Style LoRAs change nothing here.
-
-A person's picture always goes in cropped to their face and hair (found with DWPose), so
-their clothes come only from the words: the clothes in the picture never end up on top of
-the ones the scene describes. `info` marks it *face and hair* under *pictures:*, and says
-when no face could be found and the whole picture went in.
+- **Look:** every continued shot is graded onto the frame it continues from (the whole
+  tone curve, so a shot that opens washed out gets its colour back), and its end is
+  brought back to the scene's contrast and colour when it is more than 3% off (a lift by
+  at most a quarter, brightness never changed). H3 also adds contrast and colour to every
+  continued shot, so the frame handed on is toned down by the boost it measured, and H3
+  brings it back up to the true look. `info` gives each shot's opening against the frame
+  before and its end against shot 1 (contrast, colour and sharpness).
+- **Sharpness:** every hand-off and every contrast lift adds a little edge and texture, so
+  shot after shot would look more and more oversharpened. In every frame, the finest detail
+  (a pixel or two across) and the detail just above it (up to about eight pixels) are each
+  measured against the picture's larger shapes, a ratio that holds steady when what is in
+  view changes. Where either is more than 5% over the scene's first shot, that detail alone
+  is eased back down to it (never below 60% of it); tones, colours and larger shapes are
+  left as they are, and nothing is ever sharpened. A cut starts a new scene. `info` says
+  when a shot was eased.
+- **Background:** the frame handed on is decoded and encoded again, and that round trip
+  is not exact, so walls, furniture and gardens would turn blotchy shot after shot. Every
+  part of the frame that stayed still through the whole shot and still matches the
+  frame handed on before it is put back to that frame's pixels; whatever moved, and a
+  margin around it, is kept as rendered. A change counts against how bright that part of
+  the frame is, so in a dim room a leg that moved is still seen as moved and is never
+  pasted back where it was, next to where it went.
+- **Someone coming back:** the node keeps the latest frame it handed on with everyone's
+  face in view. When someone comes back into the scene (they left it, or a later beat
+  brings them in again), that frame goes in as one more picture, the same place a little
+  earlier, and the shot says that this person looks exactly as there on coming back into
+  view. A face that is only turned away or hidden (lying face down, a shot of her legs)
+  gets nothing: fed in for those, the earlier frame had H3 put the whole scene back the
+  way it was there, a woman lying on the floor standing up again with her ankles being
+  cuffed. A shot where anything goes on or comes off, and a cut, start it afresh. This is
+  off on a checkpoint or LoRA not trained on pictures, and `info` says so.
 
 ### Sound
 
-- **Speech:** a shot with a quoted line (`"…"`, `'…'`, `“…”`, `‘…’` or `<d>…</d>`)
-  speaks. Every line reaches H3 inside `<d>…</d>`, the speech tags it was trained on,
-  with the words exactly as written, except that a garment that is off is left out of
-  the line the picture is made from (see Clothing). Its first half second is held quiet
-  so the line does not start on the cut.
-- **Words are not acted out:** H3 draws what a line talks about unless told otherwise,
-  so every shot with a line says *Spoken words are only heard: the shot shows what it
-  describes, not what anyone talks about.* What the beat itself describes still happens.
-  A beat that is only someone talking (*Dana says to Sarah: "Lie down."*) says *This shot
-  is only the line being spoken: everyone stays where and as they are.* instead.
-- **Room to speak:** a shot gets about 3.5 words a second, H3's own pace, plus 2.5 seconds
-  (H3 starts talking about 2 seconds in) for its line, even past `shot_seconds`, up to
-  H3's 15 seconds. No more: time left over after a line is filled with made-up talk or with
-  acting the words out.
-  A `seconds:` line still wins. A line too long for one shot is flagged in `info`: split
-  it across beats.
-- **No talking without a line:** every shot without a quoted line renders its picture
-  with the audio held silent and says that nobody speaks and every mouth stays closed,
-  so nobody's mouth moves to mumbling. The closed-mouth wording is left out when the beat
-  has its own vocal sound (*screams*, *gasps*) or a gag holds a mouth open.
-- **Foley and ambience:** such a shot keeps the sounds its beat brings (footsteps, a
-  door, cuffs closing, tape tearing) and the ambience of the scene (rain, traffic, a
-  quiet house). The node never adds a steady hum or whir (a fridge, a strip light, a
-  computer fan) the scene does not name, since it reads as a drone. Its sound is made in a second, audio-only pass over the finished
-  picture, so the sound follows what is on screen and has no moving mouths to put a
-  voice to. That pass listens to a half-size copy of the picture, which makes it about
-  six times cheaper than rendering the shot again, and the picture itself is never
-  touched. Set `foley_resolution` to *quarter* for a faster pass, or *full* for a full-size one. A beat that describes
-  its own sounds keeps those, and a scene paragraph that describes sounds (*Full battle
-  sounds.*) keeps them in every shot, with the beat's own sounds added.
-- **No music:** every shot says there is no background music, unless its beat or the
-  scene mentions music, a radio, singing or an instrument.
-- **Silence:** a shot with nothing to hear stays silent. Turn `silence_wordless` off to
-  render every shot in one pass with free audio instead.
-- **Gagged speech:** a gagged person in a shot with speech or vocal sounds is muffled.
-  Their lips stay shut under tape, or the mouth stays held open around a ball or ring
-  gag.
-- **Ambient bed:** wire an audio file into `ambient_audio` to have it looped under the
-  whole soundtrack at `ambient_level`. It plays under the model's sound and does not
-  change it.
+Sound is made only where it belongs. Each spoken line is rendered with the picture in its
+own stretch of sound, so the lips move with it, and everything before, between and after
+the lines is held silent. A muffled sound from a taped or gagged mouth, quoted (*"Mmph!"*)
+or told in the beat (*whimpers into the tape*, *her muffled screams*), is made afterwards
+in its own short stretch, by a second pass that changes only the audio, so the taped mouth
+never moves to it and nothing is babbled around it. A shot with no line and no muffled
+sound is rendered silent, so no lips move, and then gets all of its sound in that second
+pass. The second pass works from a copy of the picture at `foley_resolution` (`off` leaves
+those shots silent). `info` gives each line's time in the shot.
 
-## Pose control
+## Speed models
 
-Text alone cannot stop H3, or a LoRA, from freeing restrained arms or catching a fall
-with cuffed hands. Every shot where someone's arms or ankles are held is checked with
-DWPose after it renders, in one of two ways.
-
-**With the H3 Fun controlnet: the skeleton is held, on any H3 checkpoint and LoRA.** The
-node loads `minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` from
-`models/model_patches` by itself, or uses the one wired into `pose_controlnet`.
-
-- Each such shot is first drafted at half size from the same text and seed. DWPose reads
-  the draft, and the shot itself is then rendered at full size with the restrained
-  person's skeleton held in place for the first `pose_end` of the steps. If the draft
-  gives nothing to hold, the shot is rendered at full size without it.
-- The draft costs about a tenth of a full render, so a checked shot costs about 1.1
-  renders instead of 2. The movement follows the draft.
-- The controlnet was trained on the hybrid b25-49 checkpoint and reads its 8-wide
-  timestep curve. On any other checkpoint the node reads each step's timestep off that
-  checkpoint and hands the controlnet the matching point on the hybrid's curve, so keep
-  the hybrid checkpoint in `models/diffusion_models`; only its small curve is read.
-
-**Without the controlnet: the shot is rendered again.** If the restraint broke, the
-shot is rendered again on a new seed, up to `pose_retries` more times. The node keeps
-the take where it held, or else the take where it broke in the fewest frames. Set
-`pose_retries` to 0 to turn this off.
-
-**Needs:** the DWPose files from `comfyui_controlnet_aux`:
-
-- `ckpts/hr16/yolox-onnx/yolox_l.torchscript.pt`
-- `ckpts/hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt`
-
-**What is checked:**
-
-- The held positions come from the restraints the node reads, or from your `hold:` lines:
-  *behind her back*, *in front*, *above her head*, *at her waist*, *ankles*, *ankles to
-  her wrists*.
-- In the shot where the restraint goes on, the limbs are checked only from the moment
-  they close.
-- Some shots are not checked:
-  - a restraint fastened to an object (`to the bed`)
-  - a restraint coming off
-  - any shot where the node cannot tell who is restrained
-- `info` says which way the restraints are being kept and has a line for every checked
-  shot.
-
-## Upscaling
-
-- **`latent_upscale`** samples each shot at `resolution` and enlarges it in latent space
-  before decoding, which is much cheaper than sampling large.
-  - It needs the Minimax H3 Latent Upscaler node pack, with its H3 model in
-    `models/latent_upscale_models`.
-  - `latent_upscale_scale` sets the factor.
-  - The next shot is still handed a frame at the sampled size.
-- **`upscale`** enlarges the finished video:
-  - `rtx`: NVIDIA RTX Video Super Resolution (needs the `comfyui_nvidia_rtx_nodes` pack)
-  - `model`: the model picked in `upscale_model`, from `models/upscale_models`
-  - `lanczos`: a plain resize
-- **`upscale_target_short_edge`** fits the result's short edge to that many pixels.
-  `lanczos` needs it; for `rtx` it also sets the factor.
-
-## FastH3 and Hyperflow
-
-- **FastH3**, detected from the model, runs at shift 10/3 with the VSA attention it was
-  trained on (keep 10%, from 20% of the schedule). If torch is on the `cudaMallocAsync`
-  allocator, restart ComfyUI with `--disable-cuda-malloc`.
-  - FastH3 was distilled for text and first-frame shots only, so it gets reference
-    pictures only where nobody can be drawn twice (see Reference pictures).
-- **Hyperflow**, detected from the LoRA's metadata or its file name in any loader (its
-  settings are read from its own file when the loader does not pass them on), samples every shot
-  on its own 8-step grid (shift 12/3, `euler`). Leave `sigmas` unwired.
-  - Its endpoint conditioning is added back from `hyperflow_endpoint_v1.0.safetensors`
-    beside the node, or from the original `minimax_h3_hyperflow_8step_v1.0.safetensors`
-    in `models/loras`.
-  - That needs a checkpoint with a full time embedder. On curve checkpoints (hybrid
-    b25-49, 10Eros, FastH3) Hyperflow runs without it, and `info` says so.
-- **Speed LoRAs** are sampled the way they were trained, whatever `sampler_name` says:
-  - a LoRA whose metadata gives its sampling (DMAD: *4 steps, video shift 12, audio shift
-    2, re-noise step rule*) gets exactly that, a re-noise rule as `lcm`;
-  - FlashGen gets its published recipe: 4 `euler` steps on its own schedule
-    `[1.0, 0.7, 0.4, 0.15, 0.0]` shifted at 12/3;
-  - any other few-step LoRA (*4step*, *8step*, *4to8step*, *turbo*, *lightning*,
-    *distill*, *lcm* in its name) gets `euler` on the steps you set, with no extra audio
-    step: a multistep sampler such as `res_multistep` overshoots on them into halos,
-    blown colour and clipped audio.
-  - Wired `sigmas` override all of this. `info` says what each LoRA got.
-- **PDD Acc** (`MiniMaxH3PDDAccApply` on the model) is sampled the way it was trained:
-  on its own sigmas, with `euler` and shift 12/3, whatever `sampler_name` and the shift
-  widgets say. Wire its `sigmas` output into `sigmas` and its `MODEL` output into `model`;
-  without its sigmas the run stops and says so. `info` says *PDD Acc*.
-- **A LoRA with timestep layers** (Hyperflow has them) on a curve checkpoint loads only
-  in part: ComfyUI leaves those layers out. Near the top of `info`, *LORA ONLY PARTLY
-  LOADED* names it; use it on a checkpoint with a full time embedder, such as the original
-  FL2VA, or use a LoRA without timestep layers.
+- **PDD Acc:** run the model through `MiniMaxH3PDDAccApply`, wire its `MODEL` output into
+  `model` and its `sigmas` output into `sigmas`. It samples on its own sigmas with `euler`
+  at shift 12/3. Its sigmas wired in without its model are left out.
+- **Speed LoRAs** are sampled the way they were trained: a LoRA whose metadata gives its
+  sampling (DMAD) gets exactly that, FlashGen gets its 4-step schedule, and any other
+  few-step LoRA (*4step*, *8step*, *turbo*, *lightning*, *distill*, *lcm*) gets `euler` on
+  your steps. The same goes for a checkpoint with one merged in.
+- **Hyperflow** samples on its own 8-step grid at shift 12/3 with `euler`.
+- **FastH3** runs at shift 10/3 with its sparse attention.
+- Wired `sigmas` override all of these. `info` says what the model got.
 
 ## Settings
 
 | widget | |
 |---|---|
-| `resolution`, `megapixels` | aspect preset and size; at 1.0 each preset is its native size, 0 keeps it exactly |
-| `shot_seconds` | the longest a shot may be, and every shot's length when `shot_length` is *fixed* |
-| `shot_length` | *from the beat* sizes each shot from its own beat: about 2.2s per action, or the spoken line, plus one action's time where something is put on, capped by `shot_seconds`. *fixed* gives every shot `shot_seconds` |
+| `resolution`, `megapixels` | aspect preset and size; at 1.0 each preset is its native size |
+| `shot_seconds` | the longest a shot may be (a beat that needs longer runs on into more shots), and every shot's length when `shot_length` is *fixed* |
+| `shot_length` | *from the beat*: as long as the beat takes at real-life speed (see *Real-life speed*), at least 5.2s; *fixed*: every shot is `shot_seconds` |
 | `steps`, `sampler_name`, `scheduler`, `seed` | as in KSampler; one seed for the whole video |
 | `first_frame` | the first shot starts on this picture |
-| `sigmas` | your own schedule (overrides Hyperflow's grid) |
+| `sigmas` | your own schedule |
 | `shift_video`, `shift_audio` | H3's sigma shift, 12/3 by default |
-| `silence_wordless` | keep shots without a quoted line silent |
+| `silence_wordless` | render shots without a spoken line silent, then make their sound |
 | `plan_only` | report the shots and their text without rendering |
-| `pose_strength`, `pose_end` | how strongly, and for how much of the schedule, the skeleton holds |
-| `pose_retries` | without pose control, how many times a shot whose restraint broke is rendered again |
-| `anchor` | framing at the front of every shot; filled in, every paragraph is a shot |
-| `character_memory` | who is in the film, after the scene in every shot |
-| `latent_upscale`, `latent_upscale_scale` | upscale each shot in latent space, and by how much |
-| `upscale`, `upscale_model`, `upscale_target_short_edge` | upscale the finished video |
-| `ambient_audio`, `ambient_level` | an audio bed looped under the whole soundtrack, and how loud |
-| `foley_resolution` | the size of the picture copy the sound pass listens to: *quarter* (fastest, sounds line up a little less tightly with the picture), *half* (about six times faster than *full*) or *full* |
+| `anchor` | text at the top of every shot; with it, every paragraph is a shot |
+| `character_memory` | the characters, their pictures and what they have on from the start |
+| `foley_resolution` | the size of the picture copy the sound pass works from: *quarter*, *half*, *full* or *off* |
+
+The finished `images` are ordinary frames: upscale them with ComfyUI's own upscale nodes.
 
 ## Outputs
 
-| slot | what it is |
+| output | |
 |---|---|
-| `images` | the finished frames |
-| `audio` | the synchronised soundtrack |
-| `info` | what the node did for each shot, how long it took, and its contrast and colour against shot 1 |
+| `images`, `audio` | the whole video and its soundtrack |
+| `info` | the setup, every shot's cast and state, and timings |
 | `script` | the exact text each shot was given |
-| `frames_per_shot`, `total_frames`, `shots`, `video_seconds` | for downstream nodes |
+
+ComfyUI hands `info` and `script` on only when the whole video is done, so a text box
+on them shows the last run's text until then. The node's live text shows the plan and
+progress right away.
+| `frames_per_shot`, `total_frames`, `shots`, `video_seconds` | counts |
 
 ## Other nodes here
 
@@ -674,18 +760,21 @@ the take where it held, or else the take where it broke in the fewest frames. Se
 ## Notes
 
 - No negative prompt and no cfg setting: H3 runs at cfg 1.
+- Each shot's `info` line ends with how long it took and where the time went (*172s (encode
+  24s, sampling 95s, sound 21s, decode 29s, finish 3s)*): *encode* is the text encoder
+  reading the shot's text and pictures, *sound* the sound pass, *finish* the look and
+  hand-off work. Reference pictures go through the VAE once per run, not once per shot.
+- Finished frames wait in a file in the system temp folder instead of in RAM (about 1.5 GB
+  per 10-second shot at 1 megapixel), so a long video no longer pushes the text encoder and
+  the model out of RAM, where they would be read back from disk before every shot. The file
+  is deleted as soon as it is made, and its space comes back when ComfyUI lets go of the
+  video. With too little disk space the frames stay in RAM as before.
 - Denoise is fixed at 1.0: partial denoise desyncs the joint audio/video schedule.
-- A LoRA whose timestep layers were built for another checkpoint's time curve, such as
-  one made for an 8-wide hybrid and used on 10Eros or the full FL2VA, cannot attach
-  those layers as it is, and the sampler loses part of its timing, which shows as faded
-  beats. The node re-fits them onto the loaded checkpoint's curve, which needs the
-  checkpoint the LoRA was built for in `models/diffusion_models`; `info` says how many.
-- ComfyUI sizes H3's working memory at a fraction of what a shot uses (a block needs
-  about 105 KB per token), so on long shots it keeps too much of the model in VRAM and
-  runs out. The node tells it 120 KB per token instead, so the rest of the model streams
-  in as needed. If a shot still does not fit, the error says to lower `megapixels` or
-  `shot_seconds`.
-- Widgets are restored by position. If they read NaN, recreate the node as described
+- The node tells ComfyUI H3's real working memory (about 120 KB per token), so on long
+  shots the rest of the model streams in as needed. If a shot still does not fit, the
+  error says to lower `megapixels` or `shot_seconds`.
+- If the node's files change while ComfyUI runs, `info` starts with `RESTART COMFYUI`.
+- Widgets are restored by position. If they read wrong, recreate the node as described
   under Install.
 
 ## Disclaimer
