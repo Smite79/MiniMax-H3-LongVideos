@@ -31,7 +31,7 @@ Long MiniMax-H3 video with synchronised audio from a single prompt, in ComfyUI.
 
 H3 renders at most about 15 seconds at a time. H3-LongVideos takes a whole scene written
 as beats, renders it shot by shot and joins the shots into one video with one soundtrack.
-People, clothes and restraints stay the same from shot to shot, and every spoken line is
+People and their clothes stay the same from shot to shot, and every spoken line is
 lip-synced to whoever says it.
 
 ## How it works
@@ -41,8 +41,8 @@ lip-synced to whoever says it.
    `shot_seconds` runs on into the next shot. The node reads who is in each beat, who says
    each line and what goes on or comes off whom, and carries that from shot to shot.
 2. **Write.** Each shot's text is the scene, the characters and your beat, followed by
-   notes that spell out each step of what goes on or comes off, keep restraints in place
-   and keep everyone whole and in frame.
+   notes that spell out each step of what goes on or comes off, keep everyone's clothes
+   as they are and keep everyone whole and in frame.
 3. **Render.** Each shot starts on the last frame of the shot before, so the scene runs on
    without a break. Reference pictures go into every shot their person is in.
 4. **Sound.** Each spoken line gets its own stretch of sound, lip-synced to its speaker. A
@@ -58,7 +58,7 @@ name gives that person the picture wired into `ref_image_1` … `ref_image_4`:
 
 ```
 Sarah <Picture 1>: a woman in her twenties, long brown hair, white blouse, black skirt
-Dana: a woman in her thirties, short red hair, black suit
+Dana: a woman in her thirties, short red hair, black blazer, blue shirt, grey trousers
 ```
 
 The prompt is the scene, then one paragraph per beat. Anything in quotes is spoken:
@@ -70,7 +70,7 @@ Dana walks in and stops at Sarah's desk. "You're still here?" she asks.
 
 Sarah looks up and smiles. "I was waiting for you."
 
-Dana cuffs Sarah's wrists behind her back.
+Dana takes off her blazer and hangs it on the back of a chair.
 
 Dana walks out of the room.
 exit: Dana
@@ -90,7 +90,7 @@ exit: Dana
 | `remove: Name, garment` | the garment comes off |
 | `wear: Name, garment` | the garment goes on, or back into place |
 | `lift: Name, garment` | the garment is pulled out of the way and stays on |
-| `tear: Name, garment` | the garment is cut or torn off, even past restraints |
+| `tear: Name, garment` | the garment is cut or torn off |
 | `exit: Name` | the person leaves and is out of the shots after |
 
 A `hold:` line in `character_memory` puts the item on from the first shot.
