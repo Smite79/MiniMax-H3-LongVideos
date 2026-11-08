@@ -152,7 +152,9 @@ While a video renders, the node shows the plan and the shot it is on, live.
 
 Two helper nodes come with it: **H3 Shot Length** gives a shot length as seconds and as a
 valid H3 frame count, and **H3 Overlay** puts a watermark and an intro title on the
-finished frames.
+finished frames. Like the main node, the overlay keeps the video in a temp file on disk
+and works through it in pieces, so a long video is never copied into RAM; the temp folder
+needs room for one more copy of it.
 
 ## Disclaimer
 

@@ -19,6 +19,7 @@ import chain
 import faces
 import modelprep
 import node
+import overlay
 import planner as P
 
 _fails = []
@@ -1080,6 +1081,65 @@ def render(prompt, dwpose=False, counts=(), textured=False, blind=False, **kw):
     return out, calls
 
 
+def anon_mb():
+    for line in open("/proc/self/status") if os.path.exists("/proc/self/status") else ():
+        if line.startswith("RssAnon"):
+            return int(line.split()[1]) / 1024
+    return None
+
+
+def test_overlay():
+    print("\n=== the overlay streams the video to a temp file and never copies it into RAM ===")
+    gen = torch.Generator().manual_seed(3)
+    src = chain.spool(40, (72, 128, 3), torch.float16)
+    for s in range(0, 40, 8):
+        src[s:s + 8].copy_(torch.rand(8, 72, 128, 3, generator=gen))
+    kept = src.clone()
+    out, info = overlay.H3Overlay().run(src, 24, watermark_text="mark", watermark_size=12.0, intro_text="Title", intro_seconds=1.0,
+                                        intro_fade=0.5, intro_size=20.0, overlay_stroke=1)
+    plain = kept.clone()
+    overlay.apply_overlays(plain, 24, "mark", wm_size_pct=12.0, intro="Title", intro_seconds=1.0, intro_fade=0.5, intro_size_pct=20.0,
+                           font_name="arial.ttf", stroke_px=1)
+    check("the result is what compositing onto a plain copy of the frames gives, and the frames that came in are left as they were",
+          torch.equal(out, plain) and not torch.equal(out, kept) and torch.equal(src, kept) and "watermark composited" in info
+          and "intro title composited" in info, info)
+    check("it comes back in a file-backed buffer of its own, not in the input's storage",
+          out.untyped_storage().is_shared() and out.untyped_storage().data_ptr() != src.untyped_storage().data_ptr()
+          and out.dtype == src.dtype and out.shape == src.shape)
+    same, note = overlay.H3Overlay().run(src, 24)
+    check("with no text the frames pass through unchanged and uncopied",
+          same.untyped_storage().data_ptr() == src.untyped_storage().data_ptr() and "unchanged" in note, note)
+    big = chain.spool(80, (720, 1280, 3), torch.float16)
+    big.fill_(0.25)
+    before = anon_mb()
+    done, _ = overlay.H3Overlay().run(big, 24, watermark_text="mark", intro_text="Title")
+    grew = None if before is None else anon_mb() - before
+    mb = big.numel() * big.element_size() / 2 ** 20
+    check("a long video is not copied into RAM: the process takes on a small fraction of the video's size",
+          grew is None or grew < mb / 4, f"grew {grew} MB for a {mb:.0f} MB video")
+    del big, done
+    real_fallocate, real_free = os.posix_fallocate, chain.mm.get_free_memory
+
+    def full(*a):
+        raise OSError(28, "No space left on device")
+
+    os.posix_fallocate = full
+    try:
+        chain.mm.get_free_memory = lambda *a, **k: 1000
+        try:
+            chain.spool(4, (64, 64, 3), torch.float16)
+            refused = ""
+        except MemoryError as e:
+            refused = str(e)
+        chain.mm.get_free_memory = lambda *a, **k: 1 << 40
+        held = chain.spool(4, (64, 64, 3), torch.float16)
+    finally:
+        os.posix_fallocate, chain.mm.get_free_memory = real_fallocate, real_free
+    check("with no room on disk the frames go to RAM only if they fit there, and otherwise it says so instead of being killed later",
+          "No space left on device" in refused and "of RAM is free" in refused
+          and tuple(held.shape) == (4, 64, 64, 3) and not held.untyped_storage().is_shared(), refused)
+
+
 def test_ankles():
     print("\n=== bound legs move together and are said once as a pair; free legs are left exactly as written ===")
     mem = ("Sarah: a young woman with long blonde hair, in a white blouse and a black skirt.\n"
@@ -1629,6 +1689,7 @@ def main():
     test_pace()
     test_models()
     test_chain()
+    test_overlay()
     test_ankles()
     test_undress_bound()
     test_skirts()

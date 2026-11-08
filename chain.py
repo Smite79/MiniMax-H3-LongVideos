@@ -147,20 +147,24 @@ def build(clip, vae, audio_vae, text, w, h, frames, handoff=None, refs=(), memor
 
 
 def spool(n, shape, dtype):
-    size, fd, path, out = n * math.prod(shape), None, None, None
+    size, fd, path = n * math.prod(shape), None, None
+    need = size * torch.tensor([], dtype=dtype).element_size()
     try:
         fd, path = tempfile.mkstemp(prefix="h3longvideos-", suffix=".frames")
-        os.posix_fallocate(fd, 0, size * torch.tensor([], dtype=dtype).element_size())
-        out = torch.from_file(path, shared=True, size=size, dtype=dtype).view(n, *shape)
-    except Exception:
-        out = None
+        os.posix_fallocate(fd, 0, need)
+        return torch.from_file(path, shared=True, size=size, dtype=dtype).view(n, *shape)
+    except Exception as e:
+        free = mm.get_free_memory(torch.device("cpu"))
+        if need > free:
+            raise MemoryError(f"the frames ({need / 2 ** 30:.1f} GB) cannot go to a temp file ({e}) and only "
+                              f"{free / 2 ** 30:.1f} GB of RAM is free") from e
+        return torch.empty((n, *shape), dtype=dtype, device="cpu")
     finally:
         if fd is not None:
             os.close(fd)
         if path is not None:
             with contextlib.suppress(OSError):
                 os.unlink(path)
-    return out if out is not None else torch.empty((n, *shape), dtype=dtype, device="cpu")
 
 
 def sample(model, cond, negative, latent, seed, steps, sampler, scheduler, sigmas):

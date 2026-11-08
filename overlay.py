@@ -5,7 +5,12 @@
 
 import torch
 
-BLEND_CHUNK = 64
+try:
+    from . import chain
+except ImportError:
+    import chain
+
+CHUNK = 64
 
 MIN_FONT_PX = 8
 FIT_SHRINK = 0.92
@@ -136,8 +141,8 @@ def blend_layer(frames, layer, frame_alpha=None, opacity=1.0):
     a_crop = alpha[y0:y1, x0:x1, :].to(frames.dtype)
     c_crop = rgb[y0:y1, x0:x1, :].to(frames.dtype)
     live = (frame_alpha > 0).nonzero().flatten().tolist()
-    for s in range(0, len(live), BLEND_CHUNK):
-        idx = live[s:s + BLEND_CHUNK]
+    for s in range(0, len(live), CHUNK):
+        idx = live[s:s + CHUNK]
         fa = frame_alpha[idx].to(frames.dtype).view(-1, 1, 1, 1)
         sub = frames[idx, y0:y1, x0:x1, :]
         a = a_crop * fa
@@ -153,6 +158,13 @@ def hold_fade_alpha(total_frames, hold_frames, fade_frames):
     if fade:
         a[hold:hold + fade] = torch.linspace(1.0, 0.0, fade + 2)[1:-1]
     return a
+
+
+def copy_frames(images):
+    out = chain.spool(images.shape[0], tuple(images.shape[1:]), images.dtype)
+    for s in range(0, int(images.shape[0]), CHUNK):
+        out[s:s + CHUNK].copy_(images[s:s + CHUNK])
+    return out
 
 
 def apply_overlays(frames, fps, watermark="", wm_position="bottom-right", wm_size_pct=4.0,
@@ -256,9 +268,8 @@ class H3Overlay:
         if not wanted:
             return (images.detach().cpu(),
                     "no overlay text given -- frames unchanged")
-        frames = images.detach().cpu().clone()
         frames, note = apply_overlays(
-            frames, max(1, int(fps)), watermark_text, watermark_position, watermark_size,
+            copy_frames(images.detach()), max(1, int(fps)), watermark_text, watermark_position, watermark_size,
             watermark_opacity, watermark_margin, intro_text, intro_seconds,
             intro_fade, intro_size, intro_position, overlay_font, overlay_stroke)
         if not note:
