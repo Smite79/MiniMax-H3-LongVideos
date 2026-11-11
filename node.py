@@ -33,10 +33,9 @@ def show(node_id, lines):
 
 def frame_size(choice, megapixels):
     w, h = NATIVE.get(choice, NATIVE["16:9"])
-    if megapixels and megapixels > 0:
-        s = math.sqrt(megapixels * 1024 * 1024 / float(w * h))
-        w, h = (max(32, round(v * s / 32) * 32) for v in (w, h))
-    return w, h
+    s = math.sqrt(megapixels) if megapixels and megapixels > 0 else 1.0
+    out = tuple(max(32, round(v * s / 32) * 32) for v in (w, h))
+    return (out if s <= 1 else (w, h)), out
 
 
 class H3LongVideos:
@@ -87,7 +86,8 @@ class H3LongVideos:
             shot_length="from the beat", foley_resolution="half", graph=None, unique_id=None, **legacy):
         t0 = time.perf_counter()
         modelprep.check_vaes(vae, audio_vae)
-        w, h = frame_size(resolution, megapixels)
+        modelprep.mend(model, graph, unique_id)
+        (w, h), (ow, oh) = frame_size(resolution, megapixels)
         pictures = [ref_image_1, ref_image_2, ref_image_3, ref_image_4]
         refs_ok, why = modelprep.takes_pictures(model, graph, unique_id)
         shots, warn = planner.plan(prompt, character_memory, anchor, shot_seconds, shot_length != "fixed",
@@ -95,21 +95,22 @@ class H3LongVideos:
         if not shots:
             raise ValueError("the prompt has no beats")
         script = "\n\n".join(f"[shot {s['n']}]\n{s['prompt']}" for s in shots)
-        info = [f"{w}x{h}, {len(shots)} shots"] + warn
+        info = [f"{w}x{h}" + (f", scaled up to {ow}x{oh} after rendering" if (ow, oh) != (w, h) else "") + f", {len(shots)} shots"] + warn
         info += [f"LORA ONLY PARTLY LOADED: {', '.join(part)} carries timestep layers this checkpoint has no place for"
                  for part in [modelprep.partial(model, graph, unique_id)] if part]
         info += [f"{why}, so no earlier frame of the scene is fed back in when a face comes back into view"] if not refs_ok else []
         info += [f"ignored inputs from an older version of this node: {', '.join(sorted(legacy))}"] if legacy else []
         if plan_only:
-            return (torch.zeros((1, h, w, 3)), {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100},
+            return (torch.zeros((1, oh, ow, 3)), {"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100},
                     " | ".join(info + [s["line"] for s in shots]), script, shots[0]["frames"], 0, len(shots), 0.0)
-        model, steps, sampler_name, sigmas, notes = modelprep.prepare(model, steps, sampler_name, scheduler, sigmas,
-                                                                      shift_video, shift_audio, graph, unique_id)
+        model, steps, sampler_name, sigmas, fine, notes = modelprep.prepare(model, steps, sampler_name, scheduler, sigmas,
+                                                                            shift_video, shift_audio, graph, unique_id)
         info += notes
+        foley_sigmas, voice_sigmas = fine or (sigmas, None)
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
         total = sum(s["frames"] - (1 if s["keyed"] and i else 0) for i, s in enumerate(shots))
         detector = faces.Detector() if faces.available() else None
-        crops, store, used, waves, sr, memo, hushed = {}, None, 0, [], 44100, {}, {}
+        crops, store, used, waves, sr, memo = {}, None, 0, [], 44100, {}
         try:
             wanted = sorted({k for s in shots for k, face in zip(s["refs"], s["faces"]) if face})
             info += ["the pictures went in whole: cropping them to face and hair needs comfyui_controlnet_aux and its DWPose "
@@ -128,7 +129,8 @@ class H3LongVideos:
                 fed = chain.soften(given, boost) if given is not None else None
                 refs = [crops.get(k) if face and crops.get(k) is not None else pictures[k]
                         for k, face in zip(shot["refs"], shot["faces"])]
-                recall = recalled[0] if recalled and given is not None and shot["coming"] and shown < len(shot["cast"]) else None
+                recall = recalled[0] if recalled and given is not None and shot["coming"] and shown < len(shot["cast"]) \
+                    and set(shot["coming"]) <= recalled[2] else None
                 back = planner.join(shot["coming"]) if recall is not None else ""
                 text = shot["prompt"] + (RECALL.format(len(refs) + 2, back, back, "looks" if len(shot["coming"]) == 1 else "look")
                                          if back else "")
@@ -139,16 +141,16 @@ class H3LongVideos:
                 chain.make_room(model, latent)
                 out = chain.sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas)
                 took.append(time.perf_counter())
-                if scale and (shot["silent"] or lines and muffles):
+                if scale and voice_sigmas is not None and lines:
                     chain.make_room(model, latent)
-                    out = chain.foley(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, sigmas, scale,
-                                      muffles or None)
-                if scale and shot["hush"]:
-                    if shot["hush"] not in hushed:
-                        hushed[shot["hush"]] = clip.encode_from_tokens_scheduled(clip.tokenize(shot["hush"]))
-                    chain.make_room(model, latent)
-                    out = chain.foley(model, hushed[shot["hush"]], negative, latent, out, seed, steps, sampler_name, scheduler, sigmas,
-                                      scale, chain.gaps(lines + muffles, shot["frames"] / planner.FPS))
+                    out = chain.foley(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, voice_sigmas, scale,
+                                      lines)
+                if scale and (shot["silent"] or lines):
+                    sound, cued = clip.encode_from_tokens_scheduled(clip.tokenize(shot["sound"])), lines + muffles
+                    for windows in [muffles] * bool(muffles) + [chain.gaps(cued, shot["frames"] / planner.FPS) if cued else None]:
+                        chain.make_room(model, latent)
+                        out = chain.foley(model, sound, negative, latent, out, seed, steps, sampler_name, scheduler, foley_sigmas,
+                                          scale, windows)
                 took.append(time.perf_counter())
                 del cond, latent
                 imgs, wave, sr = chain.decode(vae, audio_vae, out, keep=(vae, audio_vae))
@@ -175,15 +177,16 @@ class H3LongVideos:
                     detector.close()
                     recalled = None if given is None or shot["changed"] else recalled
                     if shown and shown >= max(recalled[1] if recalled else 0, len(shot["cast"])):
-                        recalled = (handoff, shown)
+                        recalled = (handoff, shown, set(shot["cast"]))
                 if given is not None and i:
                     imgs, wave = imgs[1:], wave[..., round(sr / planner.FPS):]
                 want = round(int(imgs.shape[0]) * sr / planner.FPS)
                 wave = torch.nn.functional.pad(wave[..., :want], (0, max(0, want - int(wave.shape[-1]))))
                 if store is None:
-                    store = chain.spool(total, tuple(imgs.shape[1:]), mm.intermediate_dtype())
+                    store = chain.spool(total, (oh, ow) + tuple(imgs.shape[3:]), mm.intermediate_dtype())
                 n = min(int(imgs.shape[0]), total - used)
-                store[used:used + n].copy_(imgs[:n])
+                for a in range(0, n, 16):
+                    store[used + a:used + min(n, a + 16)].copy_(chain.resize(imgs[a:min(n, a + 16)], ow, oh))
                 used += n
                 waves.append(wave.to("cpu", copy=True))
                 del imgs, wave

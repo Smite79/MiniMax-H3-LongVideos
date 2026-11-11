@@ -27,10 +27,10 @@ PINS = ("weights", "patches", "weights-loaded", "patches-loaded", "weights-fast"
 POOL, POINTS, LUT = 256, 33, 1024
 JUMP, FLAT, MEDIAN, WASHED, FLOOR = (0.15, 0.08, 0.08), 0.02, 0.12, 0.85, 1.0 / 255.0
 TOL, LIFT, BOOST = 0.03, 1.25, 1.25
-VOICE_LO, VOICE_HI, VOICED, LOUDER = 75, 400, 0.5, 3.0
+VOICE_LO, VOICE_HI, VOICED, LOUDER, VOICE_BAND, VOICE_SHARE, VOICE_GAP, VOICE_RUN = 75, 400, 0.5, 3.0, 1000, 0.5, 5, 10
 FINE, CRISP_TOL, CRISP_MIN, CRISP_STEP = 400, 0.05, 0.6, 4
-FRESH_SCALE, FRESH_FINE, FRESH_MARGIN, FRESH_STEP = 96, 256, 24, 6
-FRESH_LO, FRESH_STILL, FRESH_HI, FRESH_LEVEL, FRESH_DARK = 0.04, 0.06, 0.10, 0.3, 0.02
+FRESH_SCALE, FRESH_FINE, FRESH_THIN, FRESH_STREAK, FRESH_TURNS, FRESH_MARGIN, FRESH_STEP = 96, 256, 768, 48, 16, 24, 6
+FRESH_LO, FRESH_STILL, FRESH_HI, FRESH_LEVEL, FRESH_DARK, FRESH_LINE, FRESH_SURE = 0.04, 0.06, 0.10, 0.3, 0.02, 0.03, 0.04
 _YCC = torch.tensor([[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5], [0.5, -0.418688, -0.081312]])
 _RGB = torch.linalg.inv(_YCC)
 _MID = torch.tensor([0.0, 0.5, 0.5])
@@ -95,8 +95,12 @@ def unvoice(wave, sr, keep):
         return wave
     frames = x.unfold(0, win, hop)
     frames = frames - frames.mean(dim=1, keepdim=True)
-    ac = torch.fft.irfft(torch.fft.rfft(frames, n=2 * win).abs() ** 2, n=2 * win)[:, :win]
+    power = torch.fft.rfft(frames, n=2 * win).abs() ** 2
+    hz = torch.fft.rfftfreq(2 * win, 1 / sr, device=x.device)
+    low = power * ((hz >= VOICE_LO) & (hz <= VOICE_BAND))
+    ac = torch.fft.irfft(low, n=2 * win)[:, :win]
     peak = ac[:, sr // VOICE_HI:sr // VOICE_LO + 1].max(dim=1).values / ac[:, 0].clamp(min=1e-12)
+    share = low.sum(dim=1) / power.sum(dim=1).clamp(min=1e-12)
     rms = frames.pow(2).mean(dim=1).sqrt()
     t = torch.arange(len(rms), device=rms.device) * hop / sr
     gap = torch.ones_like(rms, dtype=torch.bool)
@@ -105,8 +109,10 @@ def unvoice(wave, sr, keep):
     if not bool(gap.any()):
         return wave
     floor = torch.quantile(rms[gap], 0.2)
-    voiced = (peak > VOICED) & (rms > LOUDER * floor) & gap
-    voiced = (torch.nn.functional.max_pool1d(voiced.float()[None, None], 17, 1, 8)[0, 0] > 0) & gap
+    voiced = (peak > VOICED) & (share > VOICE_SHARE) & (rms > LOUDER * floor) & gap
+    grow = lambda m, k: torch.nn.functional.max_pool1d(m.float()[None, None], 2 * k + 1, 1, k)[0, 0] > 0
+    joined = ~grow(~grow(voiced, VOICE_GAP), VOICE_GAP)
+    voiced = grow(voiced & grow(~grow(~joined, VOICE_RUN), VOICE_RUN), 8) & gap
     gain = torch.where(voiced, (floor / rms.clamp(min=1e-9)).clamp(max=1.0), torch.ones_like(rms))
     gain = torch.nn.functional.avg_pool1d(gain[None, None], 5, 1, 2, count_include_pad=False)
     return wave * torch.nn.functional.interpolate(gain, size=int(wave.shape[-1]), mode="linear")[0, 0].to(wave)
@@ -432,6 +438,13 @@ def _blur(x, s):
     return torch.nn.functional.conv2d(torch.nn.functional.pad(x, (0, 0, r, r), mode="reflect"), k.transpose(2, 3))
 
 
+def _streaks(n, dev):
+    t, k, ks = torch.linspace(-(n // 2), n // 2, 4 * n), FRESH_TURNS, torch.zeros(FRESH_TURNS, 1, n, n)
+    for i in range(k):
+        ks[i, 0, (n // 2 + t * math.sin(math.pi * i / k)).round().long(), (n // 2 + t * math.cos(math.pi * i / k)).round().long()] = 1
+    return (ks / ks.sum((2, 3), keepdim=True)).to(dev)
+
+
 def refresh(frame, backdrop, frames):
     if backdrop is None or frame.shape != backdrop.shape:
         return frame
@@ -441,14 +454,25 @@ def refresh(frame, backdrop, frames):
     soft = lambda t, s: _blur(t.reshape(-1, 1, h, w), max(1.0, h / s)).view_as(t)
     x, a = rgb(frame), rgb(backdrop)
 
-    def ramp(p, q, lo):
-        gain = ((torch.maximum(p, q).amax(1, keepdim=True) + FRESH_DARK) / (FRESH_LEVEL + FRESH_DARK)).clamp(max=1.0)
-        return (((p - q).abs().amax(1, keepdim=True) / gain - lo) / (FRESH_HI - lo)).clamp(0, 1)
+    lines = _streaks(2 * max(1, round(h / FRESH_STREAK)) + 1, dev)
 
-    end, moved = soft(x, FRESH_FINE), ramp(soft(x, FRESH_SCALE), soft(a, FRESH_SCALE), FRESH_LO)
+    def ramp(p, q, lo, hi=FRESH_HI, d=None):
+        gain = ((torch.maximum(p, q).amax(1, keepdim=True) + FRESH_DARK) / (FRESH_LEVEL + FRESH_DARK)).clamp(max=1.0)
+        return ((((p - q).abs() if d is None else d).amax(1, keepdim=True) / gain - lo) / (hi - lo)).clamp(0, 1)
+
+    def thin(t):
+        near, broad = soft(t, FRESH_THIN), soft(t, FRESH_SCALE)
+        return near, broad, near - broad
+
+    streak = lambda p, q: torch.nn.functional.conv2d((p - q).reshape(-1, 1, h, w), lines, padding=lines.shape[-1] // 2).abs().amax(1) \
+        .view_as(p)
+    (xn, xb, xd), (an, ab, ad), end = thin(x), thin(a), soft(x, FRESH_FINE)
+    moved = torch.maximum(ramp(xb, ab, FRESH_LO), ramp(xn, an, FRESH_LINE, FRESH_SURE, streak(xd, ad)))
     for i in range(0, int(frames.shape[0]), FRESH_STEP):
         f = torch.nn.functional.interpolate(rgb(frames[i:i + 1]), size=(h, w), mode="area")
-        moved = torch.maximum(moved, ramp(soft(f, FRESH_FINE), end, FRESH_STILL))
+        fn, _, fd = thin(f)
+        moved = torch.maximum(moved, torch.maximum(ramp(soft(f, FRESH_FINE), end, FRESH_STILL),
+                                                   ramp(fn, xn, FRESH_LINE, FRESH_SURE, streak(fd, xd))))
     r = max(1, round(h / FRESH_MARGIN))
     same = 1 - soft(torch.nn.functional.max_pool2d(moved, 2 * r + 1, stride=1, padding=r), FRESH_SCALE)
     out = frame.clone()

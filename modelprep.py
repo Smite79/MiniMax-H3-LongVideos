@@ -4,6 +4,7 @@
 # This notice may not be removed or altered. See LICENSE.
 
 import copy
+import functools
 import inspect
 import json
 import os
@@ -11,12 +12,18 @@ import re
 
 import torch
 import comfy.samplers
+import comfy.utils
 import comfy.patcher_extension as pe
+from comfy.ldm.minimax.model import TimeEmbedder, time_shift_sigma
 
 PDD_KEY = "minimax_h3_pdd_acc"
 PDD_NODE = "MiniMaxH3PDDAccApply"
 FAST_SHIFT = 10.0
 HYPERFLOW = {"sigmas": (1.0, 0.931506, 0.839236, 0.703462, 0.5, 0.296538, 0.160764, 0.068494, 0.0), "video": 12.0, "audio": 3.0}
+FLASH = {4: (1.0, 0.681872, 0.205019, 0.036496, 0.0), 6: (1.0, 0.825217, 0.471725, 0.147401, 0.049626, 0.015517, 0.0),
+         8: HYPERFLOW["sigmas"]}
+FLASH_KEYS = {"endpoint_time_embedder.proj_in.weight", "hyperflow_sigmas"}
+FINE_BELOW, REVOICE_FROM = 6, 0.88
 RECIPES = {"flashgen": {"grid": (1.0, 0.7, 0.4, 0.15, 0.0), "sampler": "euler", "video": 12.0, "audio": 3.0},
            "dmad": {"steps": 4, "sampler": "lcm", "video": 12.0, "audio": 2.0}}
 SPEED = re.compile(r"\d+[\s_-]?(?:to[\s_-]?\d+[\s_-]?)?steps?|turbo|lightning|distill|lcm", re.I)
@@ -65,10 +72,17 @@ def wired(graph, node_id, name):
     return str((graph.get(str(src[0])) or {}).get("class_type", "")) if isinstance(src, list) and len(src) == 2 else ""
 
 
+def model_file(graph, node_id):
+    for inputs in upstream(graph, node_id):
+        for k, v in inputs.items():
+            path = full_path("diffusion_models", v) or full_path("checkpoints", v) if isinstance(v, str) else ""
+            if path or k in CHECKPOINT_KEYS and isinstance(v, str):
+                return v, path
+    return "", ""
+
+
 def checkpoint(graph, node_id):
-    name = next((v for inputs in upstream(graph, node_id) for k, v in inputs.items()
-                 if k in CHECKPOINT_KEYS and isinstance(v, str)), "")
-    path = full_path("diffusion_models", name) or full_path("checkpoints", name) if name else ""
+    name, path = model_file(graph, node_id)
     info = meta(path)[1] if path else {}
     return name, " ".join(str(info.get(k, "")) for k in ("source_a", "source_b", "source", "base_model", "description"))
 
@@ -118,6 +132,81 @@ def check_vaes(vae, audio_vae):
     if stage is not None and hasattr(stage, "decoder") and not hasattr(stage, "encoder"):
         raise RuntimeError("vae has no encoder: every shot after the first starts on the last frame, which needs the full "
                            "MiniMax-H3 video VAE.")
+
+
+class LowRank(torch.nn.Module):
+    weight, comfy_force_forward = None, True
+
+    def __init__(self, pairs):
+        super().__init__()
+        self.count = len(pairs)
+        for i, (down, up) in enumerate(pairs):
+            self.register_parameter(f"down{i}", torch.nn.Parameter(down, requires_grad=False))
+            self.register_parameter(f"up{i}", torch.nn.Parameter(up, requires_grad=False))
+
+    def forward(self, x):
+        cast = lambda w: w if w.device == x.device and w.dtype == x.dtype else w.to(device=x.device, dtype=x.dtype)
+        out = [torch.nn.functional.linear(torch.nn.functional.linear(x, cast(getattr(self, f"down{i}"))), cast(getattr(self, f"up{i}")))
+               for i in range(self.count)]
+        return out[0] if self.count == 1 else torch.cat(out, dim=-1)
+
+
+def endpoint(end, module, args, out):
+    if end.step is None:
+        return out
+    t = args[0]
+    r = t.to(torch.float32)
+    for a, b in end.step:
+        r = torch.where((t - a).abs() < 1e-5, torch.full_like(r, b), r)
+    end.to(t.device)
+    return out + end.gate * (end(r).to(out.dtype) - out)
+
+
+def stepped(end, executor, x, timestep, context, transformer_options, *args, **kwargs):
+    sigmas = transformer_options.get("sample_sigmas")
+    if sigmas is not None:
+        s = sigmas.flatten().float().cpu()
+        now = float(timestep.flatten()[0]) / 1000.0
+        then = float(s[min(int((s - now).abs().argmin()) + 1, len(s) - 1)])
+        video, audio = (float(transformer_options.get(f"minimax_h3_sigma_shift_{k}", d)) for k, d in (("video", 12.0), ("audio", 3.0)))
+        heard = lambda v: float(time_shift_sigma(torch.tensor(max(v, 1e-6)), video, audio)) if v > 0 else 0.0
+        end.step = ((1.0 - now, 1.0 - then), (1.0 - heard(now), 1.0 - heard(then)))
+    try:
+        return executor(x, timestep, context, transformer_options, *args, **kwargs)
+    finally:
+        end.step = None
+
+
+def mend(model, graph, node_id):
+    try:
+        net = model.get_model_object("diffusion_model")
+        empty = [n for n, m in net.named_modules() if hasattr(m, "in_features") and getattr(m, "weight", 0) is None]
+    except Exception:
+        return
+    if not empty:
+        return
+    name, path = model_file(graph, node_id)
+    keys = meta(path)[0] if path else set()
+    stems = {n: [f"{n.rsplit('.', 1)[0]}.{c}_proj" for c in "qkv"] if n.endswith(".qkv_proj") else [n] for n in empty}
+    missing = [n for n, ss in stems.items() if not all({f"{x}.down.weight", f"{x}.up.weight"} <= keys for x in ss)]
+    if missing or not FLASH_KEYS <= keys:
+        raise RuntimeError(f"{os.path.basename(name) or 'The model'}: {len(empty)} layers came out of the loader with no weights "
+                           f"({(missing or empty)[0]} and more), and the checkpoint does not hold them in a form the node can fill in; "
+                           f"load it with the loader it was made for.")
+    from safetensors import safe_open
+    with safe_open(path, "pt", device="cpu") as f:
+        for n, ss in stems.items():
+            comfy.utils.set_attr(net, n, LowRank([(f.get_tensor(f"{x}.down.weight"), f.get_tensor(f"{x}.up.weight")) for x in ss]))
+        w = {k: f.get_tensor(f"endpoint_time_embedder.{k}") for k in ("proj_in.weight", "proj_in.bias", "proj_out.weight", "proj_out.bias")}
+        end = TimeEmbedder(w["proj_in.weight"].shape[1], w["proj_in.weight"].shape[0], w["proj_out.weight"].shape[0],
+                           dtype=torch.float32, device="cpu", operations=torch.nn)
+        end.load_state_dict({k: v.float() for k, v in w.items()})
+        end.gate = float(f.get_tensor("hyperflow_gate").flatten()[0]) if "hyperflow_gate" in keys else 0.25
+    end.step = None
+    end.requires_grad_(False)
+    net.endpoint_time_embedder = end
+    net.time_embedder.register_forward_hook(functools.partial(endpoint, end))
+    model.size = 0
 
 
 def is_fast(model):
@@ -180,6 +269,19 @@ def hyperflow(model, graph):
             "audio": num("hyperflow_audio_shift", HYPERFLOW["audio"]), "sampler": "euler", "source": "Hyperflow"}
 
 
+def flash(model, graph, node_id, steps):
+    try:
+        on = getattr(model.get_model_object("diffusion_model"), "endpoint_time_embedder", None) is not None
+    except Exception:
+        on = False
+    path = "" if on else model_file(graph, node_id)[1]
+    if not on and not (path and FLASH_KEYS & meta(path)[0]):
+        return None
+    n = min(FLASH, key=lambda k: abs(k - int(steps)))
+    return {"grid": FLASH[n], "fine": FLASH[8], "video": HYPERFLOW["video"], "audio": HYPERFLOW["audio"], "sampler": "euler",
+            "source": "HyperFlow H3 Flash"}
+
+
 def speed_recipe(graph, node_id):
     for n in loras(graph):
         said = str(meta(full_path("loras", n))[1].get("sampling", ""))
@@ -220,6 +322,17 @@ def set_shift(model, video, audio):
     to = m.model_options["transformer_options"] = dict(m.model_options.get("transformer_options") or {})
     to["minimax_h3_sigma_shift_video"], to["minimax_h3_sigma_shift_audio"] = float(video), float(audio)
     return m
+
+
+def finer(model, steps, scheduler, sigmas, video, audio, grid=None):
+    base = [float(s) for s in (sigmas if sigmas is not None else
+                               comfy.samplers.calculate_sigmas(model.get_model_object("model_sampling"), scheduler, steps))]
+    if len(base) - 1 >= FINE_BELOW:
+        return None
+    x = [s / (video - (video - 1.0) * s) for s in base]
+    grid = grid or sorted(set(x) | {(a + b) / 2 for a, b in zip(x, x[1:])}, reverse=True)
+    at = next(i for i, g in enumerate(grid) if audio * g / (1.0 + (audio - 1.0) * g) <= REVOICE_FROM)
+    return shifted(grid, video), shifted(grid[at:], video)
 
 
 def landing(sigmas, video, audio, target=0.03, coarse=0.10):
@@ -284,7 +397,7 @@ def prepare(model, steps, sampler, scheduler, sigmas, video, audio, graph, node_
         video = FAST_SHIFT if float(video) == 12.0 else video
         notes.append(f"FastH3: shift {float(video):g}/{float(audio):g}, {steps} steps")
     elif sigmas is None:
-        recipe = hyperflow(model, graph) or speed_recipe(graph, node_id)
+        recipe = hyperflow(model, graph) or flash(model, graph, node_id, steps) or speed_recipe(graph, node_id)
     if recipe:
         video, audio = recipe.get("video") or video, recipe.get("audio") or audio
         sampler = recipe.get("sampler") or sampler
@@ -293,6 +406,10 @@ def prepare(model, steps, sampler, scheduler, sigmas, video, audio, graph, node_
         notes.append(f"{recipe['source']}: {steps} steps, shift {float(video):g}/{float(audio):g}, {sampler}")
     model = set_shift(model, video, audio)
     model.add_wrapper_with_key(pe.WrappersMP.PREPARE_SAMPLING, "h3_longvideos_activations", reserve)
+    end = getattr(model.get_model_object("diffusion_model"), "endpoint_time_embedder", None)
+    if hasattr(end, "step"):
+        model.add_wrapper_with_key(pe.WrappersMP.DIFFUSION_MODEL, "h3_longvideos_endpoint", functools.partial(stepped, end))
+        notes.append("HyperFlow H3 Flash: compressed blocks and two-time conditioning filled in from the checkpoint")
     if fast:
         model, note = fast_vsa(model)
         notes.append(note)
@@ -302,4 +419,7 @@ def prepare(model, steps, sampler, scheduler, sigmas, video, audio, graph, node_
         if len(landed) != len(base):
             sigmas = torch.tensor(landed, dtype=torch.float32)
             notes.append("one audio landing step added")
-    return model, steps, sampler, sigmas, notes
+    fine = finer(model, steps, scheduler, sigmas, float(video), float(audio), (recipe or {}).get("fine"))
+    notes += [f"sound passes on {len(fine[0]) - 1} steps, and each spoken line said again over the last {len(fine[1]) - 1} of them, "
+              f"so the words come out clear"] if fine else []
+    return model, steps, sampler, sigmas, fine, notes

@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 import sys
@@ -21,6 +22,9 @@ import modelprep
 import node
 import overlay
 import planner as P
+
+MIXED = lambda text, *things: [t for t in re.split(r"(?<=[.!?])\s+", text) if re.search(r"\b(?:hands?|wrists?|cuffs|handcuffs)\b", t)
+                               and any(x in t for x in things)]
 
 _fails = []
 MEM = ("Sarah <Picture 1>: a young woman with long blonde hair, in a white blouse and grey leggings.\n"
@@ -56,9 +60,11 @@ def test_tags():
     read, warn = P.plan("An office.\n\nDana and Sarah stand.\n\nDana tapes her mouth shut and cuffs her.\n\nDana smiles.", MEM)
     check("without a tag line the beat itself is read, onto the person it happens to, and info quotes the sentence",
           "goes on: Sarah: tape over her mouth; handcuffs behind her back." in read[1]["line"] and "read from the beat: hold: Sarah"
-          in read[1]["line"] and "Sarah: tape over her mouth; handcuffs behind her back." in notes(read[2]), read[1]["line"])
+          in read[1]["line"] and "Sarah: tape over her mouth. Blonde-haired Sarah: handcuffs behind her back." in notes(read[2]),
+          read[1]["line"])
     over, _ = P.plan("An office.\n\nDana and Sarah stand.\n\nDana tapes her mouth shut.\nhold: Sarah, a red gag", MEM)
-    check("a tag line in a beat replaces what the beat would be read as", "goes on: Sarah: a red gag." in over[1]["line"]
+    check("a tag line in a beat replaces what the beat would be read as, a bare item placed where it goes",
+          "goes on: Sarah: a red gag in her mouth." in over[1]["line"]
           and "read from" not in over[1]["line"], over[1]["line"])
     wrong, warn = P.plan("A room.\n\nDana waits.\nhold: Dama, rope around her wrists\n\nDana sits.", MEM)
     check("a tag naming someone without a character line is applied as written and flagged",
@@ -68,7 +74,7 @@ def test_tags():
           "Sarah: handcuffs behind her back." in notes(early[0]) and "goes on" not in early[0]["line"], early[0]["line"])
     inline, _ = P.plan("A room.\n\nSarah sits. Dana walks in. hold: Sarah, a red collar\n\nwear: Dana, a red dress\n\nDana waits.", MEM)
     check("tags written after a sentence on the same line, or in a paragraph of their own, belong to that beat",
-          "goes on: Sarah: a red collar." in inline[0]["line"] and "puts on: Dana: a red dress." in inline[0]["line"]
+          "goes on: Sarah: a red collar around her neck." in inline[0]["line"] and "puts on: Dana: a red dress." in inline[0]["line"]
           and len(inline) == 2, [s["line"] for s in inline])
     odd, _ = P.plan("A room.\n\nDana and Sarah stand.\n\nDana puts the restraints on Sarah.\nhold: Sarah, leather restraints on her "
                     "wrists", MEM)
@@ -261,11 +267,65 @@ def test_speech():
     check("voices are kept out of a shot with no lines unless it calls for a voice, music or a tone of its own, and a scream is not "
           "told to keep its mouth closed",
           quiet["mute"] and band["mute"] and "All the sound comes from the scene itself" in notes(band)
-          and not scream["mute"] and "Nobody says a word." in notes(scream) and "every mouth stays closed" not in notes(scream)
+          and not scream["mute"] and "Every sound anyone makes is wordless." in notes(scream) and "lips closed" not in notes(scream)
           and not radio["mute"] and not said("A dog barks outside.")["mute"] and long["mute"] and said('"Get out!" Sarah screams.')["mute"]
           and not P.plan("A room.\n\nDana waits.", mem, silence=False)[0][0]["mute"]
           and P.plan('A room.\n\n"Wait," Dana says.', mem, silence=False)[0][0]["mute"],
           [(s["mute"], notes(s)) for s in (quiet, scream, radio, band)])
+    bound = said("Dana snaps handcuffs on Sarah's wrists behind her back. Dana writes \"SLAVE\" across Sarah's stomach.")
+    taped = said("Dana presses duct tape over Sarah's mouth.", "Sarah tries to scream \"Help!\" through the tape. \"Quiet,\" Dana says.")
+    song = said("A radio plays music. Sarah thinks, \"I have to get out of here.\"")
+    freed = said("Dana cuffs Sarah's hands behind her back.", "Dana unlocks the handcuffs while Sarah calls for an ambulance.")
+    towel = said("Dana gags Sarah with a dish towel and asks Sarah to stay quiet.")
+    told, heard = (lambda x: x["sound"].split("\n\n")[0]), (lambda x: x["sound"].split("\n\n")[1])
+    begs, cries = said("Sarah begs Dana to let her go."), said("Sarah whimpers and pulls at the bedpost while Dana watches.")
+    check("a beat whose only sound is talk with no words given keeps every voice out and everyone silent, while a whimper stays "
+          "hers alone and the one watching stays silent",
+          begs["mute"] and told(begs).endswith("A room. Sarah and Dana stay silent.") and not cries["mute"]
+          and told(cries).endswith("Sarah whimpers and pulls at the bedpost while Dana watches. Dana stays silent."),
+          [(x["mute"], told(x)) for x in (begs, cries)])
+    chores = [[re.sub(r"^[\w-]+-haired ", "", t) for t in re.split(r"(?<=[.!?])\s+", P.plan("A kitchen.\n\nSarah walks in.\n\n" + b, mem)
+                                                                                         [0][1]["prompt"]) if " does the " in t]
+              for b in ("Sarah is washing the dishes while Dana watches.", "She picks up a plate and washes it in the sink.",
+                        "Dana orders Sarah to do the dishes.", "Dana chops onions while Sarah folds the laundry.",
+                        "Sarah dries her hands on a towel.", "Sarah folds her arms.", "Sarah peels off her top.", "Sarah waves at Dana.",
+                        "Dana cuffs Sarah's hands behind her back. Sarah wipes the table.")]
+    scrub = "Sarah does the washing with both hands, holding each piece in one hand and scrubbing it with the other."
+    check("someone with free hands doing a two-handed chore, however it is worded, is shown how both hands do it, and a body part, an "
+          "undressing or bound hands get nothing",
+          chores == [[scrub], [scrub], [scrub], ["Sarah does the folding with both hands, taking each piece in both hands to fold it.",
+                                            "Dana does the chopping with both hands, holding the food steady with one hand and the knife "
+                                            "in the other."], [], [], [], [], []], chores)
+    kiss, moan = said('Dana kisses Sarah\'s neck. "I want you," Sarah says.'), said('Dana spanks Sarah. Sarah moans. "Thank you," she '
+                                                                                   'whispers.')
+    check("the sound around a spoken line keeps its speaker silent too, so nothing is said in front of the line, while a moan the "
+          "beat gives stays hers",
+          kiss["cues"] and re.search(r"(?:Sarah and Dana|Dana and Sarah) stay silent\.$", told(kiss))
+          and moan["cues"] and told(moan).endswith("Sarah moans. Dana stays silent."), [told(kiss), told(moan)])
+    speech = re.compile(r"\b(?:speaks?|voices?|words?|whispers?|talk\w*|dialogue)\b", re.I)
+    check("a shot's sound is written apart from its picture, as the place, what happens, who stays silent, the restraints' own "
+          "sounds and the gag's muffled ones, with no word of speech in it and no character sheet, note, spoken line, thought or "
+          "written word to be read out",
+          told(bound).startswith("integrated_multimodal_description: [Shot 1] A room. ") and "snaps handcuffs on" in told(bound)
+          and "writes across" in told(bound) and "SLAVE" in bound["prompt"] and "SLAVE" not in bound["sound"]
+          and "tank top" in bound["prompt"] and "tank top" not in bound["sound"] and "stays on" not in bound["sound"]
+          and "The handcuffs ratchet shut with sharp metallic clicks and the metal restraints on Sarah clink and rattle with every "
+              "movement." in heard(bound) and heard(bound).startswith("overall_soundscape: The quiet room tone of the place.")
+          and told(bound).endswith(" stay silent.") and bound["sound"].endswith("\n\nnon_diegetic_music: N/A")
+          and not any(speech.search(x["sound"]) for x in (bound, taped, song))
+          and "Sarah lets out muffled, closed-mouth mmmph sounds through the duct tape." in heard(taped)
+          and "Help" not in taped["sound"] and "Quiet" not in taped["sound"] and "<d>Quiet</d>" in taped["prompt"]
+          and "tries to let out a muffled, closed-mouth mmmph through the duct tape" in taped["prompt"]
+          and "with the music playing there." in heard(song)
+          and "get out of here" not in song["sound"]
+          and "thinks, silently and with closed lips: I have to get out of here." in song["prompt"]
+          and not song["cues"] and not song["said"], [bound["sound"], taped["sound"], song["sound"], taped["prompt"][-400:]])
+    check("talk with no words given is cut out of the sound, leaving what is done in the same sentence, and a towel gag tied on "
+          "does not creak like rope",
+          "A room. Dana unlocks the handcuffs. " in told(freed) and "ambulance" not in freed["sound"]
+          and "The handcuffs click open." in heard(freed) and "rattle" not in heard(freed)
+          and "gags Sarah with a dish towel." in told(towel)
+          and "asks" not in towel["sound"] and "rope" not in towel["sound"], [freed["sound"], towel["sound"]])
 
 
 def test_hands():
@@ -304,10 +364,12 @@ def test_hands():
     check("cuffs behind her back are never asked to be in plain view, the pose is spelled out, and a beat that needs her hands is "
           "flagged",
           "By the last frame, blonde-haired Sarah has handcuffs behind her back, and Dana has let go." in notes(shots[1])
-          and "Black-haired Dana brings blonde-haired Sarah's arms behind her back and closes one cuff around her left wrist with a "
-              "click, then the other around her right wrist." in notes(shots[1]) and "both arms run at their full length from her shoulders down behind her, and her hands rest together "
-                                 "at the small of her back. From the front, her body hides her hands; seen from the side or from behind, "
-                                 "both arms and both hands are in plain view" in notes(shots[2])
+          and "Black-haired Dana steps behind blonde-haired Sarah, takes both of her wrists and draws her arms back behind her, then "
+              "closes one cuff around blonde-haired Sarah's left wrist with a click, then the other around her right wrist, there at "
+              "the small of her back, where her body hides her hands from the front." in notes(shots[1])
+          and "both arms run at their full length from her shoulders down behind her, and her hands rest together at the small of her "
+              "back. From the front, both arms angle back from her shoulders and her body hides her hands; seen from the side or from "
+              "behind, both arms and both hands are in plain view" in notes(shots[2])
           and "out of sight" not in notes(shots[2]) and "rigid steel, locked behind her back" in notes(shots[2])
           and any("\"Sarah wipes her eyes.\" needs Sarah's hands" in w for w in warn), (notes(shots[1]), warn))
     down = plan("Dana cuffs Sarah's hands behind her back.", "Dana pushes Sarah down onto her stomach on the floor.",
@@ -323,6 +385,207 @@ def test_hands():
     alone = P.plan("A cell.\n\nSarah sits on the bed, handcuffed.", mem)[0][0]
     check("a closing 'handcuffed.' is on the one the sentence is about", alone["read"] == [("have", "Sarah, handcuffs behind her back")],
           alone["read"])
+
+
+def test_sex():
+    print("\n=== penetration lines up with the body, and cuffed hands stay behind her through sex ===")
+    mf = (["Sarah", "Marcus"], {"Sarah": {"sex": "f"}, "Marcus": {"sex": "m"}})
+    ff = (["Dana", "Sarah"], {"Dana": {"sex": "f"}, "Sarah": {"sex": "f"}})
+    mm = (["Leo", "Max"], {"Leo": {"sex": "m"}, "Max": {"sex": "m"}})
+    trio = (["Sarah", "Marcus", "Dana"], {"Sarah": {"sex": "f"}, "Marcus": {"sex": "m"}, "Dana": {"sex": "f"}})
+    read = lambda who, t: P._coupling(t, *who, {}, t)
+    sm = lambda tool="penis", hole="vagina", way=None: [("Marcus", "Sarah", tool, hole, way)]
+    check("penetration is read however it is worded: who, into whom, with what, into which opening and in what position, and "
+          "nothing else is",
+          read(mf, "Marcus fucks Sarah from behind.") == sm(way="behind") and read(mf, "He fucks her hard against the wall.") == sm(
+              way="standing") and read(mf, "Marcus fucks Sarah against the wall.") == sm(way="standing")
+          and read(mf, "Marcus pounds her doggy style.") == sm(way="bent") and read(mf, "His cock slides in and out of her pussy.") == sm()
+          and read(mf, "She takes his cock deep in her ass.") == sm(hole="anus") and read(mf, "Sarah lowers herself onto his cock.") == sm(
+              way="astride") and read(mf, "Sarah climbs on top of Marcus and rides him.") == sm(way="astride")
+          and read(mf, "Marcus lies on top of her and fucks her.") == sm(way="top") and read(mf, "Sarah is being fucked by Marcus.") == sm()
+          and read(mf, "Sarah fucks Marcus.") == sm() and read(mf, "Marcus slides two fingers inside her.") == sm("fingers")
+          and read(mf, "Marcus pushes the butt plug into her ass.") == sm("butt plug", "anus")
+          and read(ff, "Dana straps on a strap-on and fucks Sarah.") == [("Dana", "Sarah", "strap-on", "vagina", None)]
+          and read(mm, "Leo fucks Max from behind.") == [("Leo", "Max", "penis", "anus", "behind")]
+          and read(trio, "Dana watches as Marcus fucks her.") == sm() and read(trio, "Dana pushes a dildo into Sarah's ass.") == [
+              ("Dana", "Sarah", "dildo", "anus", None)]
+          and read(mf, "Sarah pushes the vibrator inside herself.") == [("Sarah", "Sarah", "vibrator", "vagina", None)]
+          and not any(read(mf, t) for t in ("Marcus fucks her mouth.", "Marcus fingers her clit.", "Marcus takes her hand.",
+                                            "Marcus enters her room.", "He pushes her into the wall.", "She sits on his lap.",
+                                            "He runs his fingers into her hair.", "Marcus puts the dildo in the drawer.",
+                                            "Marcus rubs his cock against her pussy.")) and not read(ff, "Dana fucks her."),
+          [read(mf, t) for t in ("She takes his cock deep in her ass.", "Sarah is being fucked by Marcus.")])
+    mem = ("Sarah: a young woman with long blonde hair, naked.\nMarcus: a man with short dark hair, naked.\n"
+           "hold: Sarah, handcuffs behind her back")
+    shots, warn = P.plan("A kitchen with a long counter.\n\n" + "\n\n".join([
+        "Marcus bends Sarah over the counter.", "Marcus fucks Sarah from behind.", "Marcus thrusts harder.",
+        "Marcus pulls out, and Sarah stands up.", "Sarah turns to face Marcus.", "Sarah strokes Marcus's cock."]), mem)
+    bent = ("bent forward, both her arms lie along her back at their full length, and her hands stay locked together on top of the "
+            "small of her back, in plain view from above and from behind.")
+    put = ("Dark-haired Marcus is right behind blonde-haired Sarah, facing the same way she faces, his hips pressed against her "
+           "buttocks. Dark-haired Marcus's penis goes into blonde-haired Sarah's vagina at the center of her crotch, between her thighs: "
+           "it points into her toward her head, level, in line with her body, and slides in and out along that level line.")
+    rise = "she rises with both arms staying behind her the whole way, and then her shoulders are drawn back"
+    check("bent over, her cuffed hands lie on top of the small of her back; sex from behind places him behind her with the penis "
+          "going into her along her body, carried while he keeps thrusting and gone once he pulls out; standing up again her arms "
+          "stay behind her the whole way, and a beat that needs her cuffed hands is flagged",
+          all(bent in notes(s) for s in shots[:3]) and put in notes(shots[1]) and put in notes(shots[2])
+          and all("penis" not in notes(s) for s in shots[3:]) and rise in notes(shots[3]) and rise not in notes(shots[4])
+          and any("\"Sarah strokes Marcus's cock.\" needs Sarah's hands" in w for w in warn), [notes(s) for s in shots[1:4]])
+    mem = "Emma: a woman with short red hair, naked.\nJake: a man with a beard, naked."
+    shots = P.plan("A bedroom with a bed.\n\n" + "\n\n".join(["Jake lays Emma on her back on the bed and spreads her legs.",
+                                                            "Jake pushes a dildo into Emma's pussy.", "Emma climbs on top of Jake "
+                                                            "and rides him.", "Emma moans."]), mem)[0]
+    check("spreading her legs spreads hers, not his; with her lying down a toy lies level between her thighs, in line with her body; "
+          "riding sits her astride him with his penis vertical, the dildo is no longer in her once he is, and she stays sitting "
+          "afterwards instead of lying",
+          "Red-haired Emma stays lying on her back on the bed with her legs spread apart for the whole shot" in notes(shots[1])
+          and "Jake stays standing" not in " ".join(map(notes, shots))
+          and "Jake holds the dildo by its base, his hand between red-haired Emma's thighs, at the center of her crotch: the dildo is "
+              "level, in line with her body, its tip pointing into her vagina toward her head and its base pointing away from her head, "
+              "and it slides in and out along that level line." in notes(shots[1])
+          and "Red-haired Emma sits astride Jake's hips, facing him, with one knee on each side of him. Jake's penis goes into "
+              "red-haired Emma's vagina from below, at the center of her crotch, between her thighs: it points straight up into her, "
+              "vertical, parallel to her spine, and slides up into her and back down along that vertical line." in notes(shots[2])
+          and not any("The dildo is still" in notes(s) for s in shots[2:])
+          and "lying down" not in notes(shots[2]) and "Red-haired Emma stays sitting for the whole shot" in notes(shots[3]),
+          [notes(s) for s in shots])
+    mem = ("Lena: a woman with long blonde hair, naked.\nDana: a woman with short black hair, naked.\n"
+           "Marcus: a man with short dark hair, naked.")
+    aim = lambda *beats: [notes(s) for s in P.plan("A kitchen with a counter and a bed.\n\n" + "\n\n".join(beats), mem)[0]]
+    up = "vertical, parallel to her thighs"
+    level = "level, in line with her body"
+    toy = ("Black-haired Dana holds the vibrator by its base, her hand low between blonde-haired Lena's thighs, below her crotch: the "
+           "vibrator is vertical, parallel to her thighs, its top end inside her vagina and its base pointing straight down at the floor, "
+           "and it slides up into her and back down along that vertical line.")
+    standing = [aim("Lena stands at the counter.", "Dana pushes a vibrator into Lena's pussy.", "Dana works it in and out faster."),
+                aim("Dana slides two fingers inside Lena."), aim("Lena stands by the counter and pushes the dildo inside herself."),
+                aim("Marcus fucks Lena from behind at the counter."), aim("Marcus fucks Lena against the wall."),
+                aim("Lena kneels.", "Dana pushes the dildo into Lena's pussy.")]
+    flat = [aim("Marcus pounds Lena doggy style.", "He thrusts harder."),
+            aim("Lena lies on her back on the bed.", "Dana slides the dildo into Lena's pussy."),
+            aim("Lena gets on all fours on the bed.", "Dana pushes the butt plug into Lena's ass."),
+            aim("Marcus spoons Lena and slides into her.")]
+    check("penetration lines up with her body: standing or kneeling it is vertical, parallel to her thighs, from below and straight "
+          "up into her, with a toy held by its base low between her thighs and its base pointing at the floor; lying, bent over, on all "
+          "fours or spooned it is level, along her body toward her head; doggy stays level while he keeps thrusting",
+          toy in standing[0][1] and toy in standing[0][2] and all(up in s[-1] and level not in s[-1] for s in standing)
+          and all(level in s[-1] and up not in s[-1] for s in flat) and level in flat[0][0]
+          and "palm up, and her fingers point straight up into her vagina" in standing[1][0]
+          and "Lena holds the dildo by its base, her hand low between her thighs, below her crotch" in standing[2][0]
+          and "from below" in standing[3][0] and "stands facing blonde-haired Lena" in standing[4][0],
+          [s[-1] for s in standing + flat])
+    lv = (["Lena", "Victor"], {"Lena": {"sex": "f"}, "Victor": {"sex": "m"}})
+    near = lambda who, t: [(y, x) for y, x, k in P._close(t, *who) if k in ("behind", "side")]
+    check("someone close behind someone else is read however it is worded, and nothing else is",
+          all(near(lv, t) == [("Victor", "Lena")] for t in (
+              "Victor walks up behind Lena and wraps his arms around her waist.", "Lena stands at the counter. Victor stands close "
+              "behind her.", "Victor gropes Lena's breasts from behind.", "Lena is grabbed from behind by Victor.",
+              "Victor spoons Lena on the bed.", "Victor presses his chest against Lena's back.", "Lena leans back against Victor.",
+              "Victor kneels behind Lena."))
+          and near(ff, "Dana hugs Sarah from behind.") == [("Dana", "Sarah")]
+          and not any(near(lv, t) for t in ("Lena stands with her hands behind her back.", "Victor stands behind Lena's chair.",
+                                            "Lena walks in and the door closes behind her.", "Victor holds Lena tight against his chest.",
+                                            "Victor looks at Lena from behind the counter.", "Lena leans back against the counter.",
+                                            "Victor cuffs Lena's wrists behind her back.")),
+          [near(lv, t) for t in ("Lena is grabbed from behind by Victor.", "Victor stands behind Lena's chair.")])
+    mem = ("Lena: a woman with long blonde hair, in a black latex crop top and black latex shorts.\nVictor: a man with short dark hair, "
+           "in a black shirt and black trousers.\nhold: Lena, handcuffs behind her back")
+    shots, warn = P.plan("A kitchen with a sink.\n\n" + "\n\n".join([
+        "Lena stands at the sink and washes the dishes.", "Victor walks up behind Lena and wraps his arms around her waist.",
+        "Victor holds Lena tight against his chest.", "Victor steps back and Lena turns around."]), mem)
+    hands = "Blonde-haired Lena's locked hands stay behind her at the small of her back, between her back and dark-haired Victor's body."
+    check("with someone close behind her, her cuffed hands stay between her back and that body, carried until they part; from the "
+          "front her arms angle back; and a chore that needs her cuffed hands is flagged",
+          hands in notes(shots[1]) and hands in notes(shots[2]) and not any("locked hands stay" in notes(s) for s in (shots[0], shots[3]))
+          and "From the front, both arms angle back from her shoulders" in notes(shots[1])
+          and any("\"Lena stands at the sink and washes the dishes.\" needs Lena's hands" in w for w in warn),
+          ([notes(s) for s in shots], warn))
+    kinds = lambda t: [(y, k) for y, _, k in P._close(t, *lv)]
+    check("someone face to face with her, hugging her, or her back against a wall or furniture is read, and facing the wall, "
+          "kissing her neck or putting something against a wall is not",
+          kinds("Victor wraps his arms around Lena's waist.") == [("Victor", "hug")] and kinds("Victor pulls Lena close.") == [
+              ("Victor", "hug")] and kinds("Victor kisses Lena.") == [("Victor", "front")] and kinds("Victor stands in front of "
+                                                                                                     "Lena.") == [("Victor", "front")]
+          and kinds("Victor pins Lena against the wall.") == [("the wall", "wall")] and kinds("Lena leans back against the counter.")
+          == [("the counter", "wall")] and kinds("Lena stands with her back to the door.") == [("the door", "wall")]
+          and not any(kinds(t) for t in ("Victor pushes Lena's face against the wall.", "Lena faces the wall.", "Victor kisses Lena's "
+                                         "neck.", "Victor sets the box against the wall.", "Victor bends Lena over the table.")),
+          [kinds(t) for t in ("Victor wraps his arms around Lena's waist.", "Victor pushes Lena's face against the wall.")])
+    mem = ("Lena: a woman with long blonde hair, naked.\nMarcus: a man with short dark hair, naked.\n"
+           "hold: Lena, handcuffs behind her back")
+    run = lambda *beats, **kw: [notes(s) for s in P.plan("A bedroom with a bed.\n\n" + "\n\n".join(beats), mem, **kw)[0]]
+    wall = run("Marcus pins Lena against the wall and fucks her.", "He thrusts harder.", "Marcus pulls out.", "Lena walks to the bed.")
+    hug = run("Marcus hugs Lena.", "Marcus kisses her.", "Marcus steps back.")
+    stay = "Blonde-haired Lena's locked hands stay behind her at the small of her back, "
+    check("pinned to a wall, hugged or face to face, her cuffed hands stay between her back and the wall, on the far side of her body "
+          "from him, under his forearms when he holds her; the wall carries until she moves away, the person until they part",
+          stay + "between her back and the wall, on the far side of her body from dark-haired Marcus." in wall[0]
+          and stay + "between her back and the wall" in wall[2] and "locked hands stay" not in wall[3]
+          and stay + "on the far side of her body from dark-haired Marcus, under his forearms." in hug[0]
+          and stay + "on the far side of her body from dark-haired Marcus, under his forearms." in hug[1]
+          and "locked hands stay" not in hug[2],
+          wall + hug)
+    moved = run("Lena stands by the bed.", "Marcus pushes Lena to her knees.", "Lena lies down on the bed.", "Lena gets up.",
+                "Lena kneels.")
+    first = run("Lena stands by the window.", "Lena looks at Marcus.", first_frame=True)
+    down, up_ = "she lowers herself with both arms staying behind her the whole way, and then ", "she rises with both arms staying"
+    check("going down onto her knees, onto the bed or from standing in a later shot, her cuffed arms stay behind her the whole way, as "
+          "they do getting up; a scene that opens on a picture with her already cuffed starts by drawing her arms back behind her",
+          down in moved[1] and down + "lying on her back" in moved[2] and up_ in moved[3] and down in moved[4] and down not in moved[0]
+          and "she draws both arms back behind her in the first moment, and then her shoulders are drawn back" in first[0]
+          and "first moment" not in first[1] and not any("first moment" in t for t in run("Lena stands by the window.")),
+          moved + first)
+    talk = run("Lena stands in the middle of the room.", "Marcus walks in and stops in front of Lena.",
+               "Marcus says, \"You will wait right here. Do you understand?\"", "Lena sits on the bed.", first_frame=True)
+    still = ("Blonde-haired Lena stays standing upright for the whole shot, holding that position from the first frame to the last: her "
+             "shoulders stay back and her cuffed hands stay locked behind her back.")
+    check("standing cuffed while someone stops in front of her and talks to her, she stays standing upright with her cuffed hands "
+          "locked behind her back, on the far side of her body from him, carried into the talking shot; a scene that never says she "
+          "stands gets no standing note",
+          still in talk[1] and still in talk[2] and stay + "on the far side of her body from dark-haired Marcus." in talk[2]
+          and "standing upright" not in talk[3] and not any("standing upright" in t for t in run("Marcus looks at Lena.")), talk)
+    tied = mem + "\nhold: Lena, a chain leash from her collar, padlocked to the counter\nDana: a woman with long brown hair, in a corset."
+    pick = [notes(s) for s in P.plan("A kitchen with a counter. A large black dildo lies on the counter.\n\nDana walks up beside Lena."
+                                     "\n\nDana picks up the large black dildo from the counter.", tied, first_frame=True)[0]]
+    said = re.split(r"(?<=[.!?])\s+", pick[1])
+    check("with her leash padlocked beside her, the slack chain runs off to that side and drops beside her, never straight down her "
+          "front, its only fixed points are her collar and the counter, it is never named with her hands, and while someone else "
+          "picks something up she holds the position of the opening frame with her cuffed hands locked behind her back",
+          "from the ring at her throat it runs down across her chest to the side of her nearest the counter, drops beside her to the "
+          "floor" in pick[1] and "Its only fixed points are the ring at her collar and the counter." in pick[1]
+          and "straight down" not in pick[1] and not MIXED(pick[1], "leash", "chain")
+          and "Blonde-haired Lena stays in the same position as in the frame this shot opens on for the whole shot, holding that "
+              "position from the first frame to the last: her shoulders stay back and her cuffed hands stay locked behind her back."
+          in pick[1] and min(k for k, t in enumerate(said) if "leash is one single" in t)
+          < min(k for k, t in enumerate(said) if "arms stay pulled" in t), pick)
+    alone = run("Lena pushes the vibrator inside herself.", "Lena moans.")[0]
+    check("cuffed behind her back, a toy she pushes into herself is never put in her hands: only its base shows between her thighs",
+          "The vibrator is inside her vagina, vertical, parallel to her thighs: only its base shows, between her thighs, pointing "
+          "straight down at the floor." in alone and "holds the vibrator" not in alone, alone)
+    mem = ("Lena: a woman with long blonde hair, in a black latex crop top and a black latex skirt.\nDana: a woman with short black "
+           "hair, in a black corset.")
+    cuff = lambda s, b: notes(P.plan(f"A kitchen with a sink.\n\n{s}\n\n{b}", mem)[0][1])
+    back = ("steps behind blonde-haired Lena, takes both of her wrists and draws her arms back behind her, then ", ", there at the "
+            "small of her back, where her body hides her hands from the front.")
+    behind = [cuff(s, b) for s, b in (("Lena stands by the counter.", "Dana cuffs Lena's hands behind her back."),
+                                      ("Lena stands by the counter.", "Dana ties Lena's wrists behind her back with rope."),
+                                      ("Lena stands by the counter.", "Dana tapes Lena's wrists behind her back with duct tape."),
+                                      ("Lena washes the dishes.", "Dana handcuffs Lena behind her back."),
+                                      ("Lena kneels on the floor.", "Dana cuffs Lena's hands behind her back."))]
+    others = [cuff(s, b) for s, b in (("Lena lies face down on the floor.", "Dana cuffs Lena's hands behind her back."),
+                                      ("Lena stands by the counter.", "Lena cuffs her own hands behind her back."),
+                                      ("Lena stands by the counter.", "Dana cuffs Lena's wrists in front of her."))]
+    check("whoever cuffs or ties someone's hands behind her back steps behind her, draws her arms back and closes them there, at "
+          "the small of her back; face down, on her own or in front nobody steps behind her",
+          all(back[0] in t and back[1] in t for t in behind) and not any("steps behind" in t for t in others), behind + others)
+    mem = "Emma: a woman with short red hair, naked.\nJake: a man with a beard, naked.\nhold: Emma, rope tying her wrists behind her back"
+    shots = P.plan("A bedroom with a bed.\n\nEmma and Jake lie down on the bed.\n\nJake fucks Emma from behind as they lie on their "
+                   "sides.", mem)[0]
+    check("spooning lays her on her side with her bound hands at the small of her back, between her and him, never on her back",
+          "lying on her side, both her arms run down behind her along her back" in notes(shots[1]) and "on her back," not in notes(shots[1])
+          and "Jake lies on his side right behind red-haired Emma" in notes(shots[1])
+          and "between her back and Jake's body." in notes(shots[1]), notes(shots[1]))
 
 
 def test_bodies():
@@ -453,7 +716,8 @@ def test_extras():
                           "Dana tapes the man's mouth shut.", mem)
     check("an unnamed man doing it is the one who does it, and what is done to him lands on nobody named",
           cuffed[1]["read"] == [("hold", "Sarah, handcuffs behind her back")]
-          and "The man brings blonde-haired Sarah's arms behind her back and closes one cuff around her left wrist" in notes(cuffed[1])
+          and "The man steps behind blonde-haired Sarah, takes both of her wrists and draws her arms back behind her, then closes one cuff "
+              "around her left wrist" in notes(cuffed[1])
           and "and the man has let go" in notes(cuffed[1]) and cuffed[2]["read"] == [] and not warn, (notes(cuffed[1]), warn))
     men = "Jake: a man with short brown hair, in a grey hoodie.\nTom: a man with a grey beard, in a flannel shirt."
     her = P.plan("A park.\n\nSarah and Dana sit.\n\nA woman grabs Sarah. She cuffs her hands behind her back while Dana watches.",
@@ -533,10 +797,11 @@ def test_clothes():
     cuffed, _ = P.plan("A room.\n\nDana and Sarah stand.\n\nDana cuffs Sarah.\nhold: Sarah, handcuffs behind her back\n\n"
                        "Dana pulls down Sarah's leggings.\nremove: Sarah, leggings\n\nSarah waits.",
                        mem.replace("Sarah:", "Sarah <Picture 1>:"), pictures=[IMG])
-    check("cuffed wrists are held behind her back from the moment they go on, and stay locked while clothes come off",
+    check("cuffed wrists are held behind her back from the moment they go on and while clothes come off, and no sentence names her "
+          "hands or cuffs with the clothes",
           "Sarah's arms stay pulled behind her back from the moment the handcuffs are on" in notes(cuffed[1])
-          and "Sarah's arms stay pulled behind her back the whole shot" in notes(cuffed[3])
-          and "Sarah's handcuffs behind her back stay locked the whole time her black leggings come off" in notes(cuffed[2])
+          and "Sarah's arms stay pulled behind her back the whole shot" in notes(cuffed[2]) + notes(cuffed[3])
+          and not MIXED(notes(cuffed[2]), "leggings")
           and "Once they are off, Sarah is naked from the waist down for the rest of the shot." in notes(cuffed[2]), notes(cuffed[2]))
     check("a dress is matched whole, not as 'dre'", P.undress("a woman in a red dress, with long hair", ["dress"])
           == "a woman with long hair." or P.undress("in a red dress, with long hair", ["dress"]) == "with long hair.",
@@ -579,10 +844,10 @@ def test_layers():
     shots, warn = P.plan("A bedroom.\n\nDana and Sarah stand.\n\nDana cuffs Sarah.\nhold: Sarah, handcuffs behind her back\n\n"
                          "Dana lifts Sarah's tank top.\nlift: Sarah, tank top\n\nSarah squirms.\n\nDana pulls it down again.\n"
                          "wear: Sarah, tank top\n\nDana pulls her pajama bottoms down.\npull: Sarah, pajama bottoms", mem, pictures=[IMG])
-    check("a lifted top stays on, pulled up, while cuffed wrists stay locked behind her back",
+    check("a lifted top stays on, pulled up, while cuffed wrists stay locked behind her back, and no sentence names her hands with it",
           "By the last frame, Sarah's white tank top is pulled up above her breasts and stays there, still on her, leaving her breasts "
-          "bare; her wrists stay locked together behind her back the whole time it moves, and it never goes over her head or "
-          "down her arms." in notes(shots[2]), notes(shots[2]))
+          "bare." in notes(shots[2]) and "Sarah's arms stay pulled behind her back the whole shot" in notes(shots[2])
+          and not MIXED(notes(shots[2]), "tank top"), notes(shots[2]))
     check("it stays pulled up in the shots after, until wear: puts it back",
           "Her white tank top is pulled up above her breasts, leaving her breasts bare." in sheet(shots[3])
           and "Sarah's white tank top stays pulled up above her breasts the whole shot." in notes(shots[3])
@@ -598,8 +863,7 @@ def test_layers():
           "clothes off: Sarah: pink pajama bottoms; black thong." in shots[2]["line"]
           and "pulled: Sarah: white tank top up above her breasts." in shots[2]["line"]
           and any("white tank top cannot come off past her bound wrists" in w for w in warn)
-          and "Sarah's handcuffs behind her back stay locked the whole time her pink pajama bottoms and black thong come off"
-          in notes(shots[2]), (shots[2]["line"], warn))
+          and not MIXED(notes(shots[2]), "bottoms", "thong", "tank top"), (shots[2]["line"], warn))
     check("once the cuffs are off, the top comes off", "clothes off: Sarah: white tank top." in shots[4]["line"]
           and "completely naked" in notes(shots[4]), shots[4]["line"])
     bound, warn = P.plan("A cell.\n\nSarah sits.\n\nDana pulls off Sarah's pajama bottoms.\nremove: Sarah, pajama bottoms",
@@ -663,7 +927,7 @@ def test_lengths():
           and not shots[2]["silent"] and shots[2]["cues"] == [(0.5, round(0.5 + P.SAY_SLACK + 18 / P.WORDS_PER_SEC, 2), "line")],
           (shots[2]["line"], shots[2]["cues"]))
     check("seconds: sets the length exactly, and a wordless shot is silent", shots[3]["frames"] == P.align(12 * 24)
-          and shots[3]["silent"] and "Nobody speaks, and every mouth stays closed." in notes(shots[3]))
+          and shots[3]["silent"] and "Everyone stays silent, with their lips closed." in notes(shots[3]))
     fixed, _ = P.plan("A room.\n\nDana sits.\n\nDana stands.", MEM, shot_seconds=5.0, from_beat=False)
     check("fixed gives every shot shot_seconds", all(s["frames"] == P.align(120) for s in fixed))
     check("a first paragraph naming nobody is the scene, kept in every shot; with an anchor every paragraph is a beat",
@@ -695,17 +959,21 @@ def test_pace():
           "the waist and slides it down her legs and off over her feet." in notes(stripped[1])
           and "unhooks blonde-haired Sarah's black bra and slides the straps off her shoulders and down her arms" in notes(stripped[2])
           and "It all happens at natural, real-life speed, one step after another, over about 13 seconds: no step is skipped, sped up or "
-              "cut short, and no piece of clothing appears, vanishes or changes by itself." in notes(stripped[1]),
+              "cut short, no piece of clothing appears, vanishes or changes by itself, and every reaction comes only after what causes it."
+              in notes(stripped[1]),
           notes(stripped[1]))
     freed = plan("Dana gags Sarah with a ball gag.\n\nDana unbuckles the gag and takes it out of Sarah's mouth.")[0]
     check("a restraint goes on and comes off step by step, and a shot where nothing changes still runs at real-life speed",
-          "Black-haired Dana brings blonde-haired Sarah's arms behind her back and closes one cuff around her left wrist with a click, "
-          "then the other around her right wrist." in notes(cuffed[1])
+          "Black-haired Dana steps behind blonde-haired Sarah, takes both of her wrists and draws her arms back behind her, then closes "
+          "one cuff around blonde-haired Sarah's left wrist with a click, then the other around her right wrist, there at the small of "
+          "her back, where her body hides her hands from the front." in notes(cuffed[1])
           and "Black-haired Dana pushes the ball into blonde-haired Sarah's mouth behind her teeth" in notes(freed[1])
           and "Black-haired Dana unbuckles the gag and takes it out of blonde-haired Sarah's mouth." in notes(freed[2])
-          and "Everything happens at natural, real-life speed." in notes(cuffed[0]), notes(freed[2]))
+          and "Everything happens at natural, real-life speed, in the order written, and every reaction comes only after what causes it."
+              in notes(cuffed[0]), notes(freed[2]))
     check("the speed line names restraints only in a shot that has them",
-          "and no piece of clothing appears" in notes(stripped[1]) and "and no restraint or piece of clothing appears" in notes(freed[1]),
+          "short, no piece of clothing appears" in notes(stripped[1])
+          and "short, no restraint or piece of clothing appears" in notes(freed[1]),
           (notes(stripped[1]), notes(freed[1])))
     gagged = plan('Dana holds up a ball gag. "Open wide." Sarah clamps her lips shut. "Fine. The hard way." Dana works the ball '
                   'between Sarah\'s teeth and buckles the strap. "Nnnh!"', 10.0)[0]
@@ -770,10 +1038,10 @@ def test_pace():
                                                 "Dana uses both hands to pull the chain between her legs."))
     check("hands between her legs or at her waist are where her bound hands go, never a second restraint on her crotch or waist",
           "hold: Sarah, handcuffs on her wrists between her legs (" in lap["line"] and "crotch" not in lap["line"]
-          and "Black-haired Dana brings blonde-haired Sarah's hands down between her legs and closes one cuff around her left wrist "
-              "with a click, then the other around her right wrist." in notes(lap)
+          and "Black-haired Dana brings blonde-haired Sarah's hands down between her legs and closes one cuff around blonde-haired "
+              "Sarah's left wrist with a click, then the other around her right wrist." in notes(lap)
           and "hold: Sarah, chains around her wrists at her waist (" in waist["line"]
-          and "brings blonde-haired Sarah's hands to her waist and wraps the chain around her wrists" in notes(waist)
+          and "brings blonde-haired Sarah's hands to her waist and wraps the chain around blonde-haired Sarah's wrists" in notes(waist)
           and "both arms bend at the elbows so her hands rest at her waist" in notes(waist)
           and f"hold: Sarah, {tight} (" in pull["line"] and "wrists" not in pull["line"],
           (lap["line"], waist["line"], pull["line"]))
@@ -796,7 +1064,8 @@ def test_pace():
     shown = plan("Sarah stumbles in with her hands cuffed in front of her and tape over her mouth.")[0][1]
     check("unnamed people stay in every part of a split beat, nobody who did it herself lets go, and cuffs and tape on two spots are "
           "both read",
-          "One of the two women brings blonde-haired Sarah's arms behind her back and wraps the rope around her wrists" in notes(masked[1])
+          "One of the two women steps behind blonde-haired Sarah, takes both of her wrists and draws her arms back behind her, then "
+          "wraps the rope around blonde-haired Sarah's wrists" in notes(masked[1])
           and "and one of the two women has let go." in notes(masked[1]) and "the two women." in notes(masked[1])
           and "By the last frame, blonde-haired Sarah has handcuffs behind her back." in notes(selfcuff)
           and "on: Sarah, handcuffs in front of her; tape over her mouth (" in shown["line"],
@@ -831,13 +1100,56 @@ def test_pace():
     relink, (uncuffed, rested) = plan(cuff + "Dana puts a crotch chain on Sarah.\n\nDana locks the crotch chain to Sarah's handcuffs.")[0][3], \
         plan(cuff + "Dana puts a crotch chain on Sarah and locks it to her cuffs.\n\nDana uncuffs Sarah.\n\nSarah rubs her wrists.")[0][3:5]
     check("cuffs put on to a crotch chain, a link made later, and uncuffing her all change only the link",
-          "then the other around her right wrist, then padlocks a separate short chain from the chain between blonde-haired Sarah's "
-          "handcuffs to the back of her crotch chain." in notes(onto)
+          "then the other around her right wrist, there at the small of her back, where her body hides her hands from the front, then "
+          "padlocks a separate short chain from the chain between blonde-haired Sarah's handcuffs to the back of her crotch chain."
+          in notes(onto)
           and "Black-haired Dana padlocks a separate short chain from the chain between blonde-haired Sarah's handcuffs to the back of "
               "her crotch chain." in notes(relink) and relink["frames"] == P.MIN_FRAMES
           and "Black-haired Dana unlocks the separate short chain that joins blonde-haired Sarah's handcuffs to the back of her crotch "
-              "chain and takes it away, then unlocks the handcuffs with a small key and takes them off her wrists." in notes(uncuffed)
+              "chain and takes it away, then steps behind blonde-haired Sarah and, there at the small of blonde-haired Sarah's back, "
+              "unlocks the handcuffs with a small key and takes them off blonde-haired Sarah's wrists, while blonde-haired Sarah's hands "
+              "stay behind her back until her wrists are free, then drops the handcuffs to the floor." in notes(uncuffed)
           and f"Blonde-haired Sarah: {tight}." in rested["prompt"], (notes(onto), notes(relink), notes(uncuffed), rested["prompt"]))
+    off = [notes(plan(cuff + b)[0][-1]) for b in ("Dana uncuffs Sarah.", "Sarah unlocks her own handcuffs.",
+                                                  "Sarah lies face down on the bed.\n\nDana unlocks Sarah's handcuffs.",
+                                                  "Sarah stands still.\nrelease: Sarah, handcuffs",
+                                                  "Dana unlocks Sarah's handcuffs and puts them on the bed.",
+                                                  "Dana puts a steel collar on Sarah and clips a chain leash to it, padlocked to the bed."
+                                                  "\n\nDana unlocks Sarah's handcuffs.")] \
+        + [notes(plan(f"Dana {on}.\n\nDana {un}.")[0][-1]) for on, un in (("ties Sarah's wrists behind her back with rope",
+                                                                         "unties Sarah's wrists"),
+                                                                        ("cuffs Sarah's hands in front of her", "uncuffs Sarah"))]
+    warn = plan(cuff + "Dana unlocks Sarah's handcuffs and puts them on the bed.")[1]
+    stay = "while blonde-haired Sarah's hands stay behind her back until her wrists are free, then drops the"
+    check("cuffs or rope taken off wrists bound behind her back come off there, at the small of her back, named as hers, and her hands "
+          "stay behind her until her wrists are free; whoever took them off drops them to the floor unless the beat says where they go, "
+          "and no loose pair is left by her leash; cuffs in front come off in front",
+          "Black-haired Dana steps behind blonde-haired Sarah and, there at the small of blonde-haired Sarah's back, unlocks the handcuffs "
+          f"with a small key and takes them off blonde-haired Sarah's wrists, {stay} handcuffs to the floor." in off[0]
+          and "Blonde-haired Sarah unlocks the handcuffs with a small key and takes them off her wrists by feel behind her, at the small "
+              "of her back, while her hands stay behind her back until her wrists are free, then drops the handcuffs to the floor."
+          in off[1]
+          and "Black-haired Dana leans over blonde-haired Sarah and, there at the small of blonde-haired Sarah's back, unlocks the"
+          in off[2]
+          and "Blonde-haired Sarah's hands stay behind her back, at the small of her back, until her wrists are free." in off[3]
+          and "takes them off blonde-haired Sarah's wrists, while blonde-haired Sarah's hands stay behind her back until her wrists are "
+              "free." in off[4] and "floor" not in off[4] and not warn
+          and f"{stay} handcuffs to the floor." in off[5] and "separate, small pair" not in off[5]
+          and "Black-haired Dana steps behind blonde-haired Sarah and, there at the small of blonde-haired Sarah's back, unties the knot "
+              f"and unwinds the rope from blonde-haired Sarah's wrists, {stay} rope to the floor." in off[6]
+          and "Black-haired Dana unlocks the handcuffs with a small key and takes them off blonde-haired Sarah's wrists, then drops the "
+              "handcuffs to the floor." in off[7] and "small of her back" not in off[7], (off, warn))
+    taped = notes(plan("Dana tapes Sarah's wrists behind her back with duct tape.")[0][-1])
+    check("tape wound around her wrists behind her back by another woman names whose wrists they are",
+          "then winds the duct tape around blonde-haired Sarah's wrists, turning the roll around them" in taped, taped)
+    both = [plan(cuff + f"Dana {on}.\n\nDana {un}.")[0][-1]["read"] for on, un in (
+        ("gags Sarah with a ball gag", "takes the gag out of Sarah's mouth and unlocks her handcuffs"),
+        ("ties Sarah's ankles together with rope", "unties Sarah's ankles and unlocks her handcuffs"),
+        ("gags Sarah with a ball gag", "removes Sarah's gag and handcuffs"))]
+    check("'and unlocks her handcuffs' after taking something else off takes the handcuffs off too, and so does 'her gag and handcuffs'",
+          both == [[("release", "Sarah, a ball gag in her mouth"), ("release", "Sarah, handcuffs behind her back")],
+                   [("release", "Sarah, rope around her ankles"), ("release", "Sarah, handcuffs behind her back")],
+                   [("release", "Sarah, handcuffs behind her back; a ball gag in her mouth")]], both)
     split, warn = plan("Dana cuffs Sarah's hands behind her back and puts a crotch chain on her, locking it to her handcuffs.", 10.0)
     front = plan("Dana cuffs Sarah's hands in front of her.\n\nDana puts a crotch chain on Sarah and locks it to her handcuffs.")[0][2]
     walked = plan("Dana walks Sarah down the corridor in handcuffs.")[0][1]
@@ -874,11 +1186,11 @@ class Patched:
 def test_models():
     print("\n=== model setup ===")
     pdd = Patched({pe.WrappersMP.DIFFUSION_MODEL: {modelprep.PDD_KEY: [None]}})
-    m, steps, sampler, sigmas, notes = modelprep.prepare(pdd, 8, "res_multistep", "simple", torch.linspace(1, 0, 9), 12.0, 3.0,
-                                                         {}, "9")
+    m, steps, sampler, sigmas, fine, notes = modelprep.prepare(pdd, 8, "res_multistep", "simple", torch.linspace(1, 0, 9), 12.0,
+                                                               3.0, {}, "9")
     tops = m.model_options["transformer_options"]
     check("PDD Acc samples on its own sigmas with euler at shift 12/3",
-          sampler == "euler" and tops["minimax_h3_sigma_shift_video"] == 12.0 and "PDD Acc" in notes[0], notes)
+          sampler == "euler" and tops["minimax_h3_sigma_shift_video"] == 12.0 and "PDD Acc" in notes[0] and fine is None, notes)
     try:
         modelprep.prepare(pdd, 8, "euler", "simple", None, 12.0, 3.0, {}, "9")
         check("PDD Acc without its sigmas stops and says so", False)
@@ -891,18 +1203,42 @@ def test_models():
         modelprep.loras = lambda g, n=None: ["minimax_h3_fl2v_turbo_8step.safetensors"]
         modelprep.meta = lambda p: (set(), {})
         modelprep.checkpoint = lambda g, n: ("minimax_h3_hybrid_ref2va.safetensors", "")
-        _, steps, sampler, sigmas, notes = modelprep.prepare(Patched(), 8, "res_multistep", "simple", torch.linspace(1, 0, 9),
-                                                             12.0, 3.0, graph, "9")
+        _, steps, sampler, sigmas, _, notes = modelprep.prepare(Patched(), 8, "res_multistep", "simple", torch.linspace(1, 0, 9),
+                                                                12.0, 3.0, graph, "9")
         check("stray PDD sigmas are dropped, and a few-step LoRA is sampled with euler on the steps set",
               sampler == "euler" and steps == 8 and sigmas is None and "left out" in notes[0], notes)
         modelprep.loras = lambda g, n=None: ["flashgen_4step.safetensors"]
-        _, steps, sampler, sigmas, _ = modelprep.prepare(Patched(), 8, "res_multistep", "simple", None, 12.0, 3.0, {}, "9")
-        check("FlashGen gets its own 4-step grid shifted at 12", steps == 4 and abs(float(sigmas[1]) - 12 * 0.7 / (1 + 11 * 0.7)) < 1e-6)
+        _, steps, sampler, sigmas, fine, notes = modelprep.prepare(Patched(), 8, "res_multistep", "simple", None, 12.0, 3.0, {}, "9")
+        unshift = lambda t: [round(float(x) / (12 - 11 * float(x)), 4) for x in t]
+        check("FlashGen gets its own 4-step grid shifted at 12, and its sound passes twice as many steps, each spoken line said again "
+              "over the last six",
+              steps == 4 and abs(float(sigmas[1]) - 12 * 0.7 / (1 + 11 * 0.7)) < 1e-6
+              and unshift(fine[0]) == [1.0, 0.85, 0.7, 0.55, 0.4, 0.275, 0.15, 0.075, 0.0] and unshift(fine[1]) == unshift(fine[0])[2:]
+              and any("said again over the last 6" in n for n in notes), ([unshift(f) for f in fine], notes))
         check("a turbo LoRA or a T2V checkpoint takes no pictures, a ref2va checkpoint with a style LoRA does",
               not modelprep.takes_pictures(Patched(), {}, "9")[0]
               and (setattr(modelprep, "loras", lambda g, n=None: ["Astro nsfw.safetensors"]) or modelprep.takes_pictures(Patched(), {}, "9")[0]))
     finally:
         modelprep.loras, modelprep.meta, modelprep.checkpoint = saved
+    head = json.dumps({"hyperflow_sigmas": {"dtype": "F32", "shape": [7], "data_offsets": [0, 28]}}).encode()
+    with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+        f.write(len(head).to_bytes(8, "little") + head + bytes(28))
+    saved, flash = modelprep.full_path, {"9": {"inputs": {"model": ["11", 0]}}, "11": {"inputs": {"model": "flash.safetensors"}}}
+    try:
+        modelprep.full_path = lambda kind, name: f.name if kind == "diffusion_models" and name == "flash.safetensors" else ""
+        got = {n: modelprep.prepare(Patched(), n, "res_multistep", "simple", None, 12.0, 3.0, flash, "9") for n in (4, 6, 8, 20)}
+    finally:
+        modelprep.full_path = saved
+        os.unlink(f.name)
+    check("a HyperFlow H3 Flash checkpoint, from any loader, is sampled with euler at shift 12/3 on its own 4-, 6- or 8-step grid, "
+          "the 6-step one being the sigmas stored in the file",
+          [g[1] for g in got.values()] == [4, 6, 8, 8] and {g[2] for g in got.values()} == {"euler"}
+          and [round(float(x), 6) for x in got[6][3]] == [1.0, 0.982656, 0.914643, 0.674756, 0.385224, 0.159055, 0.0]
+          and got[6][5] == ["HyperFlow H3 Flash: 6 steps, shift 12/3, euler"], {n: (g[1], g[5]) for n, g in got.items()})
+    check("on Flash's 4-step grid the sound passes run on its 8-step grid and each spoken line is said again from its fourth step, "
+          "while 6 or more steps leave the sound as it is",
+          torch.allclose(got[4][4][0], modelprep.shifted(modelprep.FLASH[8], 12.0)) and torch.allclose(got[4][4][1], got[4][4][0][3:])
+          and all(got[n][4] is None for n in (6, 8, 20)), got[4][4])
     land = modelprep.landing([1.0, 0.8, 0.6, 0.0], 12.0, 3.0)
     check("a coarse last step gets one audio landing step, a fine one none", len(land) == 5 and 0 < land[-2] < 0.6
           and modelprep.landing([1.0, 0.5, 0.2, 0.0], 12.0, 3.0) == [1.0, 0.5, 0.2, 0.0], land)
@@ -928,6 +1264,95 @@ class FakeAudioVAE:
         return torch.zeros(1, 32, 2, 80)
 
 
+def test_flash():
+    print("\n=== a HyperFlow H3 Flash checkpoint from ComfyUI's own loader is filled in and conditioned on each step's endpoint ===")
+    from comfy.ldm.minimax.model import MLP, Attention, TimeEmbedder, time_shift_sigma
+    from safetensors.torch import save_file
+    gen = torch.Generator().manual_seed(5)
+    rand = lambda *shape: torch.randn(*shape, generator=gen) * 0.2
+    hidden, inner, ffn, rank = 16, 16, 24, 3
+    factors = {f"blocks.0.attn.{c}_proj.{w}.weight": rand(*((rank, hidden) if w == "down" else (inner, rank))) for c in "qkv"
+               for w in ("down", "up")}
+    factors.update({"blocks.0.attn.out_proj.down.weight": rand(rank, inner), "blocks.0.attn.out_proj.up.weight": rand(hidden, rank),
+                    "blocks.0.mlp.fc1.down.weight": rand(rank, hidden), "blocks.0.mlp.fc1.up.weight": rand(2 * ffn, rank),
+                    "blocks.0.mlp.fc2.down.weight": rand(rank, ffn), "blocks.0.mlp.fc2.up.weight": rand(hidden, rank),
+                    "endpoint_time_embedder.proj_in.weight": rand(32, 8), "endpoint_time_embedder.proj_in.bias": rand(32),
+                    "endpoint_time_embedder.proj_out.weight": rand(4, 32), "endpoint_time_embedder.proj_out.bias": rand(4),
+                    "hyperflow_gate": torch.tensor([0.25]), "hyperflow_sigmas": torch.linspace(1, 0, 7)})
+    path = os.path.join(tempfile.mkdtemp(), "flash.safetensors")
+    save_file(factors, path)
+    block = torch.nn.Module()
+    block.attn = Attention(hidden, 2, 8, 1e-6, operations=torch.nn)
+    block.mlp = MLP(hidden, ffn, operations=torch.nn)
+    for layer in (block.attn.qkv_proj, block.attn.out_proj, block.mlp.fc1, block.mlp.fc2):
+        layer.weight = None
+    net = torch.nn.Module()
+    net.blocks = torch.nn.ModuleList([block])
+    net.time_embedder = TimeEmbedder(8, 32, 4, operations=torch.nn)
+    model = SimpleNamespace(get_model_object=lambda name: net, size=99)
+    saved = modelprep.model_file
+    try:
+        modelprep.model_file = lambda g, n: ("flash.safetensors", path)
+        modelprep.mend(model, {}, "9")
+        modelprep.model_file = lambda g, n: ("other.safetensors", "")
+        broken = Attention(hidden, 2, 8, 1e-6, operations=torch.nn)
+        broken.qkv_proj.weight = None
+        try:
+            modelprep.mend(SimpleNamespace(get_model_object=lambda name: broken), {}, "9")
+            refused = ""
+        except RuntimeError as e:
+            refused = str(e)
+    finally:
+        modelprep.model_file = saved
+    dense = lambda c: factors[f"{c}.up.weight"] @ factors[f"{c}.down.weight"]
+    ref = torch.nn.Module()
+    ref.attn = Attention(hidden, 2, 8, 1e-6, operations=torch.nn)
+    ref.mlp = MLP(hidden, ffn, operations=torch.nn)
+    ref.attn.load_state_dict({"qkv_proj.weight": torch.cat([dense(f"blocks.0.attn.{c}_proj") for c in "qkv"]),
+                              "out_proj.weight": dense("blocks.0.attn.out_proj"), "q_norm.weight": block.attn.q_norm.weight,
+                              "k_norm.weight": block.attn.k_norm.weight})
+    ref.mlp.load_state_dict({"fc1.weight": dense("blocks.0.mlp.fc1"), "fc2.weight": dense("blocks.0.mlp.fc2")})
+    x = rand(5, hidden)
+    with torch.no_grad():
+        same = torch.allclose(block.attn(x), ref.attn(x), atol=1e-5) and torch.allclose(block.mlp(x), ref.mlp(x), atol=1e-5)
+    check("the empty layers are filled from the checkpoint's low-rank factors, q|k|v fused in ComfyUI's order and the feed-forward "
+          "running through ComfyUI's own swiglu, matching dense weights exactly, and a checkpoint that cannot fill them is refused",
+          same and model.size == 0 and isinstance(block.attn.qkv_proj, modelprep.LowRank) and "load it with the loader" in refused,
+          refused)
+    end = net.endpoint_time_embedder
+    t = torch.tensor([0.4, 0.7, 0.999])
+    with torch.no_grad():
+        plain = net.time_embedder(t)
+        end.step = ((0.4, 0.6), (0.7, 0.8))
+        mixed = net.time_embedder(t)
+        want = plain + 0.25 * (end(torch.tensor([0.6, 0.8, 0.999])) - plain)
+        end.step = None
+    seen = []
+    run = lambda *a, **k: seen.append(end.step) or "ran"
+    tops = {"sample_sigmas": torch.tensor([1.0, 0.98, 0.9, 0.0]), "minimax_h3_sigma_shift_video": 12.0, "minimax_h3_sigma_shift_audio": 3.0}
+    got = modelprep.stepped(end, run, None, torch.tensor([980.0]), None, tops)
+    heard = lambda v: float(time_shift_sigma(torch.tensor(v), 12.0, 3.0))
+    (tv, rv), (ta, ra) = seen[0]
+    check("each distinct time t is blended with its endpoint r by the stored gate, the video and audio rows step to the next sigma "
+          "on their own shifts, conditioning rows keep r = t, and nothing is left set after the step",
+          torch.allclose(mixed, want, atol=1e-6) and got == "ran" and end.step is None and abs(tv - 0.02) < 1e-6
+          and abs(rv - 0.1) < 1e-6 and abs(ta - (1 - heard(0.98))) < 1e-6 and abs(ra - (1 - heard(0.9))) < 1e-6, seen)
+
+    class Mended(Patched):
+        def clone(self):
+            c = Mended(dict(self.wrappers))
+            c.model_options = {"transformer_options": dict(self.model_options["transformer_options"])}
+            return c
+
+        def get_model_object(self, name):
+            return SimpleNamespace(set_parameters=lambda shift=1.0, audio_shift=1.0: None, endpoint_time_embedder=end)
+    m, steps, sampler, sigmas, _, notes = modelprep.prepare(Mended(), 6, "euler", "simple", torch.linspace(1, 0, 7), 12.0, 3.0, {},
+                                                            "9")
+    check("a mended model samples with the endpoint wrapper on",
+          "h3_longvideos_endpoint" in m.wrappers.get(pe.WrappersMP.DIFFUSION_MODEL, {})
+          and any("two-time conditioning filled in" in n for n in notes), notes)
+
+
 def test_chain():
     print("\n=== conditioning, look and the hand-off ===")
     sr, gen = 16000, torch.Generator().manual_seed(3)
@@ -942,6 +1367,13 @@ def test_chain():
           "were", level(quiet, 1.1, 1.4) < 3 * level(wave, 0.2, 0.8) and abs(level(quiet, 3.1, 3.4) - level(wave, 3.1, 3.4)) < 1e-4
           and abs(level(quiet, 0.2, 0.8) - level(wave, 0.2, 0.8)) < 1e-4 and chain.gaps([(1.0, 2.0), (3.0, 4.0)], 5.0)
           == [(0.0, 1.0), (2.0, 3.0), (4.0, 5.0)], [level(quiet, 1.1, 1.4), level(wave, 0.2, 0.8)])
+    clinks = sum(torch.sin(2 * torch.pi * f * t) * 0.7 ** k for k, f in enumerate((1240.0, 2870.0, 4410.0))) * torch.exp(-(t % 0.5) * 18)
+    thumps = sum(((t >= a) & (t < a + 0.2)).float() * torch.sin(2 * torch.pi * 90 * (t - a)) * torch.exp(-(t - a).clamp(min=0) * 40)
+                 for a in (0.5, 1.1, 1.7, 2.3, 2.9, 3.5, 4.1))
+    kept = [level(chain.unvoice(x.clone(), sr, []), 0, 5) / level(x, 0, 5)
+            for x in ((room + 0.3 * clinks).view(1, 1, -1).repeat(1, 2, 1), (room + 0.25 * thumps).view(1, 1, -1).repeat(1, 2, 1))]
+    check("chains and cuffs clinking and footsteps thudding keep their full level: only a voice is brought down",
+          all(abs(k - 1) < 0.02 for k in kept), kept)
     hand, ref, mem = torch.full((1, 64, 96, 3), 0.5), torch.full((1, 32, 32, 3), 0.2), torch.full((1, 64, 96, 3), 0.7)
     cond, lat = chain.build(FakeClip(), FakeVAE(), FakeAudioVAE(), "x", 96, 64, 41, hand, [ref], mem, silent=True)
     vals = cond[0][1]
@@ -1030,26 +1462,40 @@ def test_chain():
     check("in a dim room, legs that moved away are never pasted back into the hand-off from the frame handed on before",
           gap(kept, there, slice(80, 384), slice(90, 170)) < 0.003 and gap(kept, there, slice(80, 384), slice(390, 470)) < 0.003,
           (gap(kept, there, slice(80, 384), slice(90, 170)), gap(kept, there, slice(80, 384), slice(390, 470))))
+    wall = (back * 0.2 + 0.5).clamp(0, 1)
+    bare, slack, pushed = wall.clone(), wall.clone(), wall.clone()
+    slack[:, 200:202, 100:600] += 0.12
+    pushed[:, 200:202, 100:300], pushed[:, 160:162, 300:600] = 0.12 + pushed[:, 200:202, 100:300], 0.12 + pushed[:, 160:162, 300:600]
+    pushed[:, 160:202, 299:301] += 0.12
+    grainy = (slack + 0.03 * torch.sign(torch.randn(slack.shape, generator=gen))).clamp(0, 1)
+    fastened, moved, still = (chain.refresh(e, b, torch.cat([b, e, e])) for b, e in ((bare, slack), (slack, pushed), (grainy, slack)))
+    found = (gap(fastened, slack, slice(198, 204), slice(100, 600)), gap(moved, pushed, slice(150, 210), slice(100, 600)),
+             gap(still, grainy, slice(20, 360), slice(20, 650)))
+    check("a thin chain fastened or pushed aside in a shot is kept whole in the hand-off and its old place is never pasted back over "
+          "it, while grain on a still chain still gets the frame handed on before", max(found) < 0.003, found)
     box = faces.head_box([[50, 40, 1], [50, 60, 1]] + [[0, 0, 0]] * 12 + [[46, 38, 1], [54, 38, 1]], 100, 200)
     check("the face crop runs from above the hair to the chin and is squared on the head",
           box is not None and box[1] < 30 and 50 < box[3] < 60 and abs(box[2] - box[0] - box[3] + box[1]) <= 1, box)
 
 
-def render(prompt, dwpose=False, counts=(), textured=False, blind=False, **kw):
+def render(prompt, dwpose=False, counts=(), textured=False, blind=False, fine=None, **kw):
     calls = {"build": [], "sample": [], "gate": []}
     saved = (chain.build, chain.sample, chain.decode, chain.unvoice, chain.make_room, chain.cleanup, modelprep.prepare,
              modelprep.check_vaes, modelprep.takes_pictures, modelprep.partial, faces.available, faces.count, faces.crop, faces.Detector)
     real = chain.build
 
     def build(clip, vae, avae, text, w, h, frames, handoff=None, refs=(), memory=None, silent=False, cues=(), memo=None):
-        calls["build"].append({"text": text, "handoff": handoff, "refs": list(refs), "memory": memory, "silent": silent})
+        calls["build"].append({"text": text, "handoff": handoff, "refs": list(refs), "memory": memory, "silent": silent, "w": w, "h": h})
         cond, lat = real(clip, vae, avae, text, w, h, frames, handoff, refs, memory, silent, cues, memo)
         return cond, dict(lat, shot=len(calls["build"]), frames=frames)
 
     def sample(model, cond, neg, lat, seed, steps, sampler, scheduler, sigmas):
-        calls["sample"].append({"shot": lat["shot"], "audio_only": float(lat.get("noise_mask").unbind()[0].max()) == 0
+        calls["sample"].append({"shot": lat["shot"], "text": cond[0][1]["tokens"]["text"],
+                                "audio_only": float(lat.get("noise_mask").unbind()[0].max()) == 0
                                 if lat.get("noise_mask") is not None else False,
-                                "heard": float(lat["noise_mask"].unbind()[1].mean()) if lat.get("noise_mask") is not None else 1.0})
+                                "heard": float(lat["noise_mask"].unbind()[1].mean()) if lat.get("noise_mask") is not None else 1.0,
+                                "start": float(sigmas[0]) if sigmas is not None else 1.0,
+                                "steps": len(sigmas) - 1 if sigmas is not None else steps})
         return dict(lat)
 
     def decode(vae, avae, out, keep=()):
@@ -1063,7 +1509,7 @@ def render(prompt, dwpose=False, counts=(), textured=False, blind=False, **kw):
     chain.build, chain.sample, chain.decode = build, sample, decode
     chain.unvoice = lambda wave, sr, keep: calls["gate"].append((round(float(wave.mean())), keep)) or wave
     chain.make_room = chain.cleanup = lambda *a, **k: None
-    modelprep.prepare = lambda m, st, sn, sc, sg, sv, sa, g, nid: (m, st, sn, None, ["prepared"])
+    modelprep.prepare = lambda m, st, sn, sc, sg, sv, sa, g, nid: (m, st, sn, None, fine, ["prepared"])
     modelprep.check_vaes = lambda v, a: None
     modelprep.takes_pictures = lambda m, g, n: (False, "x.safetensors was not trained on reference pictures") if blind else (True, "")
     modelprep.partial = lambda m, g, n: []
@@ -1072,8 +1518,8 @@ def render(prompt, dwpose=False, counts=(), textured=False, blind=False, **kw):
     faces.crop = lambda det, pic: pic[:, :8, :8]
     faces.Detector = lambda: SimpleNamespace(close=lambda: None)
     try:
-        out = node.H3LongVideos().run("base", FakeClip(), FakeVAE(), FakeAudioVAE(), prompt, "16:9", 0.01, 4.0, 8, "euler",
-                                      "simple", 7, character_memory=kw.pop("memory", MEM), **kw)
+        out = node.H3LongVideos().run("base", FakeClip(), FakeVAE(), FakeAudioVAE(), prompt, "16:9", kw.pop("megapixels", 0.01), 4.0, 8,
+                                      "euler", "simple", 7, character_memory=kw.pop("memory", MEM), **kw)
     finally:
         (chain.build, chain.sample, chain.decode, chain.unvoice, chain.make_room, chain.cleanup, modelprep.prepare,
          modelprep.check_vaes, modelprep.takes_pictures, modelprep.partial, faces.available, faces.count, faces.crop,
@@ -1229,13 +1675,14 @@ def test_ankles():
     check("ankle chains are leg irons: hobbled steps with her ankles joined by the chain, the chain slack when she stands, both legs "
           "moving together while one leg alone is left as written, and a man in leg irons with cuffed hands has both",
           "hold: Sarah, shackles around her ankles" in irons[0]["line"]
-          and "a pair of steel shackles is locked around them just above her feet, joined by their own heavy chain, about forty "
-              "centimetres long, that never stretches or gets longer" in notes(irons[1])
-          and beat(irons[1]) == "Sarah tries to run for the stairs, in short, hobbled steps, her ankles joined by the heavy chain of the "
-                                "shackles."
-          and "She stands with her feet a little apart, the chain between her ankles slack on the floor." in notes(irons[2])
-          and "Her ankles are shackled together by their own heavy chain about forty centimetres long." in irons[1]["prompt"]
-          and beat(irons[3]) == "Sarah lifts both legs together, her ankles joined by the heavy chain of the shackles, then one leg."
+          and "a pair of steel shackles is locked around them just above her feet, joined by about forty centimetres of heavy steel "
+              "links that never stretch or get longer" in notes(irons[1])
+          and beat(irons[1]) == "Sarah tries to run for the stairs, in short, hobbled steps, her ankles joined by the heavy steel links of "
+                                "the shackles."
+          and "She stands with her feet a little apart, the steel links between her ankles slack on the floor." in notes(irons[2])
+          and "Her ankles are shackled together by about forty centimetres of heavy steel links." in irons[1]["prompt"]
+          and beat(irons[3]) == "Sarah lifts both legs together, her ankles joined by the heavy steel links of the shackles, then one "
+                                "leg."
           and not warn and "on: Luis, shackles around his ankles; handcuffs in front of him" in both["line"], (beat(irons[1]), warn))
     tied, warn = plan("Dana ties Sarah's ankles together with rope.", "Sarah hops to the door.", "Sarah falls across the mattress.",
                       "Dana forces her to her knees.", "Sarah runs for the stairs.")
@@ -1303,10 +1750,10 @@ def test_ankles():
           and loose[1]["read"] == [("release", "Sarah, rope around her ankles")]
           and beat(loose[2]) == "Blonde-haired Sarah kicks her legs out."
           and [beat(s) for s in irons[1:]] == [
-              "Luis grabs blonde-haired Sarah's legs and arms, her ankles joined by the heavy chain of the shackles, and pulls "
+              "Luis grabs blonde-haired Sarah's legs and arms, her ankles joined by the heavy steel links of the shackles, and pulls "
               "blonde-haired Sarah onto the bed.",
-              "Luis lifts blonde-haired Sarah by the feet, her ankles joined by the heavy chain of the shackles, and holds blonde-haired "
-              "Sarah upside down."],
+              "Luis lifts blonde-haired Sarah by the feet, her ankles joined by the heavy steel links of the shackles, and holds "
+              "blonde-haired Sarah upside down."],
           [(s["read"], beat(s)) for s in knee + taped + still + loose + irons])
     seen = cuffed + lying + grab + late + knees + pair + held + free + two + tied + chair + bar + knee + taped + still + loose + irons
     split = re.compile(r"\bleft (?:leg|ankle|foot|knee|thigh|calf|shin)\b[^.]{0,40}?\bright (?:leg|ankle|foot|knee|thigh|calf|shin)\b|"
@@ -1331,6 +1778,93 @@ def test_ankles():
           and read("Sarah walks to the post in handcuffs.") == [("have", "Sarah, handcuffs behind her back")],
           [read(b) for b in ("Dana puts Sarah in a belly chain, handcuffs and leg irons.", "Dana zip-ties Sarah's wrists, then her ankles.",
                              "Sarah walks to the post in handcuffs.")])
+
+
+def test_positions():
+    print("\n=== a position someone is put into holds through the beats after it ===")
+    mem = ("Lena: a young woman with long blonde hair, in a black lace bra and black lace panties.\n"
+           "Dana: a woman with long brown hair, in a black corset and black leather trousers.")
+    plan = lambda *b: P.plan("A dim bedroom with a wide bed and a table.\n\n" + "\n\n".join(b), mem)[0]
+    thrown = plan("Dana throws Lena onto the bed.", "Dana handcuffs Lena's wrists behind her back.", "Dana cuffs Lena's ankles.")
+    pinned = plan("Dana pins Lena face down on the bed and cuffs her hands behind her back.", "Dana chains Lena's ankles.")
+    bent = plan("Dana bends Lena over the table and cuffs her wrists.", "Dana cuffs Lena's ankles to the table legs.")
+    held = lambda *b: next((x for x in re.findall(r"Blonde-haired Lena (?:stays|ends the shot) ([^.:]+)", notes(plan(*b)[-1]))), "")
+    others = [held("Lena is thrown onto the bed.", "Dana ties Lena's ankles together with rope."),
+              held("Dana knocks Lena to the floor.", "Dana cuffs Lena's ankles."),
+              held("Dana wrestles Lena to the ground and cuffs her.", "Dana shackles Lena's ankles."),
+              held("Dana pushes Lena into a chair.", "Dana tapes Lena's ankles to the chair legs."),
+              held("Dana throws Lena onto the bed.", "Dana pulls Lena off the bed and cuffs her hands behind her back.")]
+    check("thrown or pinned down, she stays lying where she landed, face down when pinned face down, in every shot after it, the ankle "
+          "cuffs go on with her legs flat where they lie and she is never laid down again; bent over a table she stays bent over it "
+          "while her ankles are cuffed to its legs, which are never read as her legs; passive, knocked, wrestled, pushed into a chair "
+          "and pulled off the bed each hold as written",
+          all("Blonde-haired Lena stays lying on the bed for the whole shot" in notes(s) for s in thrown[1:])
+          and "kneels at blonde-haired Lena's feet, holds Lena's ankles pressed together, her legs straight and flat where they lie"
+              in notes(thrown[2])
+          and "stays lying face down on the bed" in notes(pinned[1]) and " lays " not in notes(pinned[1])
+          and len(bent) == 2 and bent[1]["read"] == [("hold", "Lena, handcuffs on her ankles, locked to the table legs")]
+          and "stays bent over the table" in notes(bent[1]) and " lays " not in notes(bent[1])
+          and others == ["lying on the bed for the whole shot, holding that position from the first frame to the last",
+                         "lying on the floor for the whole shot, holding that position from the first frame to the last",
+                         "lying on the ground for the whole shot, holding that position from the first frame to the last",
+                         "sitting in the chair for the whole shot, holding that position from the first frame to the last",
+                         "standing upright"],
+          ([notes(s) for s in thrown[1:]], others))
+
+
+def test_worn():
+    print("\n=== a restraint she already wears is on from the start, wherever it is written, and stays on its own ===")
+    mem = ("Lena: a young woman with long blonde hair, in a black lace bra and black lace panties.\n"
+           "Dana: a woman with long brown hair, in a black corset and black leather trousers.")
+    story = "A dim bedroom with a wide bed.\n\nLena stands by the bed.\n\nDana walks up to Lena and kisses her."
+    chain = ("Lena: a crotch chain locked tight around her waist, its center chain pulled tight under her crotch and over her vagina from "
+             "the front of her waist to the small of her back.")
+    on = lambda m=mem, a="": P.plan(story, m, a)[0][-1]["line"]
+    given = [on(a=t) for t in ("Lena wears a crotch chain.", "Lena has a crotch chain locked on.", "Lena: crotch chain.",
+                               "Lena is naked except for a crotch chain.")] + [
+        on(mem.replace("in a black lace bra and black lace panties", "naked except for a crotch chain")),
+        on(mem + "\nhold: Lena, crotch chain")]
+    plain = [on(mem.replace("in a black lace bra", d)) for d in ("with a thin gold chain around her neck, in a black lace bra",
+                                                                 "in a shirt with rolled cuffs, a black lace bra",
+                                                                 "with handcuffs on her belt, in a black lace bra")]
+    people = P.read_memory(mem)[0]
+    worn = [P.read_beat(t, list(people), people, {}, {}, {}, {})[0][0][:2] for t in (
+        "Lena stands by the bed, handcuffs on her wrists.", "Lena waits, leather cuffs on her ankles.",
+        "Dana cuffs Lena with steel handcuffs.")]
+    cuffed = notes(P.plan("A dim bedroom.\n\nDana cuffs Lena's hands behind her back.", mem.replace(
+        "in a black lace bra and black lace panties", "naked except for a crotch chain"))[0][0])
+    leash = P.plan("A dim bedroom with a wide bed.\n\nDana puts a collar on Lena and clips a leash to it.", mem)[0][0]["read"]
+    check("a crotch chain written in the anchor, her description or a bare hold tag gets its full description in every shot, while a "
+          "necklace, shirt cuffs or cuffs on a belt stay clothing; worn cuffs belong to the one wearing them; nothing else is hooked onto "
+          "a crotch chain; a leash clipped to \"it\" after a collar goes on the collar",
+          all(chain in x for x in given) and all("on: " not in x for x in plain)
+          and worn == [("have", "Lena, handcuffs behind her back"), ("have", "Lena, leather cuffs on her ankles"),
+                       ("hold", "Lena, steel handcuffs behind her back")]
+          and "Nothing else is clipped, hooked or locked onto her crotch chain: no other chain, cuff, link or leash touches it at any "
+              "point, front or back, and her locked hands rest just above the back of it, free of it." in cuffed
+          and leash[-1] == ("hold", "Lena, a leash clipped to the collar around her neck, its other end held by Dana"),
+          (given, plain, worn, leash))
+    mem = ("Sarah: a young woman with long red hair, in a white tank top and black shorts.\n"
+           "Marcus: a man with short dark hair and a beard, in a black t-shirt and jeans.")
+    ladder = P.plan("A dim garage with a tall wooden stepladder.\n\nMarcus cuffs Sarah's wrists above her head to the top of the "
+                    "ladder. He spreads her legs wide and cuffs her ankles to the corners of the base of the ladder.\n\nSarah "
+                    "struggles.\n\nMarcus kisses Sarah.\n\nMarcus watches her.", mem)[0]
+    side = ("Dark-haired Marcus stays at red-haired Sarah's left side, the only dark-haired Marcus in the frame, and nobody is at her "
+            "right side.")
+    check("cuffed to a ladder, her wrists lock to its top and her spread ankles to its two corners one at a time, by one man who does "
+          "it all from her left side and stays there while she is held and he only looks on, the ladder said to be the only one, never "
+          "read as wide cuffs or as her legs held together",
+          [s["read"] for s in ladder[:2]] == [[("hold", "Sarah, handcuffs on her wrists above her head, locked to the top of the ladder")],
+                                          [("hold", "Sarah, handcuffs on her ankles spread apart, locked to the corners of the base of "
+                                                    "the ladder")]]
+          and "crouches at red-haired Sarah's left side, spreads her legs apart and locks her left ankle to the left corner of the base "
+              "of the ladder, then reaches across and locks her right ankle to the right corner of the base of the ladder"
+              in notes(ladder[1])
+          and all("Dark-haired Marcus does all of this from red-haired Sarah's left side: he stays on that side of her the whole shot, "
+                  "nobody is at her right side, and dark-haired Marcus appears only once in every frame." in notes(s) for s in ladder[:2])
+          and [side in notes(s) for s in ladder[2:]] == [True, False, False]
+          and all("There is only one ladder here, always in the same spot." in notes(s) for s in ladder)
+          and "pressed together" not in notes(ladder[1]), [notes(s) for s in ladder])
 
 
 def test_undress_bound():
@@ -1375,8 +1909,7 @@ def test_undress_bound():
           and beat(clothes[-1]) == "Luis removes blonde-haired Sarah's clothes, blonde-haired Sarah's blue jeans and black panties pulled "
                                    "down to just above the handcuffs on blonde-haired Sarah's ankles, where they stay."
           and "remove: Sarah, white sneakers (" in ripped[1]["line"] and "torn off: Sarah, white blouse, blue jeans (" in ripped[1]["line"]
-          and beat(wrists) == "Luis pulls blonde-haired Sarah's blouse up above her breasts, with Sarah's hands still locked together behind "
-                              "her back."
+          and beat(wrists) == "Luis pulls blonde-haired Sarah's blouse up above her breasts."
           and beat(free[-1]) == "Luis strips blonde-haired Sarah naked."
           and "pulls them down her legs and off over her feet" in notes(free[-1]),
           ([beat(s) for s in naked + clothes], ripped[1]["line"], beat(wrists), [notes(s) for s in free]))
@@ -1386,22 +1919,23 @@ def test_undress_bound():
     front = plan("Sarah stands by the table, her hands cuffed in front of her.", "Luis pulls down her jeans.")[0][1]
     lying = plan("Sarah lies on the bed, her wrists handcuffed behind her back.", "Luis pulls her jeans off.")[0][1]
     back = plan(standing, "Luis pulls her jeans down to her knees.", "Luis pulls them back up.")[0][2]
-    check("with her wrists cuffed, every change to her clothes says in the beat that her hands stay locked; standing, she steps out "
-          "of her jeans one foot after the other with her hands still locked; on her own she pushes them down and her shoes off "
-          "without her hands; lying down she steps out of nothing; 'them' at the start of the next beat is the jeans",
-          beat(off) == "Luis pulls blonde-haired Sarah's jeans down and off, with Sarah's hands still locked together behind her back."
+    check("with her wrists cuffed, her clothes change in the beat and in the step without naming her hands, and her pose keeps her "
+          "hands where they are cuffed; standing, she steps out of her jeans one foot after the other; on her own she pushes them "
+          "down and her shoes off without her hands; lying down she steps out of nothing; 'them' at the start of the next beat is the "
+          "jeans",
+          beat(off) == "Luis pulls blonde-haired Sarah's jeans down and off."
           and "opens blonde-haired Sarah's blue jeans at the waist and pulls them down her legs to her ankles, and blonde-haired Sarah "
-              "steps out of them one foot at a time, with blonde-haired Sarah's hands still locked together behind her back." in notes(off)
-          and beat(own) == "Sarah wriggles out of her jeans, with her hands still locked together behind her back."
+              "steps out of them one foot at a time." in notes(off)
+          and "Blonde-haired Sarah's arms stay pulled behind her back the whole shot" in notes(off)
+          and beat(own) == "Sarah wriggles out of her jeans."
           and "Sarah pushes her blue jeans down over her hips and wriggles them down her legs to her ankles, and steps out of them one "
-              "foot at a time, with her hands still locked together behind her back." in notes(own)
-          and "Sarah pushes her white sneakers off with her feet, one heel against the other, with her hands still locked together "
-              "behind her back." in notes(shoes)
-          and beat(front) == "Luis pulls down blonde-haired Sarah's jeans, with Sarah's hands still locked together in front."
-          and "pulls them down her legs and off over her feet, with blonde-haired Sarah's hands still locked together behind her back."
-          in notes(lying) and "steps out" not in notes(lying)
+              "foot at a time." in notes(own)
+          and "Sarah pushes her white sneakers off with her feet, one heel against the other." in notes(shoes)
+          and beat(front) == "Luis pulls down blonde-haired Sarah's jeans."
+          and "pulls them down her legs and off over her feet." in notes(lying) and "steps out" not in notes(lying)
+          and not any(MIXED(notes(x), "jeans", "sneakers") for x in (off, own, shoes, front, lying, back))
           and "pulled back: Sarah: blue jeans." in back["line"]
-          and beat(back) == "Luis pulls them back up, with Sarah's hands still locked together behind her back.",
+          and beat(back) == "Luis pulls them back up.",
           (beat(off), notes(off), beat(own), notes(own), notes(shoes), beat(front), notes(lying), back["line"], beat(back)))
 
 
@@ -1442,6 +1976,116 @@ def test_skirts():
           len(last) == 3 and last[0] == "Dana cuffs Sarah's ankles together." and last[1].startswith("Dana bends Sarah's knees")
           and "cuffs Sarah's ankles" not in last[1] and last[2].startswith("Dana removes Sarah's skirt")
           and not any(w in last[2] for w in ("lifts", "hogtie")), last)
+
+
+def test_anchors():
+    print("\n=== a restraint fastened to something keeps the arms where they were cuffed, said in terms of where they are ===")
+    mem = ("Sarah: a woman with long blonde hair, in a white tank top.\nDana: a woman with short black hair, in a black jacket.")
+    last = lambda *b: notes(P.plan("A cellar.\n\nDana and Sarah stand together.\n\n" + "\n\n".join(b), mem)[0][-1])
+    lift = ("lifting", "rising", "reaching", "raised", "above her head", "full length from her shoulders to her wrists")
+    front = last("Dana handcuffs Sarah's wrists in front of her, then chains her to the wall.", "Sarah waits.")
+    check("wrists cuffed in front and chained to a wall rest at belly height with the wall fastening said to be at waist height, and "
+          "nothing about lifting is said",
+          "wrists stay locked together in front of her the whole shot and chained to the wall" in front
+          and "locked hands rest together at the height of her belly, in plain view below her chest" in front
+          and "Fastened to the wall at the height of her waist, her wrists stay at waist height, below her shoulders, in front of her."
+          in front and not any(w in front for w in lift), front)
+    behind = last("Dana handcuffs Sarah's wrists behind her back, then chains her to a hook in the ceiling.", "Sarah waits.")
+    check("wrists cuffed behind her back stay behind it when the chain goes to a hook in the ceiling: a slack chain hangs from it, "
+          "and nothing says raised",
+          "arms stay pulled behind her back" in behind and "A long slack chain hangs loose from her wrists to the hook in the ceiling, "
+          "so her wrists stay at waist height, below her shoulders, behind her back." in behind
+          and not any(w in behind for w in lift), behind)
+    both = last("Dana handcuffs Sarah's wrists in front of her, then chains her to a hook in the ceiling.", "Sarah waits.")
+    check("wrists cuffed in front stay in front when the chain goes to the ceiling",
+          "in front of her the whole shot and chained to the hook in the ceiling" in both and "A long slack chain hangs loose" in both
+          and not any(w in both for w in lift), both)
+    up = last("Dana chains Sarah's wrists to a hook in the ceiling.", "Sarah waits.")
+    check("wrists chained overhead with no position given still hang raised, as written", "arms stay raised above her head" in up, up)
+    bare = last("Dana handcuffs Sarah to the pipe.", "Sarah waits.")
+    check("wrists fastened to a pipe with no position given rest in front of her at belly height, the pipe at waist height",
+          "wrists stay locked together in front of her the whole shot and locked to the pipe" in bare
+          and "Fastened to the pipe at the height of her waist" in bare and not any(w in bare for w in lift), bare)
+    floor = last("Dana handcuffs Sarah's wrists in front of her, then chains her to a ring in the floor.", "Sarah waits.")
+    check("a ring in the floor is reached by a short chain running down, with her wrists at waist height",
+          "A short chain runs down from her wrists to the ring in the floor, and her wrists stay at waist height" in floor, floor)
+    room = "A bedroom with a bed and a wooden headboard.\n\nDana and Sarah are in the room.\n\n"
+    bed = lambda *b: P.plan(room + "\n\n".join(b), mem)[0][-1]
+    lying = bed("Sarah lies on the bed.", "Dana cuffs Sarah's wrists to the headboard.", "Sarah waits.")
+    check("a headboard puts nothing above her head: with no position given the wrists are just locked to it, in the item and in the shot",
+          "above her head" not in lying["line"] and "above her head" not in lying["prompt"] and "stretched out" not in lying["prompt"]
+          and "her wrists are locked to the headboard" in notes(lying) and "straight to the headboard" not in notes(lying),
+          (lying["line"], notes(lying)))
+    sitting = bed("Sarah sits on the bed.", "Dana cuffs Sarah's wrists to the headboard.", "Sarah waits.")
+    check("sitting at a headboard she rests her hands at belly height, a long slack chain going to it",
+          "above her head" not in sitting["prompt"] and "locked hands rest together at the height of her belly" in notes(sitting)
+          and "A long slack chain hangs loose from her wrists to the headboard" in notes(sitting), notes(sitting))
+    said = bed("Sarah lies on the bed.", "Dana cuffs Sarah's hands above her head to the headboard.", "Sarah waits.")
+    check("above her head is kept when the beat says so", "stretched out above her head" in notes(said), notes(said))
+    owner = bed("Dana cuffs Sarah's wrists behind her back.", "Dana lays her on the bed and chains the cuffs to the headboard.",
+                "Sarah waits.")
+    check("chaining 'the cuffs' to the headboard, with only one woman cuffed, is read onto her and keeps her wrists behind her back",
+          "chains around her wrists behind her back, chained down to the headboard" in owner["line"]
+          and "pulled behind her back" in notes(owner) and "above her head" not in owner["prompt"], (owner["line"], notes(owner)))
+    plain = last("Dana cuffs Sarah's hands in front of her.", "Sarah waits.")
+    check("cuffs in front with nothing fastened rest at belly height too, with no fastening said",
+          "locked hands rest together at the height of her belly" in plain and "Fastened" not in plain
+          and not any(w in plain for w in lift), plain)
+    step = P.plan("A cellar.\n\nDana and Sarah stand together.\n\nDana handcuffs Sarah's wrists in front of her and chains her to "
+                  "the pipe.", mem)[0]
+    check("the step that fastens them says the wrists are fastened at waist height, and the end of the shot has them low there, "
+          "not 'in plain view'", any("to the pipe at waist height" in s["prompt"] for s in step)
+          and any(", low at waist height" in s["prompt"] and "locked to the pipe in plain view" not in s["prompt"] for s in step),
+          [s["prompt"][-700:] for s in step[1:2]])
+
+
+def test_marks():
+    print("\n=== words written on a body and brands stay on it, shot after shot, until washed off ===")
+    crew = ("Sarah: a woman with long blonde hair, in a white tank top.\nDana: a woman with short black hair, in a black jacket.\n"
+            "Marcus: a man with short dark hair, in a black t-shirt.")
+    plan = lambda *b, mem=crew: P.plan("A room.\n\nDana and Sarah stand together.\n\n" + "\n\n".join(b), mem)
+    shots, warn = plan('Dana uncaps a black marker and writes "SLAVE" across Sarah\'s stomach.', "Sarah looks down.", "Dana laughs.")
+    check("a quoted word being written is not read as a spoken line, and stays in the beat as written",
+          shots[1]["said"] == [] and not shots[1]["cues"] and "writes «SLAVE» across Sarah's stomach" in shots[1]["prompt"]
+          and "<d>" not in shots[1]["prompt"], (shots[1]["said"], shots[1]["prompt"]))
+    check("it goes on in the shot that writes it, and is on her in every shot after",
+          'has the word "SLAVE" written across her stomach in plain view' in notes(shots[1])
+          and all('has the word "SLAVE" written across her stomach. It stays exactly as it is' in notes(s) for s in shots[2:])
+          and "SLAVE" not in notes(shots[0]) and not warn, [notes(s) for s in shots])
+    marks = plan("Dana brands Sarah's left hip with a glowing iron.", 'Dana writes "MINE" on Sarah\'s thigh with a red marker.',
+                 "Sarah gasps.", "Dana washes the writing off Sarah's thigh.", "Sarah looks up.")[0]
+    check("a brand goes on and stays, and a second mark goes on beside it",
+          "has a brand mark on her left hip in plain view" in notes(marks[1])
+          and 'has the word "MINE" written on her thigh with a red marker in plain view' in notes(marks[2])
+          and "a brand mark on her left hip" in notes(marks[3]) and 'the word "MINE" written on her thigh' in notes(marks[3]),
+          notes(marks[3]))
+    check("washing the writing off takes only the writing off, and the brand is still there after",
+          'no longer has the word "MINE"' in notes(marks[4]) and "a brand mark on her left hip" in notes(marks[4])
+          and "MINE" not in notes(marks[5]) and "a brand mark on her left hip" in notes(marks[5]), (notes(marks[4]), notes(marks[5])))
+    tagged = plan("Sarah sighs.\nmark: Sarah, the word \"OWNED\" written across her back in red lipstick", "Dana smiles.",
+                  "Sarah nods.\nunmark: Sarah", "Dana nods.")[0]
+    check("mark: puts it on from that shot and unmark: takes it off, with no guessing from the beat",
+          'has the word "OWNED" written across her back in red lipstick in plain view' in notes(tagged[1])
+          and 'written across her back in red lipstick. It stays' in notes(tagged[2])
+          and "no longer has" in notes(tagged[3]) and "OWNED" not in notes(tagged[4]), [notes(s) for s in tagged])
+    start = plan("Sarah sighs.", "Dana smiles.", mem=crew + "\nmark: Sarah, a brand mark on her left shoulder")[0]
+    check("a mark: line in character_memory has it on from the first shot",
+          all("Sarah has a brand mark on her left shoulder. It stays" in notes(s) for s in start), [notes(s) for s in start])
+    guess, gwarn = plan('The word "SLUT" is written across her stomach.', "Sarah looks down.")
+    check("when 'her' could be either woman nothing is guessed: it says so, and nothing is put on anyone",
+          any("could not tell whose body this is" in w for w in gwarn) and not any("SLUT" in notes(s) for s in guess), gwarn)
+    man, mwarn = plan('Marcus writes "MINE" across Sarah\'s chest.', "Marcus writes \"YES\" across her back.", mem=crew)
+    check("a man writing on a woman by name is read, and 'her' with Dana also in the room is asked about, not guessed",
+          'Sarah has the word "MINE" written across her chest' in notes(man[1]) and not mwarn == []
+          and not any("YES" in notes(s) for s in man), (mwarn, [notes(s) for s in man]))
+    quiet = ["Dana writes in her notebook.", "Dana draws her sword.", "Dana draws a heart on the whiteboard.",
+             "Dana draws a line across Sarah's chest with her finger.", "Sarah wears a designer brand of sneakers on her feet.",
+             "Dana paints Sarah's nails red."]
+    check("writing in a notebook, drawing a sword, a finger across her chest, a shoe brand and painted nails put nothing on her skin",
+          not any("marks" in plan(q, "Sarah smiles.")[0][1]["line"] for q in quiet), quiet)
+    heard = plan('Dana writes a note and hands it over, "Read this."', "Sarah reads it.")[0]
+    check("a spoken line after a clause that mentions writing is still spoken",
+          [w for w, *_ in heard[1]["said"]] == ["Dana"], heard[1]["said"])
 
 
 def test_belt():
@@ -1566,7 +2210,9 @@ def test_links():
           and beat(hog[1]) == "Dana hogties Sarah, blonde-haired Sarah's ankles held to her handcuffs behind her back by a separate short "
                               "chain."
           and "Black-haired Dana unlocks the separate short chain that joins blonde-haired Sarah's handcuffs to the chain between her ankle "
-              "cuffs and takes it away, then unlocks the handcuffs with a small key and takes them off her wrists." in notes(hog[2])
+              "cuffs and takes it away, then leans over blonde-haired Sarah and, there at the small of blonde-haired Sarah's back, unlocks "
+              "the handcuffs with a small key and takes them off blonde-haired Sarah's wrists, while blonde-haired Sarah's hands stay "
+              "behind her back until her wrists are free, then drops the handcuffs to the floor." in notes(hog[2])
           and hog[2]["line"].endswith("comes off: Sarah: handcuffs behind her back.") and hog[3]["line"].endswith(
               "on: Sarah: handcuffs on her ankles.")
           and rope[0]["read"] == [("have", "Sarah, rope around her wrists behind her back; rope around her ankles, tied to the rope "
@@ -1576,6 +2222,50 @@ def test_links():
               "her ankles and takes it away." in notes(rope[1])
           and cuffs[-1]["read"] == [("hold", f"Sarah, {link}")],
           ([(s["read"], s["line"], beat(s)) for s in hog + rope + cuffs], [notes(s) for s in hog[2:3] + rope[1:]]))
+    put, back, side, front = (plan(*b)[0] for b in (
+        ("Sarah stands by the bed.", "Dana hogties Sarah on the bed with handcuffs.", "Sarah struggles."),
+        ("Sarah lies on the bed, her wrists handcuffed behind her back.", "Dana hogties Sarah."),
+        ("Sarah lies on her side on the floor, hogtied with rope.",),
+        ("Sarah lies on the floor, hogtied, her wrists cuffed in front of her.",)))
+    down = ("lying face down, both her arms lie along her back at their full length, and her hands stay locked together on top of the "
+            "small of her back")
+    check("a hogtie lays her face down: whoever ties it lays her face down where the beat says, or rolls her onto her front from her "
+          "back, before lifting her ankles, and she stays face down with her hands behind her back while it is on; lying on her side or "
+          "cuffed in front stays so when the text says so",
+          "Black-haired Dana lays blonde-haired Sarah face down on the bed, bends blonde-haired Sarah's knees and lifts her handcuffed "
+          "ankles together up behind her toward her hands" in notes(put[3])
+          and "she goes down onto her front with both arms staying behind her the whole way, and then " + down in notes(put[3])
+          and down in notes(put[4]) and "goes down" not in notes(put[4])
+          and "Black-haired Dana rolls blonde-haired Sarah onto her front, bends blonde-haired Sarah's knees" in notes(back[2])
+          and down in notes(back[2]) and down in notes(plan("Sarah lies on the floor, hogtied with rope.")[0][0])
+          and "lying on her side, both her arms run down behind her along her back" in notes(side[0])
+          and front[0]["read"] == [("have", "Sarah, handcuffs in front of her; handcuffs on her ankles, locked to her handcuffs in "
+                                            "front of her by a separate short chain")],
+          [notes(s) for s in put[3:] + back[2:] + side] + [front[0]["read"]])
+    ends = lambda *b: plan(*b)[0][-1]["read"][-1][1]
+    worn, said, kit, fetched = (ends(*b) for b in (("Dana handcuffs Sarah's wrists behind her back.", "Dana hogties Sarah."),
+                                                  ("Dana handcuffs Sarah and hogties her.",),
+                                                  ("Dana chains Sarah's wrists behind her back.", "Dana hogties her."),
+                                                  ("Dana takes a coil of chain from the shelf.", "Dana hogties Sarah.")))
+    soft, strap, zip_, tape = (plan(f"Dana hogties Sarah with {g}.", "Dana unties the hogtie.")[0]
+                               for g in ("leather cuffs", "straps", "zip ties", "duct tape"))
+    check("a hogtie uses the restraint the beat names, else what is on her wrists or was brought out before, and rope only when "
+          "nothing is; its ankle restraint keeps the same look, and the link between them is of the same kind",
+          worn == said == "Sarah, handcuffs on her ankles, locked to her handcuffs behind her back by a separate short chain"
+          and kit == fetched == "Sarah, chains around her ankles, chained to the chain around her wrists behind her back by a separate "
+                                "short chain"
+          and ends("Dana gags Sarah.", "Dana hogties her.").startswith("Sarah, rope around her ankles, tied to the rope")
+          and ends("Dana hogties Sarah with steel chains.").startswith("Sarah, steel chains around her ankles")
+          and soft[2]["read"] == [("hold", "Sarah, leather cuffs on her ankles, locked to her wrist cuffs behind her back by a separate "
+                                           "short chain")]
+          and "padlocks a separate short chain from the link between her wrist cuffs to the link between her ankle cuffs" in notes(soft[2])
+          and "The cuffs on blonde-haired Sarah's wrists and the cuffs on her ankles are separate restraints" in notes(soft[2])
+          and "then buckles a separate short strap from the strap around her wrists to the strap around her ankles" in notes(strap[2])
+          and "then fastens a separate short zip tie from the zip tie around her wrists" in notes(zip_[1])
+          and "cuts the separate short zip tie that joins" in notes(zip_[2])
+          and "lifts her taped ankles together up behind her toward her hands, then runs a separate short strip of tape" in notes(tape[2])
+          and "peels off the separate short strip of tape that joins" in notes(tape[3]) and "winds" not in notes(tape[3]),
+          [worn, said, kit, fetched] + [(s["read"], notes(s)) for s in soft[2:] + strap[2:] + zip_[1:] + tape[2:]])
     waist, hands = (plan("Sarah stands by the bed, her wrists handcuffed behind her back and a chain locked around her waist.", b)[0]
                     for b in ("Dana padlocks Sarah's handcuffs to the back of the waist chain.",
                               "Dana chains Sarah's cuffed hands to the back of her waist chain."))
@@ -1608,6 +2298,272 @@ def test_links():
           [(beat(s), s["line"][:60]) for s in other])
 
 
+def test_holds():
+    print("\n=== poses, leashes and objects hold from shot to shot ===")
+    mem = ("Sarah: a woman in her twenties with long blonde hair, in a white tank top and denim shorts.\n"
+           "Dana: a woman in her thirties with short black hair, in a black blazer and grey trousers.")
+    plan = lambda *b, m="": P.plan("A dim bedroom.\n\n" + "\n\n".join(b), mem + m)[0]
+    held = lambda shots: [next((t for t in re.split(r"(?<=[.!?])\s+", x["prompt"]) if "holding that position" in t), "") for x in shots]
+    bent = held(plan('"Bend over and spread your legs," Dana says.', "Sarah bends over the bed and spreads her legs.",
+                     "Dana walks slowly around her.", "Dana runs a hand down Sarah's back.", "Sarah stands up and turns to face Dana."))
+    told = held(plan("Dana orders Sarah to bend over the desk and spread her legs.", "Dana picks up a riding crop."))
+    obeys = held(plan('"Bend over and spread your legs," Dana orders.', "Sarah does as she is told.", "Dana walks around her."))
+    check("a pose taken in one beat holds through the shots after it, whether it was told, ordered or obeyed, until the beat that "
+          "changes it",
+          bent[:2] == ["", ""] and bent[2] == bent[3] == "Blonde-haired Sarah stays bent over the bed with her legs spread apart for the "
+          "whole shot, holding that position from the first frame to the last: her chest and shoulders rest on it."
+          and bent[4] == "" and "stays bent over the desk with her legs spread apart" in told[1]
+          and "stays bent forward at the waist with her legs spread apart" in obeys[2], [bent, told, obeys])
+    plain = lambda *b: plan("Dana cuffs Sarah's hands behind her back.", *b)
+    cuffed = [held(plain(b, "Dana walks around her."))[-1] for b in ("Dana bends Sarah over the bed.", "Dana pushes Sarah face down over "
+              "the desk.", "Sarah gets on all fours.")]
+    turned = held(plain("Dana bends Sarah over the bed.", "Dana walks around her.", "Sarah turns around to face Dana."))
+    camera = [t for t in re.split(r"(?<=[.!?])\s+", plain("Dana bends Sarah over the bed.", "Dana walks around her.")[2]["prompt"])
+              if t.startswith("The camera keeps")]
+    check("a cuffed pose keeps the cuffs where they are: bent over, her chest rests on what she is bent over and her hands stay locked "
+          "behind her, on all fours with her hands cuffed behind her she kneels bent forward instead, turning round ends the bend, and "
+          "the camera keeps all of her in view rather than her face",
+          cuffed[0] == "Blonde-haired Sarah stays bent over the bed for the whole shot, holding that position from the first frame to the "
+          "last: her chest and shoulders rest on it and her cuffed hands stay locked behind her back."
+          and "stays bent over the desk" in cuffed[1] and "stays kneeling bent forward with her chest down" in cuffed[2]
+          and turned[-1] == "" and camera == ["The camera keeps black-haired Dana's face in frame and all of blonde-haired Sarah in view "
+                                              "for the whole shot."], [cuffed, turned, camera])
+    pulled = held(plan("Dana pulls Sarah's denim shorts down to her knees.", "Dana steps back."))
+    knelt = held(plan("Sarah kneels on the floor.", "Dana circles her.", "Sarah gets on all fours.", "Dana watches her."))
+    check("pulling clothes down to the knees is not kneeling, while kneeling and going on all fours each hold until changed",
+          pulled == ["", ""] and "stays kneeling" in knelt[1] and knelt[2] == "" and "stays on all fours" in knelt[3], [pulled, knelt])
+    leash = plan("Dana cuffs Sarah's hands behind her back.", "Dana clips a chain leash to Sarah's collar and ties the other end to "
+                 "the pipe.", "Sarah turns around and faces the wall.", m="\nhold: Sarah, a black leather collar")
+    runs = "Blonde-haired Sarah's leash is one single chain of a fixed length, and one end of it is clipped to the ring at the front " \
+           "of her collar at her throat. Its other end is padlocked to the pipe at one fixed point on it, {} Between them the chain " \
+           "hangs slack in one loose curve: from the ring at her throat it runs down across her chest to the side of her nearest the " \
+           "pipe, drops beside her to the floor, clear of her clothes, and lies loose along the floor, or along whatever she is on, all " \
+           "the way to the pipe. Anyone who comes near it steps over it or nudges it aside with a foot, and the chain only slides and " \
+           "settles. Its only fixed points are the ring at her collar and the pipe."
+    lines = lambda s: re.split(r"(?<=[.!?])\s+", s["prompt"])
+    mixed = [t for s in leash for t in lines(s) if re.search(r"\bleash\b", t) and re.search(r"\bcuffs?\b|\bhandcuffs\b|\bwrists?\b", t)]
+    first = [min(k for k, t in enumerate(lines(s)) if "leash is one single" in t)
+             < min(k for k, t in enumerate(lines(s)) if t.startswith("Blonde-haired Sarah's arms stay")) for s in leash[1:]]
+    check("a chain leash clipped to a collar and tied off is one leash from her collar to one fixed point on what it is padlocked "
+          "to, kept at the point it holds in the frame each shot opens on, never a chain wrapped round her neck or a rope, slack along "
+          "the floor whichever way she turns, and running on its own apart from her cuffs",
+          "a chain leash clipped to the collar around her neck, fastened to the pipe" in leash[1]["line"]
+          and "clips the chain to the ring at the front of blonde-haired Sarah's collar and padlocks its other end to the pipe"
+              in leash[1]["prompt"] and runs.format("and from the moment it is padlocked, the padlock hangs on its own there.")
+              in leash[1]["prompt"]
+          and runs.format("the same point as in the frame this shot opens on, where the padlock hangs on its own the whole shot.")
+              in leash[2]["prompt"]
+          and "two solid cuffs joined to each other by their own three short, rigid steel links, which hold them together, side by "
+              "side, every moment" in leash[2]["prompt"] and not mixed
+          and first == [True, True]
+          and not any(re.search(r"\brope\b|chains around her neck|wraps the chain", x["prompt"]) for x in leash)
+          and "clink and rattle" in leash[2]["sound"], [x["line"] for x in leash])
+    ring = plan("Dana buckles a leather collar around Sarah's neck, clips a chain leash to it and locks the other end of the leash to a "
+                "steel ring in the wall.", "Dana clips a leash to Sarah's collar. Dana ties the other end of the leash to the bedpost.")
+    check("a collar and its leash put on in one sentence are both read, and the same leash moved later stays one leash",
+          "hold: Sarah, a leather collar around her neck" in ring[0]["line"]
+          and "a chain leash clipped to the collar around her neck, fastened to the steel ring in the wall" in ring[0]["line"]
+          and "goes on: Sarah: a chain leash clipped to the collar around her neck, fastened to the bedpost." in ring[1]["line"]
+          and "steel ring" not in ring[1]["line"], [x["line"] for x in ring])
+    box = plan("Dana walks in carrying a small wooden box with a brass lock and sets it on the dresser.",
+               "Dana opens the box and takes out a black leather riding crop.", "Dana walks to the window and looks outside.",
+               "Dana turns back to the dresser and taps the crop against the box.")
+    kept = [[t for t in re.split(r"(?<=[.!?])\s+", x["prompt"]) if "looking exactly as it did" in t or "as the shot begins" in t]
+            for x in box]
+    check("an object brought in keeps its look and its place: named again, it is the same object where it was left, and out of the "
+          "beat it stays where it was",
+          kept[0] == [] and kept[1] == ["The box is the same small wooden box with a brass lock as before, on the dresser as the shot "
+                                        "begins."]
+          and "The small wooden box with a brass lock is still on the dresser, looking exactly as it did." in kept[2]
+          and any(re.fullmatch(r"The black leather riding crop is still in (?:black-haired )?Dana's hand, looking exactly as it did\.", t)
+                  for t in kept[2])
+          and any(re.fullmatch(r"The crop is the same black leather riding crop as before, in (?:black-haired )?Dana's hand as the shot "
+                               r"begins\.", t) for t in kept[3]), kept)
+    check("clothes, restraints, body parts, people, furniture and doors held open are not objects to keep",
+          not any(P._props(t, "", ["Sarah", "Dana"]) for t in (
+              "Dana takes off her blazer and drapes it over the chair.", "Dana takes Sarah's hand.", "Dana takes a deep breath.",
+              "Dana holds the door open.", "Dana picks up a roll of duct tape.", "Dana carries Sarah to the bed.",
+              "Dana places a blindfold over Sarah's eyes.", "Sarah holds the edge of the table.", "Dana puts a hand on her hip."))
+          and P._props("Dana hands Sarah a glass of water.", "", ["Sarah", "Dana"]) == {"glass": ("glass of water", None, "Sarah", "Dana")},
+          P._props("Dana holds the door open.", "", ["Sarah", "Dana"]))
+
+
+def test_leash_ends():
+    print("\n=== where the other end of a leash is ===")
+    mem = ("Sarah: a woman in her twenties with long blonde hair, in a white blouse and a short black pleated skirt.\n"
+           "Marcus: a man in his thirties with short dark hair, in a black t-shirt and blue jeans.\n"
+           "Mia: a woman in her thirties with short red hair, in a grey suit.\n")
+    run = lambda *b, m="hold: Sarah, a black leather collar": P.plan("A dim bedroom.\n\n" + "\n\n".join(b), mem + m)
+    note = lambda s: next((t for t in re.split(r"(?<=[.!?])\s+", s["prompt"]) if t.startswith("Its other end")), "")
+    clip = run("Marcus clips a chain leash to Sarah's collar.", "Marcus pulls Sarah across the room by the leash.")[0]
+    check("a leash clipped on with nothing to tie it to stays in the hand of whoever clipped it, and the picture is told so in every "
+          "shot",
+          "clips the chain to the ring at the front of blonde-haired Sarah's collar and keeps its other end in his hand"
+              in clip[0]["prompt"]
+          and all(note(s) == "Its other end is in dark-haired Marcus's hand the whole shot, and the chain runs from her throat straight to "
+                             "that hand." for s in clip) and "let go" not in clip[0]["prompt"], [note(s) for s in clip])
+    moves = [run(*b)[0] for b in (("Marcus clips a leash to Sarah's collar and hands the end to Mia.", "Mia leads Sarah to the window."),
+                                  ("Marcus clips a chain leash to Sarah's collar.", "Marcus drops the leash and steps back."),
+                                  ("Marcus clips a chain leash to Sarah's collar.", "Marcus walks out of the room.\nexit: Marcus",
+                                   "Sarah waits by the door."),
+                                  ("Marcus chains Sarah's collar to the ring in the wall.", "Marcus unhooks the leash from the ring and "
+                                   "leads Sarah to the bed."),
+                                  ("Marcus clips a chain leash to Sarah's collar and wraps it around his hand.", "Marcus holds the end of "
+                                   "the bed."))]
+    free = ("Its other end hangs free: the chain runs from her throat across her chest to one side of her and drops beside her to the "
+            "floor, where its loose end lies.")
+    check("the other end of a leash is handed over, dropped, let go of by whoever leaves and taken off a ring, and wrapping it round "
+          "a hand never puts a leash on him",
+          all(note(s).startswith("Its other end is in red-haired Mia's hand") for s in moves[0])
+          and note(moves[1][1]) == free and "lets go of the other end of blonde-haired Sarah's leash" in moves[1][1]["prompt"]
+          and "lets go of the other end of blonde-haired Sarah's leash" in moves[2][1]["prompt"] and note(moves[2][2]) == free
+          and "unfastens the other end of blonde-haired Sarah's leash from the ring in the wall and takes it in his hand"
+              in moves[3][1]["prompt"] and note(moves[3][1]).startswith("Its other end is in dark-haired Marcus's hand")
+          and "Marcus: a chain leash" not in moves[4][0]["line"] and "his collar" not in moves[4][0]["prompt"]
+          and all(note(s).startswith("Its other end is in dark-haired Marcus's hand") for s in moves[4]),
+          [[note(s) for s in m] for m in moves])
+    kept = run("Marcus pulls Sarah by the leash.", m="hold: Sarah, a black leather collar with a chain leash")
+    sheet = P.plan("A dim bedroom.\n\nMarcus pulls Sarah by the leash.", mem.replace("pleated skirt.", "pleated skirt, a black leather "
+                                                                                    "collar with a chain leash."))
+    check("a collar with a leash, written in a hold line or in the character's own description, is a collar and a leash, and the leash "
+          "is read when someone takes it",
+          "on: Sarah: a black leather collar., goes on: Sarah: a chain leash clipped to the collar around her neck, its other end held by "
+          "Marcus." in kept[0][0]["line"]
+          and note(kept[0][0]).startswith("Its other end is in dark-haired Marcus's hand") and not kept[1]
+          and note(sheet[0][0]).startswith("Its other end is in dark-haired Marcus's hand") and not sheet[1],
+          [kept[0][0]["line"], kept[1], sheet[1]])
+    tie = "Marcus clips a chain leash to Sarah's collar and fastens the other end to the radiator."
+    cuffs = run(tie, "Marcus takes a pair of handcuffs out of the drawer.", "Marcus walks around Sarah.",
+                "Marcus cuffs Sarah's wrists behind her back.", "Marcus unhooks the chain from the radiator.")[0]
+    back = run(tie, "Marcus shows Sarah a pair of handcuffs and puts them back in the drawer.", "Marcus walks around Sarah.")[0]
+    loose = "The handcuffs in this shot are a separate, small pair of their own: two rigid steel cuffs joined to each other by their own " \
+            "three short, rigid steel links, which hold them together, side by side, every moment."
+    check("handcuffs brought out near a fastened leash are their own separate pair until they go on or are put away, the leash stays "
+          "fastened while they lock on, and unhooking the chain from where it is fastened takes it off there",
+          [loose in s["prompt"] for s in cuffs + back] == [False, True, True, False, False, False, True, False]
+          and "Dark-haired Marcus takes a separate pair of small steel handcuffs in his hand, steps behind blonde-haired Sarah, takes "
+              "both of her wrists and draws her arms back behind her, then closes one cuff around her left wrist with a click, then the "
+              "other around her right wrist, there at the small of her back, where her body hides her hands from the front."
+              in cuffs[3]["prompt"]
+          and all(note(s).startswith("Its other end is padlocked to the radiator") for s in cuffs[:4])
+          and "unfastens the other end of blonde-haired Sarah's leash from the radiator" in cuffs[4]["prompt"]
+          and note(cuffs[4]).startswith("Its other end is in dark-haired Marcus's hand"),
+          [[note(s), loose in s["prompt"]] for s in cuffs + back])
+    drawer = run(tie, "Marcus opens the top drawer of the nightstand and takes out a crop.", "Marcus walks around Sarah.",
+                 "Marcus closes the drawer.", "Sarah kneels.")[0]
+    wardrobe = run("Marcus clips a chain leash to Sarah's collar.", "Marcus opens the wardrobe.", "Marcus kicks the wardrobe door shut.")[0]
+    moved = [next((t for t in re.split(r"(?<=[.!?])\s+", s["prompt"]) if " moves " in t), "") for s in drawer + wardrobe]
+    path = "blonde-haired Sarah's leash stays one unbroken chain from the ring at her collar to the radiator, and if the top drawer " \
+           "meets it, it only pushes the slack aside."
+    check("a drawer, door or lid opened near a fastened or held leash moves only itself, while it opens, stays open and closes, and the "
+          "leash stays one unbroken chain between its two ends",
+          moved[:5] == ["", f"Opening the top drawer moves only the top drawer: {path}",
+                        f"The top drawer stays open and moves nothing else: {path}",
+                        f"Closing the top drawer moves only the top drawer: {path}", ""]
+          and moved[6].startswith("Opening the wardrobe moves only the wardrobe: blonde-haired Sarah's leash stays one unbroken chain from "
+                                  "the ring at her collar to dark-haired Marcus's hand")
+          and moved[7].startswith("Closing the wardrobe") and moved[5] == "", moved)
+    said = lambda s: next((t for t in re.split(r"(?<=[.!?])\s+", s["prompt"]) if t.startswith(("Between them", "Pulled taut"))), "")
+    walk = run(tie, "Marcus walks slowly around Sarah.", "Sarah strains against the chain.", "Sarah kneels.")[0]
+    hook = run("Marcus clips a chain leash to Sarah's collar and fastens the other end to a hook in the ceiling.")[0]
+    check("a fastened chain leash lies slack along the floor for anyone to step over, runs taut only while the beat pulls it tight, "
+          "and hangs down from a ceiling hook",
+          [said(s).split(":")[0] for s in walk] == ["Between them the chain hangs slack in one loose curve"] * 2 + [
+              "Pulled taut, the chain runs in a straight line from her throat to the radiator",
+              "Between them the chain hangs slack in one loose curve"]
+          and "steps over it" in walk[1]["prompt"] and "padlocks its other end to the radiator" in walk[0]["prompt"]
+          and said(hook[0]) == "Between them the chain hangs down from the hook in the ceiling to her throat in a slack curve.",
+          [said(s) for s in walk + hook])
+    post = run("Marcus cuffs Sarah's wrists to the bedpost.", "Sarah tugs at the cuffs.", "cut\nSarah waits.")[0]
+    point = [next((t for t in re.split(r"(?<=[.!?])\s+", s["prompt"]) if "fixed point" in t), "") for s in post]
+    cuffed = "Her handcuffs are locked to the bedpost at one fixed point on it"
+    check("wrists or ankles fastened to anything stay at one fixed point on it, the point it holds in the frame each continued shot "
+          "opens on", point == [f"{cuffed}, and that point stays the same from the moment they are on.",
+                                f"{cuffed}, the same point as in the frame this shot opens on, for the whole shot.",
+                                f"{cuffed} for the whole shot."], point)
+
+
+def test_kitchen():
+    print("\n=== everyday objects follow what is done with them ===")
+    mem = ("Sarah: a woman in her twenties with long blonde hair, in a white blouse and a short black pleated skirt.\n"
+           "Dana: a woman in her thirties with short black hair, in a black blazer and grey trousers.\n")
+    run = lambda *b: P.plan("A small kitchen with a sink under the window and a long counter beside it.\n\n" + "\n\n".join(b), mem)[0]
+    said = lambda s, w: [t for t in re.split(r"(?<=[.!?])\s+", s["prompt"]) if w in t]
+    plates = run("Sarah puts the dirty plates on the counter and washes them in the sink.", "Sarah dries her hands on a towel.")
+    pan = run("Sarah picks up a dirty pan and scrubs it in the sink.", "Sarah sets the pan on the drying rack.", "Sarah wipes her hands.")
+    handed = run("Sarah takes a plate from the counter and washes it in the sink.", "Sarah hands the plate to Dana.")
+    sink = run("Sarah bends over the sink to wash the dishes.", "Dana watches from the doorway.")
+    one = [said(x, "There is only") for x in plates + run("Sarah walks in.") + P.plan("A hotel bathroom with two sinks and a bathtub.\n\n"
+                                                                                     "Sarah washes her face.", mem)[0]]
+    check("the place's one sink, counter, bed or desk is said to be the only one, always in the same spot, and nothing written in the "
+          "plural is", one == [["There is only one sink and one counter here, each always in the same spot."]] * 3
+          + [["There is only one bathtub here, always in the same spot."]], one)
+    check("an object goes where the beat puts it next, a washed thing is not kept dirty, an object the beat moves is only said to start "
+          "where it was, and bending over a sink is not lying across it",
+          said(plates[1], "plates") == ["The plates are still in the sink, looking exactly as they did."]
+          and said(pan[1], "pan") == ["Sarah sets the pan on the drying rack.", "The pan is in the sink as the shot begins."]
+          and said(pan[2], "pan") == ["The pan is still on the drying rack, looking exactly as it did."]
+          and said(handed[1], "plate") == ["Sarah hands the plate to Dana.", "The plate is in the sink as the shot begins."]
+          and said(sink[1], "bent") == ["Blonde-haired Sarah stays bent over the sink for the whole shot, holding that position from the "
+                                        "first frame to the last."], [said(plates[1], "plates"), said(pan[1], "pan"),
+                                                                      said(handed[1], "plate"), said(sink[1], "bent")])
+
+
+def test_fixes5():
+    print("\n=== leashes, timing, toys and the look of restraints ===")
+    mem = ("Sarah: a woman in her twenties with long blonde hair, in a white tank top and denim shorts.\n"
+           "Dana: a woman in her thirties with short black hair, in a black blazer and grey trousers.\n")
+    last = lambda b, m="": P.plan("A dim basement.\n\nDana cuffs Sarah's hands behind her back.\n\n" + b + "\n\nSarah turns around.",
+                                  mem + m)[0][-1]
+    collar = "hold: Sarah, a black leather collar"
+    leashes = [last(b, m) for b, m in (("Dana puts a collar on Sarah and chains it to the wall.", ""),
+                                       ("Dana attaches a chain to Sarah's collar and padlocks it to the radiator.", collar),
+                                       ("Dana hooks a chain leash onto Sarah's collar and loops the end around the bedpost.", collar),
+                                       ("Dana fastens the leash to a hook on the wall.",
+                                        collar + "\nhold: Sarah, a chain leash clipped to her collar"),
+                                       ("Dana snaps a leash onto Sarah's collar and hands the end to Mia.", collar))]
+    check("a chain from a collar is a leash from her collar, however it is written, and never a chain on her wrists or a collar round "
+          "her wrists",
+          [re.search(r"leash clipped to (?:the collar around her neck|her collar)(?:, fastened to ([^;.]+))?", x["line"]).group(1)
+           for x in leashes] == ["the wall", "the radiator", "the bedpost", "the hook on the wall", None]
+          and not any(re.search(r"chains around her wrists|collar around her wrists|The chains on", x["prompt"]) for x in leashes)
+          and P.parts("a chain leash clipped to her collar") == {"neck"}, [x["line"] for x in leashes])
+    gagged = mem + "hold: Sarah, a ball gag in her mouth"
+    cues = [P.plan("A cellar.\n\n" + b, gagged)[0][-1]["cues"][0][0] for b in (
+        "Dana raises the riding crop and brings it down across Sarah's thighs, and Sarah screams into her gag.",
+        "Sarah screams into her gag as Dana brings the crop down.")]
+    told = P.plan("A cellar.\n\nDana slaps Sarah across the face, and Sarah gasps, \"Please stop.\"", mem)[0][-1]
+    check("a reaction waits for what causes it: a scream after a blow in the same sentence, or one written 'as' the blow lands, starts "
+          "after the blow, and the picture is told every reaction comes after its cause",
+          all(c > 1.5 for c in cues) and told["cues"][0][0] > 1.5
+          and "every reaction comes only after what causes it" in told["prompt"], (cues, told["cues"]))
+    toys = P.plan("A hotel room.\n\nDana takes a pink wand vibrator out of her bag and switches it on.\n\nDana presses the wand against "
+                  "Sarah's thigh and Sarah gasps.\n\nDana clips a pair of nipple clamps with a chain between them to Sarah's nipples."
+                  "\n\nDana steps back and watches.\n\nDana bends Sarah over the bed and picks up a wooden paddle.\n\nDana spanks "
+                  "Sarah.", mem)[0]
+    kept = [[t for t in re.split(r"(?<=[.!?])\s+", x["prompt"]) if "looking exactly as" in t or "as the shot begins" in t] for x in toys]
+    check("toys and bondage gear keep their look and place: the wand is the same vibrator still in her hand, clamps stay on, and an "
+          "object taken up after bending someone over is in the doer's hand",
+          any(re.search(r"The vibrator is the same pink wand vibrator as before, in (?:black-haired )?Dana's hand as the shot begins", t)
+              for t in kept[1])
+          and "The pair of nipple clamps with a chain are still on Sarah's nipples, looking exactly as they did." in kept[3]
+          and not any("vibrator" in t for t in kept[3])
+          and any(re.search(r"wooden paddle is still in (?:black-haired )?Dana's hand", t) for t in kept[5]), kept)
+    looks = {b: P.plan("A room.\n\n" + b, mem)[0][-1] for b in (
+        "Dana pushes a red ball gag into Sarah's mouth and buckles it behind her head.", "Dana buckles black leather cuffs around Sarah's "
+        "wrists behind her back.", "Dana ties Sarah's wrists with red rope.",
+        "Dana fastens padded leather ankle cuffs around Sarah's ankles.")}
+    items = [re.search(r"goes on: Sarah: (.*?)\.(?:,|$)", x["line"]).group(1) for x in looks.values()]
+    soft = list(looks.values())
+    check("a restraint keeps its colour and material, and soft cuffs are buckled leather, never rigid steel handcuffs",
+          items == ["a red ball gag in her mouth", "black leather cuffs behind her back", "red rope around her wrists behind her back",
+                    "padded leather cuffs on her ankles"]
+          and "rigid steel" not in soft[1]["prompt"] and "rigid steel" not in soft[3]["prompt"]
+          and "buckles one cuff around blonde-haired Sarah's left wrist, then the other around her right wrist, and clips them together"
+              in soft[1]["prompt"],
+          items)
+
+
 def test_render():
     print("\n=== the shot chain ===")
     prompt = "A room.\n\nDana waits.\n\nSarah walks in.\n\n\"Sit,\" Dana says.\n\ncut\n\nSarah drives."
@@ -1618,6 +2574,10 @@ def test_render():
           "line the room's own sound",
           [c["shot"] for c in calls["sample"] if not c["audio_only"]] == [1, 2, 3, 4]
           and [c["shot"] for c in calls["sample"] if c["audio_only"]] == [1, 2, 3, 4] and abs(sum(talk) - 1) < 0.02, calls["sample"])
+    check("every audio-only pass is given the shot's own sound, never the picture's text with its character sheets and notes",
+          all(c["text"].startswith("integrated_multimodal_description: [Shot 1] A room.") and c["text"].endswith("non_diegetic_music: N/A")
+              and " hair" not in c["text"] for c in calls["sample"] if c["audio_only"])
+          and all(" hair" in c["text"] for c in calls["sample"] if not c["audio_only"]), [c["text"][:70] for c in calls["sample"]])
     check("stray voices are taken out of every shot, around the line in a shot with one and from all of a shot with none, but never "
           "out of a shot that calls for a voice",
           [k for k, _ in calls["gate"]] == [1, 2, 3, 4] and [len(keep) for _, keep in calls["gate"]] == [0, 0, 1, 0]
@@ -1645,16 +2605,45 @@ def test_render():
           and "<Picture 2> is this same place a little earlier, with Dana in view: Dana looks exactly as there on coming back into view."
           in calls["build"][3]["text"] and "an earlier frame with Dana in view went in" in out[2]
           and all(c["memory"] is None for c in away), ([c["memory"] is not None for c in calls["build"] + away], out[2]))
+    new = render("A room.\n\nSarah waits alone.\n\nDana walks in and stops in front of Sarah.", dwpose=True, counts=(1, 1))[1]["build"]
+    check("someone coming into the scene for the first time gets no earlier frame, since none of them has them in view",
+          [c["memory"] is None for c in new] == [True, True] and "a little earlier" not in new[1]["text"], [c["memory"] for c in new])
     out, calls = render("A room.\n\nDana and Sarah sit.\n\nDana looks away.\n\nSarah looks at Dana.", dwpose=True, counts=(2, 1, 2),
                         blind=True, ref_image_1=IMG)
     check("on a model not trained on pictures every shot still gets the picture, and no earlier frame goes in",
           [len(c["refs"]) for c in calls["build"]] == [1, 1, 1] and all(c["memory"] is None for c in calls["build"])
           and "no earlier frame of the scene is fed back in" in out[2], ([len(c["refs"]) for c in calls["build"]], out[2]))
+    native, node.NATIVE["16:9"] = node.NATIVE["16:9"], (96, 64)
+    try:
+        out, calls = render("A room.\n\nDana waits.", megapixels=2.0)
+    finally:
+        node.NATIVE["16:9"] = native
+    sizes = {(r, m): node.frame_size(r, m) for r, m in (("1:1", 1.0), ("4:3", 1.0), ("16:9", 1.5), ("16:9", 0.5))}
+    check("the model always renders inside H3's own canvas, short edge 768 and no more than 768x1344, and a bigger size asked for "
+          "is reached by scaling the finished frames up, so the scene is never repeated or mirrored across a frame too big for it",
+          sizes == {("1:1", 1.0): ((768, 768), (768, 768)), ("4:3", 1.0): ((1024, 768), (1024, 768)),
+                    ("16:9", 1.5): ((1344, 768), (1632, 928)), ("16:9", 0.5): ((960, 544), (960, 544))}
+          and all((c["w"], c["h"]) == (96, 64) for c in calls["build"]) and tuple(out[0].shape[1:3]) == (96, 128)
+          and "96x64, scaled up to 128x96 after rendering" in out[2], (sizes, tuple(out[0].shape), out[2][:80]))
     out, calls = render("A room.\n\nDana tapes Sarah's mouth shut.\n\n\"Help!\" Sarah screams into the tape.")
     muffled = [c for c in calls["sample"] if c["shot"] == 2]
     check("a taped scream is rendered silent, given sound in its own short window, and the rest of the shot gets the room's own sound",
           len(muffled) == 3 and muffled[0]["heard"] == 0 and all(c["audio_only"] for c in muffled[1:]) and 0 < muffled[1]["heard"] < 0.5
           and abs(muffled[1]["heard"] + muffled[2]["heard"] - 1) < 0.02, muffled)
+    check("the scream's own window and the rest of its shot share one sound, with her muffled sounds and none of her words",
+          muffled[1]["text"] == muffled[2]["text"] and "Sarah lets out muffled, closed-mouth mmmph sounds through the" in muffled[1]["text"]
+          and "Help" not in muffled[1]["text"], muffled[1]["text"])
+    voice = torch.tensor([0.95, 0.7, 0.3, 0.0])
+    out, calls = render("A room.\n\nDana waits.\n\n\"Sit,\" Dana says.", fine=(torch.linspace(1, 0, 9), voice))
+    talk = [c for c in calls["sample"] if c["shot"] == 2]
+    check("on a few-step schedule each spoken line is said again over its own window from part-way down a finer schedule, with the "
+          "shot's own text, and the sound passes run on the finer schedule from the start",
+          [c["steps"] for c in calls["sample"] if c["shot"] == 1] == [8, 8] and [c["audio_only"] for c in talk] == [False, True, True]
+          and abs(talk[1]["start"] - 0.95) < 1e-6 and talk[1]["steps"] == 3 and talk[1]["text"] == talk[0]["text"]
+          and "<d>Sit</d>" in talk[1]["text"]
+          and 0 < talk[1]["heard"] < 0.5 and talk[2]["start"] == 1.0 and talk[2]["steps"] == 8
+          and abs(talk[1]["heard"] + talk[2]["heard"] - 1) < 0.02 and talk[2]["text"].startswith("integrated_multimodal_description"),
+          talk)
     out, calls = render("A room.\n\nDana waits.", foley_resolution="off", plan_only=False)
     check("foley off renders each beat once", len(calls["sample"]) == 1)
     sent = []
@@ -1677,6 +2666,7 @@ def main():
     test_reading()
     test_speech()
     test_hands()
+    test_sex()
     test_bodies()
     test_pronouns()
     test_extras()
@@ -1688,14 +2678,23 @@ def main():
     test_lengths()
     test_pace()
     test_models()
+    test_flash()
     test_chain()
     test_overlay()
     test_ankles()
+    test_positions()
+    test_worn()
     test_undress_bound()
     test_skirts()
+    test_anchors()
+    test_marks()
     test_belt()
     test_apart()
     test_links()
+    test_holds()
+    test_fixes5()
+    test_leash_ends()
+    test_kitchen()
     test_render()
     print("\nRESULT: " + (f"{len(_fails)} FAILURE(S): " + "; ".join(_fails) if _fails else "ALL PASSED"))
 
