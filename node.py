@@ -106,7 +106,7 @@ class H3LongVideos:
         model, steps, sampler_name, sigmas, fine, notes = modelprep.prepare(model, steps, sampler_name, scheduler, sigmas,
                                                                             shift_video, shift_audio, graph, unique_id)
         info += notes
-        foley_sigmas, voice_sigmas = fine or (sigmas, None)
+        foley_sigmas, voice_sigmas = fine
         negative = clip.encode_from_tokens_scheduled(clip.tokenize(""))
         total = sum(s["frames"] - (1 if s["keyed"] and i else 0) for i, s in enumerate(shots))
         detector = faces.Detector() if faces.available() else None
@@ -141,16 +141,14 @@ class H3LongVideos:
                 chain.make_room(model, latent)
                 out = chain.sample(model, cond, negative, latent, seed, steps, sampler_name, scheduler, sigmas)
                 took.append(time.perf_counter())
-                if scale and voice_sigmas is not None and lines:
-                    chain.make_room(model, latent)
-                    out = chain.foley(model, cond, negative, latent, out, seed, steps, sampler_name, scheduler, voice_sigmas, scale,
-                                      lines)
                 if scale and (shot["silent"] or lines):
                     sound, cued = clip.encode_from_tokens_scheduled(clip.tokenize(shot["sound"])), lines + muffles
-                    for windows in [muffles] * bool(muffles) + [chain.gaps(cued, shot["frames"] / planner.FPS) if cued else None]:
+                    gaps = chain.gaps(cued, shot["frames"] / planner.FPS) if cued else None
+                    after = [g for g in gaps or [] if any(abs(g[0] - b) < 1e-3 for _, b in lines)]
+                    for say, sig, windows in [(sound, foley_sigmas, gaps)] + [(sound, foley_sigmas, muffles)] * bool(muffles) + \
+                            [(cond, voice_sigmas, lines)] * bool(lines) + [(sound, foley_sigmas, after)] * bool(after):
                         chain.make_room(model, latent)
-                        out = chain.foley(model, sound, negative, latent, out, seed, steps, sampler_name, scheduler, foley_sigmas,
-                                          scale, windows)
+                        out = chain.foley(model, say, negative, latent, out, seed, steps, sampler_name, scheduler, sig, scale, windows)
                 took.append(time.perf_counter())
                 del cond, latent
                 imgs, wave, sr = chain.decode(vae, audio_vae, out, keep=(vae, audio_vae))

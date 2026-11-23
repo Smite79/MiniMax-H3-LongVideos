@@ -4,7 +4,6 @@
 # This notice may not be removed or altered. See LICENSE.
 
 import contextlib
-import importlib
 import importlib.util
 import io
 import os
@@ -12,10 +11,9 @@ import sys
 
 import numpy as np
 import torch
+import comfy.model_management as mm
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-AUX_SRC = os.path.normpath(os.path.join(_HERE, "..", "comfyui_controlnet_aux", "src"))
-AUX_CKPTS = os.path.normpath(os.path.join(_HERE, "..", "comfyui_controlnet_aux", "ckpts"))
+AUX = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "comfyui_controlnet_aux"))
 DET = ("hr16/yolox-onnx", "yolox_l.torchscript.pt")
 POSE = ("hr16/DWPose-TorchScript-BatchSize5", "dw-ll_ucoco_384_bs5.torchscript.pt")
 CONF = 0.3
@@ -23,27 +21,19 @@ NOSE, NECK, RSHO, LSHO, REYE, LEYE, REAR, LEAR = 0, 1, 2, 5, 14, 15, 16, 17
 CROP_HALF, CROP_UP = 0.9, 0.25
 
 
-def _aux():
+def available():
     try:
-        if importlib.util.find_spec("custom_controlnet_aux") is None and os.path.isdir(AUX_SRC):
-            sys.path.append(AUX_SRC)
+        if importlib.util.find_spec("custom_controlnet_aux") is None and os.path.isdir(os.path.join(AUX, "src")):
+            sys.path.append(os.path.join(AUX, "src"))
             importlib.invalidate_caches()
-        return importlib.util.find_spec("custom_controlnet_aux") is not None
+        if importlib.util.find_spec("custom_controlnet_aux") is None:
+            return False
     except (ImportError, ValueError):
         return False
-
-
-def paths():
-    root = os.environ.get("AUX_ANNOTATOR_CKPTS_PATH") or AUX_CKPTS
-    try:
+    root = os.environ.get("AUX_ANNOTATOR_CKPTS_PATH") or os.path.join(AUX, "ckpts")
+    with contextlib.suppress(Exception):
         root = str(importlib.import_module("custom_controlnet_aux.util").annotator_ckpts_path or root)
-    except Exception:
-        pass
-    return tuple(os.path.join(root, repo, fn) for repo, fn in (DET, POSE))
-
-
-def available():
-    return _aux() and all(os.path.isfile(p) for p in paths())
+    return all(os.path.isfile(os.path.join(root, *f)) for f in (DET, POSE))
 
 
 @contextlib.contextmanager
@@ -64,18 +54,15 @@ def _offline():
 
 
 class Detector:
-
     def __init__(self):
         self.est = None
 
     def people(self, frame):
-        import comfy.model_management as mm
         if self.est is None:
             from custom_controlnet_aux.dwpose import DwposeDetector
             with _offline():
-                det = DwposeDetector.from_pretrained(POSE[0], DET[0], det_filename=DET[1], pose_filename=POSE[1],
-                                                     torchscript_device=mm.get_torch_device())
-            self.est = det.dw_pose_estimation
+                self.est = DwposeDetector.from_pretrained(POSE[0], DET[0], det_filename=DET[1], pose_filename=POSE[1],
+                                                          torchscript_device=mm.get_torch_device()).dw_pose_estimation
         for m in (self.est.det, self.est.pose):
             m.to(mm.get_torch_device())
         img = np.ascontiguousarray(frame[..., :3].detach().float().clamp(0, 1).mul(255).round().to(torch.uint8).cpu().numpy())
@@ -85,8 +72,8 @@ class Detector:
 
     def close(self):
         if self.est is not None:
-            for m in (self.est.det, self.est.pose):
-                m.to("cpu")
+            self.est.det.to("cpu")
+            self.est.pose.to("cpu")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 

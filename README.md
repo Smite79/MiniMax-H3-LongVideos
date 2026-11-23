@@ -72,13 +72,16 @@ exit: Dana
 
 - A first paragraph that names none of your characters and has no quotes is the scene, kept at the top of every shot. Text
   in `anchor` is kept there too.
-- `cut` on its own line starts the next shot fresh instead of on the last frame.
+- `cut` on its own line starts the next shot fresh instead of on the last frame. A paragraph right after it that names
+  none of your characters and has no quotes is a new scene, kept at the top of every shot from there on.
 - A `seconds: 12` line in a beat sets that shot's length.
-- A tag line under a beat says outright what happens, instead of leaving it to the node to read:
+- A tag line under a beat says outright what happens, instead of leaving it to the node to read. Without one, the node reads
+  only plain, common wording, says in `info` what it read, and asks for a tag line whenever it cannot tell:
 
 | tag | |
 |---|---|
-| `hold: Name, item` | the item goes on in this shot and stays on |
+| `hold: Name, item` | the item goes on in this shot and stays on; "chained to …" or "held by Name" says where its end is |
+| `pose: Name, pose` | the pose ("kneeling on the bed") holds from this shot until another pose is set |
 | `release: Name, item` | the item comes off; `release: Name` takes everything off |
 | `remove: Name, garment` | the garment comes off |
 | `wear: Name, garment` | the garment goes on, or back into place |
@@ -88,7 +91,7 @@ exit: Dana
 | `unmark: Name, mark` | the mark comes off; `unmark: Name` takes every mark off |
 | `exit: Name` | the person leaves and is out of the shots after |
 
-A `hold:` or `mark:` line in `character_memory` puts the item or mark on from the first shot.
+A `hold:`, `mark:` or `pose:` line in `character_memory` applies from the first shot.
 
 ## How to wire it up
 

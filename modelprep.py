@@ -3,6 +3,7 @@
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
 
+import contextlib
 import copy
 import functools
 import inspect
@@ -16,14 +17,12 @@ import comfy.utils
 import comfy.patcher_extension as pe
 from comfy.ldm.minimax.model import TimeEmbedder, time_shift_sigma
 
-PDD_KEY = "minimax_h3_pdd_acc"
-PDD_NODE = "MiniMaxH3PDDAccApply"
-FAST_SHIFT = 10.0
+PDD_KEY, PDD_NODE = "minimax_h3_pdd_acc", "MiniMaxH3PDDAccApply"
+FAST_SHIFT, FINE_BELOW, REVOICE_FROM = 10.0, 6, 0.88
 HYPERFLOW = {"sigmas": (1.0, 0.931506, 0.839236, 0.703462, 0.5, 0.296538, 0.160764, 0.068494, 0.0), "video": 12.0, "audio": 3.0}
 FLASH = {4: (1.0, 0.681872, 0.205019, 0.036496, 0.0), 6: (1.0, 0.825217, 0.471725, 0.147401, 0.049626, 0.015517, 0.0),
          8: HYPERFLOW["sigmas"]}
 FLASH_KEYS = {"endpoint_time_embedder.proj_in.weight", "hyperflow_sigmas"}
-FINE_BELOW, REVOICE_FROM = 6, 0.88
 RECIPES = {"flashgen": {"grid": (1.0, 0.7, 0.4, 0.15, 0.0), "sampler": "euler", "video": 12.0, "audio": 3.0},
            "dmad": {"steps": 4, "sampler": "lcm", "video": 12.0, "audio": 2.0}}
 SPEED = re.compile(r"\d+[\s_-]?(?:to[\s_-]?\d+[\s_-]?)?steps?|turbo|lightning|distill|lcm", re.I)
@@ -51,19 +50,18 @@ def full_path(kind, name):
 
 
 def upstream(graph, node_id):
-    seen, todo, out = set(), [str(node_id)], []
+    start, seen, todo, out = str(node_id), set(), [str(node_id)], []
     while todo and isinstance(graph, dict):
         nid = todo.pop(0)
         if nid in seen or not isinstance(graph.get(nid), dict):
             continue
         seen.add(nid)
         inputs = graph[nid].get("inputs") or {}
-        if nid != str(node_id):
+        if nid != start:
             out.append(inputs)
             if any(k in CHECKPOINT_KEYS and isinstance(v, str) for k, v in inputs.items()):
                 break
-        todo += [str(v[0]) for k, v in inputs.items() if isinstance(v, list) and len(v) == 2
-                 and (k == "model" or nid != str(node_id))]
+        todo += [str(v[0]) for k, v in inputs.items() if isinstance(v, list) and len(v) == 2 and (k == "model" or nid != start)]
     return out
 
 
@@ -99,10 +97,8 @@ def loras(graph, node_id=None):
         if isinstance(v, str) and v in known:
             found.extend([v] if on else [])
         elif isinstance(v, str) and v[:1] in "[{":
-            try:
+            with contextlib.suppress(ValueError):
                 walk(json.loads(v), on)
-            except ValueError:
-                pass
         elif isinstance(v, dict):
             on = on and v.get("on") is not False and v.get("enabled") is not False and not any(
                 v.get(k) in (0, 0.0) for k in ("str", "strength", "strength_model"))
@@ -111,22 +107,18 @@ def loras(graph, node_id=None):
         elif isinstance(v, list) and not (len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], int)):
             for x in v:
                 walk(x, on)
+
     for inputs in upstream(graph, node_id) if node_id is not None else [
             n.get("inputs") or {} for n in (graph or {}).values() if isinstance(n, dict)]:
         walk(inputs)
     return list(dict.fromkeys(found))
 
 
-def _audio(vae):
-    if isinstance(getattr(vae, "upscale_ratio", None), (tuple, list)):
-        return False
-    return True if getattr(vae, "audio_sample_rate", None) or getattr(vae, "audio_sample_rate_output", None) else None
-
-
 def check_vaes(vae, audio_vae):
-    if _audio(audio_vae) is False:
+    video = lambda v: isinstance(getattr(v, "upscale_ratio", None), (tuple, list))
+    if video(audio_vae):
         raise RuntimeError("audio_vae is a video VAE: wire the MiniMax-H3 audio VAE into audio_vae.")
-    if _audio(vae):
+    if not video(vae) and (getattr(vae, "audio_sample_rate", None) or getattr(vae, "audio_sample_rate_output", None)):
         raise RuntimeError("vae is the audio VAE: the video and audio VAE inputs are swapped.")
     stage = getattr(vae, "first_stage_model", None)
     if stage is not None and hasattr(stage, "decoder") and not hasattr(stage, "encoder"):
@@ -145,8 +137,7 @@ class LowRank(torch.nn.Module):
             self.register_parameter(f"up{i}", torch.nn.Parameter(up, requires_grad=False))
 
     def forward(self, x):
-        cast = lambda w: w if w.device == x.device and w.dtype == x.dtype else w.to(device=x.device, dtype=x.dtype)
-        out = [torch.nn.functional.linear(torch.nn.functional.linear(x, cast(getattr(self, f"down{i}"))), cast(getattr(self, f"up{i}")))
+        out = [torch.nn.functional.linear(torch.nn.functional.linear(x, getattr(self, f"down{i}").to(x)), getattr(self, f"up{i}").to(x))
                for i in range(self.count)]
         return out[0] if self.count == 1 else torch.cat(out, dim=-1)
 
@@ -240,8 +231,7 @@ def partial(model, graph, node_id):
             return []
     except Exception:
         return []
-    return [os.path.basename(n) for n in loras(graph, node_id)
-            if any("time_embedder" in k for k in meta(full_path("loras", n))[0])]
+    return [os.path.basename(n) for n in loras(graph, node_id) if any("time_embedder" in k for k in meta(full_path("loras", n))[0])]
 
 
 def hyperflow(model, graph):
@@ -255,11 +245,13 @@ def hyperflow(model, graph):
         if not name:
             return None
         info = meta(full_path("loras", name))[1]
+
     def num(key, default):
         try:
             return float(info.get(key) or default)
         except (TypeError, ValueError):
             return default
+
     try:
         grid = tuple(float(x) for x in json.loads(info.get("hyperflow_sigmas") or "null"))
     except (TypeError, ValueError):
@@ -277,21 +269,19 @@ def flash(model, graph, node_id, steps):
     path = "" if on else model_file(graph, node_id)[1]
     if not on and not (path and FLASH_KEYS & meta(path)[0]):
         return None
-    n = min(FLASH, key=lambda k: abs(k - int(steps)))
-    return {"grid": FLASH[n], "fine": FLASH[8], "video": HYPERFLOW["video"], "audio": HYPERFLOW["audio"], "sampler": "euler",
-            "source": "HyperFlow H3 Flash"}
+    return {"grid": FLASH[min(FLASH, key=lambda k: abs(k - int(steps)))], "fine": FLASH[8], "video": HYPERFLOW["video"],
+            "audio": HYPERFLOW["audio"], "sampler": "euler", "source": "HyperFlow H3 Flash"}
 
 
 def speed_recipe(graph, node_id):
-    for n in loras(graph):
+    names = loras(graph)
+    for n in names:
         said = str(meta(full_path("loras", n))[1].get("sampling", ""))
         steps = re.search(r"(\d+)\s*steps?\b", said, re.I)
-        shift = lambda kind: re.search(rf"{kind}\s+shift\s*([\d.]+)", said, re.I)
         if steps:
-            return {"steps": int(steps.group(1)), "source": os.path.basename(n),
-                    "video": float(shift("video").group(1)) if shift("video") else None,
-                    "audio": float(shift("audio").group(1)) if shift("audio") else None,
-                    "sampler": "lcm" if re.search(r"re-?noise", said, re.I) else "euler"}
+            video, audio = (re.search(rf"{k}\s+shift\s*([\d.]+)", said, re.I) for k in ("video", "audio"))
+            return {"steps": int(steps.group(1)), "source": os.path.basename(n), "video": video and float(video.group(1)),
+                    "audio": audio and float(audio.group(1)), "sampler": "lcm" if re.search(r"re-?noise", said, re.I) else "euler"}
         known = next((r for k, r in RECIPES.items() if k in n.lower()), None)
         if known:
             return dict(known, source=os.path.basename(n))
@@ -299,7 +289,7 @@ def speed_recipe(graph, node_id):
     merged = next((r for k, r in RECIPES.items() if k in f"{name} {sources}".lower()), None)
     if merged:
         return dict(merged, source=f"{os.path.basename(name)} (speed model merged in)")
-    speed = next((n for n in loras(graph) if SPEED.search(os.path.basename(n))), "") or next(
+    speed = next((n for n in names if SPEED.search(os.path.basename(n))), "") or next(
         (x for x in sources.split() if SPEED.search(os.path.basename(x))), "")
     return {"sampler": "euler", "source": os.path.basename(speed)} if speed else None
 
@@ -324,15 +314,17 @@ def set_shift(model, video, audio):
     return m
 
 
+def schedule(model, scheduler, steps):
+    return [float(s) for s in comfy.samplers.calculate_sigmas(model.get_model_object("model_sampling"), scheduler, steps)]
+
+
 def finer(model, steps, scheduler, sigmas, video, audio, grid=None):
-    base = [float(s) for s in (sigmas if sigmas is not None else
-                               comfy.samplers.calculate_sigmas(model.get_model_object("model_sampling"), scheduler, steps))]
-    if len(base) - 1 >= FINE_BELOW:
-        return None
+    base = [float(s) for s in sigmas] if sigmas is not None else schedule(model, scheduler, steps)
     x = [s / (video - (video - 1.0) * s) for s in base]
-    grid = grid or sorted(set(x) | {(a + b) / 2 for a, b in zip(x, x[1:])}, reverse=True)
+    few = len(base) - 1 < FINE_BELOW
+    grid = (grid or sorted(set(x) | {(a + b) / 2 for a, b in zip(x, x[1:])}, reverse=True)) if few else x
     at = next(i for i, g in enumerate(grid) if audio * g / (1.0 + (audio - 1.0) * g) <= REVOICE_FROM)
-    return shifted(grid, video), shifted(grid[at:], video)
+    return shifted(grid, video) if few else sigmas, shifted(grid[at:], video)
 
 
 def landing(sigmas, video, audio, target=0.03, coarse=0.10):
@@ -372,9 +364,8 @@ def fast_vsa(model):
     try:
         from comfy_extras.nodes_sparse_attention import apply_block_sparse_attention, parse_block_list
         return apply_block_sparse_attention(model, tau=1.3, topk_ratio=0.10, vsa=True, start_percent=0.20, end_percent=1.0,
-                                            min_tokens=12288, dense_blocks=parse_block_list(""),
-                                            sink_conditioning="exact_kv_and_rows", extra_tokens=0, verbose=False), \
-            "FastH3 VSA on"
+                                            min_tokens=12288, dense_blocks=parse_block_list(""), sink_conditioning="exact_kv_and_rows",
+                                            extra_tokens=0, verbose=False), "FastH3 VSA on"
     except Exception as e:
         return model, f"FastH3 VSA off ({type(e).__name__}: {e})"
 
@@ -384,12 +375,11 @@ def prepare(model, steps, sampler, scheduler, sigmas, video, audio, graph, node_
     pdd = PDD_KEY in ((getattr(model, "wrappers", None) or {}).get(pe.WrappersMP.DIFFUSION_MODEL) or {})
     if sigmas is not None and not pdd and wired(graph, node_id, "sigmas") == PDD_NODE:
         sigmas = None
-        notes.append(f"{PDD_NODE}'s sigmas are wired in but its model is not, so they were left out: wire its model output "
-                     f"into this node's model")
+        notes.append(f"{PDD_NODE}'s sigmas are wired in but its model is not, so they were left out: wire its model output into this "
+                     f"node's model")
     if pdd and sigmas is None:
         raise ValueError(f"{PDD_NODE} is on the model: wire its sigmas output into this node's sigmas input.")
-    fast = not pdd and is_fast(model)
-    recipe = None
+    fast, recipe = not pdd and is_fast(model), None
     if pdd:
         video, audio, sampler = 12.0, 3.0, "euler"
         notes.append(f"PDD Acc: its {len(sigmas) - 1}-step sigmas, euler, shift 12/3")
@@ -399,8 +389,7 @@ def prepare(model, steps, sampler, scheduler, sigmas, video, audio, graph, node_
     elif sigmas is None:
         recipe = hyperflow(model, graph) or flash(model, graph, node_id, steps) or speed_recipe(graph, node_id)
     if recipe:
-        video, audio = recipe.get("video") or video, recipe.get("audio") or audio
-        sampler = recipe.get("sampler") or sampler
+        video, audio, sampler = recipe.get("video") or video, recipe.get("audio") or audio, recipe.get("sampler") or sampler
         sigmas = shifted(recipe["grid"], video) if recipe.get("grid") else None
         steps = len(sigmas) - 1 if sigmas is not None else recipe.get("steps") or steps
         notes.append(f"{recipe['source']}: {steps} steps, shift {float(video):g}/{float(audio):g}, {sampler}")
@@ -414,12 +403,12 @@ def prepare(model, steps, sampler, scheduler, sigmas, video, audio, graph, node_
         model, note = fast_vsa(model)
         notes.append(note)
     if sigmas is None and not fast and not recipe:
-        base = [float(x) for x in comfy.samplers.calculate_sigmas(model.get_model_object("model_sampling"), scheduler, steps)]
+        base = schedule(model, scheduler, steps)
         landed = landing(base, float(video), float(audio))
         if len(landed) != len(base):
             sigmas = torch.tensor(landed, dtype=torch.float32)
             notes.append("one audio landing step added")
     fine = finer(model, steps, scheduler, sigmas, float(video), float(audio), (recipe or {}).get("fine"))
-    notes += [f"sound passes on {len(fine[0]) - 1} steps, and each spoken line said again over the last {len(fine[1]) - 1} of them, "
-              f"so the words come out clear"] if fine else []
+    notes += [] if sigmas is fine[0] else [f"sound passes on {len(fine[0]) - 1} steps, and each spoken line is said again over the "
+                                           f"last {len(fine[1]) - 1} of them"]
     return model, steps, sampler, sigmas, fine, notes

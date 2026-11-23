@@ -9,6 +9,7 @@ import os
 import tempfile
 
 import torch
+import torch.nn.functional as F
 import comfy.nested_tensor
 import comfy.sample
 import comfy.samplers
@@ -18,11 +19,8 @@ import latent_preview
 import node_helpers
 import nodes
 
-FPS = 24
-AUDIO_FPS = 40
-REF_AUG = 0.999
+FPS, AUDIO_FPS, REF_AUG, SAMPLE_HEADROOM = 24, 40, 0.999, 1.35
 FOLEY_DROP = ("minimax_keyframes", "minimax_refs", "minimax_visual_cond_noise_aug")
-SAMPLE_HEADROOM = 1.35
 PINS = ("weights", "patches", "weights-loaded", "patches-loaded", "weights-fast", "patches-fast")
 POOL, POINTS, LUT = 256, 33, 1024
 JUMP, FLAT, MEDIAN, WASHED, FLOOR = (0.15, 0.08, 0.08), 0.02, 0.12, 0.85, 1.0 / 255.0
@@ -46,17 +44,16 @@ def cleanup():
     mm.soft_empty_cache(True)
 
 
+def _device(x):
+    return mm.get_torch_device() if torch.cuda.is_available() else x.device
+
+
 def resize(img, w, h):
     x = img[..., :3]
     if (int(x.shape[2]), int(x.shape[1])) == (w, h):
         return x
     way = "bicubic" if w * h > int(x.shape[2]) * int(x.shape[1]) else "area"
     return comfy.utils.common_upscale(x.movedim(-1, 1), w, h, way, "disabled").movedim(1, -1).clamp(0, 1)
-
-
-def canvas(w, h, gw, gh):
-    s = min(1.0, math.sqrt(gw * gh / float(max(1, w * h))))
-    return tuple(max(32, round(v * s / 32) * 32) for v in (w, h))
 
 
 def silence(audio_vae, length):
@@ -110,67 +107,58 @@ def unvoice(wave, sr, keep):
         return wave
     floor = torch.quantile(rms[gap], 0.2)
     voiced = (peak > VOICED) & (share > VOICE_SHARE) & (rms > LOUDER * floor) & gap
-    grow = lambda m, k: torch.nn.functional.max_pool1d(m.float()[None, None], 2 * k + 1, 1, k)[0, 0] > 0
+    grow = lambda m, k: F.max_pool1d(m.float()[None, None], 2 * k + 1, 1, k)[0, 0] > 0
     joined = ~grow(~grow(voiced, VOICE_GAP), VOICE_GAP)
     voiced = grow(voiced & grow(~grow(~joined, VOICE_RUN), VOICE_RUN), 8) & gap
     gain = torch.where(voiced, (floor / rms.clamp(min=1e-9)).clamp(max=1.0), torch.ones_like(rms))
-    gain = torch.nn.functional.avg_pool1d(gain[None, None], 5, 1, 2, count_include_pad=False)
-    return wave * torch.nn.functional.interpolate(gain, size=int(wave.shape[-1]), mode="linear")[0, 0].to(wave)
+    gain = F.avg_pool1d(gain[None, None], 5, 1, 2, count_include_pad=False)
+    return wave * F.interpolate(gain, size=int(wave.shape[-1]), mode="linear")[0, 0].to(wave)
 
 
 def build(clip, vae, audio_vae, text, w, h, frames, handoff=None, refs=(), memory=None, silent=False, cues=(), memo=None):
     video = torch.zeros([1, 24, 2 if frames <= 5 else (frames - 5) // 17 * 5 + 2, h // 16, w // 16], device=mm.intermediate_device())
     audio = torch.zeros([1, 32, 2, round(frames / FPS * AUDIO_FPS)], device=mm.intermediate_device())
-    items, blocks, memo = [], [], {} if memo is None else memo
+    memo, blocks = {} if memo is None else memo, []
 
     def picture(img, tw, th):
         if (id(img), tw, th) not in memo:
             pic = resize(img[:1], tw, th)
             memo[(id(img), tw, th)] = (img, pic, vae.encode(pic))
-        return memo[(id(img), tw, th)][1:]
+        blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": memo[(id(img), tw, th)][2]})
+        return {"type": "image", "data": memo[(id(img), tw, th)][1]}
 
-    for img in [r for r in refs if r is not None]:
-        tw, th = canvas(int(img.shape[2]), int(img.shape[1]), w, h)
-        pic, lat = picture(img, tw, th)
-        items.append({"type": "image", "data": pic})
-        blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": lat})
+    def fit(img):
+        s = min(1.0, math.sqrt(w * h / float(max(1, int(img.shape[2]) * int(img.shape[1])))))
+        return tuple(max(32, round(v * s / 32) * 32) for v in (int(img.shape[2]), int(img.shape[1])))
+
+    items = [picture(img, *fit(img)) for img in refs if img is not None]
     hand = resize(handoff[:1], w, h) if handoff is not None else None
-    items += [{"type": "image", "data": hand}] if hand is not None else []
-    if memory is not None:
-        pic, lat = picture(memory, w, h)
-        items.append({"type": "image", "data": pic})
-        blocks.append({"kind": "image", "latent_h": h // 16, "latent_w": w // 16, "latent": lat})
-    keys = {"minimax_keyframes": [{"resolved_frame_index": 0, "latent": vae.encode(hand)}]} if hand is not None else {}
+    items += ([{"type": "image", "data": hand}] if hand is not None else []) + ([picture(memory, w, h)] if memory is not None else [])
+    vals = {"minimax_refs": blocks, "minimax_visual_cond_noise_aug": REF_AUG} if blocks else {}
+    if hand is not None:
+        vals["minimax_keyframes"] = [{"resolved_frame_index": 0, "latent": vae.encode(hand)}]
     cond = clip.encode_from_tokens_scheduled(clip.tokenize(text, minimax_ref_items=items) if items else clip.tokenize(text))
-    vals = ({"minimax_refs": blocks, "minimax_visual_cond_noise_aug": REF_AUG} if blocks else {}) | keys
     cond = node_helpers.conditioning_set_values(cond, vals) if vals else cond
-    latent = {"samples": comfy.nested_tensor.NestedTensor((video, audio))}
     quiet = silence(audio_vae, int(audio.shape[-1])) if silent or cues else None
-    if quiet is not None:
-        latent["samples"] = comfy.nested_tensor.NestedTensor((video, quiet.to(audio)))
-        latent["noise_mask"] = comfy.nested_tensor.NestedTensor((torch.ones_like(video[:, :1]), spans(audio, cues)))
-    return cond, latent
+    if quiet is None:
+        return cond, {"samples": comfy.nested_tensor.NestedTensor((video, audio))}
+    return cond, {"samples": comfy.nested_tensor.NestedTensor((video, quiet.to(audio))),
+                  "noise_mask": comfy.nested_tensor.NestedTensor((torch.ones_like(video[:, :1]), spans(audio, cues)))}
 
 
 def spool(n, shape, dtype):
-    size, fd, path = n * math.prod(shape), None, None
+    size = n * math.prod(shape)
     need = size * torch.tensor([], dtype=dtype).element_size()
     try:
-        fd, path = tempfile.mkstemp(prefix="h3longvideos-", suffix=".frames")
-        os.posix_fallocate(fd, 0, need)
-        return torch.from_file(path, shared=True, size=size, dtype=dtype).view(n, *shape)
+        with tempfile.NamedTemporaryFile(prefix="h3longvideos-", suffix=".frames") as f:
+            os.posix_fallocate(f.fileno(), 0, need)
+            return torch.from_file(f.name, shared=True, size=size, dtype=dtype).view(n, *shape)
     except Exception as e:
         free = mm.get_free_memory(torch.device("cpu"))
         if need > free:
             raise MemoryError(f"the frames ({need / 2 ** 30:.1f} GB) cannot go to a temp file ({e}) and only "
                               f"{free / 2 ** 30:.1f} GB of RAM is free") from e
         return torch.empty((n, *shape), dtype=dtype, device="cpu")
-    finally:
-        if fd is not None:
-            os.close(fd)
-        if path is not None:
-            with contextlib.suppress(OSError):
-                os.unlink(path)
 
 
 def sample(model, cond, negative, latent, seed, steps, sampler, scheduler, sigmas):
@@ -193,12 +181,12 @@ def foley(model, cond, negative, latent, out, seed, steps, sampler, scheduler, s
     video, audio = out["samples"].unbind()
     small = video
     if scale < 1.0 and min(video.shape[-2:]) >= 32:
-        small = torch.nn.functional.interpolate(video.float(), size=(video.shape[2],) + tuple(
-            max(2, 2 * round(n * scale / 2)) for n in video.shape[-2:]), mode="area").to(video.dtype)
+        small = F.interpolate(video.float(), size=(video.shape[2],) + tuple(max(2, 2 * round(n * scale / 2)) for n in video.shape[-2:]),
+                              mode="area").to(video.dtype)
         cond = [[c, {k: v for k, v in d.items() if k not in FOLEY_DROP}] for c, d in cond]
+    heard = torch.ones_like(audio[:, :1]) if cues is None else spans(audio, cues)
     lat = dict(latent, samples=comfy.nested_tensor.NestedTensor((small, torch.zeros_like(audio) if cues is None else audio)),
-               noise_mask=comfy.nested_tensor.NestedTensor((torch.zeros_like(small[:, :1]), torch.ones_like(audio[:, :1])
-                                                            if cues is None else spans(audio, cues))))
+               noise_mask=comfy.nested_tensor.NestedTensor((torch.zeros_like(small[:, :1]), heard)))
     res = sample(model, cond, negative, lat, seed, steps, sampler, scheduler, sigmas)
     return dict(res, samples=comfy.nested_tensor.NestedTensor((video, res["samples"].unbind()[1])))
 
@@ -217,7 +205,7 @@ def _loaded(models):
 
 
 def free_ram(need, keep=()):
-    try:
+    with contextlib.suppress(Exception):
         import comfy.memory_management as cmm
         import comfy.system_memory as sm
         room = max(cmm.RAM_CACHE_HEADROOM // 2, 2 << 30)
@@ -233,12 +221,9 @@ def free_ram(need, keep=()):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         for lm in held:
-            left = short()
-            if left <= 0:
+            if (left := short()) <= 0:
                 break
             lm.model.partially_unload_ram(left + (256 << 20))
-    except Exception:
-        pass
 
 
 def make_room(model, latent):
@@ -250,10 +235,8 @@ def make_room(model, latent):
         mm.free_memory(need, mm.get_torch_device(), keep_loaded=_loaded([model]))
     except Exception:
         cleanup()
-    try:
+    with contextlib.suppress(Exception):
         free_ram(max(0, int(model.model_size()) - _pinned(model)), keep=[model])
-    except Exception:
-        pass
 
 
 def decode(vae, audio_vae, out, keep=()):
@@ -267,12 +250,10 @@ def decode(vae, audio_vae, out, keep=()):
             raise
         cleanup()
         imgs = vae.decode_tiled(video)
-    imgs = imgs.reshape(-1, *imgs.shape[-3:])
     wave = audio_vae.decode(audio).movedim(-1, 1)
-    loud = torch.std(wave, dim=[1, 2], keepdim=True) * 5.0
-    wave = wave / loud.clamp(min=1.0)
+    wave = wave / (torch.std(wave, dim=[1, 2], keepdim=True) * 5.0).clamp(min=1.0)
     sr = getattr(audio_vae, "audio_sample_rate_output", getattr(audio_vae, "audio_sample_rate", 44100))
-    return imgs, wave, int(sr)
+    return imgs.reshape(-1, *imgs.shape[-3:]), wave, int(sr)
 
 
 def _ycc(x):
@@ -285,17 +266,17 @@ def _rgb(y):
 
 def tone(img):
     x = img[0] if img.dim() == 4 else img
-    x = torch.nn.functional.adaptive_avg_pool2d(x[..., :3].float().permute(2, 0, 1).unsqueeze(0), POOL)
+    x = F.adaptive_avg_pool2d(x[..., :3].float().permute(2, 0, 1).unsqueeze(0), POOL)
     return torch.quantile(_ycc(x[0].permute(1, 2, 0).reshape(-1, 3)).cpu(), torch.linspace(0, 1, POINTS), dim=0).T
 
 
-def _flat(q):
-    return q is None or float(q[0][-2] - q[0][1]) < FLAT
+def _stats(q):
+    return float(q[0][-2] - q[0][1]), float((q[1:] - 0.5).abs().mean())
 
 
 def look(img):
-    q = tone(img)
-    return None if _flat(q) else (float(q[0][-2] - q[0][1]), float((q[1:] - 0.5).abs().mean()))
+    stats = _stats(tone(img))
+    return None if stats[0] < FLAT else stats
 
 
 def _remap(x, src, dst):
@@ -309,44 +290,45 @@ def _remap(x, src, dst):
     return out
 
 
-def _lut(src, dst):
-    return _remap(torch.linspace(0, 1, LUT).view(-1, 1).expand(-1, 3).contiguous(), src, dst)
-
-
-def _washed(ref, q):
-    spread, colour = (lambda x: float(x[0][-2] - x[0][1])), (lambda x: float((x[1:] - 0.5).abs().mean()))
-    return abs(float(q[0][POINTS // 2] - ref[0][POINTS // 2])) <= MEDIAN and (
-        spread(q) < WASHED * spread(ref) or colour(q) < WASHED * colour(ref))
-
-
 def grade(given, first, last):
     if given is None:
         return None
     qg, qf, ql = tone(given), tone(first), tone(last)
-    if _flat(qg) or _flat(qf) or _flat(ql):
+    if any(_stats(q)[0] < FLAT for q in (qg, qf, ql)):
         return None
-    if not bool(((qg - qf).abs().mean(dim=1) <= torch.tensor(JUMP)).all()) and not _washed(qg, qf):
+    (spread, colour), (was_spread, was_colour) = _stats(qf), _stats(qg)
+    washed = abs(float(qf[0][POINTS // 2] - qg[0][POINTS // 2])) <= MEDIAN and (
+        spread < WASHED * was_spread or colour < WASHED * was_colour)
+    if not bool(((qg - qf).abs().mean(dim=1) <= torch.tensor(JUMP)).all()) and not washed:
         return None
     end = _remap(ql.T, qf, qg).T
     if float((qg - qf).abs().max()) < FLOOR and float((end - ql).abs().max()) < FLOOR:
         return None
-    return _lut(qf, qg), _lut(ql, end)
+    ramp = torch.linspace(0, 1, LUT).view(-1, 1).expand(-1, 3).contiguous()
+    return _remap(ramp, qf, qg), _remap(ramp, ql, end)
+
+
+def _each(frames, dev, fn):
+    n = int(frames.shape[0])
+    for s in range(0, n, 16):
+        x = frames[s:s + 16, ..., :3].to(dev, torch.float32)
+        t = torch.arange(s, s + int(x.shape[0]), dtype=torch.float32, device=dev) / max(1, n - 1)
+        frames[s:s + int(x.shape[0]), ..., :3] = fn(x, t, s).clamp(0, 1).to(frames.device, frames.dtype)
+    return frames
 
 
 def apply(frames, luts):
-    n = int(frames.shape[0])
-    dev = mm.get_torch_device() if torch.cuda.is_available() else frames.device
+    dev = _device(frames)
     first, last = (t.to(dev) for t in luts)
-    for s in range(0, n, 16):
-        x = _ycc(frames[s:s + 16, ..., :3].to(dev, torch.float32))
-        k = int(x.shape[0])
-        t = (torch.arange(s, s + k, dtype=torch.float32, device=dev) / max(1, n - 1)).view(k, 1, 1)
-        lut = first.unsqueeze(0) * (1 - t) + last.unsqueeze(0) * t
+
+    def graded(x, t, s):
+        x, k = _ycc(x), int(x.shape[0])
+        lut = first.unsqueeze(0) * (1 - t.view(k, 1, 1)) + last.unsqueeze(0) * t.view(k, 1, 1)
         pos = x.clamp(0, 1).reshape(k, -1, 3) * (LUT - 1)
         i0 = pos.floor().long().clamp(0, LUT - 2)
         lo, hi = torch.gather(lut, 1, i0), torch.gather(lut, 1, i0 + 1)
-        frames[s:s + k, ..., :3] = _rgb((lo + (pos - i0) * (hi - lo)).view_as(x)).clamp(0, 1).to(frames.device, frames.dtype)
-    return frames
+        return _rgb((lo + (pos - i0) * (hi - lo)).view_as(x))
+    return _each(frames, dev, graded)
 
 
 def _held(want, have):
@@ -363,7 +345,7 @@ def _bands(y):
 def _rate(x):
     y = _ycc(x[..., :3].float())[..., :1].permute(0, 3, 1, 2)
     fine, mid, s = _bands(y)
-    small = _blur(torch.nn.functional.avg_pool2d(y, 4), s)
+    small = _blur(F.avg_pool2d(y, 4), s)
     coarse = (small - _blur(small, 4 * s)).abs().mean(dim=(1, 2, 3)).clamp(min=1e-6)
     return torch.stack([fine.abs().mean(dim=(1, 2, 3)), mid.abs().mean(dim=(1, 2, 3))], 1) / coarse[:, None]
 
@@ -393,27 +375,25 @@ def _keep(frames, aim, dev):
     k = torch.cat(ks).T.unsqueeze(0)
     if float(k.min()) >= 1.0:
         return None
-    k = torch.nn.functional.avg_pool1d(torch.nn.functional.pad(k, (1, 1), mode="replicate"), 3, 1)
-    return torch.nn.functional.interpolate(k, size=n, mode="linear", align_corners=True)[0].T
+    k = F.avg_pool1d(F.pad(k, (1, 1), mode="replicate"), 3, 1)
+    return F.interpolate(k, size=n, mode="linear", align_corners=True)[0].T
 
 
 def hold(frames, scene, aim=None):
-    n = int(frames.shape[0])
-    end = look(frames[-1]) if n > 1 and scene else None
+    end = look(frames[-1]) if int(frames.shape[0]) > 1 and scene else None
     gs, gc = (_held(a, e) for a, e in zip(scene, end)) if end else (1.0, 1.0)
-    dev = mm.get_torch_device() if torch.cuda.is_available() else frames.device
+    dev = _device(frames)
     keep = _keep(frames, aim, dev)
     if gs == gc == 1.0 and keep is None:
         return False, 1.0
-    for s in range(0, n, 16):
-        x = frames[s:s + 16, ..., :3].to(dev, torch.float32)
-        k = int(x.shape[0])
-        x = _ycc(_ease(x, keep[s:s + k].to(dev)) if keep is not None else x)
-        t = (torch.arange(s, s + k, dtype=torch.float32, device=dev) / (n - 1)).view(k, 1, 1, 1)
+
+    def held(x, t, s):
+        x, t = _ycc(_ease(x, keep[s:s + int(x.shape[0])].to(dev)) if keep is not None else x), t.view(-1, 1, 1, 1)
         m = x[..., :1].mean(dim=(1, 2), keepdim=True)
         x[..., :1] = (x[..., :1] - m) * (1 + (gs - 1) * t) + m
         x[..., 1:] = (x[..., 1:] - 0.5) * (1 + (gc - 1) * t) + 0.5
-        frames[s:s + k, ..., :3] = _rgb(x).clamp(0.0, 1.0).to(frames.device, frames.dtype)
+        return _rgb(x)
+    _each(frames, dev, held)
     return gs != 1.0 or gc != 1.0, float(keep.min()) if keep is not None else 1.0
 
 
@@ -434,26 +414,24 @@ def _blur(x, s):
     r = min(int(3 * s) + 1, int(min(x.shape[-2:])) - 1)
     k = torch.exp(-0.5 * (torch.arange(-r, r + 1, dtype=x.dtype, device=x.device) / s) ** 2)
     k = (k / k.sum()).view(1, 1, 1, -1)
-    x = torch.nn.functional.conv2d(torch.nn.functional.pad(x, (r, r, 0, 0), mode="reflect"), k)
-    return torch.nn.functional.conv2d(torch.nn.functional.pad(x, (0, 0, r, r), mode="reflect"), k.transpose(2, 3))
+    x = F.conv2d(F.pad(x, (r, r, 0, 0), mode="reflect"), k)
+    return F.conv2d(F.pad(x, (0, 0, r, r), mode="reflect"), k.transpose(2, 3))
 
 
 def _streaks(n, dev):
-    t, k, ks = torch.linspace(-(n // 2), n // 2, 4 * n), FRESH_TURNS, torch.zeros(FRESH_TURNS, 1, n, n)
-    for i in range(k):
-        ks[i, 0, (n // 2 + t * math.sin(math.pi * i / k)).round().long(), (n // 2 + t * math.cos(math.pi * i / k)).round().long()] = 1
+    t, ks = torch.linspace(-(n // 2), n // 2, 4 * n), torch.zeros(FRESH_TURNS, 1, n, n)
+    for i in range(FRESH_TURNS):
+        a = math.pi * i / FRESH_TURNS
+        ks[i, 0, (n // 2 + t * math.sin(a)).round().long(), (n // 2 + t * math.cos(a)).round().long()] = 1
     return (ks / ks.sum((2, 3), keepdim=True)).to(dev)
 
 
 def refresh(frame, backdrop, frames):
     if backdrop is None or frame.shape != backdrop.shape:
         return frame
-    h, w = int(frame.shape[1]), int(frame.shape[2])
-    dev = mm.get_torch_device() if torch.cuda.is_available() else frame.device
+    h, w, dev = int(frame.shape[1]), int(frame.shape[2]), _device(frame)
     rgb = lambda t: t[..., :3].to(dev, torch.float32).permute(0, 3, 1, 2)
     soft = lambda t, s: _blur(t.reshape(-1, 1, h, w), max(1.0, h / s)).view_as(t)
-    x, a = rgb(frame), rgb(backdrop)
-
     lines = _streaks(2 * max(1, round(h / FRESH_STREAK)) + 1, dev)
 
     def ramp(p, q, lo, hi=FRESH_HI, d=None):
@@ -464,17 +442,18 @@ def refresh(frame, backdrop, frames):
         near, broad = soft(t, FRESH_THIN), soft(t, FRESH_SCALE)
         return near, broad, near - broad
 
-    streak = lambda p, q: torch.nn.functional.conv2d((p - q).reshape(-1, 1, h, w), lines, padding=lines.shape[-1] // 2).abs().amax(1) \
-        .view_as(p)
-    (xn, xb, xd), (an, ab, ad), end = thin(x), thin(a), soft(x, FRESH_FINE)
-    moved = torch.maximum(ramp(xb, ab, FRESH_LO), ramp(xn, an, FRESH_LINE, FRESH_SURE, streak(xd, ad)))
+    def line(p, q):
+        d = F.conv2d((p[2] - q[2]).reshape(-1, 1, h, w), lines, padding=lines.shape[-1] // 2).abs().amax(1).view_as(p[2])
+        return ramp(p[0], q[0], FRESH_LINE, FRESH_SURE, d)
+
+    x, a = rgb(frame), rgb(backdrop)
+    now, was, end = thin(x), thin(a), soft(x, FRESH_FINE)
+    moved = torch.maximum(ramp(now[1], was[1], FRESH_LO), line(now, was))
     for i in range(0, int(frames.shape[0]), FRESH_STEP):
-        f = torch.nn.functional.interpolate(rgb(frames[i:i + 1]), size=(h, w), mode="area")
-        fn, _, fd = thin(f)
-        moved = torch.maximum(moved, torch.maximum(ramp(soft(f, FRESH_FINE), end, FRESH_STILL),
-                                                   ramp(fn, xn, FRESH_LINE, FRESH_SURE, streak(fd, xd))))
+        f = F.interpolate(rgb(frames[i:i + 1]), size=(h, w), mode="area")
+        moved = torch.maximum(moved, torch.maximum(ramp(soft(f, FRESH_FINE), end, FRESH_STILL), line(thin(f), now)))
     r = max(1, round(h / FRESH_MARGIN))
-    same = 1 - soft(torch.nn.functional.max_pool2d(moved, 2 * r + 1, stride=1, padding=r), FRESH_SCALE)
+    same = 1 - soft(F.max_pool2d(moved, 2 * r + 1, stride=1, padding=r), FRESH_SCALE)
     out = frame.clone()
     out[..., :3] = (x + same * (a - x)).permute(0, 2, 3, 1).clamp(0, 1).to(frame.device, frame.dtype)
     return out
